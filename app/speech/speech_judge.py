@@ -12,6 +12,28 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.event_bus import EventBus, Event, EventType, get_event_bus
 from .kill_aggregator import KillAggregator
+from .speech_queue import SpeechItem, PRIORITY_S, PRIORITY_A, PRIORITY_B
+
+
+# 等级 → 数字优先级映射
+LEVEL_TO_PRIORITY = {
+    "S": PRIORITY_S,
+    "A": PRIORITY_A,
+    "B": PRIORITY_B,
+}
+
+# 默认 TTL
+DEFAULT_TTL = {
+    "S": 10.0,
+    "A": 6.0,
+    "B": 4.0,
+}
+
+# category TTL 覆盖
+CATEGORY_TTL = {
+    "death": 15.0,
+    "objective": 8.0,
+}
 
 
 class SpeechLevel:
@@ -59,7 +81,7 @@ class SpeechJudge:
         EventType.ALARM_CREATED: SpeechLevel.C,
     }
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], queue=None):
         self.config = config
         self.intensity = config.get("intensity", "sparse")
         self.min_level = config.get("min_level", "B")
@@ -69,6 +91,9 @@ class SpeechJudge:
         self.kill_aggregator = KillAggregator(
             window=config.get("kill_aggregate_window", 3.0)
         )
+
+        # SpeechQueue（可选，传入则直接入队；否则发布 SPEECH_SAY 事件）
+        self.queue = queue
 
         self._last_speech_time: Dict[str, float] = {}
         self._running = False
@@ -129,18 +154,79 @@ class SpeechJudge:
         if not text:
             return
 
-        # 发布播报事件
-        priority = "high" if level in (SpeechLevel.S, SpeechLevel.A) else "normal"
-        self.event_bus.publish(Event(
-            event_type=EventType.SPEECH_SAY,
-            data={
-                "text": text,
-                "level": level,
-                "priority": priority,
-                "source_event": event.event_type,
-            },
-            source="speech_judge"
-        ))
+        # 构造 SpeechItem
+        priority = LEVEL_TO_PRIORITY.get(level, PRIORITY_B)
+        category = self._get_category(event)
+        ttl = self._get_ttl(level, category, event)
+        event_id = self._get_event_id(event)
+
+        item = SpeechItem(
+            text=text,
+            priority=priority,
+            expire_at=time.time() + ttl,
+            category=category,
+            event_id=event_id,
+            interruptible=True,
+        )
+
+        # 交给 Queue 或发布 SPEECH_SAY 事件
+        if self.queue:
+            self.queue.enqueue(item)
+        else:
+            priority_str = "high" if level in ("S", "A") else "normal"
+            self.event_bus.publish(Event(
+                event_type=EventType.SPEECH_SAY,
+                data={
+                    "text": text,
+                    "level": level,
+                    "priority": priority_str,
+                    "source_event": event.event_type,
+                },
+                source="speech_judge"
+            ))
+
+    def _get_category(self, event: Event) -> str:
+        """获取事件分类"""
+        event_type = event.event_type
+
+        if event_type in (EventType.BARON_KILLED, EventType.DRAGON_KILLED, EventType.HERALD_KILLED):
+            return "objective"
+        if event_type in (EventType.CHAMPION_KILL, EventType.MULTI_KILL, EventType.FIRST_BLOOD, EventType.ACE):
+            return "kill"
+        if event_type == EventType.ALARM_TRIGGERED:
+            return "alarm"
+        if event_type == EventType.PLAYER_SUMMONER_SPELL_USED:
+            return "spell"
+
+        return "general"
+
+    def _get_ttl(self, level: str, category: str, event: Event) -> float:
+        """获取 TTL"""
+        # category 覆盖
+        if category in CATEGORY_TTL:
+            return CATEGORY_TTL[category]
+
+        # alarm 使用自己的过期时间
+        if category == "alarm":
+            alarm = event.get("alarm", {})
+            if alarm.get("expire_at"):
+                return max(0, alarm["expire_at"] - time.time())
+
+        # 默认按等级
+        return DEFAULT_TTL.get(level, 4.0)
+
+    def _get_event_id(self, event: Event) -> str:
+        """生成事件唯一 ID（用于去重）"""
+        event_type = event.event_type
+        game_time = event.get("game_time", 0)
+
+        # 优先使用原生 EventID
+        native_id = event.get("event_id") or event.get("EventID")
+        if native_id:
+            return f"liveclient:{event_type}:{native_id}"
+
+        # fallback：组合 ID（用 timestamp 保证唯一性）
+        return f"calc:{event_type}:{int(game_time)}:{int(event.timestamp * 1000)}"
 
     def _get_event_level(self, event: Event) -> str:
         """获取事件等级"""
