@@ -26,6 +26,7 @@ from app.lol.runtime import LoLRuntime
 from app.voice.runtime import VoiceRuntime
 from app.speech.tts import TTSController
 from app.speech.speech_judge import SpeechJudge
+from app.speech.speech_queue import SpeechQueue
 
 
 class Application:
@@ -55,6 +56,7 @@ class Application:
         self.lol: LoLRuntime = None
         self.voice: VoiceRuntime = None
         self.tts: TTSController = None
+        self.speech_queue: SpeechQueue = None
         self.speech_judge: SpeechJudge = None
 
         # 状态
@@ -81,9 +83,13 @@ class Application:
         tts_config["mpv_path"] = self.config.get("music.mpv_path")
         self.tts = TTSController(tts_config)
 
-        # 4. Speech Judge
-        print("[4/5] 初始化 Speech Judge...")
-        self.speech_judge = SpeechJudge(self.config.get_section("speech_judge"))
+        # 4. Speech Queue + Judge
+        print("[4/5] 初始化语音播报队列 (SpeechQueue + SpeechJudge)...")
+        self.speech_queue = SpeechQueue(self.tts)
+        self.speech_judge = SpeechJudge(
+            self.config.get_section("speech_judge"),
+            queue=self.speech_queue,
+        )
 
         # 5. 语音输入
         print("[5/5] 初始化语音输入 (ASR + Intent)...")
@@ -116,6 +122,9 @@ class Application:
 
         # 启动 TTS
         self.tts.start()
+
+        # 启动 Speech Queue
+        self.speech_queue.start()
 
         # 启动 Speech Judge
         self.speech_judge.start()
@@ -154,6 +163,8 @@ class Application:
             self.voice.stop()
         if self.speech_judge:
             self.speech_judge.stop()
+        if self.speech_queue:
+            self.speech_queue.shutdown()
         if self.tts:
             self.tts.stop()
         if self.lol:
