@@ -291,6 +291,137 @@ class TestSpeechQueue(unittest.TestCase):
         time.sleep(0.1)
         self.assertFalse(self.queue.is_running())
 
+    def test_16_b_b_sequential(self):
+        """B → B 顺序播放"""
+        # 播放 B1
+        item1 = self._make_item("B1", PRIORITY_B, event_id="b1")
+        self.queue.enqueue(item1)
+        time.sleep(0.1)
+
+        # B2 等待
+        item2 = self._make_item("B2", PRIORITY_B, event_id="b2")
+        self.queue.enqueue(item2)
+
+        # 等待全部播放完
+        time.sleep(1.5)
+
+        self.assertEqual(self.tts.speak_count, 2)
+
+    def test_17_b_interrupted_by_a(self):
+        """B → A 打断"""
+        # 播放 B
+        item_b = self._make_item("B", PRIORITY_B, event_id="b")
+        self.queue.enqueue(item_b)
+        time.sleep(0.1)
+
+        # A 打断
+        item_a = self._make_item("A", PRIORITY_A, event_id="a")
+        self.queue.enqueue(item_a)
+
+        time.sleep(0.5)
+
+        # B 被停止了，A 开始播放
+        self.assertGreaterEqual(self.tts.stop_count, 1)
+        self.assertGreaterEqual(self.tts.speak_count, 2)
+
+    def test_18_a_interrupted_by_s(self):
+        """A → S 打断"""
+        # 播放 A
+        item_a = self._make_item("A", PRIORITY_A, event_id="a")
+        self.queue.enqueue(item_a)
+        time.sleep(0.1)
+
+        # S 打断
+        item_s = self._make_item("S", PRIORITY_S, event_id="s")
+        self.queue.enqueue(item_s)
+
+        time.sleep(0.5)
+
+        self.assertGreaterEqual(self.tts.stop_count, 1)
+
+    def test_19_a_a_queued(self):
+        """A → A 排队"""
+        # 播放 A1
+        item1 = self._make_item("A1", PRIORITY_A, event_id="a1")
+        self.queue.enqueue(item1)
+        time.sleep(0.1)
+
+        # A2 排队
+        item2 = self._make_item("A2", PRIORITY_A, event_id="a2")
+        self.queue.enqueue(item2)
+
+        time.sleep(0.3)
+
+        # 没有打断
+        self.assertEqual(self.tts.stop_count, 0)
+
+    def test_20_b_s_a_order(self):
+        """B → S → A 顺序：B cancelled, S 然后 A"""
+        # 播放 B
+        item_b = self._make_item("B", PRIORITY_B, event_id="b")
+        self.queue.enqueue(item_b)
+        time.sleep(0.1)
+
+        # S 打断 B
+        item_s = self._make_item("S", PRIORITY_S, event_id="s")
+        self.queue.enqueue(item_s)
+
+        time.sleep(0.2)
+
+        # A 排队（不打断 S）
+        item_a = self._make_item("A", PRIORITY_A, event_id="a")
+        self.queue.enqueue(item_a)
+
+        # 等待全部完成
+        time.sleep(1.5)
+
+        # 应该播放了 3 次（B 然后 S 然后 A）
+        self.assertEqual(self.tts.speak_count, 3)
+        # B 被停止了
+        self.assertGreaterEqual(self.tts.stop_count, 1)
+
+    def test_21_ttl_during_pending(self):
+        """pending 中过期的项不会被播放"""
+        # 创建一个很快过期的 item
+        now = time.time()
+        short_item = SpeechItem(
+            text="expired",
+            priority=PRIORITY_B,
+            expire_at=now + 0.1,  # 0.1 秒后过期
+            event_id="expired",
+        )
+
+        # 先入队一个 B 占用播放
+        blocking = self._make_item("blocking", PRIORITY_B, event_id="blocking")
+        self.queue.enqueue(blocking)
+        time.sleep(0.1)
+
+        # 入队即将过期的 item
+        self.queue.enqueue(short_item)
+
+        # 等待过期
+        time.sleep(0.5)
+
+        # expired item 不应该被播放
+        # speak_count 应该只有 1（blocking）
+        self.assertEqual(self.tts.speak_count, 1)
+
+    def test_22_shutdown_during_playback(self):
+        """播放中 shutdown"""
+        # 播放
+        item = self._make_item("test", PRIORITY_B, event_id="test")
+        self.queue.enqueue(item)
+        time.sleep(0.1)
+
+        # shutdown
+        self.queue.shutdown()
+
+        time.sleep(0.2)
+
+        # TTS 应该停止了
+        self.assertFalse(self.tts.is_playing())
+        self.assertFalse(self.queue.is_running())
+
 
 if __name__ == "__main__":
     unittest.main()
