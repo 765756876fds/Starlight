@@ -89,6 +89,9 @@ class TTSController:
         # 停止标志
         self._stop_flag = threading.Event()
 
+        # generation 计数器，防止旧线程继续执行
+        self._generation = 0
+
         self._running = False
 
     def start(self):
@@ -149,18 +152,27 @@ class TTSController:
         if self.is_playing():
             self.stop_playback()
 
+        # 递增 generation，让旧线程失效
+        self._generation += 1
+        my_generation = self._generation
+
+        # 清除停止标志，允许新播放
+        self._stop_flag.clear()
+
         # 提交到后台线程执行（不阻塞调用方）
         thread = threading.Thread(
             target=self._speak_thread,
-            args=(text,),
+            args=(text, my_generation),
             daemon=True,
             name="tts-speak",
         )
         thread.start()
 
-    def _speak_thread(self, text: str):
+    def _speak_thread(self, text: str, generation: int):
         """后台线程：生成音频并播放"""
-        self._stop_flag.clear()
+        # 检查是否已经被新的 speak 取代
+        if generation != self._generation:
+            return
 
         with self._lock:
             if self._state in (TTSState.GENERATING, TTSState.PLAYING):
@@ -169,6 +181,11 @@ class TTSController:
 
         # Step 1: 生成音频
         output_file = self._generate_audio(text)
+
+        # 检查是否已经被新的 speak 取代
+        if generation != self._generation:
+            self._cleanup_file(output_file)
+            return
 
         # 检查是否被停止
         if self._stop_flag.is_set():
@@ -184,6 +201,17 @@ class TTSController:
 
         # Step 2: 播放
         success = self._play_audio(output_file)
+
+        # 检查是否已经被新的 speak 取代
+        if generation != self._generation:
+            if self._play_process:
+                try:
+                    self._play_process.terminate()
+                except:
+                    pass
+            self._cleanup_file(output_file)
+            self._current_file = None
+            return
 
         # 检查是否被停止
         if self._stop_flag.is_set():
@@ -315,10 +343,12 @@ class TTSController:
         if self._play_process:
             try:
                 self._play_process.terminate()
+                # 等待进程完全退出
                 try:
                     self._play_process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     self._play_process.kill()
+                    self._play_process.wait(timeout=1)
             except Exception as e:
                 print(f"[TTS] 停止播放失败: {e}")
             finally:
