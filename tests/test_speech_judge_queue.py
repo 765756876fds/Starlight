@@ -168,6 +168,93 @@ class TestSpeechJudgeToQueue(unittest.TestCase):
         # 应该发布了 SPEECH_SAY 事件
         bus.publish.assert_called_once()
 
+    def test_13_same_event_same_id(self):
+        """Test A：相同事件重复处理得到相同 event_id"""
+        self.judge.min_interval = 0  # 跳过频率限制
+
+        event1 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "敌方",
+            "victim_name": "你",
+            "is_current_player_death": True,
+            "game_time": 100.0,
+        })
+        event2 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "敌方",
+            "victim_name": "你",
+            "is_current_player_death": True,
+            "game_time": 100.0,
+        })
+
+        id1 = self.judge._get_event_id(event1)
+        id2 = self.judge._get_event_id(event2)
+
+        self.assertEqual(id1, id2)
+
+    def test_14_different_killers_different_ids(self):
+        """Test B：相同 game_time，不同 killer/victim，不同 event_id"""
+        self.judge.min_interval = 0
+
+        event1 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "亚索",
+            "victim_name": "你",
+            "game_time": 100.0,
+        })
+        event2 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "你",
+            "victim_name": "亚索",
+            "game_time": 100.0,
+        })
+
+        id1 = self.judge._get_event_id(event1)
+        id2 = self.judge._get_event_id(event2)
+
+        self.assertNotEqual(id1, id2)
+
+    def test_15_category_not_dedup(self):
+        """Test C：相同 category 不同事件，都允许"""
+        self.judge.min_interval = 0
+
+        event1 = self._make_event(EventType.BARON_KILLED, {"killer_name": "A"})
+        event1.data["game_time"] = 100
+        self.judge._judge_and_speak(event1)
+
+        event2 = self._make_event(EventType.DRAGON_KILLED, {"killer_name": "B"})
+        event2.data["game_time"] = 200
+        self.judge._judge_and_speak(event2)
+
+        # 两个都进入了 Queue
+        self.assertEqual(len(self.queue.items), 2)
+        # category 都是 objective
+        self.assertEqual(self.queue.items[0].category, "objective")
+        self.assertEqual(self.queue.items[1].category, "objective")
+
+    def test_16_fallback_no_timestamp(self):
+        """Test D：fallback 不含系统时间"""
+        event = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "A",
+            "victim_name": "B",
+            "game_time": 100.0,
+        })
+
+        event_id = self.judge._get_event_id(event)
+
+        # 不应该包含当前系统时间
+        self.assertNotIn(str(int(time.time())), event_id)
+        self.assertFalse(event_id.startswith("calc:"))
+
+    def test_17_native_event_id(self):
+        """Test E：原生 EventID 优先"""
+        event = self._make_event(EventType.DRAGON_KILLED, {
+            "event_id": 12345,
+            "killer_name": "A",
+        })
+
+        event_id = self.judge._get_event_id(event)
+
+        # 应该使用原生 ID
+        self.assertTrue(event_id.startswith("liveclient:"))
+        self.assertIn("12345", event_id)
+
 
 if __name__ == "__main__":
     unittest.main()

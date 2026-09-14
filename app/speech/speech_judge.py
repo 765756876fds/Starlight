@@ -216,17 +216,69 @@ class SpeechJudge:
         return DEFAULT_TTL.get(level, 4.0)
 
     def _get_event_id(self, event: Event) -> str:
-        """生成事件唯一 ID（用于去重）"""
-        event_type = event.event_type
-        game_time = event.get("game_time", 0)
+        """
+        生成事件唯一 ID（用于去重）
 
-        # 优先使用原生 EventID
-        native_id = event.get("event_id") or event.get("EventID")
-        if native_id:
+        优先级：
+        1. 原生 Riot EventID
+        2. 稳定字段组合 fallback（event_type + game_time + 关键实体）
+
+        注意：V1 fallback 不含 game_session_id，
+        也不使用系统时间/UUID/random，
+        目的是让同一个逻辑事件重复进入时得到相同 ID。
+        """
+        event_type = event.event_type
+        data = event.data
+
+        # 1. 优先使用原生 EventID
+        native_id = data.get("event_id") or data.get("EventID")
+        if native_id is not None:
             return f"liveclient:{event_type}:{native_id}"
 
-        # fallback：组合 ID（用 timestamp 保证唯一性）
-        return f"calc:{event_type}:{int(game_time)}:{int(event.timestamp * 1000)}"
+        # 2. 稳定字段组合 fallback
+        # 从 data 中提取稳定字段
+        game_time = data.get("game_time", 0)
+
+        # 根据事件类型选择关键实体字段
+        key_parts = [event_type, str(int(game_time))]
+
+        # 击杀相关：killer + victim
+        if event_type == EventType.CHAMPION_KILL:
+            killer = data.get("killer_name", "")
+            victim = data.get("victim_name", "")
+            key_parts.extend([killer, victim])
+
+        # 目标相关：objective 类型 + killer
+        elif event_type in (EventType.BARON_KILLED, EventType.DRAGON_KILLED, EventType.HERALD_KILLED):
+            killer = data.get("killer_name", "")
+            obj_type = data.get("dragon_type", "")
+            key_parts.extend([obj_type, killer])
+
+        # 多杀：count + killer
+        elif event_type == EventType.MULTI_KILL:
+            count = data.get("count", 2)
+            killer = data.get("killer_name", "")
+            key_parts.extend([str(count), killer])
+
+        # 防御塔：tower_name
+        elif event_type == EventType.TOWER_DESTROYED:
+            tower = data.get("tower_name", "")
+            key_parts.append(tower)
+
+        # 警报：alarm_id
+        elif event_type == EventType.ALARM_TRIGGERED:
+            alarm = data.get("alarm", {})
+            alarm_id = alarm.get("id", "")
+            key_parts.append(str(alarm_id))
+
+        # 召唤师技能：champion + spell
+        elif event_type == EventType.PLAYER_SUMMONER_SPELL_USED:
+            champion = data.get("champion_name", "")
+            spell = data.get("spell_name", "")
+            key_parts.extend([champion, spell])
+
+        # 用 | 连接，保证稳定
+        return "fallback:" + "|".join(key_parts)
 
     def _get_event_level(self, event: Event) -> str:
         """获取事件等级"""
