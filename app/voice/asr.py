@@ -141,6 +141,88 @@ class Qwen3ASR(ASREngine):
         gc.collect()
 
 
+class Qwen3ServerASR(ASREngine):
+    """
+    Qwen3-ASR llama-server HTTP API 引擎
+
+    使用常驻 llama-server 服务，通过 OpenAI 兼容的 /audio/transcriptions 接口调用。
+    不需要 llama-cpp-python，延迟更低（模型常驻）。
+    """
+
+    def __init__(self, base_url: str = "http://127.0.0.1:8080/v1",
+                 model: str = "default", timeout: float = 30.0):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
+        self._client = None
+        self._loaded = False
+
+    def load(self):
+        """测试连接"""
+        try:
+            import requests
+            resp = requests.get(f"{self.base_url}/models", timeout=5)
+            if resp.status_code == 200:
+                self._loaded = True
+                print(f"[ASR] llama-server 已连接: {self.base_url}")
+            else:
+                print(f"[ASR] llama-server 连接失败: HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"[ASR] llama-server 连接失败: {e}")
+
+    def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
+        """转录音频"""
+        if not self._loaded:
+            return ""
+
+        try:
+            import requests
+            import io
+            import wave
+
+            # 构造 WAV 文件
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(audio_data)
+            wav_bytes = buf.getvalue()
+
+            files = {'file': ('audio.wav', wav_bytes, 'audio/wav')}
+            data = {'model': self.model}
+
+            resp = requests.post(
+                f"{self.base_url}/audio/transcriptions",
+                files=files,
+                data=data,
+                timeout=self.timeout,
+            )
+
+            if resp.status_code == 200:
+                result = resp.json()
+                text = result.get('text', '')
+                # 提取 <asr_text> 内容
+                import re
+                match = re.search(r'<asr_text>(.*?)(?:</asr_text>|$)', text)
+                if match:
+                    text = match.group(1).strip()
+                return text
+            else:
+                print(f"[ASR] 转录失败: HTTP {resp.status_code}")
+                return ""
+
+        except Exception as e:
+            print(f"[ASR] 转录异常: {e}")
+            return ""
+
+    def is_available(self) -> bool:
+        return self._loaded
+
+    def unload(self):
+        self._loaded = False
+
+
 class FasterWhisperASR(ASREngine):
     """
     Faster-Whisper ASR（备用引擎）
