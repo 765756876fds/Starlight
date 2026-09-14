@@ -4,17 +4,14 @@ mpv 控制器 - 通过 JSON IPC (Windows Named Pipe) 控制 mpv
 mpv 作为纯音频后端运行，无 GUI，不抢焦点。
 Python 通过命名管道发送 JSON 命令控制播放。
 
-架构：双连接
-- 写连接：主线程发送控制命令
-- 读连接：单独线程读取事件和响应
-
-每个连接只在一个线程中使用，避免 Python 文件对象的线程安全问题。
+架构：单连接同步读写
+- 所有命令和响应都通过同一个连接
+- 不使用后台读线程（避免 Python 文件对象线程安全问题）
+- 每次 send_command 后同步读取响应
 """
 import json
 import os
-import queue
 import subprocess
-import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -31,16 +28,12 @@ class MpvController:
         self.mpv_path = mpv_path
         self.ipc_pipe = ipc_pipe
         self._process: Optional[subprocess.Popen] = None
-        self._write_pipe = None  # 主线程写入
-        self._read_pipe = None   # 读线程读取
+        self._pipe = None
         self._running = False
 
-        # 事件线程相关
-        self._read_thread: Optional[threading.Thread] = None
         self._request_id = 0
         self._properties: Dict[str, Any] = {}
-        self._property_watchers: Dict[str, Callable] = {}
-        self._event_listeners: List[Callable[[Dict[str, Any]], None]] = []
+        self._property_watchers: Dict[str, Any] = {}
 
     def start(self):
         """启动 mpv 进程"""
@@ -66,33 +59,24 @@ class MpvController:
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
-        # 等待管道就绪并建立连接
-        self._wait_for_pipe()
+        # 等待管道就绪并连接
+        self._wait_for_pipe(timeout=10.0)
         self._running = True
 
-        # 启动读线程（使用读连接）
-        self._read_thread = threading.Thread(
-            target=self._read_loop, daemon=True, name="mpv-read"
-        )
-        self._read_thread.start()
-
-        # 在读连接上观察常用属性（这样事件会发送回读连接）
-        # 注意：必须在读连接上发送 observe_property，
-        # 否则事件会发送回写连接，读连接收不到
-        self._observe_properties_via_read_pipe()
+        # 初始化常用属性
+        self._init_properties()
 
         print(f"[mpv] 已启动, PID={self._process.pid}")
 
-    def _wait_for_pipe(self, timeout: float = 5.0):
+    def _wait_for_pipe(self, timeout: float = 10.0):
         """
-        等待命名管道就绪，并建立两个连接
+        等待命名管道就绪并连接
 
-        先用 os.path.exists() 轮询等待管道出现，
-        然后打开两个独立连接：一个写、一个读。
+        使用轮询方式，有明确超时。
         """
         start = time.time()
 
-        # 先等待管道文件出现（轮询）
+        # 先等待管道文件出现
         pipe_exists = False
         while time.time() - start < timeout:
             try:
@@ -106,88 +90,53 @@ class MpvController:
         if not pipe_exists:
             raise TimeoutError(f"mpv IPC 管道超时未出现: {self.ipc_pipe}")
 
-        # 打开写连接（主线程使用）
-        self._write_pipe = open(self.ipc_pipe, "w", buffering=1, encoding="utf-8")
-        time.sleep(0.1)
+        # 等待额外时间确保管道完全就绪
+        time.sleep(0.3)
 
-        # 打开读连接（读线程使用，读写模式以便发送 observe_property）
-        self._read_pipe = open(self.ipc_pipe, "r+", buffering=1, encoding="utf-8")
+        # 尝试连接（带重试）
+        last_error = None
+        for i in range(5):
+            try:
+                self._pipe = open(self.ipc_pipe, "r+", buffering=1, encoding="utf-8")
+                return
+            except Exception as e:
+                last_error = e
+                time.sleep(0.2)
 
-    def _observe_properties_via_read_pipe(self):
-        """在读连接上观察常用属性变化"""
+        raise ConnectionError(f"无法连接到 mpv IPC 管道: {last_error}")
+
+    def _init_properties(self):
+        """初始化常用属性"""
         properties = [
-            "playback-time", "duration", "pause", "volume",
-            "filename", "media-title", "idle-active",
-            "eof-reached", "playlist-pos",
+            "pause", "volume", "idle-active", "filename",
+            "playback-time", "duration",
         ]
         for prop in properties:
-            req_id = self._request_id
-            self._request_id += 1
-            message = {
-                "command": ["observe_property", req_id, prop],
-                "request_id": req_id,
-            }
-            line = json.dumps(message) + "\n"
             try:
-                self._read_pipe.write(line)
-                self._read_pipe.flush()
-            except Exception as e:
-                print(f"[mpv] observe_property 发送失败: {e}")
-
-    def _read_loop(self):
-        """读线程主循环（使用读连接）"""
-        while self._running and self._read_pipe:
-            try:
-                line = self._read_pipe.readline()
-                if not line:
-                    time.sleep(0.05)
-                    continue
-                line = line.strip()
-                if line:
-                    try:
-                        message = json.loads(line)
-                        self._handle_message(message)
-                    except json.JSONDecodeError:
-                        pass
-            except (OSError, ValueError):
-                if self._running:
-                    time.sleep(0.1)
-
-    def _handle_message(self, message: Dict[str, Any]):
-        """处理 mpv 消息"""
-        if "event" in message:
-            event = message["event"]
-            if event == "property-change":
-                prop = message.get("name")
-                value = message.get("data")
-                if prop:
+                value = self.get_property(prop, timeout=1.0)
+                if value is not None:
                     self._properties[prop] = value
-                    # 通知属性监听器
-                    if prop in self._property_watchers:
-                        try:
-                            self._property_watchers[prop](value)
-                        except Exception:
-                            pass
-        # 通知事件监听器
-        for listener in self._event_listeners:
-            try:
-                listener(message)
             except Exception:
                 pass
 
-    def _send_command(self, command: str, params: Optional[List[Any]] = None) -> Any:
+    def _send_command(self, command: str, params: Optional[List[Any]] = None,
+                       timeout: float = 3.0) -> Optional[Dict[str, Any]]:
         """
-        发送命令到 mpv（使用写连接）
+        发送命令到 mpv，并同步读取响应
 
         Args:
-            command: 命令名，如 "loadfile", "set_property"
+            command: 命令名
             params: 参数列表
+            timeout: 等待响应超时
 
         Returns:
-            命令执行结果
+            响应消息
         """
-        req_id = self._request_id
+        if not self._pipe:
+            raise ConnectionError("mpv IPC 未连接")
+
         self._request_id += 1
+        req_id = self._request_id
 
         message = {
             "command": [command] + (params or []),
@@ -195,14 +144,50 @@ class MpvController:
         }
 
         line = json.dumps(message) + "\n"
-        self._write_pipe.write(line)
-        self._write_pipe.flush()
+        self._pipe.write(line)
+        self._pipe.flush()
 
-        return None
+        # 等待响应（跳过事件消息）
+        start = time.time()
+        while time.time() - start < timeout:
+            line = self._pipe.readline()
+            if not line:
+                time.sleep(0.01)
+                continue
+
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            # 事件消息，跳过
+            if "event" in msg:
+                # 处理属性变化事件
+                if msg["event"] == "property-change":
+                    prop = msg.get("name")
+                    value = msg.get("data")
+                    if prop:
+                        self._properties[prop] = value
+                        if prop in self._property_watchers:
+                            try:
+                                self._property_watchers[prop](value)
+                            except Exception:
+                                pass
+                continue
+
+            # 响应消息
+            if msg.get("request_id") == req_id:
+                return msg
+
+        raise TimeoutError(f"mpv 命令超时: {command}")
 
     def loadfile(self, filepath: str, mode: str = "replace"):
         """加载并播放文件"""
-        self._send_command("loadfile", [filepath, mode])
+        self._send_command("loadfile", [filepath, mode], timeout=5.0)
 
     def play(self):
         """播放（取消暂停）"""
@@ -229,13 +214,7 @@ class MpvController:
         self._send_command("playlist_prev")
 
     def seek(self, seconds: float, mode: str = "relative"):
-        """
-        跳转
-
-        Args:
-            seconds: 秒数
-            mode: "relative" 相对, "absolute" 绝对, "absolute-percent" 百分比
-        """
+        """跳转"""
         self._send_command("seek", [seconds, mode])
 
     def set_volume(self, volume: int):
@@ -251,9 +230,12 @@ class MpvController:
         """设置属性"""
         self._send_command("set_property", [name, value])
 
-    def get_property(self, name: str) -> Any:
-        """获取属性（从缓存）"""
-        return self._properties.get(name)
+    def get_property(self, name: str, timeout: float = 2.0) -> Any:
+        """获取属性"""
+        resp = self._send_command("get_property", [name], timeout=timeout)
+        if resp and "data" in resp:
+            return resp["data"]
+        return None
 
     def get_current_time(self) -> float:
         """获取当前播放位置（秒）"""
@@ -275,15 +257,6 @@ class MpvController:
         """获取当前文件名"""
         return str(self._properties.get("filename", ""))
 
-    def add_event_listener(self, listener: Callable[[Dict[str, Any]], None]):
-        """添加事件监听器"""
-        self._event_listeners.append(listener)
-
-    def remove_event_listener(self, listener: Callable):
-        """移除事件监听器"""
-        if listener in self._event_listeners:
-            self._event_listeners.remove(listener)
-
     def on_property_change(self, prop: str, callback: Callable[[Any], None]):
         """注册属性变化监听器"""
         self._property_watchers[prop] = callback
@@ -298,23 +271,12 @@ class MpvController:
         """停止 mpv 进程"""
         self._running = False
 
-        if self._write_pipe:
+        if self._pipe:
             try:
-                self._write_pipe.close()
+                self._pipe.close()
             except Exception:
                 pass
-            self._write_pipe = None
-
-        if self._read_pipe:
-            try:
-                self._read_pipe.close()
-            except Exception:
-                pass
-            self._read_pipe = None
-
-        if self._read_thread:
-            self._read_thread.join(timeout=1)
-            self._read_thread = None
+            self._pipe = None
 
         if self._process:
             try:
