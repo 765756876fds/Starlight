@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+events/
+
+# Data & databases
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Audio outputs
+data/*.mp3
+data/*.wav
+data/*.flac
+
+# Models (large files, never commit)
+*.gguf
+*.bin
+*.onnx
+models/
+
+# Local config (may contain tokens)
+config/local.yaml
+config/*.local.yaml
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+.pytest_cache/
+.mypy_cache/
+
+# Test outputs
+test_output/
+*.test.mp3
+
+# Personal / sensitive
+*.token
+*.key
+*.secret
+secrets.yaml

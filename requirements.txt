@@ -1,0 +1,35 @@
+# ===== 核心依赖 =====
+requests>=2.31.0
+websocket-client>=1.6.0
+pydantic>=2.5.0
+PyYAML>=6.0
+python-dateutil>=2.8.2
+
+# ===== 数据库 =====
+# SQLite 内置，FTS5 支持
+
+# ===== 音频 / 音乐 =====
+# mpv 通过 JSON IPC 控制，无需 Python 绑定
+# 音乐标签读取
+mutagen>=1.47.0
+
+# ===== 语音识别 ASR =====
+# llama-cpp-python 用于本地 Qwen3-ASR / Qwen3 推理
+llama-cpp-python>=0.2.50
+
+# ===== 麦克风 / VAD =====
+pyaudio>=0.2.14
+# Silero VAD
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# ===== TTS =====
+edge-tts>=6.1.9
+
+# ===== UI =====
+# 第一版用 PySide6，后续可换
+PySide6>=6.6.0
+
+# ===== 工具 =====
+psutil>=5.9.6
+loguru>=0.7.2
