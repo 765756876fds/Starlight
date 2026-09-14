@@ -44,7 +44,7 @@ class EventType:
     MUSIC_PAUSE = "music.pause"
     MUSIC_RESUME = "music.resume"
     MUSIC_NEXT = "music.next"
-    MUSIC_PREV = "music.prev"
+    MUSIC_PREV = "music.previous"
     MUSIC_VOLUME = "music.volume"
     MUSIC_SEEK = "music.seek"
     MUSIC_SEARCH = "music.search"

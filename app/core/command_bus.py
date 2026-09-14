@@ -35,7 +35,7 @@ class CommandType:
     MUSIC_RESUME = "music.resume"
     MUSIC_TOGGLE = "music.toggle"
     MUSIC_NEXT = "music.next"
-    MUSIC_PREV = "music.prev"
+    MUSIC_PREV = "music.previous"
     MUSIC_VOLUME_SET = "music.volume_set"
     MUSIC_VOLUME_UP = "music.volume_up"
     MUSIC_VOLUME_DOWN = "music.volume_down"

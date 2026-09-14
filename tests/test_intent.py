@@ -22,7 +22,7 @@ class TestRuleBasedIntent:
     def test_prev_song(self):
         intent = RuleBasedIntent.match("上一首")
         assert intent is not None
-        assert intent.intent_type == "music.prev"
+        assert intent.intent_type == "music.previous"
 
     def test_pause(self):
         intent = RuleBasedIntent.match("暂停")

@@ -77,32 +77,27 @@ class PTTMicrophone:
             self._pyaudio = None
 
     def _listen_loop(self):
-        """按键监听循环"""
-        import msvcrt
+        """按键监听循环（使用 keyboard 库全局监听）"""
+        import keyboard
+
+        ptt_key_map = {
+            "space": "space",
+            "ctrl": "ctrl",
+            "shift": "shift",
+            "alt": "alt",
+        }
+        kb_key = ptt_key_map.get(self.ptt_key, "space")
 
         while self._running:
-            # 检查按键状态
             try:
-                # 简单实现：用 getch 检测空格按下
-                # 注意：msvcrt.getch 是阻塞的，我们用小超时轮询
-                import time as _time
-                start = _time.time()
-                pressed = False
-
-                while _time.time() - start < 0.05:
-                    if msvcrt.kbhit():
-                        ch = msvcrt.getch()
-                        # 空格键 = b' '
-                        if ch == b' ':
-                            pressed = True
-                            break
-                    _time.sleep(0.01)
+                pressed = keyboard.is_pressed(kb_key)
 
                 if pressed and not self._recording:
                     self._start_recording()
                 elif not pressed and self._recording:
                     self._stop_recording()
 
+                time.sleep(0.02)
             except Exception:
                 time.sleep(0.1)
 

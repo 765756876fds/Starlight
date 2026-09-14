@@ -236,7 +236,7 @@ class LLMIntent:
     # 支持的意图列表（用于 prompt）
     SUPPORTED_INTENTS = {
         "music.next": "下一首/换一首",
-        "music.prev": "上一首",
+        "music.previous": "上一首",
         "music.pause": "暂停播放",
         "music.resume": "继续播放",
         "music.volume_set": "设置音量，参数 volume (0-100)",

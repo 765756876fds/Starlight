@@ -221,9 +221,14 @@ class MpvController:
         """设置音量 0-100"""
         volume = max(0, min(100, volume))
         self.set_property("volume", float(volume))
+        self._properties["volume"] = float(volume)
 
     def get_volume(self) -> int:
-        """获取音量"""
+        """获取音量（实时从 mpv 读取）"""
+        vol = self.get_property("volume", timeout=1.0)
+        if vol is not None:
+            self._properties["volume"] = vol
+            return int(vol)
         return int(self._properties.get("volume", 0))
 
     def set_property(self, name: str, value: Any):

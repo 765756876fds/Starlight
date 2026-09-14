@@ -249,7 +249,7 @@ try:
         ("下一首", "music.next"),
         ("暂停", "music.pause"),
         ("继续播放", "music.resume"),
-        ("上一首", "music.prev"),
+        ("上一首", "music.previous"),
         ("音量大一点", "music.volume_up"),
         ("音量小一点", "music.volume_down"),
         ("两分钟后提醒我", "alarm.custom"),
