@@ -364,18 +364,24 @@ class OpenAIAPIIntent:
     OpenAI 兼容 API 意图识别（用于 LM Studio / Ollama）
 
     通过 HTTP API 调用本地模型，不需要 llama-cpp-python。
+    默认启用 non-thinking（/no_think）模式。
     """
 
     SUPPORTED_INTENTS = LLMIntent.SUPPORTED_INTENTS
 
+    # 允许的 Intent 白名单（安全校验）
+    ALLOWED_INTENTS = set(SUPPORTED_INTENTS.keys()) | {"system.unknown"}
+
     def __init__(self, base_url: str = "http://127.0.0.1:1234/v1",
                  model: str = "local-model",
                  api_key: str = "lm-studio",
-                 temperature: float = 0.1):
+                 temperature: float = 0.1,
+                 enable_no_think: bool = True):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
         self.temperature = temperature
+        self.enable_no_think = enable_no_think
         self._client = None
         self._loaded = False
 
@@ -413,7 +419,12 @@ class OpenAIAPIIntent:
                 f"- {k}: {v}" for k, v in self.SUPPORTED_INTENTS.items()
             )
 
-            prompt = f"""你是一个意图识别助手。将用户的自然语言转换为结构化意图。
+            # system prompt：non-thinking 模式
+            sys_prompt = "你是一个专业的意图识别助手，只输出 JSON。"
+            if self.enable_no_think:
+                sys_prompt = "/no_think\n" + sys_prompt
+
+            prompt = f"""将用户的自然语言转换为结构化意图。
 
 支持的意图类型：
 {intent_list}
@@ -430,12 +441,11 @@ class OpenAIAPIIntent:
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "你是一个专业的意图识别助手，只输出 JSON。"},
+                    {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=self.temperature,
                 max_tokens=256,
-                response_format={"type": "json_object"},
             )
 
             content = response.choices[0].message.content.strip()
@@ -443,24 +453,27 @@ class OpenAIAPIIntent:
             # 解析 JSON
             try:
                 result = json.loads(content)
-                return Intent(
-                    result.get("intent", "system.unknown"),
-                    float(result.get("confidence", 0.5)),
-                    result.get("params", {})
-                )
             except json.JSONDecodeError:
                 json_match = re.search(r'\{.*\}', content, re.DOTALL)
                 if json_match:
                     try:
                         result = json.loads(json_match.group())
-                        return Intent(
-                            result.get("intent", "system.unknown"),
-                            float(result.get("confidence", 0.5)),
-                            result.get("params", {})
-                        )
                     except json.JSONDecodeError:
-                        pass
+                        return Intent("system.unknown", confidence=0.0)
+                else:
+                    return Intent("system.unknown", confidence=0.0)
+
+            # 安全校验：Intent 白名单
+            intent_type = result.get("intent", "system.unknown")
+            if intent_type not in self.ALLOWED_INTENTS:
+                print(f"[Intent] 未知 Intent（安全拦截）: {intent_type}")
                 return Intent("system.unknown", confidence=0.0)
+
+            return Intent(
+                intent_type,
+                float(result.get("confidence", 0.5)),
+                result.get("params", {})
+            )
 
         except Exception as e:
             print(f"[Intent] API 解析失败: {e}")
@@ -522,6 +535,7 @@ class IntentRouter:
                 model=api_config.get("model", "local-model"),
                 api_key=api_config.get("api_key", "lm-studio"),
                 temperature=self.config.get("temperature", 0.1),
+                enable_no_think=api_config.get("enable_no_think", True),
             )
             self.api_intent.load()
             if self.api_intent.is_available():
