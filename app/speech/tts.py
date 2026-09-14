@@ -273,12 +273,13 @@ class TTSController:
                 "--no-terminal",
                 "--force-window=no",
                 "--no-input-default-bindings",
-                "--quit-when-done",
+                "--quit",
                 filepath,
             ]
 
             self._play_process = subprocess.Popen(
                 args,
+                stdin=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
