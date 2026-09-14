@@ -1,0 +1,244 @@
+{
+  "gameData": {
+    "gameMode": "PRACTICETOOL",
+    "gameTime": 514.6192626953125,
+    "mapName": "Map11",
+    "mapNumber": 11,
+    "mapTerrain": "Default"
+  },
+  "allPlayers": [
+    {
+      "championName": "探险家",
+      "isBot": false,
+      "isDead": false,
+      "items": [
+        {
+          "canUse": true,
+          "consumable": false,
+          "count": 1,
+          "displayName": "侦察守卫",
+          "itemID": 3340,
+          "price": 0,
+          "rawDescription": "GeneratedTip_Item_3340_Description",
+          "rawDisplayName": "Item_3340_Name",
+          "slot": 6
+        }
+      ],
+      "level": 18,
+      "position": "NONE",
+      "rawChampionName": "game_character_displayname_Ezreal",
+      "rawSkinName": "game_character_displayname_Ezreal",
+      "respawnTimer": 0.0,
+      "riotId": "[REDACTED]",
+      "riotIdGameName": "[REDACTED]",
+      "riotIdTagLine": "51315",
+      "runes": {
+        "keystone": {
+          "displayName": "不灭之握",
+          "id": 8437,
+          "rawDescription": "perk_tooltip_GraspOfTheUndying",
+          "rawDisplayName": "perk_displayname_GraspOfTheUndying"
+        },
+        "primaryRuneTree": {
+          "displayName": "坚决",
+          "id": 8400,
+          "rawDescription": "perkstyle_tooltip_7204",
+          "rawDisplayName": "perkstyle_displayname_7204"
+        },
+        "secondaryRuneTree": {
+          "displayName": "启迪",
+          "id": 8300,
+          "rawDescription": "perkstyle_tooltip_7203",
+          "rawDisplayName": "perkstyle_displayname_7203"
+        }
+      },
+      "scores": {
+        "assists": 0,
+        "creepScore": 0,
+        "deaths": 0,
+        "kills": 0,
+        "wardScore": 0.0
+      },
+      "skinID": 0,
+      "skinName": "探险家",
+      "summonerName": "[REDACTED]",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "闪现",
+          "rawDescription": "GeneratedTip_SummonerSpell_SummonerFlash_Description",
+          "rawDisplayName": "GeneratedTip_SummonerSpell_SummonerFlash_DisplayName"
+        },
+        "summonerSpellTwo": {
+          "displayName": "引燃",
+          "rawDescription": "GeneratedTip_SummonerSpell_SummonerDot_Description",
+          "rawDisplayName": "GeneratedTip_SummonerSpell_SummonerDot_DisplayName"
+        }
+      },
+      "team": "ORDER"
+    }
+  ],
+  "activePlayer": {
+    "abilities": {
+      "E": {
+        "abilityLevel": 5,
+        "displayName": "奥术跃迁",
+        "id": "EzrealE",
+        "rawDescription": "GeneratedTip_Spell_EzrealE_Description",
+        "rawDisplayName": "GeneratedTip_Spell_EzrealE_DisplayName"
+      },
+      "Passive": {
+        "displayName": "咒能高涨",
+        "id": "EzrealPassive",
+        "rawDescription": "GeneratedTip_Passive_EzrealPassive_Description",
+        "rawDisplayName": "GeneratedTip_Passive_EzrealPassive_DisplayName"
+      },
+      "Q": {
+        "abilityLevel": 5,
+        "displayName": "秘术射击",
+        "id": "EzrealQ",
+        "rawDescription": "GeneratedTip_Spell_EzrealQ_Description",
+        "rawDisplayName": "GeneratedTip_Spell_EzrealQ_DisplayName"
+      },
+      "R": {
+        "abilityLevel": 3,
+        "displayName": "精准弹幕",
+        "id": "EzrealR",
+        "rawDescription": "GeneratedTip_Spell_EzrealR_Description",
+        "rawDisplayName": "GeneratedTip_Spell_EzrealR_DisplayName"
+      },
+      "W": {
+        "abilityLevel": 5,
+        "displayName": "精华跃动",
+        "id": "EzrealW",
+        "rawDescription": "GeneratedTip_Spell_EzrealW_Description",
+        "rawDisplayName": "GeneratedTip_Spell_EzrealW_DisplayName"
+      }
+    },
+    "championStats": {
+      "abilityHaste": 8.0,
+      "abilityPower": 0.0,
+      "armor": 95.4000015258789,
+      "armorPenetrationFlat": 0.0,
+      "armorPenetrationPercent": 1.0,
+      "attackDamage": 123.75000762939453,
+      "attackRange": 550.0,
+      "attackSpeed": 0.8906250596046448,
+      "bonusArmorPenetrationPercent": 1.0,
+      "bonusMagicPenetrationPercent": 1.0,
+      "critChance": 0.0,
+      "critDamage": 200.0,
+      "currentHealth": 2337.000244140625,
+      "healShieldPower": 0.0,
+      "healthRegenRate": 3.010000228881836,
+      "lifeSteal": 0.0,
+      "magicLethality": 0.0,
+      "magicPenetrationFlat": 0.0,
+      "magicPenetrationPercent": 1.0,
+      "magicResist": 51.70000457763672,
+      "maxHealth": 2337.000244140625,
+      "moveSpeed": 333.125,
+      "omnivamp": 0.0,
+      "physicalLethality": 0.0,
+      "physicalVamp": 0.0,
+      "resourceMax": 1565.0001220703125,
+      "resourceRegenRate": 5.100000381469727,
+      "resourceType": "MANA",
+      "resourceValue": 1565.0001220703125,
+      "spellVamp": 0.0,
+      "tenacity": 5.0
+    },
+    "currentGold": 11799.8798828125,
+    "fullRunes": {
+      "generalRunes": [
+        {
+          "displayName": "不灭之握",
+          "id": 8437,
+          "rawDescription": "perk_tooltip_GraspOfTheUndying",
+          "rawDisplayName": "perk_displayname_GraspOfTheUndying"
+        },
+        {
+          "displayName": "生命源泉",
+          "id": 8463,
+          "rawDescription": "perk_tooltip_FontOfLife",
+          "rawDisplayName": "perk_displayname_FontOfLife"
+        },
+        {
+          "displayName": "骸骨镀层",
+          "id": 8473,
+          "rawDescription": "perk_tooltip_BonePlatingTooltip",
+          "rawDisplayName": "perk_displayname_BonePlating"
+        },
+        {
+          "displayName": "过度生长",
+          "id": 8451,
+          "rawDescription": "perk_tooltip_Overgrowth",
+          "rawDisplayName": "perk_displayname_Overgrowth"
+        },
+        {
+          "displayName": "星界洞悉",
+          "id": 8347,
+          "rawDescription": "perk_tooltip_CosmicInsight",
+          "rawDisplayName": "perk_displayname_CosmicInsight"
+        },
+        {
+          "displayName": "海克斯科技闪现罗网",
+          "id": 8306,
+          "rawDescription": "perk_tooltip_HextechFlashtraption",
+          "rawDisplayName": "perk_displayname_HextechFlashtraption"
+        }
+      ],
+      "keystone": {
+        "displayName": "不灭之握",
+        "id": 8437,
+        "rawDescription": "perk_tooltip_GraspOfTheUndying",
+        "rawDisplayName": "perk_displayname_GraspOfTheUndying"
+      },
+      "primaryRuneTree": {
+        "displayName": "坚决",
+        "id": 8400,
+        "rawDescription": "perkstyle_tooltip_7204",
+        "rawDisplayName": "perkstyle_displayname_7204"
+      },
+      "secondaryRuneTree": {
+        "displayName": "启迪",
+        "id": 8300,
+        "rawDescription": "perkstyle_tooltip_7203",
+        "rawDisplayName": "perkstyle_displayname_7203"
+      },
+      "statRunes": [
+        {
+          "id": 5007,
+          "rawDescription": "perk_tooltip_StatModCooldownReductionScaling"
+        },
+        {
+          "id": 5010,
+          "rawDescription": "perk_tooltip_StatModMovementSpeed"
+        },
+        {
+          "id": 5013,
+          "rawDescription": "perk_tooltip_StatModTenacity"
+        }
+      ]
+    },
+    "level": 18,
+    "riotId": "[REDACTED]",
+    "riotIdGameName": "[REDACTED]",
+    "riotIdTagLine": "[REDACTED]",
+    "summonerName": "[REDACTED]",
+    "teamRelativeColors": true
+  },
+  "events": {
+    "Events": [
+      {
+        "EventID": 0,
+        "EventName": "GameStart",
+        "EventTime": 0.009803700260818005
+      },
+      {
+        "EventID": 1,
+        "EventName": "MinionsSpawning",
+        "EventTime": 30.040672302246094
+      }
+    ]
+  }
+}

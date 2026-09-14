@@ -63,6 +63,18 @@ desktop.ini
 test_output/
 *.test.mp3
 
+# Temporary verification scripts
+check_*.py
+fix_*.py
+list_*.py
+test_2999_*.py
+test_mpv_*.py
+test_lcu_*.py
+audit_*.py
+
+# ASR test recordings
+data/asr_test/
+
 # Personal / sensitive
 *.token
 *.key
