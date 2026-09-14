@@ -273,7 +273,6 @@ class TTSController:
                 "--no-terminal",
                 "--force-window=no",
                 "--no-input-default-bindings",
-                "--quit",
                 filepath,
             ]
 
