@@ -91,6 +91,8 @@ class SpeechJudge:
         self.kill_aggregator = KillAggregator(
             window=config.get("kill_aggregate_window", 3.0)
         )
+        # 设置聚合窗口到期回调：自动 flush 并播报 pending kill
+        self.kill_aggregator.set_on_expire(self._on_kill_aggregator_expire)
 
         # SpeechQueue（可选，传入则直接入队；否则发布 SPEECH_SAY 事件）
         self.queue = queue
@@ -120,6 +122,12 @@ class SpeechJudge:
     def stop(self):
         """停止"""
         self._running = False
+
+    def _on_kill_aggregator_expire(self):
+        """聚合窗口到期，自动 flush 并播报 pending kill"""
+        event = self.kill_aggregator.flush()
+        if event:
+            self._judge_and_speak(event)
 
     def _on_event(self, event: Event):
         """处理事件"""

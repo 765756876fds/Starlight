@@ -305,10 +305,20 @@ class ASRManager:
 
     def initialize(self):
         """初始化所有引擎"""
-        engine_type = self.config.get("engine", "faster_whisper")
+        engine_type = self.config.get("engine", "qwen3_server")
 
-        if engine_type == "qwen3":
-            # 主引擎：Qwen3-ASR（需要 llama-cpp-python）
+        # 主引擎：Qwen3-ASR llama-server（HTTP API）
+        if engine_type == "qwen3_server":
+            server_config = self.config.get("qwen3_server", {})
+            qwen_server = Qwen3ServerASR(
+                base_url=server_config.get("base_url", "http://127.0.0.1:8080/v1"),
+                model=server_config.get("model", "default"),
+                timeout=server_config.get("timeout", 30.0),
+            )
+            self.engines.append(qwen_server)
+
+        elif engine_type == "qwen3":
+            # 备用：Qwen3-ASR 直接加载模型（需要 llama-cpp-python）
             try:
                 import llama_cpp
                 qwen = Qwen3ASR(
@@ -320,7 +330,7 @@ class ASRManager:
             except ImportError:
                 print("[ASR] llama-cpp-python 未安装，跳过 Qwen3-ASR")
 
-        # Faster-Whisper 引擎（默认）
+        # Faster-Whisper 引擎（fallback）
         fw_config = self.config.get("faster_whisper", {})
         faster = FasterWhisperASR(
             model_size=fw_config.get("model_size", "small"),
