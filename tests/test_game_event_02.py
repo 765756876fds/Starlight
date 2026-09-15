@@ -814,16 +814,7 @@ class TestGameStartMapping:
 
 
 class TestKillAggregatorDisabled:
-    """KillAggregator 已停用测试"""
-
-    def test_champion_kill_does_not_go_through_kill_aggregator(self):
-        """ChampionKill 不再经过 KillAggregator 产生 MultiKill"""
-        from app.speech.speech_judge import SpeechJudge
-
-        judge = SpeechJudge({})
-
-        # KillAggregator 应该是 None
-        assert judge.kill_aggregator is None
+    """KillAggregator 已删除测试"""
 
     def test_speech_judge_no_longer_aggregates_kills(self):
         """SpeechJudge 不再自己聚合多杀"""

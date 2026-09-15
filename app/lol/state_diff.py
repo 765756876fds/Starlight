@@ -19,7 +19,6 @@ class StateDiff:
     def __init__(self):
         self._last_snapshot: Optional[GameSnapshot] = None
         self._last_kill_time: float = 0.0
-        self._kill_streak: int = 0
         self._last_kill_team: str = ""
         self._known_events: set = set()  # 去重
 
@@ -166,15 +165,6 @@ class StateDiff:
                     },
                     timestamp=time.time(),
                 ))
-
-                # 注意：MultiKill 聚合由 KillAggregator 负责
-                # StateDiff 不再生成第二套 MultiKill Domain Event
-                # 保留 _kill_streak 状态但不用于生成事件（未来可能用于 UI 显示）
-                if killer_team == self._last_kill_team:
-                    self._kill_streak += 1
-                else:
-                    self._kill_streak = 1
-                    self._last_kill_team = killer_team
 
             elif event_name == "FirstBlood":
                 events.append(GameEvent(
@@ -411,6 +401,5 @@ class StateDiff:
         """重置状态（新游戏开始时调用）"""
         self._last_snapshot = None
         self._last_kill_time = 0.0
-        self._kill_streak = 0
         self._last_kill_team = ""
         self._known_events.clear()

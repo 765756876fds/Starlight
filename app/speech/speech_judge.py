@@ -11,7 +11,6 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.event_bus import EventBus, Event, EventType, get_event_bus
-from .kill_aggregator import KillAggregator
 from .speech_queue import SpeechItem, PRIORITY_S, PRIORITY_A, PRIORITY_B
 
 
@@ -88,10 +87,6 @@ class SpeechJudge:
         self.min_interval = config.get("min_interval", 5.0)
 
         self.event_bus = get_event_bus()
-        # KillAggregator 已停用（Riot 原生 Multikill 事件由 StateDiff 直接提供）
-        # 保留类实例但不接入事件处理路径
-        self.kill_aggregator = None
-        self._on_kill_aggregator_expire = None
 
         # SpeechQueue（可选，传入则直接入队；否则发布 SPEECH_SAY 事件）
         self.queue = queue
