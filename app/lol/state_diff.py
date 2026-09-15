@@ -130,7 +130,18 @@ class StateDiff:
 
             event_name = evt.get("EventName", "")
 
-            if event_name == "ChampionKill":
+            # GameStart
+            if event_name == "GameStart":
+                events.append(GameEvent(
+                    event_type=GameEventType.GAME_STARTED,
+                    game_time=new.game_time,
+                    data={
+                        "riot_event_id": evt.get("EventID"),
+                    },
+                    timestamp=time.time(),
+                ))
+
+            elif event_name == "ChampionKill":
                 killer_name = evt.get("KillerName", "")
                 victim_name = evt.get("VictimName", "")
                 assistants = evt.get("Assisters", [])
@@ -355,15 +366,24 @@ class StateDiff:
         return "UNKNOWN"
 
     def _event_key(self, event: Dict[str, Any]) -> str:
-        """生成事件唯一键（用于去重）"""
+        """生成事件唯一键（用于去重）
+
+        优先使用 Riot 原生 EventID 作为唯一身份。
+        如果没有 EventID，则使用 fallback 组合键。
+        """
+        # 优先使用 Riot 原生 EventID（注意 EventID=0 是合法的 GameStart 事件）
+        event_id = event.get("EventID")
+        if event_id is not None:
+            return f"riot:{event_id}"
+
+        # Fallback：没有 EventID 的事件使用组合键
         event_name = event.get("EventName", "")
         event_time = event.get("EventTime", 0)
-        # 加上一些关键字段
         key_parts = [event_name, str(event_time)]
         for field in ["KillerName", "VictimName", "DragonType", "TurretKilled"]:
             if field in event:
                 key_parts.append(str(event[field]))
-        return "|".join(key_parts)
+        return "fallback:" + "|".join(key_parts)
 
     def _deduplicate(self, events: List[GameEvent]) -> List[GameEvent]:
         """事件去重"""

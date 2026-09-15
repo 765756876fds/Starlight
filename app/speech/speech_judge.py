@@ -88,11 +88,10 @@ class SpeechJudge:
         self.min_interval = config.get("min_interval", 5.0)
 
         self.event_bus = get_event_bus()
-        self.kill_aggregator = KillAggregator(
-            window=config.get("kill_aggregate_window", 3.0)
-        )
-        # 设置聚合窗口到期回调：自动 flush 并播报 pending kill
-        self.kill_aggregator.set_on_expire(self._on_kill_aggregator_expire)
+        # KillAggregator 已停用（Riot 原生 Multikill 事件由 StateDiff 直接提供）
+        # 保留类实例但不接入事件处理路径
+        self.kill_aggregator = None
+        self._on_kill_aggregator_expire = None
 
         # SpeechQueue（可选，传入则直接入队；否则发布 SPEECH_SAY 事件）
         self.queue = queue
@@ -123,26 +122,14 @@ class SpeechJudge:
         """停止"""
         self._running = False
 
-    def _on_kill_aggregator_expire(self):
-        """聚合窗口到期，自动 flush 并播报 pending kill"""
-        event = self.kill_aggregator.flush()
-        if event:
-            self._judge_and_speak(event)
-
     def _on_event(self, event: Event):
         """处理事件"""
         if not self._running:
             return
 
-        # 特殊处理：击杀聚合
-        if event.event_type == EventType.CHAMPION_KILL:
-            aggregated = self.kill_aggregator.add(event)
-            if aggregated:
-                # 聚合后的多杀事件
-                self._judge_and_speak(aggregated)
-            return
-
-        # 普通事件评判
+        # 注意：KillAggregator 不再负责多杀聚合
+        # Riot 原生 Multikill 事件由 StateDiff 直接产生
+        # ChampionKill 和 Multikill 都直接走正常判断路径
         self._judge_and_speak(event)
 
     def _judge_and_speak(self, event: Event):

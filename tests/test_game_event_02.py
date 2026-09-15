@@ -571,3 +571,279 @@ class TestTencentLiveClientPath:
         # 注意：ENDPOINTS 字典中的已经有前缀了
         # is_available() 中的也需要检查
         assert "/liveclientdata/gamestats" in source
+
+
+class TestEventIDDedup:
+    """Riot EventID 去重测试"""
+
+    def test_event_id_zero_handled_correctly(self):
+        """EventID=0 (GameStart) 必须正确处理，不被当成无 EventID"""
+        diff = StateDiff()
+
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 0.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        new_snapshot = MagicMock(spec=GameSnapshot)
+        new_snapshot.game_time = 0.1
+        new_snapshot.is_game_running = True
+        new_snapshot.recent_events = [
+            {
+                "EventID": 0,
+                "EventName": "GameStart",
+                "EventTime": 0.1,
+            }
+        ]
+        new_snapshot.players = []
+        new_snapshot.current_player = None
+        new_snapshot.ally_team_name = "Order"
+
+        events = diff.diff(new_snapshot)
+        game_start_events = [e for e in events if e.event_type == EventType.GAME_STARTED]
+
+        assert len(game_start_events) == 1
+        assert game_start_events[0].data["riot_event_id"] == 0
+
+    def test_same_event_id_no_duplicate(self):
+        """相同 EventID 不产生重复 Domain Event"""
+        diff = StateDiff()
+
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 100.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        # 第一次
+        snapshot1 = MagicMock(spec=GameSnapshot)
+        snapshot1.game_time = 105.0
+        snapshot1.is_game_running = True
+        snapshot1.recent_events = [
+            {
+                "EventID": 5,
+                "EventName": "ChampionKill",
+                "EventTime": 105.0,
+                "KillerName": "PlayerA",
+                "VictimName": "PlayerB",
+                "Assisters": [],
+            }
+        ]
+        snapshot1.players = []
+        snapshot1.current_player = None
+        snapshot1.ally_team_name = "Order"
+
+        events1 = diff.diff(snapshot1)
+        assert len([e for e in events1 if e.event_type == EventType.CHAMPION_KILL]) == 1
+
+        # 第二次，相同事件（模拟全量历史）
+        snapshot2 = MagicMock(spec=GameSnapshot)
+        snapshot2.game_time = 106.0
+        snapshot2.is_game_running = True
+        snapshot2.recent_events = [
+            {
+                "EventID": 5,
+                "EventName": "ChampionKill",
+                "EventTime": 105.0,
+                "KillerName": "PlayerA",
+                "VictimName": "PlayerB",
+                "Assisters": [],
+            }
+        ]
+        snapshot2.players = []
+        snapshot2.current_player = None
+        snapshot2.ally_team_name = "Order"
+
+        events2 = diff.diff(snapshot2)
+        assert len([e for e in events2 if e.event_type == EventType.CHAMPION_KILL]) == 0
+
+    def test_same_time_same_killer_different_event_id(self):
+        """同时间 + 同 Killer + 不同 EventID 不被错误 dedup"""
+        diff = StateDiff()
+
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 100.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        # 两个 Multikill 事件，相同时间和 Killer，但不同 EventID
+        new_snapshot = MagicMock(spec=GameSnapshot)
+        new_snapshot.game_time = 105.0
+        new_snapshot.is_game_running = True
+        new_snapshot.recent_events = [
+            {
+                "EventID": 5,
+                "EventName": "Multikill",
+                "EventTime": 105.0,
+                "KillStreak": 2,
+                "KillerName": "PlayerA",
+            },
+            {
+                "EventID": 7,
+                "EventName": "Multikill",
+                "EventTime": 105.0,
+                "KillStreak": 3,
+                "KillerName": "PlayerA",
+            },
+        ]
+        new_snapshot.players = []
+        new_snapshot.current_player = None
+        new_snapshot.ally_team_name = "Order"
+
+        events = diff.diff(new_snapshot)
+        multikill_events = [e for e in events if e.event_type == EventType.MULTI_KILL]
+
+        # 两个不同 EventID 的 Multikill 必须都产生
+        assert len(multikill_events) == 2
+
+    def test_event_id_resets_on_new_game(self):
+        """新游戏 EventID 重置"""
+        diff = StateDiff()
+
+        # 第一局
+        initial1 = MagicMock(spec=GameSnapshot)
+        initial1.game_time = 0.0
+        initial1.is_game_running = True
+        initial1.recent_events = []
+        initial1.players = []
+        initial1.current_player = None
+        initial1.ally_team_name = "Order"
+        diff.diff(initial1)
+
+        snapshot1 = MagicMock(spec=GameSnapshot)
+        snapshot1.game_time = 100.0
+        snapshot1.is_game_running = True
+        snapshot1.recent_events = [
+            {
+                "EventID": 5,
+                "EventName": "ChampionKill",
+                "EventTime": 100.0,
+                "KillerName": "PlayerA",
+                "VictimName": "PlayerB",
+                "Assisters": [],
+            }
+        ]
+        snapshot1.players = []
+        snapshot1.current_player = None
+        snapshot1.ally_team_name = "Order"
+
+        events1 = diff.diff(snapshot1)
+        assert len([e for e in events1 if e.event_type == EventType.CHAMPION_KILL]) == 1
+
+        # 新游戏
+        diff.reset()
+
+        initial2 = MagicMock(spec=GameSnapshot)
+        initial2.game_time = 0.0
+        initial2.is_game_running = True
+        initial2.recent_events = []
+        initial2.players = []
+        initial2.current_player = None
+        initial2.ally_team_name = "Order"
+        diff.diff(initial2)
+
+        # 第二局，相同 EventID=5
+        snapshot2 = MagicMock(spec=GameSnapshot)
+        snapshot2.game_time = 100.0
+        snapshot2.is_game_running = True
+        snapshot2.recent_events = [
+            {
+                "EventID": 5,
+                "EventName": "ChampionKill",
+                "EventTime": 100.0,
+                "KillerName": "PlayerC",
+                "VictimName": "PlayerD",
+                "Assisters": [],
+            }
+        ]
+        snapshot2.players = []
+        snapshot2.current_player = None
+        snapshot2.ally_team_name = "Order"
+
+        events2 = diff.diff(snapshot2)
+        # 新游戏后，相同 EventID 应该重新产生
+        assert len([e for e in events2 if e.event_type == EventType.CHAMPION_KILL]) == 1
+
+
+class TestGameStartMapping:
+    """GameStart 映射测试"""
+
+    def test_game_start_event_mapped(self):
+        """Riot GameStart 事件正确映射为 GAME_STARTED"""
+        diff = StateDiff()
+
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 0.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        new_snapshot = MagicMock(spec=GameSnapshot)
+        new_snapshot.game_time = 0.1
+        new_snapshot.is_game_running = True
+        new_snapshot.recent_events = [
+            {
+                "EventID": 0,
+                "EventName": "GameStart",
+                "EventTime": 0.1,
+            }
+        ]
+        new_snapshot.players = []
+        new_snapshot.current_player = None
+        new_snapshot.ally_team_name = "Order"
+
+        events = diff.diff(new_snapshot)
+        game_start_events = [e for e in events if e.event_type == EventType.GAME_STARTED]
+
+        assert len(game_start_events) == 1
+        assert game_start_events[0].data["riot_event_id"] == 0
+
+
+class TestKillAggregatorDisabled:
+    """KillAggregator 已停用测试"""
+
+    def test_champion_kill_does_not_go_through_kill_aggregator(self):
+        """ChampionKill 不再经过 KillAggregator 产生 MultiKill"""
+        from app.speech.speech_judge import SpeechJudge
+
+        judge = SpeechJudge({})
+
+        # KillAggregator 应该是 None
+        assert judge.kill_aggregator is None
+
+    def test_speech_judge_no_longer_aggregates_kills(self):
+        """SpeechJudge 不再自己聚合多杀"""
+        from app.speech.speech_judge import SpeechJudge
+        from app.core.event_bus import Event
+
+        judge = SpeechJudge({})
+        judge._running = True
+
+        # 连续发送 3 个 ChampionKill
+        for i in range(3):
+            event = Event(
+                event_type=EventType.CHAMPION_KILL,
+                data={
+                    "killer_name": "PlayerA",
+                    "victim_name": f"PlayerB{i}",
+                },
+                source="test"
+            )
+            # 不应该产生多杀聚合
+            # 直接走正常判断路径
+            # 这里只验证不崩溃
+            judge._on_event(event)
