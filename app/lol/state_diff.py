@@ -134,6 +134,7 @@ class StateDiff:
                 killer_name = evt.get("KillerName", "")
                 victim_name = evt.get("VictimName", "")
                 assistants = evt.get("Assisters", [])
+                riot_event_id = evt.get("EventID")  # Riot 原生 EventID
 
                 # 查找队伍
                 killer_team = self._find_team(new, killer_name)
@@ -143,6 +144,7 @@ class StateDiff:
                     event_type=GameEventType.CHAMPION_KILL,
                     game_time=new.game_time,
                     data={
+                        "riot_event_id": riot_event_id,  # Riot 原生 EventID
                         "killer_name": killer_name,
                         "killer_team": killer_team,
                         "victim_name": victim_name,
@@ -154,29 +156,23 @@ class StateDiff:
                     timestamp=time.time(),
                 ))
 
-                # 多杀检测
+                # 注意：MultiKill 聚合由 KillAggregator 负责
+                # StateDiff 不再生成第二套 MultiKill Domain Event
+                # 保留 _kill_streak 状态但不用于生成事件（未来可能用于 UI 显示）
                 if killer_team == self._last_kill_team:
                     self._kill_streak += 1
                 else:
                     self._kill_streak = 1
                     self._last_kill_team = killer_team
 
-                if self._kill_streak >= 2:
-                    events.append(GameEvent(
-                        event_type=GameEventType.MULTI_KILL,
-                        game_time=new.game_time,
-                        data={
-                            "team": killer_team,
-                            "count": self._kill_streak,
-                        },
-                        timestamp=time.time(),
-                    ))
-
             elif event_name == "FirstBlood":
                 events.append(GameEvent(
                     event_type=GameEventType.FIRST_BLOOD,
                     game_time=new.game_time,
-                    data={"recipient": evt.get("Recipient", "")},
+                    data={
+                        "riot_event_id": evt.get("EventID"),
+                        "recipient": evt.get("Recipient", ""),
+                    },
                     timestamp=time.time(),
                 ))
 
@@ -184,7 +180,10 @@ class StateDiff:
                 events.append(GameEvent(
                     event_type=GameEventType.ACE,
                     game_time=new.game_time,
-                    data={"acer": evt.get("Acer", "")},
+                    data={
+                        "riot_event_id": evt.get("EventID"),
+                        "acer": evt.get("Acer", ""),
+                    },
                     timestamp=time.time(),
                 ))
 
@@ -278,6 +277,7 @@ class StateDiff:
                     event_type=GameEventType.DRAGON_KILLED,
                     game_time=new.game_time,
                     data={
+                        "riot_event_id": evt.get("EventID"),
                         "dragon_type": evt.get("DragonType", ""),
                         "killer_name": evt.get("KillerName", ""),
                         "stolen": evt.get("Stolen", False),
@@ -290,6 +290,7 @@ class StateDiff:
                     event_type=GameEventType.BARON_KILLED,
                     game_time=new.game_time,
                     data={
+                        "riot_event_id": evt.get("EventID"),
                         "killer_name": evt.get("KillerName", ""),
                         "stolen": evt.get("Stolen", False),
                     },
@@ -301,6 +302,7 @@ class StateDiff:
                     event_type=GameEventType.HERALD_KILLED,
                     game_time=new.game_time,
                     data={
+                        "riot_event_id": evt.get("EventID"),
                         "killer_name": evt.get("KillerName", ""),
                         "stolen": evt.get("Stolen", False),
                     },
@@ -312,6 +314,7 @@ class StateDiff:
                     event_type=GameEventType.TOWER_DESTROYED,
                     game_time=new.game_time,
                     data={
+                        "riot_event_id": evt.get("EventID"),
                         "tower_name": evt.get("TurretKilled", ""),
                         "killer_name": evt.get("KillerName", ""),
                     },
@@ -322,7 +325,10 @@ class StateDiff:
                 events.append(GameEvent(
                     event_type=GameEventType.INHIBITOR_DESTROYED,
                     game_time=new.game_time,
-                    data={"inhibitor": evt.get("InhibKilled", "")},
+                    data={
+                        "riot_event_id": evt.get("EventID"),
+                        "inhibitor": evt.get("InhibKilled", ""),
+                    },
                     timestamp=time.time(),
                 ))
 

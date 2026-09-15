@@ -202,14 +202,22 @@ class RuleEngine:
         """
         生成稳定 event_id（用于 dedup）
 
-        优先使用 payload 中的稳定字段。
+        优先级：
+        1. Riot 原生 EventID（riot_event_id）
+        2. payload 中的 event_id
+        3. fallback：event_type + 关键 payload 字段
         """
-        # 如果 payload 中有 event_id，直接用
+        # 第一优先级：Riot 原生 EventID
+        riot_eid = event.get("riot_event_id")
+        if riot_eid:
+            return f"{event.event_type}:riot_{riot_eid}"
+
+        # 第二优先级：payload 中的 event_id
         payload_eid = event.get("event_id")
         if payload_eid:
             return f"{event.event_type}:{payload_eid}"
 
-        # fallback：event_type + 关键 payload 字段
+        # Fallback：event_type + 关键 payload 字段
         game_time = event.get("game_time", 0)
         killer = event.get("killer_name", "")
         victim = event.get("victim_name", "")
