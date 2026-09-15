@@ -89,6 +89,9 @@ class TTSController:
         # 停止标志
         self._stop_flag = threading.Event()
 
+        # 防止重复发布 speech.finished
+        self._finished_published = False
+
         # generation 计数器，防止旧线程继续执行
         self._generation = 0
 
@@ -158,6 +161,8 @@ class TTSController:
 
         # 清除停止标志，允许新播放
         self._stop_flag.clear()
+        # 重置 finished 标记，允许新播放发布 finished
+        self._finished_published = False
 
         # 提交到后台线程执行（不阻塞调用方）
         thread = threading.Thread(
@@ -241,6 +246,10 @@ class TTSController:
         # 检查是否被停止（如果是 stop 触发的，状态已经被 stop_playback 设置为 IDLE）
         if not self._stop_flag.is_set():
             self._set_state(TTSState.IDLE)
+            # 正常播放完成，发布 finished（防止重复）
+            if not self._finished_published:
+                self._finished_published = True
+                self._publish_event(EventType.SPEECH_FINISHED, {"reason": "completed"})
 
     def _generate_audio(self, text: str) -> Optional[str]:
         """生成音频文件（同步，在后台线程执行）"""
@@ -362,7 +371,10 @@ class TTSController:
         with self._lock:
             self._set_state(TTSState.IDLE)
 
-        self._publish_event(EventType.SPEECH_FINISHED, {"reason": "stopped"})
+        # 发布 finished（防止重复）
+        if not self._finished_published:
+            self._finished_published = True
+            self._publish_event(EventType.SPEECH_FINISHED, {"reason": "stopped"})
 
     def is_playing(self) -> bool:
         """是否正在播放"""
