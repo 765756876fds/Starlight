@@ -69,6 +69,13 @@ class LoLRuntime:
         self._last_champ_select: Optional[Dict[str, Any]] = None
         self._champ_select_active: bool = False
 
+        # GameEnd 缓存和 grace window
+        self._cached_game_end_result: Optional[str] = None
+        self._game_end_published: bool = False
+        self._game_end_retry_count: int = 0
+        self._max_game_end_retries: int = 2
+        self._game_end_retry_delay: float = 0.5
+
     def start(self):
         """启动 LoL 运行时"""
         if self._running:
@@ -116,19 +123,16 @@ class LoLRuntime:
         # 检查 API 是否可用
         if not self.live_api.is_available():
             if self._game_active:
-                # 游戏结束
-                self._game_active = False
-                self.state_diff.reset()
-                self.event_bus.publish(Event(
-                    event_type=EventType.GAME_ENDED,
-                    data={},
-                    source="lol"
-                ))
-                self.state_store.set(StateNamespace.GAME, "is_active", False)
+                # 游戏可能结束，进入 grace window 确认阶段
+                self._handle_game_end_detection()
             return
 
         # 游戏正在运行
         if not self._game_active:
+            # 新游戏开始，清除 GameEnd 缓存和标记
+            self._cached_game_end_result = None
+            self._game_end_published = False
+            self._game_end_retry_count = 0
             self._game_active = True
             self.state_store.set(StateNamespace.GAME, "is_active", True)
 
@@ -145,11 +149,31 @@ class LoLRuntime:
             # 更新状态存储
             self._update_state(snapshot)
 
+            # 读取 eventdata，缓存 GameEnd
+            try:
+                eventdata = self.live_api.get_event_data()
+                if eventdata and 'Events' in eventdata:
+                    for evt in eventdata['Events']:
+                        if evt.get('EventName') == 'GameEnd':
+                            self._cached_game_end_result = evt.get('Result', '')
+                            break
+            except Exception:
+                pass
+
             # 检测状态差异
             events = self.state_diff.diff(snapshot)
 
             # 发布事件
             for event in events:
+                # 检查是否是 GAME_ENDED 事件
+                if event.event_type == EventType.GAME_ENDED:
+                    if self._game_end_published:
+                        continue  # 已经发布过，跳过重复
+                    self._game_end_published = True
+                    # 如果缓存中有 result，优先使用
+                    if self._cached_game_end_result and not event.data.get('result'):
+                        event.data['result'] = self._cached_game_end_result
+
                 self.event_bus.publish(Event(
                     event_type=event.event_type,
                     data=event.data,
@@ -158,6 +182,42 @@ class LoLRuntime:
 
         except Exception as e:
             print(f"[LoL] 数据轮询异常: {e}")
+
+    def _handle_game_end_detection(self):
+        """
+        游戏结束检测：grace window 重试机制
+
+        is_available() 失败后，不要立即发布 GAME_ENDED。
+        短暂重试几次，尝试拿到 GameEnd.Result。
+        """
+        if self._game_end_published:
+            # 已经发布过 GAME_ENDED，不需要再处理
+            return
+
+        # grace window 重试
+        if self._game_end_retry_count < self._max_game_end_retries:
+            self._game_end_retry_count += 1
+            # 短暂等待后再试（在当前轮询周期内，下一次轮询会自动重试）
+            # 这里不阻塞，让 scheduler 下一次轮询再检测
+            return
+
+        # 所有重试都失败，最终确认游戏结束
+        self._game_active = False
+        self.state_diff.reset()
+
+        # 构造 GAME_ENDED 事件，带上缓存的 result（如果有）
+        game_end_data = {}
+        if self._cached_game_end_result:
+            game_end_data['result'] = self._cached_game_end_result
+
+        self.event_bus.publish(Event(
+            event_type=EventType.GAME_ENDED,
+            data=game_end_data,
+            source="lol"
+        ))
+
+        self._game_end_published = True
+        self.state_store.set(StateNamespace.GAME, "is_active", False)
 
     def _poll_lcu(self):
         """轮询 LCU 状态，检测 GameFlow 变化并发布事件"""
