@@ -35,16 +35,16 @@ class LiveClientAPI:
     """
 
     ENDPOINTS = {
-        "allgamedata": "/allgamedata",
-        "activeplayer": "/activeplayer",
-        "activeplayerabilities": "/activeplayerabilities",
-        "activeplayerrunes": "/activeplayerrunes",
-        "playerlist": "/playerlist",
-        "playerscores": "/playerscores",
-        "playersummonerspells": "/playersummonerspells",
-        "playeritems": "/playeritems",
-        "gamestats": "/gamestats",
-        "eventdata": "/eventdata",
+        "allgamedata": "/liveclientdata/allgamedata",
+        "activeplayer": "/liveclientdata/activeplayer",
+        "activeplayerabilities": "/liveclientdata/activeplayerabilities",
+        "activeplayerrunes": "/liveclientdata/activeplayerrunes",
+        "playerlist": "/liveclientdata/playerlist",
+        "playerscores": "/liveclientdata/playerscores",
+        "playersummonerspells": "/liveclientdata/playersummonerspells",
+        "playeritems": "/liveclientdata/playeritems",
+        "gamestats": "/liveclientdata/gamestats",
+        "eventdata": "/liveclientdata/eventdata",
     }
 
     def __init__(self, base_url: str = "https://127.0.0.1:2999",
@@ -67,7 +67,7 @@ class LiveClientAPI:
         self._last_check = now
         try:
             resp = self._session.get(
-                f"{self.base_url}/gamestats",
+                f"{self.base_url}/liveclientdata/gamestats",
                 timeout=self.timeout
             )
             self._available = resp.status_code == 200

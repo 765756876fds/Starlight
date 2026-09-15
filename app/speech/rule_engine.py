@@ -238,7 +238,19 @@ class RuleEngine:
         从模板和 payload 生成实际文本
 
         V1 简单实现：直接返回模板，或从 payload 填充基本字段。
+        Multikill 根据 kill_streak 生成不同文本。
         """
+        # Multikill 特殊处理：根据 kill_streak 生成文本
+        if event.event_type == EventType.MULTI_KILL:
+            kill_streak = event.get("kill_streak", 2)
+            multikill_texts = {
+                2: "双杀",
+                3: "三杀",
+                4: "四杀",
+                5: "五杀",
+            }
+            return multikill_texts.get(kill_streak, f"{kill_streak}连杀")
+
         text = template
 
         # 尝试填充一些基本字段

@@ -187,6 +187,19 @@ class StateDiff:
                     timestamp=time.time(),
                 ))
 
+            elif event_name == "Multikill":
+                # Riot 原生 Multikill 事件 - 不再自己推导多杀
+                events.append(GameEvent(
+                    event_type=GameEventType.MULTI_KILL,
+                    game_time=new.game_time,
+                    data={
+                        "riot_event_id": evt.get("EventID"),
+                        "kill_streak": evt.get("KillStreak", 2),
+                        "killer_name": evt.get("KillerName", ""),
+                    },
+                    timestamp=time.time(),
+                ))
+
         return events
 
     def _detect_item_changes(self, old: GameSnapshot, new: GameSnapshot) -> List[GameEvent]:

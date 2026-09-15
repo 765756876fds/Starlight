@@ -20,14 +20,14 @@ class TestLiveClientAPI:
         assert api.base_url == "https://127.0.0.1:2999"
 
     def test_endpoints_defined(self):
-        """验证所有端点已定义"""
+        """验证所有端点已定义（腾讯服使用 /liveclientdata 前缀）"""
         api = LiveClientAPI()
         expected_endpoints = {
-            "allgamedata": "/allgamedata",
-            "activeplayer": "/activeplayer",
-            "playerlist": "/playerlist",
-            "gamestats": "/gamestats",
-            "eventdata": "/eventdata",
+            "allgamedata": "/liveclientdata/allgamedata",
+            "activeplayer": "/liveclientdata/activeplayer",
+            "playerlist": "/liveclientdata/playerlist",
+            "gamestats": "/liveclientdata/gamestats",
+            "eventdata": "/liveclientdata/eventdata",
         }
         for key, path in expected_endpoints.items():
             assert key in api.ENDPOINTS
