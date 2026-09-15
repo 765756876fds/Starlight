@@ -58,6 +58,10 @@ class LoLRuntime:
         self._current_snapshot: Optional[GameSnapshot] = None
         self._game_active = False
 
+        # LCU GameFlow 状态
+        self._last_lcu_phase: Optional[str] = None
+        self._lcu_was_connected = False
+
     def start(self):
         """启动 LoL 运行时"""
         if self._running:
@@ -84,7 +88,7 @@ class LoLRuntime:
         self.scheduler.add_task(
             "lol_poll_lcu",
             self._poll_lcu,
-            interval=2.0,
+            interval=1.0,
         )
 
         print("[LoL] 运行时已启动")
@@ -149,16 +153,81 @@ class LoLRuntime:
             print(f"[LoL] 数据轮询异常: {e}")
 
     def _poll_lcu(self):
-        """轮询 LCU 状态"""
+        """轮询 LCU 状态，检测 GameFlow 变化并发布事件"""
         if not self._running:
             return
 
-        if self.lcu.connected:
-            phase = self.lcu.get_gameflow_phase()
-            self.state_store.set(StateNamespace.LCU, "gameflow_phase", phase)
+        if not self.lcu.connected:
+            # LCU 断开
+            if self._lcu_was_connected:
+                self._lcu_was_connected = False
+                self._last_lcu_phase = None
+                self.state_store.set(StateNamespace.LCU, "connected", False)
+                self.event_bus.publish(Event(
+                    event_type=EventType.LCU_DISCONNECTED,
+                    data={},
+                    source="lol"
+                ))
+            return
+
+        # LCU 刚连接
+        if not self._lcu_was_connected:
+            self._lcu_was_connected = True
             self.state_store.set(StateNamespace.LCU, "connected", True)
-        else:
-            self.state_store.set(StateNamespace.LCU, "connected", False)
+            self.event_bus.publish(Event(
+                event_type=EventType.LCU_CONNECTED,
+                data={},
+                source="lol"
+            ))
+
+        # 获取当前 phase
+        try:
+            phase = self.lcu.get_gameflow_phase()
+        except Exception as e:
+            print(f"[LCU] 获取 gameflow phase 失败: {e}")
+            return
+
+        if not phase:
+            return
+
+        # 归类未知 phase
+        known_phases = {
+            "None", "Lobby", "ChampSelect", "GameStart",
+            "InProgress", "Reconnecting", "WaitingForStats",
+            "PreEndOfGame", "EndOfGame", "Tournament"
+        }
+        normalized_phase = phase if phase in known_phases else "Unknown"
+
+        # 更新状态存储
+        self.state_store.set(StateNamespace.LCU, "gameflow_phase", normalized_phase)
+        self.state_store.set(StateNamespace.LCU, "raw_phase", phase)
+
+        # 检测变化
+        if self._last_lcu_phase is None:
+            # 第一次获取，发布初始状态
+            self._last_lcu_phase = normalized_phase
+            self.event_bus.publish(Event(
+                event_type=EventType.LCU_GAMEFLOW_CHANGED,
+                data={
+                    "old_phase": "UNKNOWN",
+                    "new_phase": normalized_phase,
+                    "raw_phase": phase,
+                },
+                source="lol"
+            ))
+        elif self._last_lcu_phase != normalized_phase:
+            # phase 变化
+            old_phase = self._last_lcu_phase
+            self._last_lcu_phase = normalized_phase
+            self.event_bus.publish(Event(
+                event_type=EventType.LCU_GAMEFLOW_CHANGED,
+                data={
+                    "old_phase": old_phase,
+                    "new_phase": normalized_phase,
+                    "raw_phase": phase,
+                },
+                source="lol"
+            ))
 
     def _update_state(self, snapshot: GameSnapshot):
         """更新状态存储"""
