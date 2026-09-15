@@ -847,3 +847,169 @@ class TestKillAggregatorDisabled:
             # 直接走正常判断路径
             # 这里只验证不崩溃
             judge._on_event(event)
+
+
+class TestRealTencentSample108:
+    """真实腾讯服 108 事件样本回归测试"""
+
+    def _load_real_sample(self):
+        """加载真实样本"""
+        import json
+        import os
+        fixture_path = os.path.join(
+            os.path.dirname(__file__),
+            'fixtures',
+            'eventdata_tencent_core_108.json'
+        )
+        with open(fixture_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    def test_sample_file_exists(self):
+        """样本文件存在"""
+        data = self._load_real_sample()
+        assert 'Events' in data
+        assert len(data['Events']) == 108
+
+    def test_state_diff_maps_all_core_events(self):
+        """StateDiff 正确映射所有核心事件"""
+        data = self._load_real_sample()
+        events = data['Events']
+
+        diff = StateDiff()
+
+        # 初始化空 snapshot
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 0.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        # 一次性喂所有事件（模拟第一次轮询）
+        snapshot = MagicMock(spec=GameSnapshot)
+        snapshot.game_time = 1000.0
+        snapshot.is_game_running = True
+        snapshot.recent_events = events
+        snapshot.players = []
+        snapshot.current_player = None
+        snapshot.ally_team_name = "Order"
+
+        domain_events = diff.diff(snapshot)
+
+        # 统计各类型数量
+        from collections import Counter
+        type_counts = Counter(e.event_type for e in domain_events)
+
+        # 验证核心事件数量
+        expected = {
+            EventType.GAME_STARTED: 1,
+            EventType.CHAMPION_KILL: 40,
+            EventType.FIRST_BLOOD: 1,
+            EventType.MULTI_KILL: 32,
+            EventType.ACE: 8,
+            EventType.TOWER_DESTROYED: 13,
+            EventType.DRAGON_KILLED: 2,
+            EventType.HERALD_KILLED: 1,
+            EventType.BARON_KILLED: 1,
+            EventType.INHIBITOR_DESTROYED: 3,
+            EventType.GAME_ENDED: 1,
+        }
+
+        for etype, count in expected.items():
+            actual = type_counts.get(etype, 0)
+            assert actual == count, f"{etype}: expected {count}, got {actual}"
+
+    def test_game_end_result_preserved(self):
+        """GameEnd 的 Result 字段正确保留"""
+        data = self._load_real_sample()
+        events = data['Events']
+
+        diff = StateDiff()
+
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 0.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        snapshot = MagicMock(spec=GameSnapshot)
+        snapshot.game_time = 1000.0
+        snapshot.is_game_running = True
+        snapshot.recent_events = events
+        snapshot.players = []
+        snapshot.current_player = None
+        snapshot.ally_team_name = "Order"
+
+        domain_events = diff.diff(snapshot)
+        game_end_events = [e for e in domain_events if e.event_type == EventType.GAME_ENDED]
+
+        assert len(game_end_events) >= 1
+        game_end = game_end_events[0]
+        assert game_end.data["result"] == "Win"
+        assert game_end.data["riot_event_id"] == 107
+
+    def test_dragon_type_preserved(self):
+        """DragonKill 的 DragonType 字段正确保留"""
+        data = self._load_real_sample()
+        events = data['Events']
+
+        diff = StateDiff()
+
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 0.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        snapshot = MagicMock(spec=GameSnapshot)
+        snapshot.game_time = 1000.0
+        snapshot.is_game_running = True
+        snapshot.recent_events = events
+        snapshot.players = []
+        snapshot.current_player = None
+        snapshot.ally_team_name = "Order"
+
+        domain_events = diff.diff(snapshot)
+        dragon_events = [e for e in domain_events if e.event_type == EventType.DRAGON_KILLED]
+
+        assert len(dragon_events) == 2
+        # 第一个应该是 Air 龙
+        assert dragon_events[0].data["dragon_type"] == "Air"
+
+    def test_turret_killed_has_tower_name(self):
+        """TurretKilled 的塔名正确保留"""
+        data = self._load_real_sample()
+        events = data['Events']
+
+        diff = StateDiff()
+
+        initial = MagicMock(spec=GameSnapshot)
+        initial.game_time = 0.0
+        initial.is_game_running = True
+        initial.recent_events = []
+        initial.players = []
+        initial.current_player = None
+        initial.ally_team_name = "Order"
+        diff.diff(initial)
+
+        snapshot = MagicMock(spec=GameSnapshot)
+        snapshot.game_time = 1000.0
+        snapshot.is_game_running = True
+        snapshot.recent_events = events
+        snapshot.players = []
+        snapshot.current_player = None
+        snapshot.ally_team_name = "Order"
+
+        domain_events = diff.diff(snapshot)
+        turret_events = [e for e in domain_events if e.event_type == EventType.TOWER_DESTROYED]
+
+        assert len(turret_events) == 13
+        assert turret_events[0].data["tower_name"] != ""

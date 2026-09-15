@@ -356,6 +356,17 @@ class StateDiff:
                     timestamp=time.time(),
                 ))
 
+            elif event_name == "GameEnd":
+                events.append(GameEvent(
+                    event_type=GameEventType.GAME_ENDED,
+                    game_time=new.game_time,
+                    data={
+                        "riot_event_id": evt.get("EventID"),
+                        "result": evt.get("Result", ""),
+                    },
+                    timestamp=time.time(),
+                ))
+
         return events
 
     def _find_team(self, snapshot: GameSnapshot, name: str) -> str:
