@@ -20,6 +20,7 @@ from app.core.command_bus import get_command_bus
 from app.core.state_store import get_state_store, StateNamespace
 from app.core.scheduler import get_scheduler
 from app.core.logger import get_logger
+from app.core.event_log import EventLog
 
 from app.music.controller import MusicController
 from app.lol.runtime import LoLRuntime
@@ -58,6 +59,7 @@ class Application:
         self.tts: TTSController = None
         self.speech_queue: SpeechQueue = None
         self.speech_judge: SpeechJudge = None
+        self.event_log: EventLog = None
 
         # 状态
         self._running = False
@@ -68,6 +70,12 @@ class Application:
         print("=" * 60)
         print("  LoL × 本地音乐 × 语音 Agent")
         print("=" * 60)
+
+        # 0. Event Log（最先启动，记录所有事件）
+        print("\n[0/5] 初始化 Event Log...")
+        self.event_log = EventLog(
+            log_dir=self.config.get("events.log_dir", "./data/events")
+        )
 
         # 1. 音乐模块
         print("\n[1/5] 初始化音乐模块...")
@@ -107,6 +115,9 @@ class Application:
 
         self._running = True
         print("\n正在启动系统...")
+
+        # 启动 Event Log（最先启动）
+        self.event_log.start()
 
         # 启动调度器
         self.scheduler.start()
@@ -174,6 +185,10 @@ class Application:
 
         self.scheduler.stop()
         self.state_store.set(StateNamespace.SYSTEM, "running", False)
+
+        # 最后停止 Event Log（确保所有停止事件都被记录）
+        if self.event_log:
+            self.event_log.stop()
 
         print("系统已停止。")
 
