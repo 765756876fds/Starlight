@@ -94,6 +94,7 @@ class EventType:
     LCU_CONNECTED = "lcu.connected"
     LCU_DISCONNECTED = "lcu.disconnected"
     LCU_GAMEFLOW_CHANGED = "lcu.gameflow_changed"
+    LCU_SUMMONER_UPDATED = "lcu.summoner_updated"
     LCU_CHAMP_SELECT_CHANGED = "lcu.champ_select_changed"
     LCU_READY_CHECK = "lcu.ready_check"
 

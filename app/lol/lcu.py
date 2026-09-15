@@ -399,6 +399,15 @@ class LCUConnection:
                 self._gameflow_phase = phase
         return self._gameflow_phase
 
+    def get_current_summoner(self) -> Optional[Dict[str, Any]]:
+        """获取当前登录召唤师信息"""
+        if not self._connected:
+            return None
+        try:
+            return self.get("/lol-summoner/v1/current-summoner")
+        except Exception:
+            return None
+
     def get_champ_select_session(self) -> Optional[Dict[str, Any]]:
         """获取英雄选择会话"""
         if self._champ_select_data:

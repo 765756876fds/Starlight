@@ -62,6 +62,9 @@ class LoLRuntime:
         self._last_lcu_phase: Optional[str] = None
         self._lcu_was_connected = False
 
+        # LCU Summoner 状态
+        self._last_summoner: Optional[Dict[str, Any]] = None
+
     def start(self):
         """启动 LoL 运行时"""
         if self._running:
@@ -162,6 +165,7 @@ class LoLRuntime:
             if self._lcu_was_connected:
                 self._lcu_was_connected = False
                 self._last_lcu_phase = None
+                self._last_summoner = None
                 self.state_store.set(StateNamespace.LCU, "connected", False)
                 self.event_bus.publish(Event(
                     event_type=EventType.LCU_DISCONNECTED,
@@ -228,6 +232,66 @@ class LoLRuntime:
                 },
                 source="lol"
             ))
+
+        # 获取 current-summoner
+        try:
+            summoner = self.lcu.get_current_summoner()
+        except Exception as e:
+            print(f"[LCU] 获取 current-summoner 失败: {e}")
+            summoner = None
+
+        if not summoner or not isinstance(summoner, dict):
+            return
+
+        # 提取有用字段（兼容 Tencent 可能缺失的字段）
+        summoner_info = {
+            "summonerId": summoner.get("summonerId"),
+            "displayName": summoner.get("displayName"),
+            "profileIconId": summoner.get("profileIconId"),
+            "summonerLevel": summoner.get("summonerLevel"),
+            "puuid": summoner.get("puuid"),
+            "gameName": summoner.get("gameName"),
+            "tagLine": summoner.get("tagLine"),
+        }
+
+        # 更新 StateStore
+        self.state_store.set(StateNamespace.LCU, "current_summoner", summoner_info)
+
+        # 检测变化（只比较关键字段）
+        new_key = (
+            summoner_info.get("summonerId"),
+            summoner_info.get("displayName"),
+            summoner_info.get("summonerLevel"),
+        )
+
+        if self._last_summoner is None:
+            # 第一次获取
+            self._last_summoner = summoner_info
+            self.event_bus.publish(Event(
+                event_type=EventType.LCU_SUMMONER_UPDATED,
+                data={
+                    "summoner": summoner_info,
+                    "is_first": True,
+                },
+                source="lol"
+            ))
+        else:
+            old_key = (
+                self._last_summoner.get("summonerId"),
+                self._last_summoner.get("displayName"),
+                self._last_summoner.get("summonerLevel"),
+            )
+            if new_key != old_key:
+                # 数据变化
+                self._last_summoner = summoner_info
+                self.event_bus.publish(Event(
+                    event_type=EventType.LCU_SUMMONER_UPDATED,
+                    data={
+                        "summoner": summoner_info,
+                        "is_first": False,
+                    },
+                    source="lol"
+                ))
 
     def _update_state(self, snapshot: GameSnapshot):
         """更新状态存储"""
