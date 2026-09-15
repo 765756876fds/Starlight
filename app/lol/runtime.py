@@ -65,6 +65,10 @@ class LoLRuntime:
         # LCU Summoner 状态
         self._last_summoner: Optional[Dict[str, Any]] = None
 
+        # LCU Champ Select 状态
+        self._last_champ_select: Optional[Dict[str, Any]] = None
+        self._champ_select_active: bool = False
+
     def start(self):
         """启动 LoL 运行时"""
         if self._running:
@@ -166,6 +170,8 @@ class LoLRuntime:
                 self._lcu_was_connected = False
                 self._last_lcu_phase = None
                 self._last_summoner = None
+                self._last_champ_select = None
+                self._champ_select_active = False
                 self.state_store.set(StateNamespace.LCU, "connected", False)
                 self.event_bus.publish(Event(
                     event_type=EventType.LCU_DISCONNECTED,
@@ -233,6 +239,9 @@ class LoLRuntime:
                 source="lol"
             ))
 
+        # 获取 Champ Select Session
+        self._poll_champ_select()
+
         # 获取 current-summoner
         try:
             summoner = self.lcu.get_current_summoner()
@@ -292,6 +301,141 @@ class LoLRuntime:
                     },
                     source="lol"
                 ))
+
+    def _poll_champ_select(self):
+        """轮询 Champ Select Session，检测状态变化并发布事件"""
+        if not self._running:
+            return
+
+        try:
+            session = self.lcu.get_champ_select_session()
+        except Exception as e:
+            print(f"[LCU] 获取 champ select session 失败: {e}")
+            session = None
+
+        # 404 / None = NO_SESSION
+        if not session or not isinstance(session, dict):
+            if self._champ_select_active:
+                # 从 ACTIVE → NO_SESSION
+                self._champ_select_active = False
+                self._last_champ_select = None
+                self.state_store.set(StateNamespace.LCU, "champ_select", {"status": "NO_SESSION"})
+                self.event_bus.publish(Event(
+                    event_type=EventType.LCU_CHAMP_SELECT_CHANGED,
+                    data={
+                        "status": "ENDED",
+                    },
+                    source="lol"
+                ))
+            return
+
+        # ACTIVE_SESSION：提取 normalized state
+        normalized = self._normalize_champ_select(session)
+
+        # 更新 StateStore
+        self.state_store.set(StateNamespace.LCU, "champ_select", normalized)
+
+        # 检测变化
+        if not self._champ_select_active:
+            # 从 NO_SESSION → ACTIVE
+            self._champ_select_active = True
+            self._last_champ_select = normalized
+            self.event_bus.publish(Event(
+                event_type=EventType.LCU_CHAMP_SELECT_CHANGED,
+                data={
+                    "status": "STARTED",
+                    "session": normalized,
+                },
+                source="lol"
+            ))
+        else:
+            # 比较关键字段
+            new_key = self._champ_select_key(normalized)
+            old_key = self._champ_select_key(self._last_champ_select) if self._last_champ_select else None
+            if new_key != old_key:
+                self._last_champ_select = normalized
+                self.event_bus.publish(Event(
+                    event_type=EventType.LCU_CHAMP_SELECT_CHANGED,
+                    data={
+                        "status": "UPDATED",
+                        "session": normalized,
+                    },
+                    source="lol"
+                ))
+
+    def _normalize_champ_select(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        从原始 Champ Select session JSON 提取 V1 有用字段
+
+        只提取后续真正需要的最小结构，不保存整个巨大 JSON。
+        """
+        normalized = {
+            "status": "ACTIVE_SESSION",
+            "phase": session.get("phase"),
+            "timer": None,
+            "local_player": None,
+            "my_team_champions": [],
+            "enemy_team_champions": [],
+        }
+
+        # 计时器信息
+        timer = session.get("timer")
+        if isinstance(timer, dict):
+            normalized["timer"] = {
+                "phase": timer.get("phase"),
+                "adjustedTimeLeftInPhase": timer.get("adjustedTimeLeftInPhase"),
+                "totalTimeInPhase": timer.get("totalTimeInPhase"),
+            }
+
+        # 本地玩家信息
+        local_player = session.get("localPlayerCellId")
+        if local_player is not None:
+            normalized["local_player"] = {"cellId": local_player}
+
+        # 队伍信息
+        my_team = session.get("myTeam", [])
+        if isinstance(my_team, list):
+            for player in my_team:
+                if isinstance(player, dict):
+                    cell_id = player.get("cellId")
+                    champion_id = player.get("championId")
+                    champion_pick = player.get("championPickIntent")
+                    is_picked = player.get("isPicked")
+                    is_banned = player.get("isBanned")
+                    if cell_id is not None and (champion_id or is_picked or champion_pick):
+                        normalized["my_team_champions"].append({
+                            "cellId": cell_id,
+                            "championId": champion_id,
+                            "championPickIntent": champion_pick,
+                            "isPicked": is_picked,
+                            "isBanned": is_banned,
+                        })
+
+        # 敌方队伍
+        enemy_team = session.get("enemyTeam", [])
+        if isinstance(enemy_team, list):
+            for player in enemy_team:
+                if isinstance(player, dict):
+                    champion_id = player.get("championId")
+                    is_banned = player.get("isBanned")
+                    if champion_id or is_banned:
+                        normalized["enemy_team_champions"].append({
+                            "championId": champion_id,
+                            "isBanned": is_banned,
+                        })
+
+        return normalized
+
+    def _champ_select_key(self, state: Optional[Dict[str, Any]]) -> tuple:
+        """生成用于比较的 key（只比较关键字段）"""
+        if state is None:
+            return None
+        return (
+            state.get("phase"),
+            state.get("timer", {}).get("phase") if state.get("timer") else None,
+            len(state.get("my_team_champions", [])),
+            len(state.get("enemy_team_champions", [])),
+        )
 
     def _update_state(self, snapshot: GameSnapshot):
         """更新状态存储"""
