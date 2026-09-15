@@ -343,3 +343,213 @@ class TestLcuChampSelect:
 
         events = self._get_champ_events()
         assert len(events) == 0  # 不应该 spam
+
+    # ===== 返工新增测试：字段级变化检测 =====
+
+    def test_champion_id_change_triggers_update(self):
+        """Test A：championId 变化 → UPDATED"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 0, "isPicked": False}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # championId 从 0 变成 157
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 157, "isPicked": False}]
+        )
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 1
+        assert events[0].data["status"] == "UPDATED"
+
+    def test_champion_pick_intent_change_triggers_update(self):
+        """Test B：championPickIntent 变化 → UPDATED"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 0, "championPickIntent": 0, "isPicked": False}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # pick intent 从 0 变成 157
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 0, "championPickIntent": 157, "isPicked": False}]
+        )
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 1
+        assert events[0].data["status"] == "UPDATED"
+
+    def test_is_picked_change_triggers_update(self):
+        """Test C：isPicked False → True → UPDATED"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 64, "isPicked": False}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # 锁定选择
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 64, "isPicked": True}]
+        )
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 1
+        assert events[0].data["status"] == "UPDATED"
+
+    def test_is_banned_change_triggers_update(self):
+        """Test D：isBanned False → True → UPDATED"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            enemy_team=[{"championId": 157, "isBanned": False}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # 被 ban 了
+        self.mock_lcu._champ_session = self._make_session(
+            enemy_team=[{"championId": 157, "isBanned": True}]
+        )
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 1
+        assert events[0].data["status"] == "UPDATED"
+
+    def test_local_player_cell_id_change(self):
+        """Test E：local player cellId 变化 → UPDATED"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session()
+        self.mock_lcu._champ_session["localPlayerCellId"] = 0
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # cellId 变化
+        self.mock_lcu._champ_session = self._make_session()
+        self.mock_lcu._champ_session["localPlayerCellId"] = 2
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 1
+        assert events[0].data["status"] == "UPDATED"
+
+    def test_exact_same_state_no_event(self):
+        """Test F：完全相同状态不重复事件"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            phase="Pick",
+            my_team=[
+                {"cellId": 0, "championId": 64, "championPickIntent": 0, "isPicked": True, "isBanned": False},
+                {"cellId": 1, "championId": 55, "championPickIntent": 0, "isPicked": True, "isBanned": False},
+            ],
+            enemy_team=[{"championId": 157, "isBanned": True}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # 完全相同的 session
+        self.mock_lcu._champ_session = self._make_session(
+            phase="Pick",
+            my_team=[
+                {"cellId": 0, "championId": 64, "championPickIntent": 0, "isPicked": True, "isBanned": False},
+                {"cellId": 1, "championId": 55, "championPickIntent": 0, "isPicked": True, "isBanned": False},
+            ],
+            enemy_team=[{"championId": 157, "isBanned": True}]
+        )
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 0  # 完全相同不重复
+
+    def test_irrelevant_raw_field_change_no_event(self):
+        """Test G：raw 无关字段变化不触发 UPDATED"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 64, "isPicked": True}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # 增加一个 normalized state 不关心的字段
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 64, "isPicked": True}]
+        )
+        self.mock_lcu._champ_session["someInternalField"] = "random_value"
+        self.mock_lcu._champ_session["anotherField"] = {"nested": "data"}
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 0  # 无关字段不触发
+
+    def test_timer_countdown_change_no_spam(self):
+        """timer 倒计时变化不 spam（100 → 99）"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 64, "isPicked": True}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # 倒计时变化（100000 → 99000），其他完全相同
+        self.mock_lcu._champ_session = self._make_session(
+            my_team=[{"cellId": 0, "championId": 64, "isPicked": True}]
+        )
+        self.mock_lcu._champ_session["timer"]["adjustedTimeLeftInPhase"] = 99000
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 0  # 倒计时变化不 spam
+
+    def test_timer_phase_change_triggers_update(self):
+        """timer.phase 变化（Ban → Pick）触发 UPDATED"""
+        self.mock_lcu.connected = True
+        self.mock_lcu._phase = "ChampSelect"
+        self.mock_lcu._champ_session = self._make_session(
+            phase="Ban",
+            my_team=[{"cellId": 0, "championId": 0, "isPicked": False}]
+        )
+
+        self.runtime._poll_lcu()  # STARTED
+        self.events_received.clear()
+
+        # timer.phase 从 Ban 变成 Pick
+        self.mock_lcu._champ_session = self._make_session(
+            phase="Pick",
+            my_team=[{"cellId": 0, "championId": 0, "isPicked": False}]
+        )
+
+        self.runtime._poll_lcu()
+
+        events = self._get_champ_events()
+        assert len(events) == 1
+        assert events[0].data["status"] == "UPDATED"

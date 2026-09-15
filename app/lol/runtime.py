@@ -427,14 +427,55 @@ class LoLRuntime:
         return normalized
 
     def _champ_select_key(self, state: Optional[Dict[str, Any]]) -> tuple:
-        """生成用于比较的 key（只比较关键字段）"""
+        """
+        生成用于比较的 key（比较所有真正影响 V1 Champ Select 状态的字段）
+
+        保持 deterministic 顺序：队伍成员按 cellId 排序。
+        不比较 timer.adjustedTimeLeftInPhase（每秒变化，避免 spam）。
+        比较 timer.phase（阶段变化应该触发事件）。
+        """
         if state is None:
             return None
+
+        # 本地玩家
+        local_player = state.get("local_player") or {}
+        local_cell_id = local_player.get("cellId")
+
+        # 我方队伍：按 cellId 排序，提取每个成员的关键字段
+        my_team = state.get("my_team_champions", [])
+        my_team_sorted = sorted(my_team, key=lambda x: x.get("cellId", 0))
+        my_team_key = tuple(
+            (
+                member.get("cellId"),
+                member.get("championId"),
+                member.get("championPickIntent"),
+                member.get("isPicked"),
+                member.get("isBanned"),
+            )
+            for member in my_team_sorted
+        )
+
+        # 敌方队伍：按 championId 排序（没有 cellId）
+        enemy_team = state.get("enemy_team_champions", [])
+        enemy_team_sorted = sorted(enemy_team, key=lambda x: x.get("championId", 0))
+        enemy_team_key = tuple(
+            (
+                member.get("championId"),
+                member.get("isBanned"),
+            )
+            for member in enemy_team_sorted
+        )
+
+        # timer.phase（阶段变化触发事件，但倒计时不触发）
+        timer = state.get("timer") or {}
+        timer_phase = timer.get("phase")
+
         return (
             state.get("phase"),
-            state.get("timer", {}).get("phase") if state.get("timer") else None,
-            len(state.get("my_team_champions", [])),
-            len(state.get("enemy_team_champions", [])),
+            timer_phase,
+            local_cell_id,
+            my_team_key,
+            enemy_team_key,
         )
 
     def _update_state(self, snapshot: GameSnapshot):
