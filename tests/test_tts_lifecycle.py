@@ -1,6 +1,7 @@
 """
 TTS 生命周期事件测试：speech.started / speech.finished
 """
+import time
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -196,3 +197,161 @@ class TestTTSLifecycleEvents:
 
         assert len(finished_calls) == 1
         assert finished_calls[0].data["reason"] == "stopped"
+
+
+class TestTTSSpeakThreadGenerationGuard:
+    """回归测试：_speak_thread 在 _wait_for_playback 返回后必须检查 generation
+
+    场景：A 正在播放 → A 被 stop → B 开始播放 → A 的旧线程从 _wait_for_playback 返回
+    修复前：A 会继续清理共享状态、覆盖 B 的 state、错误发布 finished(completed)
+    修复后：A 检测到 generation 变化，立即 return，不触碰任何共享状态。
+    """
+
+    def _create_tts(self):
+        from app.speech.tts import TTSController, TTSState
+
+        config = {
+            "engine": "edge",
+            "edge_voice": "zh-CN-XiaoxiaoNeural",
+            "rate": "+0%",
+            "volume": "+0%",
+            "output_dir": "./data/tts",
+            "enabled": True,
+            "mpv_path": "D:\\新建文件夹 (2)\\mpv.exe",
+        }
+
+        with patch("app.speech.tts.get_event_bus") as mock_get_bus, \
+             patch("app.speech.tts.os.makedirs"), \
+             patch("app.speech.tts.threading.Thread"):
+
+            mock_bus = MagicMock()
+            mock_get_bus.return_value = mock_bus
+            tts = TTSController(config)
+            tts._event_bus = mock_bus
+
+        return tts, mock_bus
+
+    def test_old_thread_does_not_touch_shared_state_after_generation_change(self):
+        """_wait_for_playback 返回后 generation 已变 → 旧线程必须立即 return
+
+        验证：
+        - 不覆盖 B 的 state
+        - 不清空 B 的 _current_file
+        - 不发布 SPEECH_FINISHED(completed)
+        """
+        import threading
+        from app.speech.tts import TTSState
+
+        tts, mock_bus = self._create_tts()
+
+        # 模拟 A 正在播放（generation=1）
+        tts._generation = 1
+        tts._set_state(TTSState.PLAYING)
+        tts._current_file = "/fake/a.mp3"
+        tts._finished_published = False
+        tts._stop_flag.clear()
+
+        # 用一个 Event 控制 _wait_for_playback 的返回时机
+        wait_blocker = threading.Event()
+        wait_released = threading.Event()
+
+        def fake_wait_for_playback():
+            # 阻塞，直到测试主线程放行
+            wait_blocker.wait(timeout=5.0)
+            wait_released.set()
+
+        tts._wait_for_playback = fake_wait_for_playback
+        tts._generate_audio = lambda text: "/fake/a.mp3"
+        tts._play_audio = lambda filepath: True
+        tts._cleanup_file = MagicMock()
+
+        # 启动 A 的 _speak_thread（generation=1）
+        a_result = {}
+        def run_a():
+            try:
+                tts._speak_thread("语音A", 1)
+                a_result["returned"] = True
+            except Exception as e:
+                a_result["error"] = e
+
+        a_thread = threading.Thread(target=run_a, daemon=True)
+        a_thread.start()
+
+        # 等待 A 进入 _wait_for_playback（阻塞中）
+        time.sleep(0.3)
+
+        # === 模拟 B 开始播放（generation 变为 2）===
+        # 这是 speak(B) 做的事情：
+        tts._generation = 2           # generation 递增
+        tts._stop_flag.clear()        # 清除停止标志
+        tts._finished_published = False  # 重置 finished 标记
+        # B 正在播放中，state=PLAYING，_current_file 指向 B 的文件
+        tts._current_file = "/fake/b.mp3"
+        tts._set_state(TTSState.PLAYING)
+
+        # 放行 A 的 _wait_for_playback
+        wait_blocker.set()
+        a_thread.join(timeout=2.0)
+
+        # === 验证 A 的旧线程没有破坏 B 的状态 ===
+        # 1. state 仍然是 PLAYING（没有被 A 改成 IDLE）
+        assert tts.get_state() == TTSState.PLAYING, \
+            f"state 被旧线程覆盖: {tts.get_state()}"
+
+        # 2. _current_file 仍然是 B 的文件（没有被 A 清空）
+        assert tts._current_file == "/fake/b.mp3", \
+            f"_current_file 被旧线程清空: {tts._current_file}"
+
+        # 3. A 的线程确实返回了（没有崩溃）
+        assert a_result.get("returned") is True, \
+            f"A 线程未正常返回: {a_result}"
+
+        # 4. 没有发布 SPEECH_FINISHED(completed)
+        finished_calls = [
+            call[0][0] for call in mock_bus.publish.call_args_list
+            if call[0][0].event_type == "speech.finished"
+        ]
+        completed_calls = [
+            e for e in finished_calls
+            if e.data.get("reason") == "completed"
+        ]
+        assert len(completed_calls) == 0, \
+            f"旧线程错误发布了 {len(completed_calls)} 个 completed finished"
+
+    def test_new_speak_normal_completion_still_works(self):
+        """修复不影响新线程的正常完成路径
+
+        B 的 generation == self._generation，应该正常走到 finished(completed)
+        """
+        from app.speech.tts import TTSState
+
+        tts, mock_bus = self._create_tts()
+
+        # B 的 generation=2，当前 self._generation=2
+        # state=IDLE 才能通过 _speak_thread 的早期检查
+        tts._generation = 2
+        tts._set_state(TTSState.IDLE)
+        tts._current_file = None
+        tts._finished_published = False
+        tts._stop_flag.clear()
+
+        # mock 各步骤
+        tts._generate_audio = lambda text: "/fake/b.mp3"
+        tts._play_audio = lambda filepath: True
+        tts._wait_for_playback = lambda: None
+        tts._cleanup_file = MagicMock()
+
+        # 直接调用 _speak_thread（generation=2，匹配当前 generation）
+        tts._speak_thread("语音B", 2)
+
+        # 验证正常完成
+        assert tts.get_state() == TTSState.IDLE
+        assert tts._finished_published is True
+
+        finished_calls = [
+            call[0][0] for call in mock_bus.publish.call_args_list
+            if call[0][0].event_type == "speech.finished"
+        ]
+        assert len(finished_calls) == 1
+        assert finished_calls[0].data["reason"] == "completed"
+

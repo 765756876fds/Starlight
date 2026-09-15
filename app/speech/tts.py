@@ -239,6 +239,12 @@ class TTSController:
         # Step 3: 等待播放完成
         self._wait_for_playback()
 
+        # 旧线程防护：如果在等待期间新的 speak() 启动了（generation 已变），
+        # 本线程不得再清理共享状态或发布事件，否则会覆盖新线程的 state、
+        # 清空新线程的 _current_file、错误发布 SPEECH_FINISHED(completed)。
+        if generation != self._generation:
+            return
+
         # Step 4: 清理
         self._cleanup_file(output_file)
         self._current_file = None
