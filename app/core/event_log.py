@@ -89,8 +89,13 @@ class EventLog:
         EventBus 事件回调
 
         所有异常都被捕获，确保不影响 EventBus。
+        Replay 事件（带 _replay 标记）不写入日志，避免循环。
         """
         if not self._running:
+            return
+
+        # 跳过 replay 事件，避免 Replay → EventBus → EventLog 循环
+        if event.data.get("_replay", False):
             return
 
         try:
