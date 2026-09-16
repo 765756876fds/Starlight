@@ -211,7 +211,9 @@ class VoiceRuntime:
         if intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
                            CommandType.MUSIC_PAUSE, CommandType.MUSIC_RESUME,
                            CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
-                           CommandType.MUSIC_RESCAN):
+                           CommandType.MUSIC_RESCAN,
+                           CommandType.MUSIC_HIGHLIGHT_MODE,
+                           CommandType.MUSIC_SET_PLAY_MODE):
             self.command_bus.execute(Command(
                 command_type=intent_type,
                 params=params,

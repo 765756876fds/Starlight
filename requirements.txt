@@ -12,6 +12,10 @@ python-dateutil>=2.8.2
 # mpv 通过 JSON IPC 控制，无需 Python 绑定
 # 音乐标签读取
 mutagen>=1.47.0
+# 离线 Highlight 分析（tools/analyze_highlight.py）
+numpy>=1.24.0
+librosa>=0.10.0
+soundfile>=0.12.0
 
 # ===== 语音识别 ASR =====
 # llama-cpp-python 用于本地 Qwen3-ASR / Qwen3 推理

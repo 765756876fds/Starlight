@@ -54,6 +54,14 @@ class MusicController:
         self._lock = threading.Lock()
         self._current_song: Optional[Dict[str, Any]] = None
 
+        # Highlight Mode 状态
+        self._highlight_mode: bool = False
+        self._highlight_gen: int = 0  # 每首歌一个 token，旧 poller 失效
+        self._highlight_end_time: Optional[float] = None
+        self._highlight_song_id: Optional[int] = None
+        self._highlight_stop: threading.Event = threading.Event()
+        self._highlight_poller: Optional[threading.Thread] = None
+
         # 注册命令处理器
         self._register_commands()
 
@@ -83,6 +91,7 @@ class MusicController:
     def stop(self):
         """停止音乐模块"""
         self._running = False
+        self._invalidate_highlight()
         self.mpv.stop_process()
         print("[Music] 模块已停止")
 
@@ -100,6 +109,8 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_SEEK, self._cmd_seek)
         self.command_bus.register(CommandType.MUSIC_SEARCH_PLAY, self._cmd_search_play)
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT, lambda c: self.jump_to_highlight())
+        self.command_bus.register(CommandType.MUSIC_HIGHLIGHT_MODE, self._cmd_highlight_mode)
+        self.command_bus.register(CommandType.MUSIC_SET_PLAY_MODE, self._cmd_set_play_mode)
         self.command_bus.register(CommandType.MUSIC_RESCAN, lambda c: self.rescan())
 
     # ===== 播放控制 =====
@@ -136,6 +147,7 @@ class MusicController:
     def next(self):
         """下一首"""
         with self._lock:
+            self._invalidate_highlight()
             song = self.queue.next()
             if song:
                 self._play_song(song)
@@ -151,6 +163,7 @@ class MusicController:
     def prev(self):
         """上一首"""
         with self._lock:
+            self._invalidate_highlight()
             song = self.queue.prev()
             if song:
                 self._play_song(song)
@@ -158,6 +171,7 @@ class MusicController:
     def play_song(self, song: Dict[str, Any]):
         """播放指定歌曲"""
         with self._lock:
+            self._invalidate_highlight()
             # 添加到队列并播放
             self.queue.add(song)
             self.queue.play_at(self.queue.size() - 1)
@@ -207,6 +221,10 @@ class MusicController:
             source="music"
         ))
 
+        # Highlight Mode：如果开启，seek 到 highlight start_time 并启动 poller
+        if self._highlight_mode:
+            self._start_highlight_segment(song)
+
     # ===== 音量控制 =====
 
     def set_volume(self, volume: int):
@@ -236,7 +254,7 @@ class MusicController:
         self.mpv.seek(seconds, mode)
 
     def jump_to_highlight(self):
-        """跳到高潮部分"""
+        """跳到高潮部分（一次性）"""
         if not self._current_song:
             return
 
@@ -254,6 +272,102 @@ class MusicController:
             duration = self.mpv.get_duration()
             if duration > 0:
                 self.mpv.seek(duration * 0.6, "absolute")
+
+    # ===== Highlight Mode =====
+
+    def set_highlight_mode(self, enabled: bool):
+        """开启或关闭高潮模式"""
+        self._highlight_mode = enabled
+        if not enabled:
+            self._invalidate_highlight()
+        else:
+            # 如果当前有歌曲，立即开始 highlight 段
+            if self._current_song:
+                self._invalidate_highlight()
+                self._start_highlight_segment(self._current_song)
+        self.state_store.set(StateNamespace.MUSIC, "highlight_mode", enabled)
+
+    def is_highlight_mode(self) -> bool:
+        return self._highlight_mode
+
+    def set_play_mode(self, mode: str):
+        """设置播放模式（sequential/shuffle/repeat_one）"""
+        self.queue.set_play_mode(mode)
+        self.state_store.set(StateNamespace.MUSIC, "play_mode", mode)
+
+    def get_play_mode(self) -> str:
+        return self.queue.get_play_mode()
+
+    def _start_highlight_segment(self, song: Dict[str, Any]):
+        """为当前歌曲启动 highlight 播放段"""
+        song_id = song.get("id")
+        highlight = self.db.get_highlight(song_id)
+        if not highlight:
+            # 无 highlight → 整首正常播放，不 fallback
+            return
+
+        start = highlight["start_time"]
+        end = highlight["end_time"]
+        if end is None or end <= start:
+            return
+
+        # seek 到 highlight 开始位置
+        self.mpv.seek(start, "absolute")
+
+        # 生成新 generation，使旧 poller 失效
+        self._highlight_gen += 1
+        gen = self._highlight_gen
+        self._highlight_end_time = end
+        self._highlight_song_id = song_id
+        self._highlight_stop = threading.Event()
+
+        self.event_bus.publish(Event(
+            event_type=EventType.MUSIC_HIGHLIGHT,
+            data={"song_id": song_id, "position": start, "mode": "segment"},
+            source="music"
+        ))
+
+        # 启动 poller
+        self._highlight_poller = threading.Thread(
+            target=self._highlight_poll_loop,
+            args=(gen, song_id, end),
+            daemon=True,
+            name="highlight-poller"
+        )
+        self._highlight_poller.start()
+
+    def _invalidate_highlight(self):
+        """使当前 highlight poller 失效"""
+        self._highlight_stop.set()
+        self._highlight_gen += 1
+        self._highlight_end_time = None
+        self._highlight_song_id = None
+
+    def _highlight_poll_loop(self, gen: int, song_id: int, end_time: float):
+        """Highlight 段轮询线程：到达 end_time 自动 next"""
+        stop = self._highlight_stop
+        while not stop.wait(timeout=0.4):
+            # 校验 generation 和 song_id
+            if gen != self._highlight_gen:
+                return
+            if song_id != self._highlight_song_id:
+                return
+            if not self._highlight_mode:
+                return
+            if not self._running:
+                return
+
+            try:
+                pos = self.mpv.get_live_playback_time()
+            except Exception:
+                continue
+
+            if pos >= end_time:
+                # 再次校验，防止竞态
+                if gen == self._highlight_gen and song_id == self._highlight_song_id:
+                    self._invalidate_highlight()
+                    self.next()
+                return
 
     # ===== 扫描 =====
 
@@ -310,6 +424,14 @@ class MusicController:
         query = command.get("query", "")
         index = command.get("index", 0)
         self.play_search_result(query, int(index))
+
+    def _cmd_highlight_mode(self, command: Command):
+        enabled = command.get("enabled", True)
+        self.set_highlight_mode(bool(enabled))
+
+    def _cmd_set_play_mode(self, command: Command):
+        mode = command.get("mode", "sequential")
+        self.set_play_mode(mode)
 
     # ===== 事件处理 =====
 

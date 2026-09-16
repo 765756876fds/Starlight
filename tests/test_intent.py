@@ -312,3 +312,52 @@ class TestOpenAIAPIIntent:
 
         assert result.intent_type == "music.next"
 
+
+class TestPunctuationNormalization:
+    """ASR 句末标点归一化测试"""
+
+    @pytest.mark.parametrize("text", [
+        "打开高潮模式",
+        "打开高潮模式。",
+        "打开高潮模式！",
+        "打开高潮模式？",
+    ])
+    def test_highlight_mode_on(self, text):
+        intent = RuleBasedIntent.match(text)
+        assert intent is not None
+        assert intent.intent_type == "music.highlight_mode"
+        assert intent.params.get("enabled") is True
+
+    def test_highlight_mode_off(self):
+        intent = RuleBasedIntent.match("关闭高潮模式。")
+        assert intent is not None
+        assert intent.intent_type == "music.highlight_mode"
+        assert intent.params.get("enabled") is False
+
+    @pytest.mark.parametrize("text", [
+        "随机播放。",
+        "随机播放！",
+    ])
+    def test_shuffle(self, text):
+        intent = RuleBasedIntent.match(text)
+        assert intent is not None
+        assert intent.intent_type == "music.set_play_mode"
+        assert intent.params.get("mode") == "shuffle"
+
+    def test_repeat_one(self):
+        intent = RuleBasedIntent.match("单曲循环。")
+        assert intent is not None
+        assert intent.intent_type == "music.set_play_mode"
+        assert intent.params.get("mode") == "repeat_one"
+
+    def test_sequential(self):
+        intent = RuleBasedIntent.match("连续播放。")
+        assert intent is not None
+        assert intent.intent_type == "music.set_play_mode"
+        assert intent.params.get("mode") == "sequential"
+
+    def test_next_with_punct(self):
+        intent = RuleBasedIntent.match("下一首。")
+        assert intent is not None
+        assert intent.intent_type == "music.next"
+

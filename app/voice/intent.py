@@ -68,8 +68,20 @@ class RuleBasedIntent:
         (r"音量减(\d+)", CommandType.MUSIC_VOLUME_DOWN, {"step": 1}),
         # 设置音量
         (r"音量(\d+)", CommandType.MUSIC_VOLUME_SET, {}),
-        # 跳高潮
+        # 高潮模式开关（必须在通用"高潮"之前）
+        (r"(关闭高潮模式|退出高潮模式|高潮模式关|关掉高潮模式)$",
+         CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": False}),
+        (r"(打开高潮模式|开启高潮模式|高潮模式开|进入高潮模式)$",
+         CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": True}),
+        # 跳高潮（一次性）
         (r"(高潮|跳到高潮|跳高潮|副歌)", CommandType.MUSIC_HIGHLIGHT, {}),
+        # 播放顺序模式
+        (r"(连续播放|顺序播放|正常播放|列表循环)$",
+         CommandType.MUSIC_SET_PLAY_MODE, {"mode": "sequential"}),
+        (r"(随机播放|随机模式|随机曲)$",
+         CommandType.MUSIC_SET_PLAY_MODE, {"mode": "shuffle"}),
+        (r"(单曲循环|单曲循环播放|循环这首|循环这首歌)$",
+         CommandType.MUSIC_SET_PLAY_MODE, {"mode": "repeat_one"}),
         # 重新扫描
         (r"(重新扫描|扫描音乐|更新音乐库)", CommandType.MUSIC_RESCAN, {}),
     ]
@@ -136,6 +148,8 @@ class RuleBasedIntent:
             匹配到的 Intent，未匹配返回 None
         """
         text = text.strip()
+        # 去除首尾常见句末标点（ASR 常在句尾自动加 。！？；等）
+        text = text.strip("。！？；，,.!?,;:：")
 
         # 音乐控制
         for pattern, command, base_params in cls.MUSIC_RULES:
@@ -244,6 +258,8 @@ class LLMIntent:
         "music.volume_down": "音量减少",
         "music.search_play": "搜索并播放，参数 query",
         "music.highlight": "跳到高潮部分",
+        "music.highlight_mode": "开启或关闭高潮模式，参数 enabled (bool)",
+        "music.set_play_mode": "设置播放模式，参数 mode (sequential/shuffle/repeat_one)",
         "alarm.flash": "记录闪现，参数 champion",
         "alarm.spell": "记录技能，参数 champion, spell, cooldown",
         "alarm.ward": "记录眼位，参数 location",

@@ -330,7 +330,9 @@ class MusicDatabase:
         self._conn.execute("""
             INSERT INTO music_highlight (song_id, start_time, end_time, confidence, source, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (song_id, start_time, end_time, confidence, source, time.time()))
+        """, (song_id, float(start_time),
+              float(end_time) if end_time is not None else None,
+              float(confidence), source, time.time()))
         self._conn.commit()
 
     def close(self):

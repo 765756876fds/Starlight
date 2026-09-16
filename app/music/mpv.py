@@ -12,6 +12,7 @@ Python 通过命名管道发送 JSON 命令控制播放。
 import json
 import os
 import subprocess
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -34,6 +35,7 @@ class MpvController:
         self._request_id = 0
         self._properties: Dict[str, Any] = {}
         self._property_watchers: Dict[str, Any] = {}
+        self._pipe_lock = threading.Lock()
 
     def start(self):
         """启动 mpv 进程"""
@@ -135,55 +137,56 @@ class MpvController:
         if not self._pipe:
             raise ConnectionError("mpv IPC 未连接")
 
-        self._request_id += 1
-        req_id = self._request_id
+        with self._pipe_lock:
+            self._request_id += 1
+            req_id = self._request_id
 
-        message = {
-            "command": [command] + (params or []),
-            "request_id": req_id,
-        }
+            message = {
+                "command": [command] + (params or []),
+                "request_id": req_id,
+            }
 
-        line = json.dumps(message) + "\n"
-        self._pipe.write(line)
-        self._pipe.flush()
+            line = json.dumps(message) + "\n"
+            self._pipe.write(line)
+            self._pipe.flush()
 
-        # 等待响应（跳过事件消息）
-        start = time.time()
-        while time.time() - start < timeout:
-            line = self._pipe.readline()
-            if not line:
-                time.sleep(0.01)
-                continue
+            # 等待响应（跳过事件消息）
+            start = time.time()
+            while time.time() - start < timeout:
+                line = self._pipe.readline()
+                if not line:
+                    time.sleep(0.01)
+                    continue
 
-            line = line.strip()
-            if not line:
-                continue
+                line = line.strip()
+                if not line:
+                    continue
 
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
-            # 事件消息，跳过
-            if "event" in msg:
-                # 处理属性变化事件
-                if msg["event"] == "property-change":
-                    prop = msg.get("name")
-                    value = msg.get("data")
-                    if prop:
-                        self._properties[prop] = value
-                        if prop in self._property_watchers:
-                            try:
-                                self._property_watchers[prop](value)
-                            except Exception:
-                                pass
-                continue
+                # 事件消息，跳过
+                if "event" in msg:
+                    # 处理属性变化事件
+                    if msg["event"] == "property-change":
+                        prop = msg.get("name")
+                        value = msg.get("data")
+                        if prop:
+                            self._properties[prop] = value
+                            if prop in self._property_watchers:
+                                try:
+                                    self._property_watchers[prop](value)
+                                except Exception:
+                                    pass
+                    continue
 
-            # 响应消息
-            if msg.get("request_id") == req_id:
-                return msg
+                # 响应消息
+                if msg.get("request_id") == req_id:
+                    return msg
 
-        raise TimeoutError(f"mpv 命令超时: {command}")
+            raise TimeoutError(f"mpv 命令超时: {command}")
 
     def loadfile(self, filepath: str, mode: str = "replace"):
         """加载并播放文件"""
@@ -243,8 +246,19 @@ class MpvController:
         return None
 
     def get_current_time(self) -> float:
-        """获取当前播放位置（秒）"""
+        """获取当前播放位置（秒，缓存值）"""
         return float(self._properties.get("playback-time", 0))
+
+    def get_live_playback_time(self) -> float:
+        """实时查询当前播放位置（秒，直接向 mpv 请求）"""
+        try:
+            val = self.get_property("playback-time", timeout=1.0)
+            if val is not None:
+                self._properties["playback-time"] = val
+                return float(val)
+        except Exception:
+            pass
+        return self.get_current_time()
 
     def get_duration(self) -> float:
         """获取总时长（秒）"""

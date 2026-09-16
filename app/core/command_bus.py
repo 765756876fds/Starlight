@@ -42,6 +42,8 @@ class CommandType:
     MUSIC_SEEK = "music.seek"
     MUSIC_SEARCH_PLAY = "music.search_play"
     MUSIC_HIGHLIGHT = "music.highlight"
+    MUSIC_HIGHLIGHT_MODE = "music.highlight_mode"
+    MUSIC_SET_PLAY_MODE = "music.set_play_mode"
     MUSIC_RESCAN = "music.rescan"
 
     # ===== GameAlarm 命令 =====
