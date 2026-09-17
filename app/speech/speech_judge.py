@@ -53,24 +53,25 @@ class SpeechJudge:
 
     # 事件 -> 等级映射
     EVENT_LEVELS = {
-        # S 级 - 极高价值
-        EventType.BARON_KILLED: SpeechLevel.S,
+        # S 级 - 极高价值（当前无即时事件，保留 Baron 为 S 备用）
+        EventType.BARON_KILLED: SpeechLevel.DROP,
         "game.nexus_destroyed": SpeechLevel.S,
         "game.team_wiped": SpeechLevel.S,
 
-        # A 级 - 高价值
-        EventType.DRAGON_KILLED: SpeechLevel.A,
-        EventType.HERALD_KILLED: SpeechLevel.A,
-        EventType.FIRST_BLOOD: SpeechLevel.A,
-        EventType.MULTI_KILL: SpeechLevel.A,
-        EventType.ACE: SpeechLevel.A,
-        EventType.TOWER_DESTROYED: SpeechLevel.A,
-        EventType.INHIBITOR_DESTROYED: SpeechLevel.A,
+        # A 级 - 高价值（即时事件全部静音，走 Objective Reminder）
+        EventType.DRAGON_KILLED: SpeechLevel.DROP,
+        EventType.HERALD_KILLED: SpeechLevel.DROP,
+        EventType.FIRST_BLOOD: SpeechLevel.DROP,
+        EventType.MULTI_KILL: SpeechLevel.DROP,
+        EventType.ACE: SpeechLevel.DROP,
+        EventType.TOWER_DESTROYED: SpeechLevel.DROP,
+        EventType.INHIBITOR_DESTROYED: SpeechLevel.DROP,
+        EventType.GAME_ENDED: SpeechLevel.A,
 
-        # B 级 - 普通
-        EventType.CHAMPION_KILL: SpeechLevel.B,
+        # B 级 - 普通（ALARM_TRIGGERED 是唯一允许即时播报的 B 级）
+        EventType.CHAMPION_KILL: SpeechLevel.DROP,
         EventType.ALARM_TRIGGERED: SpeechLevel.B,
-        EventType.PLAYER_SUMMONER_SPELL_USED: SpeechLevel.B,
+        EventType.PLAYER_SUMMONER_SPELL_USED: SpeechLevel.DROP,
 
         # C 级 - 只在 UI 显示
         EventType.PLAYER_LEVEL_UP: SpeechLevel.C,
@@ -136,7 +137,7 @@ class SpeechJudge:
             return
 
         # 频率限制
-        if not self._check_frequency(event):
+        if not self._check_frequency(event, level):
             return
 
         # 生成播报文本
@@ -278,7 +279,12 @@ class SpeechJudge:
         # 根据强度调整
         if self.intensity == "sparse":
             # 稀疏模式：B 级降为 C
-            if level == SpeechLevel.B:
+            # 但 ALARM_TRIGGERED（资源提醒）不降
+            is_objective_alarm = (
+                event.event_type == EventType.ALARM_TRIGGERED
+                and event.get("alarm", {}).get("type") == "objective"
+            )
+            if level == SpeechLevel.B and not is_objective_alarm:
                 level = SpeechLevel.C
         elif self.intensity == "detailed":
             # 详细模式：C 级升为 B
@@ -307,8 +313,11 @@ class SpeechJudge:
         min_order = self._level_order.get(self.min_level, 2)
         return level_order <= min_order
 
-    def _check_frequency(self, event: Event) -> bool:
-        """检查播报频率限制"""
+    def _check_frequency(self, event: Event, level: str) -> bool:
+        """检查播报频率限制（S 级不受限制）"""
+        if level == SpeechLevel.S:
+            return True
+
         event_type = event.event_type
         now = time.time()
 
@@ -357,9 +366,24 @@ class SpeechJudge:
 
         # 多杀
         if event_type == EventType.MULTI_KILL:
-            count = data.get("count", 2)
+            count = data.get("kill_streak") or data.get("count", 2)
             kill_names = {2: "双杀", 3: "三杀", 4: "四杀", 5: "五杀"}
             return f"{kill_names.get(count, f'{count}杀')}！"
+
+        # 游戏结束
+        if event_type == EventType.GAME_ENDED:
+            result = data.get("result", "")
+            if result == "Win":
+                return "游戏胜利！"
+            elif result == "Lose":
+                return "游戏失败。"
+            return "游戏结束。"
+
+        # S 级特殊事件（保留接口）
+        if event_type == "game.nexus_destroyed":
+            return "水晶被摧毁！"
+        if event_type == "game.team_wiped":
+            return "团灭！"
 
         # 一血
         if event_type == EventType.FIRST_BLOOD:
@@ -374,14 +398,11 @@ class SpeechJudge:
             tower = data.get("tower_name", "")
             return f"防御塔被摧毁。"
 
-        # 提醒触发
+        # 提醒触发（Objective Reminder 等）
         if event_type == EventType.ALARM_TRIGGERED:
             alarm = data.get("alarm", {})
             title = alarm.get("title", "提醒")
-            remaining = data.get("remaining", 0)
-            if remaining > 0:
-                return f"{title}还有{int(remaining)}秒。"
-            return f"{title}好了。"
+            return title
 
         # 召唤师技能使用（敌方）
         if event_type == EventType.PLAYER_SUMMONER_SPELL_USED:

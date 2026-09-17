@@ -134,19 +134,6 @@ class GameAlarmEngine:
             EventType.GAME_TIME_UPDATE,
             self._on_game_time_update
         )
-        # 中立资源被杀
-        self.event_bus.subscribe(
-            EventType.DRAGON_KILLED,
-            lambda e: self._on_objective_killed("dragon", e)
-        )
-        self.event_bus.subscribe(
-            EventType.BARON_KILLED,
-            lambda e: self._on_objective_killed("baron", e)
-        )
-        self.event_bus.subscribe(
-            EventType.HERALD_KILLED,
-            lambda e: self._on_objective_killed("herald", e)
-        )
         # 游戏开始/结束
         self.event_bus.subscribe(EventType.GAME_STARTED, self._on_game_start)
         self.event_bus.subscribe(EventType.GAME_ENDED, self._on_game_end)
@@ -277,6 +264,39 @@ class GameAlarmEngine:
             data={"alarm_id": alarm_id},
             source="game_alarm"
         ))
+
+    def schedule_objective_reminder(self, title: str, game_time_end: float,
+                                     lead_time: float = 40.0,
+                                     data: Optional[Dict] = None) -> Optional[Alarm]:
+        """
+        创建一个在指定游戏时间提前 lead_time 秒触发的提醒。
+
+        game_time_end: 资源刷新的绝对游戏时间（秒）
+        lead_time: 提前多少秒提醒
+        如果当前游戏时间已经超过 game_time_end - lead_time，则不创建（不补播）。
+        """
+        with self._lock:
+            # 不补播：如果提醒时间已过，跳过
+            if self._current_game_time >= game_time_end - lead_time:
+                return None
+
+            alarm = Alarm(
+                alarm_id=str(uuid.uuid4()),
+                alarm_type=AlarmType.OBJECTIVE,
+                title=title,
+                game_time_start=self._current_game_time,
+                duration=game_time_end - self._current_game_time,
+                lead_time=lead_time,
+                data=data or {},
+            )
+            self.alarms[alarm.alarm_id] = alarm
+
+        self.event_bus.publish(Event(
+            event_type=EventType.ALARM_CREATED,
+            data={"alarm": self._alarm_to_dict(alarm)},
+            source="game_alarm"
+        ))
+        return alarm
 
     def get_active_alarms(self) -> List[Alarm]:
         """获取所有活跃提醒"""

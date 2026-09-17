@@ -36,6 +36,18 @@ class StateDiff:
 
         if self._last_snapshot is None:
             self._last_snapshot = new_snapshot
+            # Agent 启动时游戏已经在进行中：合成 GAME_STARTED
+            if new_snapshot.is_game_running:
+                events.append(GameEvent(
+                    event_type=GameEventType.GAME_STARTED,
+                    game_time=new_snapshot.game_time,
+                    data={
+                        "game_mode": new_snapshot.game_mode,
+                        "map": new_snapshot.map_name,
+                        "mid_game_start": True,
+                    },
+                    timestamp=time.time(),
+                ))
             return events
 
         old = self._last_snapshot
@@ -295,6 +307,7 @@ class StateDiff:
                         "dragon_type": evt.get("DragonType", ""),
                         "killer_name": evt.get("KillerName", ""),
                         "stolen": evt.get("Stolen", False),
+                        "game_time": new.game_time,
                     },
                     timestamp=time.time(),
                 ))
@@ -307,6 +320,7 @@ class StateDiff:
                         "riot_event_id": evt.get("EventID"),
                         "killer_name": evt.get("KillerName", ""),
                         "stolen": evt.get("Stolen", False),
+                        "game_time": new.game_time,
                     },
                     timestamp=time.time(),
                 ))
@@ -319,6 +333,7 @@ class StateDiff:
                         "riot_event_id": evt.get("EventID"),
                         "killer_name": evt.get("KillerName", ""),
                         "stolen": evt.get("Stolen", False),
+                        "game_time": new.game_time,
                     },
                     timestamp=time.time(),
                 ))

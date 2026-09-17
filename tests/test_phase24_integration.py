@@ -63,99 +63,62 @@ class TestPhase24Integration(unittest.TestCase):
         self.queue.shutdown()
 
     def test_1_champion_kill_full_chain(self):
-        """Test 1：ChampionKill 完整链路"""
-        # 发布一个 ChampionKill 事件
+        """Test 1：ALARM_TRIGGERED 完整链路"""
         event = Event(
-            event_type=EventType.CHAMPION_KILL,
+            event_type=EventType.ALARM_TRIGGERED,
             data={
-                "killer_name": "敌方英雄",
-                "victim_name": "你",
-                "is_current_player_death": True,
-                "game_time": 100.0,
+                "alarm": {"title": "40秒后小龙刷新"},
+                "remaining": 5,
             },
             source="test"
         )
         self.bus.publish(event)
-
-        # 等待 SpeechJudge 处理
         time.sleep(0.2)
-
-        # Queue 应该有一个 SpeechItem
         self.assertGreaterEqual(self.queue.size() + (1 if self.queue.get_current() else 0), 1)
 
     def test_2_same_snapshot_no_duplicate(self):
         """Test 2：相同事件不重复播报"""
-        self.judge.min_interval = 0  # 跳过频率限制
+        self.judge.min_interval = 0
 
-        # 第一次发布
+        alarm = {"title": "40秒后小龙刷新", "alarm_id": "same"}
         event1 = Event(
-            event_type=EventType.CHAMPION_KILL,
-            data={
-                "killer_name": "A",
-                "victim_name": "B",
-                "game_time": 100.0,
-            },
+            event_type=EventType.ALARM_TRIGGERED,
+            data={"alarm": alarm, "remaining": 5},
             source="test"
         )
         self.bus.publish(event1)
         time.sleep(0.1)
 
-        # 第二次发布完全相同的事件
         event2 = Event(
-            event_type=EventType.CHAMPION_KILL,
-            data={
-                "killer_name": "A",
-                "victim_name": "B",
-                "game_time": 100.0,
-            },
+            event_type=EventType.ALARM_TRIGGERED,
+            data={"alarm": alarm, "remaining": 5},
             source="test"
         )
         self.bus.publish(event2)
         time.sleep(0.1)
 
-        # TTS 只应该 speak 一次（Queue dedup）
-        # 注意：因为 Queue 有 dedup，相同 event_id 第二次会被 DROP
         self.assertEqual(self.tts.speak_count, 1)
 
     def test_3_different_kills(self):
-        """Test 3：两个不同的击杀事件"""
+        """Test 3：两个不同的 alarm 事件"""
         self.judge.min_interval = 0
 
-        # Kill A（当前玩家击杀）
         event1 = Event(
-            event_type=EventType.CHAMPION_KILL,
-            data={
-                "killer_name": "你",
-                "victim_name": "敌方1",
-                "is_current_player_kill": True,
-                "game_time": 100.0,
-            },
+            event_type=EventType.ALARM_TRIGGERED,
+            data={"alarm": {"title": "A", "alarm_id": "1"}, "remaining": 5, "game_time": 100},
             source="test"
         )
-        id1 = self.judge._get_event_id(event1)
-        print(f"DEBUG: event1 id = {id1}")
         self.bus.publish(event1)
-        time.sleep(0.5)  # 等第一个播完
+        time.sleep(0.8)
 
-        # Kill B（当前玩家又击杀了）
         event2 = Event(
-            event_type=EventType.CHAMPION_KILL,
-            data={
-                "killer_name": "你",
-                "victim_name": "敌方2",
-                "is_current_player_kill": True,
-                "game_time": 200.0,
-            },
+            event_type=EventType.ALARM_TRIGGERED,
+            data={"alarm": {"title": "B", "alarm_id": "2"}, "remaining": 5, "game_time": 200},
             source="test"
         )
-        id2 = self.judge._get_event_id(event2)
-        print(f"DEBUG: event2 id = {id2}")
         self.bus.publish(event2)
-        time.sleep(0.5)
+        time.sleep(0.8)
 
-        print(f"DEBUG: after wait, speak_count = {self.tts.speak_count}, queue size = {self.queue.size()}")
-
-        # 应该 speak 两次
         self.assertEqual(self.tts.speak_count, 2)
 
     def test_4_same_killers_different_times(self):
@@ -192,12 +155,10 @@ class TestPhase24Integration(unittest.TestCase):
         self.judge.min_interval = 0
 
         event = Event(
-            event_type=EventType.CHAMPION_KILL,
+            event_type=EventType.ALARM_TRIGGERED,
             data={
-                "killer_name": "敌方",
-                "victim_name": "你",
-                "is_current_player_death": True,
-                "game_time": 100.0,
+                "alarm": {"title": "40秒后小龙刷新"},
+                "remaining": 5,
             },
             source="test"
         )
@@ -206,7 +167,7 @@ class TestPhase24Integration(unittest.TestCase):
 
         # 检查 TTS 是否收到了正确的文本
         self.assertEqual(self.tts.speak_count, 1)
-        self.assertIn("击杀", self.tts.current_text or "")
+        self.assertIn("小龙", self.tts.current_text or "")
 
 
 if __name__ == "__main__":

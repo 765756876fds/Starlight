@@ -20,6 +20,7 @@ from .live_client import LiveClientAPI
 from .snapshot import GameSnapshot, SnapshotBuilder
 from .state_diff import StateDiff
 from .game_alarm import GameAlarmEngine
+from .objective_timer import ObjectiveTimer
 from .lcu import LCUConnection
 
 
@@ -47,6 +48,7 @@ class LoLRuntime:
         )
         self.state_diff = StateDiff()
         self.game_alarm = GameAlarmEngine(self.alarm_config)
+        self.objective_timer = ObjectiveTimer(self.game_alarm)
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -85,6 +87,7 @@ class LoLRuntime:
 
         # 启动 GameAlarm
         self.game_alarm.start()
+        self.objective_timer.start()
 
         # 启动 LCU
         if self.lcu_config.get("enabled", True):
@@ -110,6 +113,7 @@ class LoLRuntime:
     def stop(self):
         """停止 LoL 运行时"""
         self._running = False
+        self.objective_timer.stop()
         self.game_alarm.stop()
         self.lcu.stop()
         self.live_api.close()
