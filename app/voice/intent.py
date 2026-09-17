@@ -236,6 +236,32 @@ class RuleBasedIntent:
                         params={"query": query}
                     )
 
+        # ===== Player Query 规则 =====
+        # recent: 最近N场 / 最近战绩 / 玩了几场
+        m = re.match(r"^最近([\d一二两三四五六七八九十]+)场$", text)
+        if m:
+            n = int(cls._parse_number(m.group(1)))
+            return Intent("player.query", confidence=0.99,
+                          params={"query_type": "recent", "limit": n})
+        m = re.match(r"^最近([\d一二两三四五六七八九十]+)局$", text)
+        if m:
+            n = int(cls._parse_number(m.group(1)))
+            return Intent("player.query", confidence=0.99,
+                          params={"query_type": "recent", "limit": n})
+        if text in ("最近战绩", "最近比赛", "最近几场", "玩了几场", "玩了几局"):
+            return Intent("player.query", confidence=0.99,
+                          params={"query_type": "recent", "limit": 10})
+
+        # champion_stats
+        if text in ("最常玩的英雄", "最常玩什么英雄", "英雄统计", "英雄战绩", "常用英雄"):
+            return Intent("player.query", confidence=0.99,
+                          params={"query_type": "champion_stats"})
+
+        # role_stats
+        if text in ("主要位置", "常玩位置", "位置统计", "位置战绩"):
+            return Intent("player.query", confidence=0.99,
+                          params={"query_type": "role_stats"})
+
         return None
 
 
@@ -266,6 +292,7 @@ class LLMIntent:
         "alarm.custom": "自定义计时器，参数 duration(秒), title",
         "voice.disable": "关闭语音识别",
         "tts.disable": "关闭语音播报",
+        "player.query": "查询玩家本地历史数据。query_type: recent/champion_stats/role_stats/match_analysis。identity 仅支持明确 puuid 或 riot_id，不要使用 self/current_player。",
         "system.unknown": "无法识别的意图",
     }
 

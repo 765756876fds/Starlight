@@ -64,6 +64,9 @@ class CommandType:
     AUTO_ACCEPT_TOGGLE = "auto.accept_toggle"
     AUTO_BANPICK_TOGGLE = "auto.banpick_toggle"
 
+    # ===== Player Query =====
+    PLAYER_QUERY = "player.query"
+
     # ===== 系统命令 =====
     SYSTEM_SHUTDOWN = "system.shutdown"
     SYSTEM_RESTART = "system.restart"

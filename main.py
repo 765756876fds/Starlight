@@ -16,7 +16,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from app.core.config import get_config
 from app.core.event_bus import get_event_bus, Event, EventType
-from app.core.command_bus import get_command_bus
+from app.core.command_bus import get_command_bus, CommandType
 from app.core.state_store import get_state_store, StateNamespace
 from app.core.scheduler import get_scheduler
 from app.core.logger import get_logger
@@ -28,6 +28,12 @@ from app.voice.runtime import VoiceRuntime
 from app.speech.tts import TTSController
 from app.speech.speech_judge import SpeechJudge
 from app.speech.speech_queue import SpeechQueue
+from app.player.history_repository import HistoryRepository
+from app.player.profile_service import PlayerProfileService
+from app.player.game_analysis import GameAnalysisService
+from app.player.event_log_reader import EventLogReader
+from app.player.query_service import PlayerQueryService
+from app.player.query_handler import make_player_query_handler
 
 
 class Application:
@@ -105,6 +111,9 @@ class Application:
 
         # 注册 GameAlarm 命令处理（通过事件）
         self._register_alarm_events()
+
+        # 注册 Player Query 命令
+        self._register_player_query()
 
         print("\n初始化完成！")
 
@@ -231,6 +240,27 @@ class Application:
         self.event_bus.subscribe("alarm.create_spell", on_create_spell)
         self.event_bus.subscribe("alarm.create_ward", on_create_ward)
         self.event_bus.subscribe("alarm.create_custom", on_create_custom)
+
+    def _register_player_query(self):
+        """注册 Player Query 命令处理器"""
+        try:
+            db_path = "data/player.db"
+            events_dir = self.config.get(
+                "events.log_dir", "./data/events"
+            )
+            history = HistoryRepository(db_path)
+            profile = PlayerProfileService(history)
+            analysis = GameAnalysisService(history, EventLogReader(events_dir))
+            svc = PlayerQueryService(history, profile, analysis)
+            handler = make_player_query_handler(
+                svc,
+                speech_queue=self.speech_queue,
+                state_store=self.state_store,
+            )
+            self.command_bus.register(CommandType.PLAYER_QUERY, handler)
+            print("[PlayerQuery] handler 已注册")
+        except Exception as e:
+            print(f"[PlayerQuery] 注册失败: {e}")
 
     def run(self):
         """运行主循环（阻塞）"""

@@ -12,6 +12,9 @@ from typing import Any, Dict, List, Optional
 class PlayerInfo:
     """玩家信息"""
     summoner_name: str = ""
+    riot_id: str = ""  # full Riot ID "name#tag"
+    riot_game_name: str = ""
+    riot_tag_line: str = ""
     champion_name: str = ""
     champion_id: int = 0
     team: str = ""  # "ORDER" / "CHAOS" / "UNKNOWN"
@@ -213,6 +216,10 @@ class SnapshotBuilder:
         """解析单个玩家数据"""
         player = PlayerInfo()
         player.summoner_name = p_data.get("summonerName", "")
+        # Riot ID fields (2999 now returns these)
+        player.riot_id = p_data.get("riotId", "")
+        player.riot_game_name = p_data.get("riotIdGameName", "")
+        player.riot_tag_line = p_data.get("riotIdTagLine", "")
         player.champion_name = p_data.get("championName", "")
         player.champion_id = int(p_data.get("championId", 0))
         player.team = p_data.get("team", "UNKNOWN")

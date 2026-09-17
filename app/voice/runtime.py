@@ -288,6 +288,13 @@ class VoiceRuntime:
                 source="voice"
             ))
 
+        elif intent_type == CommandType.PLAYER_QUERY:
+            self.command_bus.execute(Command(
+                command_type=CommandType.PLAYER_QUERY,
+                params=params,
+                source="voice",
+            ))
+
         # 发布命令执行事件
         self.event_bus.publish(Event(
             event_type=EventType.VOICE_COMMAND_EXECUTED,
