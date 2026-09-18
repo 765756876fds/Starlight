@@ -117,6 +117,20 @@ class RuleBasedIntent:
         "半": 0.5,
     }
 
+    # ===== Cooldown 手动计时器规则 =====
+    COOLDOWN_RULES = [
+        (r"取消所有(?:技能)?计时", "cooldown.cancel_all", {}),
+        (r"取消(.+?)(?:计时|的计时)$", "cooldown.cancel", {"champion_group": 1}),
+        # 召唤师技能：必须出现闪现/点燃等关键词，允许 side 前缀
+        (r"^(对面|敌方|我方|队友)?(.+?)(闪现|点燃|治疗|净化|屏障|虚弱|疾跑|传送|惩戒|tp|TP)"
+         r"(?:交了|用了|放了|没了|好了)",
+         "cooldown.start", {"champion_group": 2, "skill_group": 3, "side_group": 1}),
+        # 英雄技能：必须有 side 前缀（对面/敌方/我方/队友），避免与旧 alarm.spell 冲突
+        (r"^(对面|敌方|我方|队友)(?:的)?(.*?)([QqWwEeRr]|大招)"
+         r"(?:交了|用了|放了|没了|好了)",
+         "cooldown.start", {"champion_group": 2, "skill_group": 3, "side_group": 1}),
+    ]
+
     @classmethod
     def _parse_number(cls, text: str) -> float:
         """解析数字（支持阿拉伯数字和中文数字）"""
@@ -168,6 +182,29 @@ class RuleBasedIntent:
                     except (ValueError, IndexError):
                         pass
                 return Intent(command, confidence=0.99, params=params)
+
+        # ===== Cooldown 手动计时器（优先于 alarm 规则，避免被旧规则吞掉） =====
+        for pattern, intent_type, base_params in cls.COOLDOWN_RULES:
+            match = re.search(pattern, text)
+            if match:
+                params = {}
+                cg = base_params.get("champion_group")
+                sg = base_params.get("skill_group")
+                sdg = base_params.get("side_group")
+                try:
+                    if cg:
+                        v = match.group(int(cg)).strip() if match.group(int(cg)) else ""
+                        v = re.sub(r"^(对面|敌方|对面的|敌方的|我方|队友|的)", "", v)
+                        params["champion"] = v or None
+                    if sg:
+                        params["skill"] = match.group(int(sg)).strip()
+                    if sdg:
+                        s = match.group(int(sdg)) or "敌方"
+                        params["side"] = {"对面": "enemy", "敌方": "enemy",
+                                          "我方": "ally", "队友": "ally"}.get(s, "enemy")
+                except (IndexError, ValueError):
+                    pass
+                return Intent(intent_type, confidence=0.95, params=params)
 
         # 游戏提醒
         for pattern, intent_type, base_params in cls.ALARM_RULES:

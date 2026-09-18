@@ -64,6 +64,12 @@ class CommandType:
     AUTO_ACCEPT_TOGGLE = "auto.accept_toggle"
     AUTO_BANPICK_TOGGLE = "auto.banpick_toggle"
 
+    # ===== Cooldown 手动计时器 =====
+    COOLDOWN_START = "cooldown.start"
+    COOLDOWN_CANCEL = "cooldown.cancel"
+    COOLDOWN_CANCEL_ALL = "cooldown.cancel_all"
+    COOLDOWN_LIST = "cooldown.list"
+
     # ===== Player Query =====
     PLAYER_QUERY = "player.query"
 

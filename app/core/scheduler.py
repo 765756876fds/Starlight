@@ -34,6 +34,8 @@ class ScheduledTask:
         if not self.enabled:
             return False
         if self.last_run is None:
+            if self.next_run is not None:
+                return now >= self.next_run
             return self.immediate or True
         return now - self.last_run >= self.interval
 
@@ -77,6 +79,7 @@ class Scheduler:
 
     def __init__(self, tick_interval: float = 0.1):
         self._tasks: Dict[str, ScheduledTask] = {}
+        self._oneshot_cancelled: Dict[str, bool] = {}
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -93,6 +96,39 @@ class Scheduler:
     def remove_task(self, task_id: str):
         """移除定时任务"""
         with self._lock:
+            self._tasks.pop(task_id, None)
+
+    def schedule_once(self, delay_seconds: float, func: Callable,
+                      task_id: Optional[str] = None) -> str:
+        """一次性任务：delay_seconds 秒后执行一次，然后自动移除。"""
+        import uuid as _uuid
+        tid = task_id or ("once-" + _uuid.uuid4().hex[:8])
+        due_at = time.time() + max(0.0, delay_seconds)
+
+        def _runner():
+            if self._oneshot_cancelled.pop(tid, False):
+                return
+            try:
+                func()
+            finally:
+                with self._lock:
+                    self._tasks.pop(tid, None)
+
+        # 用一个极短 interval 的任务承载，通过 last_run 控制首次触发时机
+        task = ScheduledTask(tid, _runner, interval=0.05, immediate=False)
+        task.next_run = due_at
+        with self._lock:
+            self._tasks[tid] = task
+            self._oneshot_cancelled[tid] = False
+        # 启动调度器（如果未启动）
+        if not self._running:
+            self.start()
+        return tid
+
+    def cancel_once(self, task_id: str):
+        """取消一次性任务。"""
+        with self._lock:
+            self._oneshot_cancelled[task_id] = True
             self._tasks.pop(task_id, None)
 
     def enable_task(self, task_id: str):
