@@ -779,3 +779,213 @@ def test_a8_worker_reentry_guard():
     rc._active = True  # 模拟上一次尚未结束
     rc.check(0.0)
     assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+# ============================================================
+# A1.3: Auto Ban coverage (B1-B7)
+# ============================================================
+
+def _ban_pick_cfg(ban_priority=None, pick_priority=None,
+                  auto_ban=True, auto_pick=False, max_attempts=3):
+    from app.lol.automation.models import AutomationPreset
+    c = AutomationConfig(enabled=True, auto_ban=auto_ban, auto_pick=auto_pick,
+                        max_action_attempts=max_attempts)
+    c.presets["solo_duo"] = AutomationPreset(
+        ban_priority=list(ban_priority or []),
+        pick_priority=list(pick_priority or []),
+        primary_role="solo_duo",
+    )
+    return c
+
+
+def _cs_session(action_type="ban", action_id=9, actor=3,
+                champion_id=0, completed=False, local_cell=None):
+    return {
+        "localPlayerCellId": local_cell if local_cell is not None else actor,
+        "myTeam": [{"cellId": actor, "championId": 0}],
+        "theirTeam": [],
+        "actions": [[{
+            "id": action_id, "type": action_type, "actorCellId": actor,
+            "isInProgress": not completed, "completed": completed,
+            "championId": champion_id,
+        }]],
+    }
+
+
+def _route_cs(lcu, session, pickable, bannable, patch_status=200):
+    lcu.route("GET", "/lol-champ-select/v1/session", 200, session)
+    lcu.route("GET", "/lol-champ-select/v1/pickable-champion-ids", 200, pickable)
+    lcu.route("GET", "/lol-champ-select/v1/bannable-champion-ids", 200, bannable)
+    lcu.route("PATCH", "/lol-champ-select/v1/session/actions/9", patch_status, {})
+    lcu.route("PATCH", "/lol-champ-select/v1/session/actions/10", patch_status, {})
+
+
+def test_b1_ban_picks_priority0():
+    lcu = FakeLcu()
+    _route_cs(lcu, _cs_session("ban", 9), [1, 2, 3], [1, 2, 3])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(ban_priority=[1]))
+    patches = [c[2]["championId"] for c in lcu.calls if c[0] == "PATCH"]
+    assert patches and patches[0] == 1
+    assert any(c == "automation.ban_attempted" for c, _ in ev)
+
+
+def test_b2_ban_skips_unavailable_picks_next():
+    lcu = FakeLcu()
+    # P1=1 不可 ban（不在 bannable），P2=2 可
+    _route_cs(lcu, _cs_session("ban", 9), [], [2, 3])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(ban_priority=[1, 2]))
+    patches = [c[2]["championId"] for c in lcu.calls if c[0] == "PATCH"]
+    assert patches and patches[0] == 2
+
+
+def test_b3_ban_all_unavailable_safe_no_patch():
+    lcu = FakeLcu()
+    _route_cs(lcu, _cs_session("ban", 9), [], [])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(ban_priority=[1, 2]))
+    assert not any(c[0] == "PATCH" for c in lcu.calls)
+    assert any(c == "automation.no_available_champion" for c, _ in ev)
+
+
+def test_b4_auto_ban_disabled_no_patch():
+    lcu = FakeLcu()
+    _route_cs(lcu, _cs_session("ban", 9), [1, 2, 3], [1, 2, 3])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(ban_priority=[1], auto_ban=False))
+    assert not any(c[0] == "PATCH" for c in lcu.calls)
+
+
+def test_b5_ban_not_mine_no_patch():
+    lcu = FakeLcu()
+    _route_cs(lcu, _cs_session("ban", 9, actor=5, local_cell=3), [1, 2, 3], [1, 2, 3])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(ban_priority=[1]))
+    assert not any(c[0] == "PATCH" for c in lcu.calls)
+
+
+def test_b6_ban_completed_no_repeat_patch():
+    lcu = FakeLcu()
+    _route_cs(lcu, _cs_session("ban", 9, champion_id=1, completed=True), [1, 2, 3], [1, 2, 3])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(ban_priority=[1]))
+    assert not any(c[0] == "PATCH" for c in lcu.calls)
+
+
+def test_b7_ban_rejected_does_not_pollute_pick():
+    lcu = FakeLcu()
+    stop = threading.Event()
+    ev, on = make_events()
+    ex = ChampSelectActionExecutor(lcu.request_raw, stop, on)
+    ctrl = ChampSelectController(lcu.request_raw, ex, stop, on)
+
+    # ban action 9: PATCH 始终失败 → 两次后 reject champion 1
+    def patch_fail(m, e, d=None):
+        if m == "PATCH":
+            return 400, None
+        return lcu.request_raw(m, e, d)
+    ex_fail = ChampSelectActionExecutor(patch_fail, stop, on)
+    ctrl_fail = ChampSelectController(patch_fail, ex_fail, stop, on)
+
+    _route_cs(lcu, _cs_session("ban", 9), [], [1, 2])
+    cfg = _ban_pick_cfg(ban_priority=[1], pick_priority=[1],
+                        auto_pick=True, max_attempts=1)
+    ctrl_fail.poll(cfg)
+    assert 1 in ctrl_fail._rejected.get(9, set())
+
+    # 切到 pick action 10，champion 1 应仍可被 pick（不被 ban 的 rejected 污染）
+    lcu.calls.clear()
+    s = _cs_session("pick", 10)
+    lcu.route("GET", "/lol-champ-select/v1/session", 200, s)
+    lcu.route("GET", "/lol-champ-select/v1/pickable-champion-ids", 200, [1])
+    lcu.route("GET", "/lol-champ-select/v1/bannable-champion-ids", 200, [])
+    lcu.route("PATCH", "/lol-champ-select/v1/session/actions/10", 200, {})
+    ctrl_fail.poll(cfg)
+    # champion 1 应仍被 pick 选中（ban 的 rejected 按 action_id 分键，不污染 pick）
+    assert any(c == "automation.pick_attempted" and p.get("champion_id") == 1
+               for c, p in ev), "pick should still be able to use champion 1"
+
+
+# ============================================================
+# A1.3: Lock (phase-2) failure (L1-L2)
+# ============================================================
+
+def test_l1_phase2_failure_returns_false_no_crash():
+    lcu = FakeLcu()
+    stop = threading.Event()
+    ev, on = make_events()
+    ex = ChampSelectActionExecutor(lcu.request_raw, stop, on)
+    # phase1 (no completed) -> 200 ; phase2 (completed=True) -> 400
+    orig = lcu.request_raw
+    def patch_by_body(m, e, d=None):
+        if m == "PATCH":
+            if d and d.get("completed"):
+                return 400, None
+            return 200, None
+        return orig(m, e, d)
+    ex2 = ChampSelectActionExecutor(patch_by_body, stop, on)
+    result = ex2.two_phase_patch(9, 1, hover_only=False)
+    assert result is False  # phase2 failed
+
+
+def test_l2_lock_failure_bounded_reject_then_next_candidate():
+    lcu = FakeLcu()
+    stop = threading.Event()
+    ev, on = make_events()
+    orig = lcu.request_raw
+    def patch_by_body(m, e, d=None):
+        if m == "PATCH":
+            lcu.calls.append((m, e, d))  # 记录以便断言
+            if d and d.get("completed"):
+                return 400, None  # lock always fails
+            return 200, None      # hover ok
+        return orig(m, e, d)
+    ex = ChampSelectActionExecutor(patch_by_body, stop, on)
+    ctrl = ChampSelectController(patch_by_body, ex, stop, on)
+
+    s = _cs_session("pick", 9)
+    lcu.route("GET", "/lol-champ-select/v1/session", 200, s)
+    lcu.route("GET", "/lol-champ-select/v1/pickable-champion-ids", 200, [1, 2])
+    lcu.route("GET", "/lol-champ-select/v1/bannable-champion-ids", 200, [])
+    cfg = _ban_pick_cfg(pick_priority=[1, 2], auto_ban=False, auto_pick=True,
+                        max_attempts=1)
+    ctrl.poll(cfg)  # attempt 1 -> lock fail -> reject champion 1
+    assert any(c == "automation.action_rejected" for c, _ in ev)
+    ctrl.poll(cfg)  # next -> champion 2
+    ids = [c[2]["championId"] for c in lcu.calls
+           if c[0] == "PATCH" and not c[2].get("completed")]
+    assert 1 in ids and 2 in ids
+    # 不会无限 PATCH champion 1
+    assert ids.count(1) == 1
+
+
+# ============================================================
+# A1.3: No-op / all unavailable (N1-N2)
+# ============================================================
+
+def test_n1_empty_priority_no_patch():
+    lcu = FakeLcu()
+    _route_cs(lcu, _cs_session("pick", 9), [1, 2, 3], [])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(pick_priority=[], auto_ban=False, auto_pick=True))
+    assert not any(c[0] == "PATCH" for c in lcu.calls)
+    assert any(c == "automation.no_available_champion" for c, _ in ev)
+
+
+def test_n2_all_candidates_unavailable_no_patch():
+    lcu = FakeLcu()
+    # pickable 为空，priority 全部不可用
+    _route_cs(lcu, _cs_session("pick", 9), [], [])
+    ev, on = make_events()
+    ctrl = _make_controller(lcu, on)
+    ctrl.poll(_ban_pick_cfg(pick_priority=[1, 2, 3], auto_ban=False, auto_pick=True))
+    assert not any(c[0] == "PATCH" for c in lcu.calls)
+    assert any(c == "automation.no_available_champion" for c, _ in ev)
