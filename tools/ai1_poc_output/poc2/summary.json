@@ -1,0 +1,601 @@
+{
+  "total_time_sec": 845.2713861465454,
+  "num_songs": 4,
+  "avg_time_per_song": 211.31784653663635,
+  "results": [
+    {
+      "name": "A-K歌之王-陈奕迅",
+      "category": "A-副歌明显结构标准",
+      "path": "D:\\落雪\\音乐文件\\K歌之王 - 陈奕迅.flac",
+      "analysis_time_sec": 175.97644925117493,
+      "total_duration_sec": 222.36,
+      "num_segments": 12,
+      "num_choruses": 3,
+      "choruses": [
+        {
+          "label": "chorus",
+          "start": 63.69,
+          "end": 76.33,
+          "duration": 12.64
+        },
+        {
+          "label": "chorus",
+          "start": 76.33,
+          "end": 103.62,
+          "duration": 27.290000000000006
+        },
+        {
+          "label": "chorus",
+          "start": 140.96,
+          "end": 175.08,
+          "duration": 34.120000000000005
+        }
+      ],
+      "rules": {
+        "A": {
+          "rule": "A-longest",
+          "start": 140.96,
+          "end": 175.08,
+          "duration": 34.120000000000005
+        },
+        "B": {
+          "rule": "B-last",
+          "start": 140.96,
+          "end": 175.08,
+          "duration": 34.120000000000005
+        },
+        "C": {
+          "rule": "C-last_long",
+          "start": 140.96,
+          "end": 175.08,
+          "duration": 34.120000000000005
+        },
+        "D": {
+          "rule": "D-combined",
+          "start": 140.96,
+          "end": 175.08,
+          "duration": 34.120000000000005,
+          "score": 0.9421298794747257
+        }
+      },
+      "all_segments": [
+        {
+          "label": "start",
+          "start": 0.0,
+          "end": 0.41
+        },
+        {
+          "label": "intro",
+          "start": 0.41,
+          "end": 13.34
+        },
+        {
+          "label": "verse",
+          "start": 13.34,
+          "end": 39.94
+        },
+        {
+          "label": "verse",
+          "start": 39.94,
+          "end": 63.69
+        },
+        {
+          "label": "chorus",
+          "start": 63.69,
+          "end": 76.33
+        },
+        {
+          "label": "chorus",
+          "start": 76.33,
+          "end": 103.62
+        },
+        {
+          "label": "verse",
+          "start": 103.62,
+          "end": 140.96
+        },
+        {
+          "label": "chorus",
+          "start": 140.96,
+          "end": 175.08
+        },
+        {
+          "label": "outro",
+          "start": 175.08,
+          "end": 188.88
+        },
+        {
+          "label": "outro",
+          "start": 188.88,
+          "end": 201.24
+        },
+        {
+          "label": "outro",
+          "start": 201.24,
+          "end": 214.96
+        },
+        {
+          "label": "outro",
+          "start": 214.96,
+          "end": 222.36
+        }
+      ]
+    },
+    {
+      "name": "B-MYALL-浜崎あゆみ",
+      "category": "B-多个明显chorus",
+      "path": "D:\\落雪\\音乐文件\\MY ALL - 浜崎あゆみ.flac",
+      "analysis_time_sec": 255.1946451663971,
+      "total_duration_sec": 327.46,
+      "num_segments": 19,
+      "num_choruses": 7,
+      "choruses": [
+        {
+          "label": "chorus",
+          "start": 55.72,
+          "end": 74.17,
+          "duration": 18.450000000000003
+        },
+        {
+          "label": "chorus",
+          "start": 74.17,
+          "end": 92.65,
+          "duration": 18.480000000000004
+        },
+        {
+          "label": "chorus",
+          "start": 92.65,
+          "end": 111.68,
+          "duration": 19.03
+        },
+        {
+          "label": "chorus",
+          "start": 166.48,
+          "end": 184.95,
+          "duration": 18.47
+        },
+        {
+          "label": "chorus",
+          "start": 184.95,
+          "end": 202.83,
+          "duration": 17.880000000000024
+        },
+        {
+          "label": "chorus",
+          "start": 240.33,
+          "end": 258.8,
+          "duration": 18.47
+        },
+        {
+          "label": "chorus",
+          "start": 258.8,
+          "end": 277.83,
+          "duration": 19.029999999999973
+        }
+      ],
+      "rules": {
+        "A": {
+          "rule": "A-longest",
+          "start": 92.65,
+          "end": 111.68,
+          "duration": 19.03
+        },
+        "B": {
+          "rule": "B-last",
+          "start": 258.8,
+          "end": 277.83,
+          "duration": 19.029999999999973
+        },
+        "C": {
+          "rule": "C-last_long",
+          "start": 258.8,
+          "end": 277.83,
+          "duration": 19.029999999999973
+        },
+        "D": {
+          "rule": "D-combined",
+          "start": 258.8,
+          "end": 277.83,
+          "duration": 19.029999999999973,
+          "score": 0.9638765040004881
+        }
+      },
+      "all_segments": [
+        {
+          "label": "start",
+          "start": 0.0,
+          "end": 0.32
+        },
+        {
+          "label": "intro",
+          "start": 0.32,
+          "end": 19.37
+        },
+        {
+          "label": "verse",
+          "start": 19.37,
+          "end": 37.83
+        },
+        {
+          "label": "verse",
+          "start": 37.83,
+          "end": 55.72
+        },
+        {
+          "label": "chorus",
+          "start": 55.72,
+          "end": 74.17
+        },
+        {
+          "label": "chorus",
+          "start": 74.17,
+          "end": 92.65
+        },
+        {
+          "label": "chorus",
+          "start": 92.65,
+          "end": 111.68
+        },
+        {
+          "label": "solo",
+          "start": 111.68,
+          "end": 130.14
+        },
+        {
+          "label": "verse",
+          "start": 130.14,
+          "end": 148.02
+        },
+        {
+          "label": "verse",
+          "start": 148.02,
+          "end": 166.48
+        },
+        {
+          "label": "chorus",
+          "start": 166.48,
+          "end": 184.95
+        },
+        {
+          "label": "chorus",
+          "start": 184.95,
+          "end": 202.83
+        },
+        {
+          "label": "bridge",
+          "start": 202.83,
+          "end": 222.45
+        },
+        {
+          "label": "break",
+          "start": 222.45,
+          "end": 240.33
+        },
+        {
+          "label": "chorus",
+          "start": 240.33,
+          "end": 258.8
+        },
+        {
+          "label": "chorus",
+          "start": 258.8,
+          "end": 277.83
+        },
+        {
+          "label": "solo",
+          "start": 277.83,
+          "end": 296.29
+        },
+        {
+          "label": "solo",
+          "start": 296.29,
+          "end": 313.61
+        },
+        {
+          "label": "outro",
+          "start": 313.61,
+          "end": 327.46
+        }
+      ]
+    },
+    {
+      "name": "C-爱人错过-告五人",
+      "category": "C-高潮靠后最终副歌明显",
+      "path": "D:\\落雪\\音乐文件\\爱人错过 - 告五人.flac",
+      "analysis_time_sec": 235.79214334487915,
+      "total_duration_sec": 292.08,
+      "num_segments": 20,
+      "num_choruses": 8,
+      "choruses": [
+        {
+          "label": "chorus",
+          "start": 74.11,
+          "end": 87.8,
+          "duration": 13.689999999999998
+        },
+        {
+          "label": "chorus",
+          "start": 87.8,
+          "end": 101.11,
+          "duration": 13.310000000000002
+        },
+        {
+          "label": "chorus",
+          "start": 142.68,
+          "end": 156.39,
+          "duration": 13.70999999999998
+        },
+        {
+          "label": "chorus",
+          "start": 156.39,
+          "end": 170.1,
+          "duration": 13.710000000000008
+        },
+        {
+          "label": "chorus",
+          "start": 170.1,
+          "end": 183.82,
+          "duration": 13.719999999999999
+        },
+        {
+          "label": "chorus",
+          "start": 183.82,
+          "end": 197.53,
+          "duration": 13.710000000000008
+        },
+        {
+          "label": "chorus",
+          "start": 238.67,
+          "end": 252.39,
+          "duration": 13.719999999999999
+        },
+        {
+          "label": "chorus",
+          "start": 252.39,
+          "end": 279.82,
+          "duration": 27.430000000000007
+        }
+      ],
+      "rules": {
+        "A": {
+          "rule": "A-longest",
+          "start": 252.39,
+          "end": 279.82,
+          "duration": 27.430000000000007
+        },
+        "B": {
+          "rule": "B-last",
+          "start": 252.39,
+          "end": 279.82,
+          "duration": 27.430000000000007
+        },
+        "C": {
+          "rule": "C-last_long",
+          "start": 252.39,
+          "end": 279.82,
+          "duration": 27.430000000000007
+        },
+        "D": {
+          "rule": "D-combined",
+          "start": 252.39,
+          "end": 279.82,
+          "duration": 27.430000000000007,
+          "score": 0.9822137770473843
+        }
+      },
+      "all_segments": [
+        {
+          "label": "start",
+          "start": 0.0,
+          "end": 5.53
+        },
+        {
+          "label": "intro",
+          "start": 5.53,
+          "end": 19.25
+        },
+        {
+          "label": "intro",
+          "start": 19.25,
+          "end": 32.54
+        },
+        {
+          "label": "intro",
+          "start": 32.54,
+          "end": 46.68
+        },
+        {
+          "label": "verse",
+          "start": 46.68,
+          "end": 60.39
+        },
+        {
+          "label": "verse",
+          "start": 60.39,
+          "end": 74.11
+        },
+        {
+          "label": "chorus",
+          "start": 74.11,
+          "end": 87.8
+        },
+        {
+          "label": "chorus",
+          "start": 87.8,
+          "end": 101.11
+        },
+        {
+          "label": "inst",
+          "start": 101.11,
+          "end": 115.25
+        },
+        {
+          "label": "verse",
+          "start": 115.25,
+          "end": 142.68
+        },
+        {
+          "label": "chorus",
+          "start": 142.68,
+          "end": 156.39
+        },
+        {
+          "label": "chorus",
+          "start": 156.39,
+          "end": 170.1
+        },
+        {
+          "label": "chorus",
+          "start": 170.1,
+          "end": 183.82
+        },
+        {
+          "label": "chorus",
+          "start": 183.82,
+          "end": 197.53
+        },
+        {
+          "label": "solo",
+          "start": 197.53,
+          "end": 211.23
+        },
+        {
+          "label": "solo",
+          "start": 211.23,
+          "end": 224.96
+        },
+        {
+          "label": "bridge",
+          "start": 224.96,
+          "end": 238.67
+        },
+        {
+          "label": "chorus",
+          "start": 238.67,
+          "end": 252.39
+        },
+        {
+          "label": "chorus",
+          "start": 252.39,
+          "end": 279.82
+        },
+        {
+          "label": "outro",
+          "start": 279.82,
+          "end": 292.08
+        }
+      ]
+    },
+    {
+      "name": "D-Komorebi-MXZ",
+      "category": "D-结构复杂",
+      "path": "D:\\落雪\\音乐文件\\Komorebi(警笛警报版本)完整版混音 - MXZ.flac",
+      "analysis_time_sec": 173.2760910987854,
+      "total_duration_sec": 212.09,
+      "num_segments": 13,
+      "num_choruses": 1,
+      "choruses": [
+        {
+          "label": "chorus",
+          "start": 18.94,
+          "end": 37.58,
+          "duration": 18.639999999999997
+        }
+      ],
+      "rules": {
+        "A": {
+          "rule": "A-longest",
+          "start": 18.94,
+          "end": 37.58,
+          "duration": 18.639999999999997
+        },
+        "B": {
+          "rule": "B-last",
+          "start": 18.94,
+          "end": 37.58,
+          "duration": 18.639999999999997
+        },
+        "C": {
+          "rule": "C-last_long",
+          "start": 18.94,
+          "end": 37.58,
+          "duration": 18.639999999999997
+        },
+        "D": {
+          "rule": "D-combined",
+          "start": 18.94,
+          "end": 37.58,
+          "duration": 18.639999999999997,
+          "score": 0.7016490640765712
+        }
+      },
+      "all_segments": [
+        {
+          "label": "start",
+          "start": 0.0,
+          "end": 0.3
+        },
+        {
+          "label": "intro",
+          "start": 0.3,
+          "end": 18.94
+        },
+        {
+          "label": "chorus",
+          "start": 18.94,
+          "end": 37.58
+        },
+        {
+          "label": "verse",
+          "start": 37.58,
+          "end": 56.22
+        },
+        {
+          "label": "verse",
+          "start": 56.22,
+          "end": 74.86
+        },
+        {
+          "label": "solo",
+          "start": 74.86,
+          "end": 93.5
+        },
+        {
+          "label": "solo",
+          "start": 93.5,
+          "end": 112.14
+        },
+        {
+          "label": "solo",
+          "start": 112.14,
+          "end": 130.78
+        },
+        {
+          "label": "solo",
+          "start": 130.78,
+          "end": 149.43
+        },
+        {
+          "label": "solo",
+          "start": 149.43,
+          "end": 168.07
+        },
+        {
+          "label": "solo",
+          "start": 168.07,
+          "end": 186.71
+        },
+        {
+          "label": "solo",
+          "start": 186.71,
+          "end": 205.34
+        },
+        {
+          "label": "end",
+          "start": 205.34,
+          "end": 212.09
+        }
+      ]
+    }
+  ]
+}

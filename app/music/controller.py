@@ -243,6 +243,29 @@ class MusicController:
             return []
         return self.online_manager.list_sources()
 
+    def search_local(self, keyword: str, limit: int = 200) -> list:
+        """搜索本地库，返回 [{id, path, title, artist, album}, ...]"""
+        try:
+            if not keyword:
+                rows = self.db._conn.execute(
+                    "SELECT id, path, title, artist, album FROM music LIMIT ?", (limit,)
+                ).fetchall()
+            else:
+                kw = f"%{keyword}%"
+                rows = self.db._conn.execute(
+                    "SELECT id, path, title, artist, album FROM music "
+                    "WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? LIMIT ?",
+                    (kw, kw, kw, limit),
+                ).fetchall()
+            return [
+                {"id": r[0], "path": r[1], "title": r[2] or "",
+                 "artist": r[3] or "", "album": r[4] or ""}
+                for r in rows
+            ]
+        except Exception as e:
+            print(f"[Music] search_local error: {e}")
+            return []
+
     def play_online(self, track) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         if self.online_manager is None:
@@ -343,6 +366,19 @@ class MusicController:
     def is_highlight_mode(self) -> bool:
         return self._highlight_mode
 
+    def mark_highlight_start(self) -> bool:
+        """用户手动标记当前播放位置为高潮起点（+35 秒段）"""
+        song = self.get_current_song()
+        if not song:
+            return False
+        pos = self.mpv.get_live_playback_time()
+        if not pos or pos < 5:
+            return False
+        end = min(pos + 35.0, self.mpv.get_duration() or pos + 35.0)
+        self.db.save_highlight(song["id"], pos, end, confidence=1.0, source="manual")
+        print(f"[Music] manual highlight {song.get('title')}: {pos:.1f}-{end:.1f}s")
+        return True
+
     def set_play_mode(self, mode: str):
         """设置播放模式（sequential/shuffle/repeat_one）"""
         self.queue.set_play_mode(mode)
@@ -364,8 +400,17 @@ class MusicController:
         if end is None or end <= start:
             return
 
-        # seek 到 highlight 开始位置
-        self.mpv.seek(start, "absolute")
+        # 延迟 seek（等 mpv 加载新曲目）
+        def _delayed_seek(gen_check, start_sec):
+            import time
+            time.sleep(0.6)
+            if gen_check != self._highlight_gen:
+                return
+            try:
+                self.mpv.seek(start_sec, "absolute")
+                print(f"[Music] highlight seek to {start_sec:.1f}s")
+            except Exception as e:
+                print(f"[Music] highlight seek failed: {e}")
 
         # 生成新 generation，使旧 poller 失效
         self._highlight_gen += 1
@@ -379,6 +424,9 @@ class MusicController:
             data={"song_id": song_id, "position": start, "mode": "segment"},
             source="music"
         ))
+
+        # 延迟 seek 线程
+        threading.Thread(target=_delayed_seek, args=(gen, start), daemon=True).start()
 
         # 启动 poller
         self._highlight_poller = threading.Thread(

@@ -1,0 +1,20 @@
+[
+  {
+    "song_name": "K歌之王 - 陈奕迅",
+    "error": "[Errno 2] No such file or directory: 'C:\\\\Users\\\\1\\\\Doubao\\\\chats\\\\2026-09-14\\\\new-chat\\\\lol-music-agent\\\\demix\\\\htdemucs\\\\K歌之王 - 陈奕迅\\\\bass.wav'",
+    "analysis_time_sec": 3.9880917072296143,
+    "category": "A-结构明显"
+  },
+  {
+    "song_name": "MY ALL - 浜崎あゆみ",
+    "error": "[Errno 2] No such file or directory: 'C:\\\\Users\\\\1\\\\Doubao\\\\chats\\\\2026-09-14\\\\new-chat\\\\lol-music-agent\\\\demix\\\\htdemucs\\\\MY ALL - 浜崎あゆみ\\\\bass.wav'",
+    "analysis_time_sec": 3.8998305797576904,
+    "category": "B-结构中等"
+  },
+  {
+    "song_name": "Komorebi(警笛警报版本) - MXZ",
+    "error": "[Errno 2] No such file or directory: 'C:\\\\Users\\\\1\\\\Doubao\\\\chats\\\\2026-09-14\\\\new-chat\\\\lol-music-agent\\\\demix\\\\htdemucs\\\\Komorebi(警笛警报版本)完整版混音 - MXZ\\\\bass.wav'",
+    "analysis_time_sec": 4.0799102783203125,
+    "category": "C-困难样本"
+  }
+]

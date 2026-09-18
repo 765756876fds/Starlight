@@ -20,6 +20,31 @@ def _resolve_self_puuid(state_store) -> str:
     return None
 
 
+def _normalize_identity(identity, state_store):
+    """归一化 LLM / Rule 传来的 identity 字段，保证进入 QueryService 的是 dict 或 None。
+
+    兼容：
+      {"puuid": "..."}        → 原样
+      {"riot_id": "..."}      → 原样
+      "self"                  → {"self": True}
+      {"self": True}          → {"self": True}
+      None / 123 / [] / {}    → None
+    非法类型不猜测、不崩溃。
+    """
+    if identity is None:
+        return None
+    if isinstance(identity, str):
+        if identity.strip().lower() == "self":
+            return {"self": True}
+        # 其他字符串（如 "xxx#1234"）不自动猜为 riot_id
+        return None
+    if not isinstance(identity, dict):
+        return None
+    if not identity:
+        return None
+    return identity
+
+
 def make_player_query_handler(service: PlayerQueryService,
                               speech_queue=None,
                               state_store=None):
@@ -30,7 +55,18 @@ def make_player_query_handler(service: PlayerQueryService,
         limit = params.get("limit")
         local_match_id = params.get("local_match_id")
 
-        # 显式 identity 优先；否则尝试 self
+        # 归一化 identity
+        identity = _normalize_identity(identity, state_store)
+
+        # self 归一化后走 StateStore → current_summoner.puuid
+        if identity and identity.get("self"):
+            self_puuid = _resolve_self_puuid(state_store)
+            if self_puuid:
+                identity = {"puuid": self_puuid}
+            else:
+                identity = None
+
+        # 无 identity → 也尝试 self（兼容 RuleBasedIntent 无 identity 的情况）
         if not identity:
             self_puuid = _resolve_self_puuid(state_store)
             if self_puuid:

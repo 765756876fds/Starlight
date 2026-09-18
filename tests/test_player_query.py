@@ -309,6 +309,128 @@ class TestSelfIdentity:
             assert len(r["result"]["recent_matches"]) == 2
 
 
+class TestIdentityDefense:
+    def test_string_self_resolves(self):
+        class FakeSS:
+            def get(self, ns, k, default=None):
+                return {"puuid": "p1"}
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=FakeSS())
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": "self"})
+            r = handler(cmd)
+            assert len(r["result"]["recent_matches"]) == 2
+
+    def test_dict_self_resolves(self):
+        class FakeSS:
+            def get(self, ns, k, default=None):
+                return {"puuid": "p1"}
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=FakeSS())
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": {"self": True}})
+            r = handler(cmd)
+            assert len(r["result"]["recent_matches"]) == 2
+
+    def test_self_no_state_store(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=None)
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": "self"})
+            r = handler(cmd)
+            assert r["data_quality"]["status"] == "MISSING_IDENTITY"
+
+    def test_self_no_current_summoner(self):
+        class EmptySS:
+            def get(self, ns, k, default=None):
+                return None
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=EmptySS())
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": "self"})
+            r = handler(cmd)
+            assert r["data_quality"]["status"] == "MISSING_IDENTITY"
+
+    def test_none_identity(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=None)
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": None})
+            r = handler(cmd)
+            assert r["data_quality"]["status"] == "MISSING_IDENTITY"
+
+    def test_int_identity(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=None)
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": 123})
+            r = handler(cmd)
+            assert r["data_quality"]["status"] == "MISSING_IDENTITY"
+
+    def test_list_identity(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=None)
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": []})
+            r = handler(cmd)
+            assert r["data_quality"]["status"] == "MISSING_IDENTITY"
+
+    def test_empty_dict_identity(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=None)
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": {}})
+            r = handler(cmd)
+            assert r["data_quality"]["status"] == "MISSING_IDENTITY"
+
+    def test_explicit_puuid_wins_over_self(self):
+        class FakeSS:
+            def get(self, ns, k, default=None):
+                return {"puuid": "other"}
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "p.db")
+            log = os.path.join(td, "events")
+            _seed(db, log)
+            svc = _make_service(db, log)
+            handler = make_player_query_handler(svc, state_store=FakeSS())
+            cmd = Command(command_type=CommandType.PLAYER_QUERY,
+                          params={"query_type": "recent", "identity": {"puuid": "p1"}})
+            r = handler(cmd)
+            assert len(r["result"]["recent_matches"]) == 2
+
+
 class TestSpeechEnqueue:
     def test_enqueue_called(self):
         class FakeQueue:

@@ -62,6 +62,9 @@ class AutomationConfig:
     max_action_attempts: int = 3
     polling_interval: float = 0.5
     presets: Dict[str, AutomationPreset] = field(default_factory=dict)
+    auto_queue_mode: str = "bot"
+    auto_queue_primary_role: Optional[str] = None
+    auto_queue_secondary_role: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "AutomationConfig":
@@ -86,6 +89,9 @@ class AutomationConfig:
             max_action_attempts=int(data.get("max_action_attempts", 3)),
             polling_interval=float(data.get("polling_interval", 0.5)),
             presets=presets,
+            auto_queue_mode=str(data.get("auto_queue_mode", "bot")),
+            auto_queue_primary_role=data.get("auto_queue_primary_role"),
+            auto_queue_secondary_role=data.get("auto_queue_secondary_role"),
         )
 
     def pick_priority_for(self, role: Optional[str]) -> List[int]:

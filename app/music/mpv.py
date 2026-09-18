@@ -57,9 +57,10 @@ class MpvController:
             pass
 
         # 管道名加 PID，避免连到旧实例
-        self.ipc_pipe = f"\\.\pipe\lol_music_mpv_{os.getpid()}"
+        self.ipc_pipe = r"\\.\pipe\lol_music_mpv_" + str(os.getpid())
 
         # 启动 mpv
+        print(f"[mpv] pipe name: {self.ipc_pipe!r}")
         args = [
             self.mpv_path,
             "--no-video",
@@ -67,6 +68,8 @@ class MpvController:
             "--force-window=no",
             f"--input-ipc-server={self.ipc_pipe}",
             "--idle=yes",
+            "--tls-verify=no",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         ]
 
         self._process = subprocess.Popen(
@@ -281,7 +284,14 @@ class MpvController:
         return self.get_current_time()
 
     def get_duration(self) -> float:
-        """获取总时长（秒）"""
+        """获取总时长（秒，实时查询）"""
+        try:
+            val = self.get_property("duration", timeout=1.0)
+            if val is not None:
+                self._properties["duration"] = val
+                return float(val)
+        except Exception:
+            pass
         return float(self._properties.get("duration", 0))
 
     def is_paused(self) -> bool:

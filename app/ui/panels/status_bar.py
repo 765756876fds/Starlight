@@ -47,8 +47,13 @@ class StatusBar(QStatusBar):
         llm_label = "未就绪"
         if intent is not None:
             llm = getattr(intent, "llm_intent", None)
+            api = getattr(intent, "api_intent", None)
             if llm is not None and getattr(llm, "is_available", lambda: False)():
                 llm_ok = True
-                model = getattr(llm, "model", "") or ""
-                llm_label = model or "LLM"
+                model = getattr(llm, "model", "") or "llama.cpp"
+                llm_label = model
+            elif api is not None and getattr(api, "is_available", lambda: False)():
+                llm_ok = True
+                model = getattr(api, "model", "") or "LM Studio"
+                llm_label = model
         self.lbl_llm.setText(f"{_dot(llm_ok)} LLM {llm_label}")

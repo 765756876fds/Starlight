@@ -127,8 +127,12 @@ class LCUConnection:
                 masked_token = self._mask_token(token)
                 print(f"[LCU] 已连接, 端口={self._port}, token={masked_token}, 游戏流程={self._gameflow_phase}")
 
-                # 4. 启动 WebSocket 监听
-                self._start_websocket()
+                # 4. WebSocket 监听（可选；默认关闭，用 HTTP 轮询）
+                use_ws = getattr(self, "_use_websocket", False)
+                if use_ws:
+                    self._start_websocket()
+                else:
+                    print("[LCU] WebSocket 已禁用，使用 HTTP 轮询")
         except Exception as e:
             print(f"[LCU] 连接测试失败: {e}")
             self._disconnect()

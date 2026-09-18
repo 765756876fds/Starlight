@@ -161,7 +161,7 @@ class Qwen3ServerASR(ASREngine):
         """测试连接"""
         try:
             import requests
-            resp = requests.get(f"{self.base_url}/models", timeout=5)
+            resp = requests.get(f"{self.base_url}/models", timeout=0.5)
             if resp.status_code == 200:
                 self._loaded = True
                 print(f"[ASR] llama-server 已连接: {self.base_url}")

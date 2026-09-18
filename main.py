@@ -2,6 +2,14 @@
 
 import os
 import sys
+
+# Force UTF-8 stdout/stderr so Chinese prints correctly in cmd.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import signal
 import threading
 import time
@@ -10,6 +18,12 @@ from typing import Any, Dict
 # 纭繚椤圭洰鏍圭洰褰曞湪璺緞涓?
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
+
+try:
+    from app.core.log_redirect import install_log_redirect
+    install_log_redirect()
+except Exception:
+    pass
 
 from app.core.config import get_config
 from app.core.event_bus import get_event_bus, Event, EventType
@@ -71,7 +85,12 @@ class Application:
         self._running = False
         self._shutdown_event = threading.Event()
 
+    _initialized = False
     def initialize(self):
+        if Application._initialized:
+            print("[Startup] already initialized, skip")
+            return
+        Application._initialized = True
         """鍒濆鍖栨墍鏈夊瓙绯荤粺"""
         print("=" * 60)
         print("  LoL 脳 鏈湴闊充箰 脳 璇煶 Agent")
@@ -425,59 +444,90 @@ class Application:
             return
 
         app = QApplication.instance() or QApplication(sys.argv)
+        app.setQuitOnLastWindowClosed(False)
         try:
             from app.ui.theme.applier import apply_dark_theme
             apply_dark_theme(app)
         except Exception as _e:
-            print(f"[UI] theme load failed: {_e}")
+            print(f'[UI] theme load failed: {_e}')
+
+        print("[Run] creating MainWindow")
         window = MainWindow(
-            automation_service=getattr(self, "automation", None),
-            cooldown_manager=getattr(self, "cooldown_manager", None),
-            music=getattr(self, "music", None),
-            ongoing_service=getattr(self, "ongoing_service", None),
-            services={
-                "lcu": self.lol.lcu if self.lol else None,
-                "asr": self.voice.asr if self.voice else None,
-                "intent": self.voice.intent_router if self.voice else None,
-            },
+            automation_service=None,
+            cooldown_manager=None,
+            music=None,
         )
-
-        def _on_quit():
-            try:
-                self.stop()
-            except Exception:
-                pass
-
-        # Overlay锛堝彧璇绘偓娴獥锛?
-        try:
-            from app.ui.overlay.overlay_model import OverlayModel
-            from app.ui.overlay.overlay_window import OverlayWindow
-            def _phase_provider():
-                try:
-                    if self.lol and self.lol.lcu:
-                        return self.lol.lcu.get_gameflow_phase() or "None"
-                except Exception:
-                    pass
-                return "None"
-            self._overlay_model = OverlayModel(
-                cooldown_manager=getattr(self, "cooldown_manager", None),
-                objective_timer=getattr(self, "objective_timer", None),
-                phase_provider=_phase_provider,
-            )
-            self._overlay = OverlayWindow(self._overlay_model)
-            window.set_overlay_refs(self._overlay_model, self._overlay)
-            print("[Overlay] 宸插垱寤猴紙鏁版嵁椹卞姩鏄剧ず锛屾棤鏁版嵁鏃惰嚜鍔ㄩ殣钘忥級")
-        except Exception as e:
-            print(f"[Overlay] 鍒濆鍖栧け璐? {e}")
-
-        tray = TrayIcon(window, _on_quit)
-        tray.show()
+        window.resize(480, 640)
         window.show()
-        print("...")
+        window.raise_()
+        window.activateWindow()
+        print(f"[Run] MainWindow shown at {window.geometry()}")
+
+        state = {"done": False, "error": None, "switched": False}
+
+        def backend():
+            try:
+                print("[Run] background: initialize")
+                self.initialize()
+                print("[Run] background: start")
+                self.start()
+                print("[Run] background: done")
+                state["done"] = True
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                state["error"] = str(e)
+
+        import threading
+        threading.Thread(target=backend, daemon=True).start()
+
+        from PySide6.QtCore import QTimer
+
+        def check():
+            if state["error"]:
+                print(f"[Run] backend error: {state['error']}")
+                return
+            if state["done"] and not state["switched"]:
+                state["switched"] = True
+                print("[Run] switching to tabs")
+                try:
+                    self._switch_to_tabs(window)
+                    print("[Run] switched")
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+
+        timer = QTimer()
+        timer.timeout.connect(check)
+        timer.start(500)
+        self._startup_timer = timer
+
+        print("[Run] entering app.exec()")
         try:
             app.exec()
         finally:
             self.stop()
+
+    def _switch_to_tabs(self, window):
+        print("[Run] _switch_to_tabs start")
+        from app.ui.widgets.main_tabs import MainTabs
+        print("[Run] building MainTabs")
+        tabs = MainTabs(
+            automation_service=getattr(self, "automation", None),
+            cooldown_manager=getattr(self, "cooldown_manager", None),
+            music=getattr(self, "music", None),
+            ongoing_service=getattr(self, "ongoing_service", None),
+        )
+        print("[Run] MainTabs built, switching")
+        window.switch_to_tabs(tabs)
+        print("[Run] switched, showing tray")
+        from app.ui.tray import TrayIcon
+        tray = TrayIcon(window, on_quit=self.stop)
+        tray.show()
+        self._tray = tray
+        self._main_window = window
+        print("[Run] tray shown")
+
 
     def get_status(self) -> Dict[str, Any]:
         """doc"""

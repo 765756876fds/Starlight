@@ -1,0 +1,6 @@
+FROM "D:\迅雷下载\ggml-org\Qwen3-ASR-0.6B-GGUF\Qwen3-ASR-0.6B-Q8_0.gguf"
+
+PARAMETER temperature 0.1
+PARAMETER num_ctx 4096
+
+SYSTEM "你是一个语音识别助手。将输入的音频转录为文字，只输出转录结果。"

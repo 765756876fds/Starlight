@@ -1,0 +1,111 @@
+{
+  "name": "D-Komorebi-MXZ",
+  "category": "D-结构复杂",
+  "path": "D:\\落雪\\音乐文件\\Komorebi(警笛警报版本)完整版混音 - MXZ.flac",
+  "analysis_time_sec": 173.2760910987854,
+  "total_duration_sec": 212.09,
+  "num_segments": 13,
+  "num_choruses": 1,
+  "choruses": [
+    {
+      "label": "chorus",
+      "start": 18.94,
+      "end": 37.58,
+      "duration": 18.639999999999997
+    }
+  ],
+  "rules": {
+    "A": {
+      "rule": "A-longest",
+      "start": 18.94,
+      "end": 37.58,
+      "duration": 18.639999999999997
+    },
+    "B": {
+      "rule": "B-last",
+      "start": 18.94,
+      "end": 37.58,
+      "duration": 18.639999999999997
+    },
+    "C": {
+      "rule": "C-last_long",
+      "start": 18.94,
+      "end": 37.58,
+      "duration": 18.639999999999997
+    },
+    "D": {
+      "rule": "D-combined",
+      "start": 18.94,
+      "end": 37.58,
+      "duration": 18.639999999999997,
+      "score": 0.7016490640765712
+    }
+  },
+  "all_segments": [
+    {
+      "label": "start",
+      "start": 0.0,
+      "end": 0.3
+    },
+    {
+      "label": "intro",
+      "start": 0.3,
+      "end": 18.94
+    },
+    {
+      "label": "chorus",
+      "start": 18.94,
+      "end": 37.58
+    },
+    {
+      "label": "verse",
+      "start": 37.58,
+      "end": 56.22
+    },
+    {
+      "label": "verse",
+      "start": 56.22,
+      "end": 74.86
+    },
+    {
+      "label": "solo",
+      "start": 74.86,
+      "end": 93.5
+    },
+    {
+      "label": "solo",
+      "start": 93.5,
+      "end": 112.14
+    },
+    {
+      "label": "solo",
+      "start": 112.14,
+      "end": 130.78
+    },
+    {
+      "label": "solo",
+      "start": 130.78,
+      "end": 149.43
+    },
+    {
+      "label": "solo",
+      "start": 149.43,
+      "end": 168.07
+    },
+    {
+      "label": "solo",
+      "start": 168.07,
+      "end": 186.71
+    },
+    {
+      "label": "solo",
+      "start": 186.71,
+      "end": 205.34
+    },
+    {
+      "label": "end",
+      "start": 205.34,
+      "end": 212.09
+    }
+  ]
+}

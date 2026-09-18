@@ -1,6 +1,7 @@
 """主窗口。"""
 from PySide6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
+    QCheckBox, QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget,
+    QWidget, QVBoxLayout,
 )
 
 from .panels.automation_panel import AutomationPanel
@@ -8,6 +9,7 @@ from .panels.cooldown_panel import CooldownPanel
 from .panels.music_panel import MusicPanel
 from .panels.ongoing_panel import OngoingPanel
 from .panels.status_bar import StatusBar
+from .panels.loading_panel import LoadingPanel
 
 
 class MainWindow(QMainWindow):
@@ -18,37 +20,64 @@ class MainWindow(QMainWindow):
         self.resize(560, 720)
         self._services = services or {}
 
-        root = QVBoxLayout()
-        # 顶栏 overlay 开关
-        top = QHBoxLayout()
-        self.cb_overlay = QCheckBox("显示游戏内 Overlay")
-        self.cb_overlay.setChecked(True)
-        top.addWidget(self.cb_overlay)
-        top.addStretch()
-        root.addLayout(top)
+        self._stack = QStackedWidget()
+        self.setCentralWidget(self._stack)
 
-        tabs = QTabWidget()
-        tabs.addTab(AutomationPanel(automation_service), "自动化")
-        tabs.addTab(OngoingPanel(ongoing_service), "对局信息")
-        tabs.addTab(CooldownPanel(cooldown_manager), "计时器")
-        tabs.addTab(MusicPanel(music), "音乐")
-        root.addWidget(tabs)
+        # Page 0: loading
+        self._loading = LoadingPanel()
+        self._stack.addWidget(self._loading)
 
-        central = QWidget()
-        central.setLayout(root)
-        self.setCentralWidget(central)
+        # Page 1: tabs (built lazily via switch_to_tabs)
+        self._tabs = None
+        self._automation_service = automation_service
+        self._cooldown_manager = cooldown_manager
+        self._music = music
+        self._ongoing_service = ongoing_service
 
+        try:
+            from app.core.log_bus import get_log_bus
+            get_log_bus().sig_log.connect(self._loading._on_log)
+        except Exception:
+            pass
+
+    def switch_to_tabs(self, tabs=None):
+        print("[UI] switch_to_tabs")
+        if tabs is None:
+            # Build tabs ourselves
+            central = QWidget()
+            root = QVBoxLayout(central)
+            top = QHBoxLayout()
+            self.cb_overlay = QCheckBox("显示游戏内 Overlay")
+            self.cb_overlay.setChecked(True)
+            top.addWidget(self.cb_overlay)
+            top.addStretch()
+            root.addLayout(top)
+            tabs_w = QTabWidget()
+            tabs_w.addTab(AutomationPanel(self._automation_service), "自动化")
+            tabs_w.addTab(OngoingPanel(self._ongoing_service), "对局信息")
+            tabs_w.addTab(CooldownPanel(self._cooldown_manager), "计时器")
+            tabs_w.addTab(MusicPanel(self._music), "音乐")
+            root.addWidget(tabs_w)
+            self._tabs = central
+        else:
+            self._tabs = tabs
+        self._stack.addWidget(self._tabs)
+        self._stack.setCurrentIndex(self._stack.count() - 1)
         self._status = StatusBar(self._services)
         self.setStatusBar(self._status)
-
         self._overlay_model = None
         self._overlay_window = None
-        self.cb_overlay.toggled.connect(self._on_overlay_toggle)
+        try:
+            self.cb_overlay.toggled.connect(self._on_overlay_toggle)
+        except Exception:
+            pass
+        print("[UI] switched")
 
     def set_overlay_refs(self, model, window) -> None:
         self._overlay_model = model
         self._overlay_window = window
-        self.cb_overlay.setChecked(model.is_enabled())
+        if hasattr(self, "cb_overlay"):
+            self.cb_overlay.setChecked(model.is_enabled())
 
     def _on_overlay_toggle(self, on: bool) -> None:
         if self._overlay_model is not None:

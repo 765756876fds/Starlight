@@ -1,0 +1,37 @@
+﻿{
+    "choices":  [
+                    {
+                        "finish_reason":  "length",
+                        "index":  0,
+                        "message":  {
+                                        "role":  "assistant",
+                                        "content":  "",
+                                        "reasoning_content":  "Okay, the user just said \"hi\". I need to respond politely and friendly. Since"
+                                    }
+                    }
+                ],
+    "created":  1789521104,
+    "model":  "D:\\迅雷下载\\enacimie\\Qwen3-4B-Q4_K_M-GGUF\\qwen3-4b-q4_k_m.gguf",
+    "system_fingerprint":  "b10964-b29c606e2",
+    "object":  "chat.completion",
+    "usage":  {
+                  "completion_tokens":  20,
+                  "prompt_tokens":  9,
+                  "total_tokens":  29,
+                  "prompt_tokens_details":  {
+                                                "cached_tokens":  3
+                                            }
+              },
+    "id":  "chatcmpl-SMffFL9tnynTVVRcomuy81gD1RrmOOgB",
+    "timings":  {
+                    "cache_n":  3,
+                    "prompt_n":  6,
+                    "prompt_ms":  277.367,
+                    "prompt_per_token_ms":  46.227833333333336,
+                    "prompt_per_second":  21.63198938590387,
+                    "predicted_n":  20,
+                    "predicted_ms":  260.779,
+                    "predicted_per_token_ms":  13.72521052631579,
+                    "predicted_per_second":  72.8586274201527
+                }
+}

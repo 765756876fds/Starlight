@@ -30,6 +30,7 @@ class CooldownPanel(QWidget):
         for label, val in _SIDES:
             self.cmb_side.addItem(label, val)
         self.btn_add = QPushButton("添加")
+        self.btn_add.setProperty("class", "primary")
         form.addRow("敌方英雄", self.edit_champ)
         form.addRow("技能", self.cmb_skill)
         form.addRow("阵营", self.cmb_side)

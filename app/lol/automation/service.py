@@ -40,6 +40,7 @@ class LoLAutomationService:
         self._lock = threading.RLock()
         self._state = AutomationState.IDLE
         self._last_phase: str = "None"
+        self._tick_hint = ""
 
         # 事件桥
         def _request_with_status(method: str, endpoint: str, data):
@@ -114,6 +115,13 @@ class LoLAutomationService:
     def set_auto_accept(self, enabled: bool) -> None:
         with self._lock:
             self._config.auto_accept = bool(enabled)
+            self._sync_feature_switches()
+        if enabled:
+            self._ensure_worker_running()
+
+    def set_auto_queue(self, enabled: bool) -> None:
+        with self._lock:
+            self._config.auto_queue = bool(enabled)
             self._sync_feature_switches()
         if enabled:
             self._ensure_worker_running()
@@ -239,17 +247,39 @@ class LoLAutomationService:
             self._champ_select.clear_state()
         self._last_phase = phase
 
+        hints = []
+        if cfg.auto_queue:
+            if phase == "Lobby":
+                hints.append("将自动开始匹配")
+            elif phase == "Matchmaking":
+                hints.append("已在排队中")
+            else:
+                hints.append("等待进入组队房间")
+        if cfg.auto_accept:
+            if phase == "ReadyCheck":
+                hints.append("将自动接受")
+            else:
+                hints.append("等待 ReadyCheck")
+        if cfg.auto_ban or cfg.auto_pick:
+            if phase == "ChampSelect":
+                hints.append("将在选人阶段自动操作")
+            else:
+                hints.append("等待进入选人阶段")
+        self._tick_hint = " | ".join(hints) if hints else "空闲"
+
         # 状态推导（双信号：gameflow + 动作本身）
         self._set_state(derive_state(phase))
-        if phase == "Lobby" and cfg.auto_queue:
-            self._log("auto_queue", "Lobby, try_start -> POST search")
-            self._queue.try_start(phase)
+        if cfg.auto_queue:
+            self._queue.try_start(phase, cfg)
         elif phase == "ReadyCheck" and cfg.auto_accept:
             self._log("auto_accept", "ReadyCheck detected -> four-step check")
             self._ready_check.check(cfg.accept_delay)
         elif phase == "ChampSelect":
             self._log("champ_select", f"ChampSelect poll (ban={cfg.auto_ban} pick={cfg.auto_pick})")
             self._champ_select.poll(cfg)
+
+    def get_status_hint(self) -> str:
+        return getattr(self, "_tick_hint", "")
 
     @staticmethod
     def _log(feature: str, msg: str) -> None:

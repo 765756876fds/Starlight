@@ -132,6 +132,11 @@ class TestHighlightModeSegment:
         song = db.get_song_by_id(sids[0])
         with patch("app.music.controller.os.path.exists", return_value=True):
             ctrl._play_song(song)
+        import time
+        for _ in range(30):
+            if ctrl.mpv.seek.called:
+                break
+            time.sleep(0.1)
         ctrl.mpv.seek.assert_called_with(pytest.approx(100.0), "absolute")
         db.close()
 

@@ -66,15 +66,21 @@ class OnlineSourceManager:
                 out[name] = cached
                 continue
             futs[self._executor.submit(self._safe_search, src, keyword, limit_per_source)] = name
-        for fut in as_completed(futs, timeout=self._timeout + 2):
-            name = futs[fut]
-            try:
-                tracks = fut.result(timeout=self._timeout)
-                out[name] = tracks
-                self._cache.set(name, keyword, limit_per_source, tracks)
-            except Exception as e:
-                self._errors[name] = str(e)
-                out[name] = []
+        try:
+            for fut in as_completed(futs, timeout=self._timeout + 2):
+                name = futs[fut]
+                try:
+                    tracks = fut.result(timeout=self._timeout)
+                    out[name] = tracks
+                    self._cache.set(name, keyword, limit_per_source, tracks)
+                except Exception as e:
+                    self._errors[name] = str(e)
+                    out[name] = []
+        except Exception as e:
+            for fut, name in futs.items():
+                if not fut.done():
+                    out[name] = []
+                    self._errors[name] = f"timeout: {e}"
         return out
 
     def _safe_search(self, src: MusicSource, kw: str, limit: int) -> List[OnlineTrack]:

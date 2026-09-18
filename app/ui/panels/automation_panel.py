@@ -1,10 +1,12 @@
 """自动化面板：4 个开关 + 状态显示。"""
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QFormLayout, QGroupBox, QLabel, QVBoxLayout, QWidget,
+    QHBoxLayout, QPushButton, QGroupBox, QLabel, QVBoxLayout, QWidget,
 )
 
 from ..widgets.toggle_button import ToggleButton
+from ..dialogs.auto_queue_config_dialog import AutoQueueConfigDialog
+from ..dialogs.ban_pick_config_dialog import BanPickConfigDialog
 
 
 class AutomationPanel(QWidget):
@@ -18,16 +20,32 @@ class AutomationPanel(QWidget):
 
         self.lbl_state = QLabel("状态：?")
         self.lbl_phase = QLabel("游戏阶段：?")
+        self._lbl_hint = QLabel("")
+        self._lbl_hint.setStyleSheet("color: #9090a8; font-size: 11px;")
+        self._lbl_hint.setWordWrap(True)
         form.addWidget(self.lbl_phase)
         form.addWidget(self.lbl_state)
+        form.addWidget(self._lbl_hint)
 
         self.btn_queue = ToggleButton("自动排队", False)
         self.btn_accept = ToggleButton("自动接受", False)
         self.btn_ban = ToggleButton("自动禁用", False)
         self.btn_pick = ToggleButton("自动选择", False)
 
-        for b in (self.btn_queue, self.btn_accept, self.btn_ban, self.btn_pick):
-            form.addWidget(b)
+        def _row(btn, gear=None):
+            r = QHBoxLayout()
+            r.addWidget(btn, 1)
+            if gear is not None:
+                g = QPushButton("⚙")
+                g.setFixedWidth(36)
+                g.clicked.connect(gear)
+                r.addWidget(g)
+            return r
+
+        form.addLayout(_row(self.btn_queue, self._open_queue_config))
+        form.addWidget(self.btn_accept)
+        form.addLayout(_row(self.btn_ban, self._open_ban_config))
+        form.addLayout(_row(self.btn_pick, self._open_pick_config))
 
         layout.addWidget(box)
         layout.addStretch()
@@ -47,6 +65,55 @@ class AutomationPanel(QWidget):
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
 
+    def _open_queue_config(self):
+        if self._svc is None:
+            return
+        cfg = getattr(self._svc, "config", None)
+        cur = {}
+        if cfg is not None:
+            cur = {
+                "auto_queue_mode": getattr(cfg, "auto_queue_mode", "normal"),
+                "auto_queue_primary_role": getattr(cfg, "auto_queue_primary_role", "不限"),
+                "auto_queue_secondary_role": getattr(cfg, "auto_queue_secondary_role", "不限"),
+            }
+        dlg = AutoQueueConfigDialog(cur, self)
+        if dlg.exec():
+            vals = dlg.values()
+            for k, v in vals.items():
+                try:
+                    setattr(cfg, k, v)
+                except Exception:
+                    pass
+            print(f"[UI] auto_queue config saved: {vals}")
+            try:
+                import yaml
+                path = "config/settings.yaml"
+                with open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                data.setdefault("automation", {}).update(vals)
+                with open(path, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+            except Exception as e:
+                print(f"[UI] save yaml failed: {e}")
+
+    def _open_ban_config(self):
+        self._open_banpick("自动禁用配置", "ban_priority")
+
+    def _open_pick_config(self):
+        self._open_banpick("自动选择配置", "pick_priority")
+
+    def _open_banpick(self, title, field):
+        if self._svc is None:
+            return
+        cfg = getattr(self._svc, "config", None)
+        cur = list(getattr(cfg, field, []) or [])
+        dlg = BanPickConfigDialog(title, cur, self)
+        if dlg.exec():
+            try:
+                setattr(cfg, field, dlg.values())
+            except Exception:
+                pass
+
     def refresh(self):
         if self._svc is None:
             return
@@ -59,6 +126,10 @@ class AutomationPanel(QWidget):
             state_zh = _STATE_ZH.get(state, state)
             self.lbl_state.setText(f"状态：{state_zh}")
             self.lbl_phase.setText(f"游戏阶段：{phase}")
+            try:
+                self._lbl_hint.setText(service.get_status_hint() or "")
+            except Exception:
+                pass
             cfg = getattr(self._svc, "config", None)
             if cfg is not None:
                 self.btn_queue.set_state(bool(getattr(cfg, "auto_queue", False)))

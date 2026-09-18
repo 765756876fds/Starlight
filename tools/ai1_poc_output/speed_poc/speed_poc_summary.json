@@ -1,0 +1,154 @@
+{
+  "pychorus": {
+    "songs": [
+      {
+        "song": "A-K歌之王-陈奕迅",
+        "error": "find_chorus() missing 2 required positional arguments: 'sr' and 'song_length_sec'",
+        "quality": "D-明显错误"
+      },
+      {
+        "song": "B-MYALL-浜崎あゆみ",
+        "error": "find_chorus() missing 2 required positional arguments: 'sr' and 'song_length_sec'",
+        "quality": "D-明显错误"
+      },
+      {
+        "song": "C-爱人错过-告五人",
+        "error": "find_chorus() missing 2 required positional arguments: 'sr' and 'song_length_sec'",
+        "quality": "D-明显错误"
+      },
+      {
+        "song": "D-Komorebi-MXZ",
+        "error": "find_chorus() missing 2 required positional arguments: 'sr' and 'song_length_sec'",
+        "quality": "D-明显错误"
+      }
+    ],
+    "avg_time": 0,
+    "est_144_min": 0.0,
+    "quality_counts": {
+      "A-明显合理": 0,
+      "B-基本合理": 0,
+      "C-勉强": 0,
+      "D-明显错误": 4
+    }
+  },
+  "librosa_energy": {
+    "songs": [
+      {
+        "song": "A-K歌之王-陈奕迅",
+        "result": {
+          "start": 155.364716553288,
+          "end": 175.364716553288,
+          "duration": 20,
+          "time_sec": 1.7779443264007568,
+          "total_duration": 222.35142857142858
+        },
+        "baseline": 141.0,
+        "quality": "A-明显合理"
+      },
+      {
+        "song": "B-MYALL-浜崎あゆみ",
+        "result": {
+          "start": 183.0661224489796,
+          "end": 203.0661224489796,
+          "duration": 20,
+          "time_sec": 0.636512279510498,
+          "total_duration": 327.4537868480726
+        },
+        "baseline": 258.8,
+        "quality": "B-基本合理"
+      },
+      {
+        "song": "C-爱人错过-告五人",
+        "result": {
+          "start": 254.32816326530613,
+          "end": 274.3281632653061,
+          "duration": 20,
+          "time_sec": 0.7062273025512695,
+          "total_duration": 292.0748752834467
+        },
+        "baseline": 252.4,
+        "quality": "A-明显合理"
+      },
+      {
+        "song": "D-Komorebi-MXZ",
+        "result": {
+          "start": 132.28408163265306,
+          "end": 152.28408163265306,
+          "duration": 20,
+          "time_sec": 0.5825202465057373,
+          "total_duration": 212.0833560090703
+        },
+        "baseline": 18.9,
+        "quality": "D-明显错误"
+      }
+    ],
+    "avg_time": 0.9258010387420654,
+    "est_144_min": 2.221922492980957,
+    "quality_counts": {
+      "A-明显合理": 2,
+      "B-基本合理": 1,
+      "C-勉强": 0,
+      "D-明显错误": 1
+    }
+  },
+  "librosa_repeat": {
+    "songs": [
+      {
+        "song": "A-K歌之王-陈奕迅",
+        "result": {
+          "start": 0.0,
+          "end": 20.0,
+          "duration": 20,
+          "time_sec": 1.4172093868255615,
+          "total_duration": 222.35142857142858
+        },
+        "baseline": 141.0,
+        "quality": "D-明显错误"
+      },
+      {
+        "song": "B-MYALL-浜崎あゆみ",
+        "result": {
+          "start": 0.0,
+          "end": 20.0,
+          "duration": 20,
+          "time_sec": 2.0948050022125244,
+          "total_duration": 327.4537868480726
+        },
+        "baseline": 258.8,
+        "quality": "D-明显错误"
+      },
+      {
+        "song": "C-爱人错过-告五人",
+        "result": {
+          "start": 0.46439909297052157,
+          "end": 20.46439909297052,
+          "duration": 20,
+          "time_sec": 2.0806779861450195,
+          "total_duration": 292.0748752834467
+        },
+        "baseline": 252.4,
+        "quality": "D-明显错误"
+      },
+      {
+        "song": "D-Komorebi-MXZ",
+        "result": {
+          "start": 6.965986394557823,
+          "end": 26.965986394557824,
+          "duration": 20,
+          "time_sec": 1.4821412563323975,
+          "total_duration": 212.0833560090703
+        },
+        "baseline": 18.9,
+        "quality": "A-明显合理"
+      }
+    ],
+    "avg_time": 1.7687084078788757,
+    "est_144_min": 4.244900178909302,
+    "quality_counts": {
+      "A-明显合理": 1,
+      "B-基本合理": 0,
+      "C-勉强": 0,
+      "D-明显错误": 3
+    }
+  }
+}

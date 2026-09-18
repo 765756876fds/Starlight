@@ -36,17 +36,41 @@ class JSMusicSource(MusicSource):
 
     def _find_node(self):
         import shutil
-        p = os.environ.get("NODE_EXE")
-        if p and os.path.exists(p): return p
-        p = shutil.which("node")
-        if p: return p
-        for c in [r"C:\Program Files\nodejs\node.exe",
-                  r"C:\Program Files (x86)\nodejs\node.exe",
-                  os.path.expanduser(r"~\AppData\Roaming\npm\node.exe"),
-                  os.path.expanduser(r"~\AppData\Local\Programs\nodejs\node.exe"),
-                  os.path.expanduser(r"~\scoop\apps\nodejs\current\node.exe"),
-                  r"C:\tools\nodejs\node.exe"]:
-            if os.path.exists(c): return c
+        candidates = []
+        env_p = os.environ.get("NODE_EXE", "")
+        if env_p:
+            candidates.append(env_p)
+        candidates += [
+            r"C:\Program Files\nodejs\node.exe",
+            r"C:\Program Files (x86)\nodejs\node.exe",
+            r"D:\nodejs\node.exe",
+            r"D:\Program Files\nodejs\node.exe",
+            r"C:\nvm4w\nodejs\node.exe",
+            os.path.expanduser(r"~\scoop\apps\nodejs\current\node.exe"),
+            os.path.expanduser(r"~\scoop\shims\node.exe"),
+            os.path.expanduser(r"~\AppData\Local\Programs\nodejs\node.exe"),
+            os.path.expanduser(r"~\AppData\Roaming\npm\node.exe"),
+            r"C:\tools\nodejs\node.exe",
+        ]
+        which = shutil.which("node")
+        if which:
+            candidates.append(which)
+        for c in candidates:
+            if c and os.path.isfile(c):
+                print(f"[JSBridge] 使用 node: {c}")
+                return c
+        # nvm 扫描
+        try:
+            nvm_root = os.path.expanduser(r"~\AppData\Roaming\nvm")
+            if os.path.isdir(nvm_root):
+                for ver in sorted(os.listdir(nvm_root), reverse=True):
+                    cand = os.path.join(nvm_root, ver, "node.exe")
+                    if os.path.isfile(cand):
+                        print(f"[JSBridge] 使用 node (nvm): {cand}")
+                        return cand
+        except Exception:
+            pass
+        print("[JSBridge] 未找到 node.exe。请安装 Node.js 或设置环境变量 NODE_EXE。")
         return None
 
     def _start_bridge(self) -> None:
