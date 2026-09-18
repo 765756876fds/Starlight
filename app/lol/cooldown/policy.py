@@ -17,9 +17,14 @@ class ReminderPolicy:
     ultimate_remind_before: float = 15.0    # R
     spell_remind_before: float = 15.0      # Flash/Ignite/...
 
-    def for_skill(self, skill_type: str, slot: str = "") -> float:
+    def for_skill(self, skill_type: str, slot: str = "",
+                  estimated_cd: float | None = None) -> float:
+        # 召唤师技能固定提前 15 秒
         if skill_type == "summoner_spell":
             return self.spell_remind_before
+        # 按实际冷却时长：<=40 秒算短，提前 5 秒；>40 秒提前 15 秒
+        if estimated_cd is not None:
+            return self.small_remind_before if estimated_cd <= 40.0 else self.ultimate_remind_before
         if (slot or "").strip().upper() == "R":
             return self.ultimate_remind_before
         return self.small_remind_before

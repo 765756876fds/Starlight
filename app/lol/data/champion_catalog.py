@@ -24,6 +24,15 @@ _BUILTIN: List[Champion] = [
 
 DEFAULT_DATA = Path("data/lol_data/champions.json")
 
+# 俗称 / 常见 ASR 误听 → 官方中文名（key 必须是 champions.json 里的 name）
+_NAME_ALIASES: Dict[str, tuple] = {
+    "墨菲特": ("石头人", "大石头", "制图人"),
+    "艾希": ("寒冰", "冰弓", "寒冰射手"),
+    "厄运小姐": ("女枪", "赏金", "赏金猎人"),
+    "韦鲁斯": ("维鲁斯",),
+    "卡莎": ("卡萨",),
+}
+
 
 class ChampionCatalog:
     """英雄查询，支持按 id / 中文名 / 别名。"""
@@ -36,6 +45,8 @@ class ChampionCatalog:
         for c in champions:
             self._by_zh[c.name_zh] = c
             for a in c.aliases:
+                self._by_zh[a] = c
+            for a in _NAME_ALIASES.get(c.name_zh, ()):
                 self._by_zh[a] = c
 
     @staticmethod

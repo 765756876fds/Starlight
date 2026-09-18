@@ -288,6 +288,15 @@ class VoiceRuntime:
                 source="voice"
             ))
 
+        elif intent_type in ("cooldown.start", "cooldown.query",
+                             "cooldown.cancel", "cooldown.cancel_all"):
+            # 冷却计时 / 静态CD查询：转发给已在 main 注册的 CooldownManager
+            self.command_bus.execute(Command(
+                command_type=intent_type,
+                params=params,
+                source="voice",
+            ))
+
         elif intent_type == CommandType.PLAYER_QUERY:
             self.command_bus.execute(Command(
                 command_type=CommandType.PLAYER_QUERY,

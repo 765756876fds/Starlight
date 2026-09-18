@@ -112,7 +112,7 @@ class CooldownManager:
 
         base_cd = cd
         est_cd = estimated if estimated is not None else float(cd)
-        remind_before = self._policy.for_skill(stype, slot)
+        remind_before = self._policy.for_skill(stype, slot, est_cd)
         rid = uuid.uuid4().hex[:8]
         now = time.monotonic()
         r = CooldownReminder(
@@ -224,7 +224,7 @@ class CooldownManager:
         text = result.get("text") or ""
         if self._speech_enqueue and text:
             try:
-                self._speech_enqueue(text, "cooldown.query")
+                self._speech_enqueue(text, f"cooldown.query.{uuid.uuid4().hex[:8]}")
             except Exception:
                 pass
         self._on_event("cooldown.queried", result)

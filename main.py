@@ -359,8 +359,9 @@ class Application:
                     if sq is None:
                         return
                     # 閫傞厤 SpeechQueue.enqueue(SpeechItem)
-                    from app.speech.speech_queue import SpeechItem
-                    item = SpeechItem(priority="A", text=text, event_id=event_id)
+                    from app.speech.speech_queue import SpeechItem, PRIORITY_A
+                    import time as _t
+                    item = SpeechItem(text=text, priority=PRIORITY_A, expire_at=_t.time()+30.0, event_id=event_id)
                     sq.enqueue(item)
                 except Exception:
                     pass
