@@ -410,3 +410,65 @@
   - 过程中为获取测试真实状态，曾向 `tools/` 写入临时文件 `tools/_a0_pytest.txt`（重跑失败的输出），该文件未作为交付物、可随清理删除；除此之外未新增/修改/删除任何项目文件。
 - **删除文件**: 0。
 - **运行的只读命令**: `git status/branch/log/diff --stat`、目录列举、源码 Read、grep、`pytest` 调用（因当前解释器未装 pytest 未成功，未安装依赖）。
+
+
+---
+
+# PHASE A0.5 — Cleanup Execution（追加）
+
+> 执行日期：本会话。分支 `a0-cleanup`。
+> 原则：不重构、不改业务逻辑；死代码优先归档而非永久删除。
+
+## Git
+- before HEAD: `fded3a6`（master）
+- 保护性冻结提交: `41f291b chore: freeze pre-cleanup workspace`（在 `a0-cleanup` 分支上，完整保存清理前工作区）
+- cleanup 提交: `db5937e chore(a0-cleanup): remove dead automation features layer, archive ptt, drop Faster-Whisper, prune stale config/docs`
+- 工作区：cleanup 后干净。注：`git add -A` 将此前未跟踪的运行时产物（`data/tts_test/*.mp3`、一份 pdf）一并纳入提交，**未删除任何源码**，仅为归档噪音，可后续单独清理。
+
+## 逐项执行
+
+### CLEAN-01 移除 automation/features/* 死抽象
+- 证据：全仓 grep，`.tick()` 在 app/ 内零调用；生产仅 `service.py` import+实例化；tests 仅 `test_lol_automation.py:509` 调用 `feature_status()`；无动态注册。
+- 处理：
+  - `app/lol/automation/features/` 整目录 `git mv` → `archive/automation_features/`（8 文件 + `__init__.py`，保留内容）。
+  - `service.py` 移除 features import、`self._features` 字典、`_sync_feature_switches()` 及其全部调用。
+  - `feature_status()` 改为直接读 `self._config`（单一事实源），输出 `{"auto_queue": {"enabled": bool}, ...}`，保持测试与 UI 契约不变。
+  - 真实执行路径（`self._queue/_ready_check/_champ_select` 直接被 `_tick()` 调用）未改动。
+- 结果：features 生产引用 = 0；真实 automation 执行链未变。
+
+### CLEAN-02 归档 ptt.py
+- 证据：生产 app/ 内无任何 import；仅 `tools/run_voice_music_test.py`、`tools/test_e2e_voice_music.py` 两个一次性探针脚本引用。
+- 处理：`app/voice/ptt.py` → `git mv` → `archive/voice/ptt.py`。
+- 影响：上述两个 tools/ 探针若运行会 import 失败（已知，非生产路径）；PTT 作为未来需求保留在 archive。
+
+### CLEAN-03 移除 Faster-Whisper（负责人裁决）
+- 生产引用 = 0（grep 确认 app/ 内无残留）：
+  - `app/voice/asr.py`：删除 `FasterWhisperASR` 类、`initialize()` 中的实例化块；更新模块文档字符串。主链 Mic→RMS→Qwen3ServerASR→IntentRouter 未动。
+  - `app/voice/__init__.py`：导出由 `FasterWhisperASR` 改为 `Qwen3ServerASR`。
+  - `config/settings.yaml`：删除 `asr.faster_whisper` 块与 `engine` 注释中的 `| faster_whisper`。
+- 配置引用 = 0；依赖引用 = 0（requirements.txt 本就未列 faster-whisper）。
+- README：ASR 行改为仅 Qwen3-ASR（llama-server 主 / llama.cpp 备）。
+- 测试：`tests/manual_test_asr.py`（import faster_whisper 的手动脚本）→ `git mv` → `archive/tests/manual_test_asr.py`。
+- 残留（非生产，未动）：`项目工作报告.md` 为历史记录，保留原文。
+
+### CLEAN-04 删除旧 auto: 配置段
+- 证据：无任何代码读取旧 `auto:` 段；main.py 实际读 `automation:` 段。
+- 处理：从 `config/settings.yaml` 删除整个 `auto:` 段（含其注释头）；新 `automation:` 段保留。
+
+### CLEAN-05 删除 main.py 重复 import
+- 证据：`from app.lol.cooldown import CooldownManager` 未使用，实际用 `as _CM`。
+- 处理：删除重复行。
+
+### CLEAN-06 README 更新
+- 仅按真实代码重写：feature 表改用状态词（IMPLEMENTED/INTEGRATED/SKELETON，未把未真测标成 DONE）；移除已删的 `kill_aggregator.py`；结构补 automation/cooldown/ongoing/online/ui/player。
+
+## 明确延期（REFACTOR LATER / FIX IN A2，未改动）
+- GameAlarmEngine vs CooldownManager 两套计时：保留，未来统一 Timer Service。
+- runtime 与 ongoing 对 ChampSelect 的双轮询：保留，未来统一抓取。
+- Voice→Cooldown 桥接缺口：保留（规则产出 `cooldown.*` 但 `_execute_intent` 无分支），列入 A2 单独开发。
+- Player 层多代数据访问、online music 源完善、UI/Overlay 真实对局目视验证。
+
+## 验证
+- `py_compile`：app/ + tests/ 共 153 文件全部通过。
+- 全仓 grep：features / ptt / FasterWhisperASR / faster_whisper 在生产 app/ 内引用 = 0。
+- 测试环境：当前解释器未安装 pytest/requests/pyyaml（按要求未擅自安装依赖），故未重跑 pytest；以最近一次归档结果（314 passed/7 skipped）为基线，本阶段未改动被测业务逻辑。
