@@ -1,0 +1,5 @@
+"""online_music.* 事件常量。"""
+ONLINE_SEARCH_STARTED = "online_music.search_started"
+ONLINE_SEARCH_DONE = "online_music.search_done"
+ONLINE_PLAY = "online_music.play"
+ONLINE_ERROR = "online_music.error"
