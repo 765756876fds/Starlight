@@ -239,14 +239,18 @@ class LoLAutomationService:
 
         # 状态推导（双信号：gameflow + 动作本身）
         self._set_state(derive_state(phase))
-        if cfg.auto_queue:
-            self._queue.try_start(phase, cfg)
-        elif phase == "ReadyCheck" and cfg.auto_accept:
-            self._log("auto_accept", "ReadyCheck detected -> four-step check")
-            self._ready_check.check(cfg.accept_delay)
-        elif phase == "ChampSelect":
-            self._log("champ_select", f"ChampSelect poll (ban={cfg.auto_ban} pick={cfg.auto_pick})")
-            self._champ_select.poll(cfg)
+        # ReadyCheck 阶段只做 accept；其余阶段做 queue 与 champ_select。
+        # 这样 auto_queue 与 auto_accept 可同时开启，不再被 elif 饿死。
+        if phase == "ReadyCheck":
+            if cfg.auto_accept:
+                self._log("auto_accept", "ReadyCheck detected -> four-step check")
+                self._ready_check.check(cfg.accept_delay)
+        else:
+            if cfg.auto_queue:
+                self._queue.try_start(phase, cfg)
+            if phase == "ChampSelect":
+                self._log("champ_select", f"ChampSelect poll (ban={cfg.auto_ban} pick={cfg.auto_pick})")
+                self._champ_select.poll(cfg)
 
     def get_status_hint(self) -> str:
         return getattr(self, "_tick_hint", "")

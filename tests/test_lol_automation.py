@@ -576,3 +576,206 @@ def test_queue_no_repeat_post():
     assert r1 is True
     assert r2 is False
     assert len(posts) == 1
+
+
+# ============================================================
+# A1.0: Auto Queue state-validation + post-verification (Q1-Q8)
+# ============================================================
+
+
+class _SearchFake:
+    """search-state 随 POST 自动翻转为 True；可强制 POST 失败。"""
+    def __init__(self, post_status=204):
+        self.calls = []
+        self.connected = True
+        self.gameflow_phase = "Lobby"
+        self.in_queue = False
+        self.post_status = post_status
+        self.flip_on_post = True
+
+    def request_raw(self, method, endpoint, data=None):
+        self.calls.append((method, endpoint, data))
+        if endpoint == "/lol-lobby/v2/lobby/matchmaking/search-state":
+            return 200, {"isCurrentlyInQueue": self.in_queue}
+        if method == "POST" and endpoint == "/lol-lobby/v2/lobby/matchmaking/search":
+            if self.flip_on_post:
+                self.in_queue = True
+            return self.post_status, None
+        return 0, None
+
+    def get_gameflow_phase(self):
+        return self.gameflow_phase
+
+
+def _queue_svc(cfg, lcu):
+    from app.lol.automation.service import LoLAutomationService
+    return LoLAutomationService(lcu=lcu, config=cfg)
+
+
+def test_q1_queue_disabled_no_post():
+    lcu = _SearchFake()
+    svc = _queue_svc(AutomationConfig(enabled=True, auto_queue=False), lcu)
+    svc._tick()
+    posts = [c for c in lcu.calls if c[0] == "POST"]
+    assert posts == []
+
+
+def test_q2_lobby_starts_and_verifies():
+    lcu = _SearchFake()
+    q = QueueController(lcu.request_raw, make_events()[1])
+    assert q.try_start("Lobby") is True
+    assert lcu.in_queue is True
+    assert any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_q3_already_searching_no_repeat_post():
+    lcu = _SearchFake()
+    lcu.in_queue = True
+    q = QueueController(lcu.request_raw, make_events()[1])
+    assert q.try_start("Lobby") is False
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_q4_readycheck_no_queue_post():
+    lcu = _SearchFake()
+    q = QueueController(lcu.request_raw, make_events()[1])
+    q.try_start("ReadyCheck")
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_q5_champselect_no_queue_post():
+    lcu = _SearchFake()
+    q = QueueController(lcu.request_raw, make_events()[1])
+    q.try_start("ChampSelect")
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_q6_inprogress_no_queue_post():
+    lcu = _SearchFake()
+    q = QueueController(lcu.request_raw, make_events()[1])
+    q.try_start("InProgress")
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_q7_post_failure_records_error():
+    lcu = _SearchFake(post_status=500)
+    ev, on = make_events()
+    q = QueueController(lcu.request_raw, on)
+    assert q.try_start("Lobby") is True
+    assert any(c == "automation.error" for c, _ in ev)
+
+
+def test_q8_post_success_but_no_state_verify_failed():
+    lcu = _SearchFake()
+    lcu.flip_on_post = False  # POST 204 但状态没翻
+    ev, on = make_events()
+    q = QueueController(lcu.request_raw, on)
+    q.try_start("Lobby")
+    assert any(c == "automation.queue_search_verify_failed" for c, _ in ev)
+
+
+# ============================================================
+# A1.0: Auto Accept (A1-A8)
+# ============================================================
+
+class _ReadyFake:
+    def __init__(self, accept_status=204, accept_leaves=True):
+        self.calls = []
+        self.connected = True
+        self.gameflow_phase = "ReadyCheck"
+        self.state = "InProgress"
+        self.response = "None"
+        self.accept_status = accept_status
+        self.accept_leaves = accept_leaves
+
+    def request_raw(self, method, endpoint, data=None):
+        self.calls.append((method, endpoint, data))
+        if endpoint == "/lol-matchmaking/v1/ready-check":
+            return 200, {"state": self.state, "playerResponse": self.response, "readyCheckId": 1}
+        if method == "POST" and endpoint == "/lol-matchmaking/v1/ready-check/accept":
+            if self.accept_leaves:
+                self.state = "None"
+            return self.accept_status, None
+        return 0, None
+
+    def get_gameflow_phase(self):
+        return self.gameflow_phase
+
+
+def test_a1_accept_disabled_no_post():
+    lcu = _ReadyFake()
+    svc = _queue_svc(AutomationConfig(enabled=True, auto_accept=False), lcu)
+    svc._tick()
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_a2_non_readycheck_no_post():
+    lcu = _ReadyFake()
+    lcu.state = "None"
+    ev, on = make_events()
+    rc = ReadyCheckController(lcu.request_raw, threading.Event(), on)
+    rc.check(0.0)
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_a3_readycheck_delay_then_accept():
+    lcu = _ReadyFake()
+    ev, on = make_events()
+    rc = ReadyCheckController(lcu.request_raw, threading.Event(), on)
+    rc.check(0.0)
+    assert any(c[0] == "POST" and c[1].endswith("/accept") for c in lcu.calls)
+    assert any(c == "automation.accept_verified" for c, _ in ev)
+
+
+def test_a4_delay_stop_no_post():
+    lcu = _ReadyFake()
+    ev, on = make_events()
+    stop = threading.Event()
+    rc = ReadyCheckController(lcu.request_raw, stop, on)
+    import time
+    def run(): rc.check(0.5)
+    t = threading.Thread(target=run); t.start()
+    stop.set(); t.join(timeout=3)
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_a5_state_changed_during_delay_no_post():
+    lcu = _ReadyFake()
+    # 第二次 GET（复核时）state 变 None
+    n = {"k": 0}
+    orig = lcu.request_raw
+    def patched(method, endpoint, data=None):
+        if endpoint == "/lol-matchmaking/v1/ready-check":
+            n["k"] += 1
+            if n["k"] >= 2:
+                lcu.state = "None"
+        return orig(method, endpoint, data)
+    ev, on = make_events()
+    rc = ReadyCheckController(patched, threading.Event(), on)
+    rc.check(0.0)
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_a6_accept_post_failure_records_error():
+    lcu = _ReadyFake(accept_status=500, accept_leaves=False)
+    ev, on = make_events()
+    rc = ReadyCheckController(lcu.request_raw, threading.Event(), on)
+    rc.check(0.0)
+    assert any(c == "automation.error" for c, _ in ev)
+
+
+def test_a7_accept_success_verifies_left_inprogress():
+    lcu = _ReadyFake()
+    ev, on = make_events()
+    rc = ReadyCheckController(lcu.request_raw, threading.Event(), on)
+    rc.check(0.0)
+    assert any(c == "automation.accept_verified" for c, _ in ev)
+
+
+def test_a8_worker_reentry_guard():
+    lcu = _ReadyFake()
+    ev, on = make_events()
+    rc = ReadyCheckController(lcu.request_raw, threading.Event(), on)
+    rc._active = True  # 模拟上一次尚未结束
+    rc.check(0.0)
+    assert not any(c[0] == "POST" for c in lcu.calls)
