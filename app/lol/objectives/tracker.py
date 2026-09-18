@@ -39,7 +39,9 @@ class ObjectiveTracker:
         self.ruleset = ruleset
         self._lock = threading.Lock()
         self._objs: Dict[str, _Objective] = {}
-        self._dragon_kills = 0
+        # Dragon Soul 按队伍计：某队累计 4 条 Elemental Drake 才触发
+        self._dragon_kills_by_team: Dict[str, int] = {}
+        self._soul_team: Optional[str] = None
         self._elder_reached = False
         self.reset()
 
@@ -48,7 +50,8 @@ class ObjectiveTracker:
             self._objs = {
                 r.type: _Objective(rule=r) for r in self.ruleset.enabled_types()
             }
-            self._dragon_kills = 0
+            self._dragon_kills_by_team = {}
+            self._soul_team = None
             self._elder_reached = False
 
     # ----- 事件入口 -----
@@ -70,7 +73,14 @@ class ObjectiveTracker:
                 o.state = ObjectiveState.GAME_ENDED
                 o.next_spawn = None
 
-    def on_dragon_killed(self, game_time: float, dragon_type: str = "") -> None:
+    def on_dragon_killed(self, game_time: float, dragon_type: str = "",
+                          killer_team: str = "") -> None:
+        """记录一次龙击杀。
+
+        killer_team: 击杀方队伍（来自 StateDiff，UNKNOWN 表示无法判定）。
+        Dragon Soul 仅当「某一已知队伍」累计 4 条 Elemental Drake 时触发；
+        全局累计计数不得触发 Elder。
+        """
         with self._lock:
             if dragon_type == "Elder":
                 e = self._objs.get("elder")
@@ -79,20 +89,26 @@ class ObjectiveTracker:
                     e.next_spawn = game_time + float(e.rule.respawn)
                     e.state = ObjectiveState.WAITING_RESPAWN
                 return
-            self._dragon_kills += 1
+
             d = self._objs.get("dragon")
             if d:
                 d.killed += 1
                 if d.rule.respawn:
                     d.next_spawn = game_time + float(d.rule.respawn)
                     d.state = ObjectiveState.WAITING_RESPAWN
-            # 第 4 条龙 → dragon soul → 首次远古龙
-            if not self._elder_reached and self._dragon_kills >= 4:
-                self._elder_reached = True
-                e = self._objs.get("elder")
-                if e and e.rule.respawn:
-                    e.next_spawn = game_time + float(e.rule.respawn)
-                    e.state = ObjectiveState.WAITING_RESPAWN
+
+            # 按队伍累计；UNKNOWN 不计入任何队伍（不触发 Soul）
+            if killer_team and killer_team != "UNKNOWN":
+                cnt = self._dragon_kills_by_team.get(killer_team, 0) + 1
+                self._dragon_kills_by_team[killer_team] = cnt
+                # 某队达到 4 条 → Soul → 首次远古龙（仅一次）
+                if not self._elder_reached and cnt >= 4:
+                    self._elder_reached = True
+                    self._soul_team = killer_team
+                    e = self._objs.get("elder")
+                    if e and e.rule.respawn:
+                        e.next_spawn = game_time + float(e.rule.respawn)
+                        e.state = ObjectiveState.WAITING_RESPAWN
 
     def on_baron_killed(self, game_time: float) -> None:
         with self._lock:

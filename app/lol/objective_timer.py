@@ -24,6 +24,8 @@ class ObjectiveTimer:
         self.ruleset = ruleset or load_ruleset()
         self.tracker = ObjectiveTracker(self.ruleset)
         self._running = False
+        # 去重：同一 (objective, spawn_time, lead) 只排一次提醒
+        self._scheduled = set()
 
     def start(self):
         self._running = True
@@ -42,6 +44,7 @@ class ObjectiveTimer:
     # ----- 事件处理 -----
     def _on_game_start(self, event: Event):
         self.tracker.on_game_start()
+        self._scheduled.clear()
         # 为每个有首次刷新时间的资源安排各 lead 提醒
         for o in self.tracker.snapshot():
             rule = self.ruleset.get(o["type"])
@@ -51,11 +54,13 @@ class ObjectiveTimer:
 
     def _on_game_end(self, event: Event):
         self.tracker.on_game_end()
+        self._scheduled.clear()
 
     def _on_dragon_killed(self, event: Event):
         game_time = event.get("game_time", 0.0) or 0.0
         dragon_type = event.data.get("dragon_type", "")
-        self.tracker.on_dragon_killed(game_time, dragon_type)
+        killer_team = event.data.get("killer_team", "")
+        self.tracker.on_dragon_killed(game_time, dragon_type, killer_team)
 
         if dragon_type == "Elder":
             t = self.tracker.next_spawn_times().get("elder")
@@ -88,8 +93,12 @@ class ObjectiveTimer:
     # ----- 内部 -----
     def _schedule_for(self, obj_type: str, name_zh: str,
                       spawn_at: float, leads) -> None:
-        """为一个资源的多个 lead 点排提醒。"""
+        """为一个资源的多个 lead 点排提醒（同 objective/spawn/lead 去重）。"""
         for lead in leads:
+            key = (obj_type, round(float(spawn_at), 2), round(float(lead), 2))
+            if key in self._scheduled:
+                continue
+            self._scheduled.add(key)
             self.game_alarm.schedule_objective_reminder(
                 f"{int(lead)}秒后{name_zh}刷新",
                 spawn_at,

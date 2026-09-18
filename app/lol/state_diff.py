@@ -299,13 +299,15 @@ class StateDiff:
             event_name = evt.get("EventName", "")
 
             if event_name == "DragonKill":
+                killer_name = evt.get("KillerName", "")
                 events.append(GameEvent(
                     event_type=GameEventType.DRAGON_KILLED,
                     game_time=new.game_time,
                     data={
                         "riot_event_id": evt.get("EventID"),
                         "dragon_type": evt.get("DragonType", ""),
-                        "killer_name": evt.get("KillerName", ""),
+                        "killer_name": killer_name,
+                        "killer_team": self._find_team(new, killer_name),
                         "stolen": evt.get("Stolen", False),
                         "game_time": new.game_time,
                     },
@@ -313,12 +315,14 @@ class StateDiff:
                 ))
 
             elif event_name == "BaronKill":
+                killer_name = evt.get("KillerName", "")
                 events.append(GameEvent(
                     event_type=GameEventType.BARON_KILLED,
                     game_time=new.game_time,
                     data={
                         "riot_event_id": evt.get("EventID"),
-                        "killer_name": evt.get("KillerName", ""),
+                        "killer_name": killer_name,
+                        "killer_team": self._find_team(new, killer_name),
                         "stolen": evt.get("Stolen", False),
                         "game_time": new.game_time,
                     },
@@ -326,12 +330,14 @@ class StateDiff:
                 ))
 
             elif event_name == "HeraldKill":
+                killer_name = evt.get("KillerName", "")
                 events.append(GameEvent(
                     event_type=GameEventType.HERALD_KILLED,
                     game_time=new.game_time,
                     data={
                         "riot_event_id": evt.get("EventID"),
-                        "killer_name": evt.get("KillerName", ""),
+                        "killer_name": killer_name,
+                        "killer_team": self._find_team(new, killer_name),
                         "stolen": evt.get("Stolen", False),
                         "game_time": new.game_time,
                     },
