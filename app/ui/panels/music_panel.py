@@ -61,6 +61,7 @@ class MusicPanel(QWidget):
         self.edit_kw = QLineEdit()
         self.edit_kw.setPlaceholderText("搜索在线音乐（archive.org）")
         self.btn_search = QPushButton("搜索")
+        self.btn_search.setProperty("class", "primary")
         self.cb_source = QComboBox()
         self.cb_source.addItem("全部", userData=None)
         search_row.addWidget(self.edit_kw)

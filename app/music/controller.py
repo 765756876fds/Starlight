@@ -44,6 +44,9 @@ class MusicController:
         self.queue = PlayQueue()
         self.mpv = MpvController(self.mpv_path, self.mpv_ipc_pipe)
 
+        # Online sources（延迟构造，可选）
+        self.online_manager = None
+
         # 核心服务
         self.event_bus = get_event_bus()
         self.command_bus = get_command_bus()
@@ -226,6 +229,56 @@ class MusicController:
             self._start_highlight_segment(song)
 
     # ===== 音量控制 =====
+
+    def set_online_manager(self, manager) -> None:
+        self.online_manager = manager
+
+    def search_online(self, keyword: str) -> dict:
+        if self.online_manager is None:
+            return {}
+        return self.online_manager.search_all(keyword)
+
+    def get_online_sources(self) -> list:
+        if self.online_manager is None:
+            return []
+        return self.online_manager.list_sources()
+
+    def play_online(self, track) -> bool:
+        """通过 online source 获取 URL 后用 mpv 直接播放。"""
+        if self.online_manager is None:
+            return False
+        url = self.online_manager.get_play_url(track)
+        if not url:
+            print(f"[Music] online 无 URL: {track.title}")
+            return False
+        print(f"[Music] play online: {track.title} -> {url[:80]}")
+        try:
+            self.mpv.loadfile(url)
+            print("[Music] mpv loadfile ok")
+        except Exception as e:
+            print(f"[Music] mpv loadfile fail: {e}")
+            return False
+        self._current_song = {
+            "id": None,
+            "title": track.title,
+            "artist": track.artist,
+            "album": track.album,
+            "duration": track.duration_seconds,
+            "path": url,
+            "online": True,
+        }
+        self._update_state(
+            playing=True,
+            current_song={
+                "title": track.title,
+                "artist": track.artist,
+                "album": track.album,
+                "duration": track.duration_seconds,
+                "path": url,
+                "online": True,
+            }
+        )
+        return True
 
     def set_volume(self, volume: int):
         """设置音量"""

@@ -12,10 +12,11 @@ from .panels.status_bar import StatusBar
 
 class MainWindow(QMainWindow):
     def __init__(self, automation_service=None, cooldown_manager=None,
-                 music=None, ongoing_service=None, parent=None):
+                 music=None, ongoing_service=None, services=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("LoL Music Agent")
         self.resize(560, 720)
+        self._services = services or {}
 
         root = QVBoxLayout()
         # 顶栏 overlay 开关
@@ -37,7 +38,7 @@ class MainWindow(QMainWindow):
         central.setLayout(root)
         self.setCentralWidget(central)
 
-        self._status = StatusBar()
+        self._status = StatusBar(self._services)
         self.setStatusBar(self._status)
 
         self._overlay_model = None

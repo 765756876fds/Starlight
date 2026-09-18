@@ -425,11 +425,21 @@ class Application:
             return
 
         app = QApplication.instance() or QApplication(sys.argv)
+        try:
+            from app.ui.theme.applier import apply_dark_theme
+            apply_dark_theme(app)
+        except Exception as _e:
+            print(f"[UI] theme load failed: {_e}")
         window = MainWindow(
             automation_service=getattr(self, "automation", None),
             cooldown_manager=getattr(self, "cooldown_manager", None),
             music=getattr(self, "music", None),
             ongoing_service=getattr(self, "ongoing_service", None),
+            services={
+                "lcu": self.lol.lcu if self.lol else None,
+                "asr": self.voice.asr if self.voice else None,
+                "intent": self.voice.intent_router if self.voice else None,
+            },
         )
 
         def _on_quit():

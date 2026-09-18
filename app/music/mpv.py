@@ -46,6 +46,19 @@ class MpvController:
         if not os.path.exists(self.mpv_path):
             raise FileNotFoundError(f"mpv 可执行文件不存在: {self.mpv_path}")
 
+        # 杀掉历史残留 mpv，避免僵尸管道
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "mpv.exe"],
+                capture_output=True, timeout=5,
+            )
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+        # 管道名加 PID，避免连到旧实例
+        self.ipc_pipe = f"\\.\pipe\lol_music_mpv_{os.getpid()}"
+
         # 启动 mpv
         args = [
             self.mpv_path,
@@ -190,7 +203,14 @@ class MpvController:
 
     def loadfile(self, filepath: str, mode: str = "replace"):
         """加载并播放文件"""
-        self._send_command("loadfile", [filepath, mode], timeout=5.0)
+        print(f"[mpv] cmd loadfile: {filepath[:80]} (mode={mode})")
+        try:
+            resp = self._send_command("loadfile", [filepath, mode], timeout=5.0)
+            err = (resp or {}).get("error")
+            print(f"[mpv] resp: error={err}")
+        except Exception as e:
+            print(f"[mpv] loadfile fail: {e}")
+            raise
 
     def play(self):
         """播放（取消暂停）"""

@@ -40,7 +40,11 @@ async function loadAll() {
     try {
       const p = j.isLx ? await lxLoader.load(j.fp) : mfLoader.load(j.fp);
       sources.set(p.name, p);
-      console.error(`[bridge] loaded ${j.isLx ? 'lx' : 'mf'}: ${p.name}`);
+      // aliases: basename (without .js) and lowercase
+      const base = path.basename(j.fp, '.js');
+      sources.set(base, p);
+      sources.set(base.toLowerCase(), p);
+      console.error(`[bridge] loaded ${j.isLx ? 'lx' : 'mf'}: ${p.name} (alias=${base})`);
     } catch (e) {
       console.error(`[bridge] load fail ${j.fp}: ${e.message}`);
     }

@@ -31,6 +31,8 @@ class JSMusicSource(MusicSource):
         self._sources: List[str] = []
         self._ready = threading.Event()
         self._start_bridge()
+        # 阻塞等待 bridge 就绪
+        self._ready.wait(timeout=3.0)
 
     def _find_node(self):
         import shutil
