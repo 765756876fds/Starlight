@@ -1,0 +1,51 @@
+{
+  "patch": "cd-latest",
+  "data_version": "objectives-26.1",
+  "source": "Riot patch 26.1 + in-game defaults (Summoner's Rift)",
+  "updated_at": "2026-09-19",
+  "note": "Summoner's Rift only. Times are game-clock seconds. Lead reminders are pre-spawn notifications.",
+  "modes": {
+    "classic": {
+      "objectives": [
+        {
+          "type": "void_grubs",
+          "name_zh": "巢虫",
+          "enabled": true,
+          "first_spawn": 480.0,
+          "respawn": null,
+          "one_per_game": true,
+          "despawn": 885.0,
+          "leads": [60.0]
+        },
+        {
+          "type": "dragon",
+          "name_zh": "小龙",
+          "enabled": true,
+          "first_spawn": 300.0,
+          "respawn": 300.0,
+          "one_per_game": false,
+          "leads": [60.0, 30.0]
+        },
+        {
+          "type": "baron",
+          "name_zh": "大龙",
+          "enabled": true,
+          "first_spawn": 1200.0,
+          "respawn": 360.0,
+          "one_per_game": false,
+          "leads": [60.0, 30.0]
+        },
+        {
+          "type": "elder",
+          "name_zh": "远古龙",
+          "enabled": true,
+          "first_spawn": null,
+          "respawn": 360.0,
+          "one_per_game": false,
+          "trigger": "after_dragon_soul",
+          "leads": [60.0, 30.0]
+        }
+      ]
+    }
+  }
+}
