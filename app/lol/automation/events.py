@@ -1,0 +1,20 @@
+"""自动化事件类型常量。"""
+
+
+class AutomationEvent:
+    STARTED = "automation.started"
+    STOPPED = "automation.stopped"
+    STATE_CHANGED = "automation.state_changed"
+    QUEUE_SEARCH_STARTED = "automation.queue_search_started"
+    READY_CHECK_DETECTED = "automation.ready_check_detected"
+    READY_CHECK_EXPIRED = "automation.ready_check_expired"
+    ACCEPT_SENT = "automation.accept_sent"
+    CHAMP_SELECT_ENTERED = "automation.champ_select_entered"
+    BAN_ATTEMPTED = "automation.ban_attempted"
+    PICK_ATTEMPTED = "automation.pick_attempted"
+    ACTION_CONFIRMED = "automation.action_confirmed"
+    ACTION_CHANGED = "automation.action_changed"
+    ACTION_REJECTED = "automation.action_rejected"
+    NO_AVAILABLE_CHAMPION = "automation.no_available_champion"
+    TRANSIENT_FAILURE = "automation.transient_failure"
+    ERROR = "automation.error"

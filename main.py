@@ -34,6 +34,8 @@ from app.player.game_analysis import GameAnalysisService
 from app.player.event_log_reader import EventLogReader
 from app.player.query_service import PlayerQueryService
 from app.player.query_handler import make_player_query_handler
+from app.lol.automation.service import LoLAutomationService
+from app.lol.automation.models import AutomationConfig
 
 
 class Application:
@@ -66,6 +68,7 @@ class Application:
         self.speech_queue: SpeechQueue = None
         self.speech_judge: SpeechJudge = None
         self.event_log: EventLog = None
+        self.automation = None
 
         # 状态
         self._running = False
@@ -114,6 +117,9 @@ class Application:
 
         # 注册 Player Query 命令
         self._register_player_query()
+
+        # 注册 LoL 自动化（auto accept / auto banpick）
+        self._register_automation()
 
         print("\n初始化完成！")
 
@@ -188,6 +194,8 @@ class Application:
         if self.tts:
             self.tts.stop()
         if self.lol:
+            if self.automation:
+                self.automation.stop()
             self.lol.stop()
         if self.music:
             self.music.stop()
@@ -261,6 +269,31 @@ class Application:
             print("[PlayerQuery] handler 已注册")
         except Exception as e:
             print(f"[PlayerQuery] 注册失败: {e}")
+
+    def _register_automation(self):
+        """注册 LoL 自动化服务与 auto accept / auto banpick 命令。"""
+        try:
+            cfg = AutomationConfig.from_dict(self.config.get("automation", {}))
+            self.automation = LoLAutomationService(
+                lcu=self.lol.lcu,
+                config=cfg,
+            )
+
+            def on_accept_toggle(command):
+                enabled = self.automation.toggle_auto_accept()
+                return {"auto_accept": enabled}
+
+            def on_banpick_toggle(command):
+                enabled = self.automation.toggle_auto_banpick()
+                return {"auto_banpick": enabled}
+
+            self.command_bus.register(CommandType.AUTO_ACCEPT_TOGGLE, on_accept_toggle)
+            self.command_bus.register(CommandType.AUTO_BANPICK_TOGGLE, on_banpick_toggle)
+            if cfg.enabled:
+                self.automation.start()
+            print(f"[Automation] 已注册 enabled={cfg.enabled}")
+        except Exception as e:
+            print(f"[Automation] 注册失败: {e}")
 
     def run(self):
         """运行主循环（阻塞）"""

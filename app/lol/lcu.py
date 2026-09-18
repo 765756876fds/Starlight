@@ -353,8 +353,21 @@ class LCUConnection:
         Returns:
             响应 JSON 数据或 None
         """
+        status, body = self.request_raw(method, endpoint, data)
+        if status in (200, 201, 204):
+            return body
+        return None
+
+    def request_raw(self, method: str, endpoint: str,
+                    data: Optional[Dict[str, Any]] = None) -> tuple:
+        """
+        发送 LCU API 请求，返回 (status_code, parsed_body_or_text_or_None)。
+
+        与 request() 不同，本方法不吞掉非 2xx 状态码，供需要区分
+        200/204/404 的调用方（如自动化模块）使用。
+        """
         if not self._connected or not self._session:
-            return None
+            return 0, None
 
         url = f"{self.base_url}{endpoint}"
         try:
@@ -369,19 +382,18 @@ class LCUConnection:
             elif method.upper() == "DELETE":
                 resp = self._session.delete(url, timeout=5)
             else:
-                return None
+                return 0, None
 
-            if resp.status_code in (200, 201, 204):
-                if resp.content:
-                    try:
-                        return resp.json()
-                    except json.JSONDecodeError:
-                        return resp.text
-                return None
-            return None
+            body = None
+            if resp.content:
+                try:
+                    body = resp.json()
+                except json.JSONDecodeError:
+                    body = resp.text
+            return resp.status_code, body
         except Exception as e:
             print(f"[LCU] 请求失败 {method} {endpoint}: {e}")
-            return None
+            return 0, None
 
     def get(self, endpoint: str) -> Optional[Any]:
         """GET 请求"""
