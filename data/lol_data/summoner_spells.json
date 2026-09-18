@@ -1,0 +1,17 @@
+{
+  "patch": "cd-latest",
+  "data_version": "summoner-spells-26.1",
+  "source": "in-game / community spell tables (base cooldown, no haste)",
+  "updated_at": "2026-09-19",
+  "spells": [
+    {"sid": 4, "name_en": "Flash", "name_zh": "闪现", "cooldown": 300.0},
+    {"sid": 12, "name_en": "Teleport", "name_zh": "传送", "cooldown": 360.0},
+    {"sid": 14, "name_en": "Ignite", "name_zh": "点燃", "cooldown": 180.0},
+    {"sid": 21, "name_en": "Barrier", "name_zh": "屏障", "cooldown": 180.0},
+    {"sid": 1, "name_en": "Cleanse", "name_zh": "净化", "cooldown": 210.0},
+    {"sid": 3, "name_en": "Exhaust", "name_zh": "虚弱", "cooldown": 210.0},
+    {"sid": 6, "name_en": "Ghost", "name_zh": "疾跑", "cooldown": 210.0},
+    {"sid": 7, "name_en": "Heal", "name_zh": "治疗", "cooldown": 240.0},
+    {"sid": 11, "name_en": "Smite", "name_zh": "惩戒", "cooldown": 15.0}
+  ]
+}
