@@ -3,8 +3,8 @@
 使用游戏真实的 Haste 机制（不是自造百分比）：
   - 普通技能 (Q/W/E)：受 Ability Haste 影响
         effective = base * 100 / (100 + ability_haste)
-  - 终极技能 (R)：受 Ultimate Haste 影响（独立属性）
-        effective = base * 100 / (100 + ultimate_haste)
+  - 终极技能 (R)：Ability Haste 与 Ultimate Haste 叠加
+        effective = base * 100 / (100 + ability_haste + ultimate_haste)
   - 召唤师技能：受 Summoner Spell Haste 影响
         effective = base * 100 / (100 + summoner_spell_haste)
 
@@ -46,9 +46,18 @@ def effective_ability_cooldown(base: Number, ability_haste: Number = 0.0) -> Opt
     return _apply(base, ability_haste)
 
 
-def effective_ultimate_cooldown(base: Number, ultimate_haste: Number = 0.0) -> Optional[float]:
-    """R 的实际冷却（用 Ultimate Haste，而非 Ability Haste）。"""
-    return _apply(base, ultimate_haste)
+def _num(v: Number) -> float:
+    try:
+        return float(v or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def effective_ultimate_cooldown(base: Number, ability_haste: Number = 0.0,
+                                ultimate_haste: Number = 0.0) -> Optional[float]:
+    """R 的实际冷却：Ability Haste 与 Ultimate Haste 叠加。"""
+    total = _num(ability_haste) + _num(ultimate_haste)
+    return _apply(base, total)
 
 
 def effective_summoner_cooldown(base: Number, summoner_spell_haste: Number = 0.0) -> Optional[float]:
@@ -65,7 +74,8 @@ class CooldownCalculator:
                     ultimate_haste: Number = 0.0) -> Optional[float]:
         slot = (slot or "").strip().upper()
         if slot == "R":
-            return effective_ultimate_cooldown(base, ultimate_haste)
+            return effective_ultimate_cooldown(base, ability_haste=ability_haste,
+                                               ultimate_haste=ultimate_haste)
         return effective_ability_cooldown(base, ability_haste)
 
     @staticmethod

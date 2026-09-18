@@ -123,11 +123,13 @@ def test_calc_ability_haste():
 
 
 def test_calc_ultimate_haste():
-    # R 用 UH，不用 AH
-    assert effective_ultimate_cooldown(100.0, 100) == 50.0
-    # 给 R 传 AH 应被忽略
-    assert CooldownCalculator.for_ability(100.0, "R", ability_haste=100, ultimate_haste=0) == 100.0
-    assert CooldownCalculator.for_ability(100.0, "R", ability_haste=100, ultimate_haste=100) == 50.0
+    # R 的有效 haste = ability_haste + ultimate_haste（叠加）
+    assert effective_ultimate_cooldown(100.0, 100, 0) == 50.0
+    assert effective_ultimate_cooldown(100.0, 0, 100) == 50.0
+    # 给 R 传 AH=100（无 UH）应生效（不是忽略 AH）
+    assert CooldownCalculator.for_ability(100.0, "R", ability_haste=100, ultimate_haste=0) == 50.0
+    # AH=100 + UH=100 = haste 200 -> 100*100/300 = 33.33
+    assert CooldownCalculator.for_ability(100.0, "R", ability_haste=100, ultimate_haste=100) == 33.33
 
 
 def test_calc_summoner_haste():
