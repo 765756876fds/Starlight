@@ -80,3 +80,11 @@ data/asr_test/
 *.key
 *.secret
 secrets.yaml
+
+# JS music sources (user files)
+data/music_sources/
+
+
+app/music/online/js_bridge/node_modules/
+app/music/online/js_bridge/package-lock.json
+

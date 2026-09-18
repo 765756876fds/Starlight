@@ -1,7 +1,7 @@
-"""
-LoL × 本地音乐 × 语音 Agent - 主入口
+﻿"""
+LoL 脳 鏈湴闊充箰 脳 璇煶 Agent - 涓诲叆鍙?
 
-整合所有模块，启动系统。
+鏁村悎鎵€鏈夋ā鍧楋紝鍚姩绯荤粺銆?
 """
 import os
 import sys
@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Any, Dict
 
-# 确保项目根目录在路径中
+# 纭繚椤圭洰鏍圭洰褰曞湪璺緞涓?
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -40,17 +40,17 @@ from app.lol.automation.models import AutomationConfig
 
 class Application:
     """
-    主应用类
+    涓诲簲鐢ㄧ被
 
-    整合所有子系统，管理生命周期。
+    鏁村悎鎵€鏈夊瓙绯荤粺锛岀鐞嗙敓鍛藉懆鏈熴€?
     """
 
     def __init__(self, config_path: str = None):
-        # 加载配置
+        # 鍔犺浇閰嶇疆
         self.config = get_config(config_path)
         self.config_data = self.config.data
 
-        # 初始化核心服务
+        # 鍒濆鍖栨牳蹇冩湇鍔?
         self.event_bus = get_event_bus()
         self.command_bus = get_command_bus()
         self.state_store = get_state_store()
@@ -60,7 +60,7 @@ class Application:
             level=self.config.get("app.log_level", "INFO"),
         )
 
-        # 子系统
+        # 瀛愮郴缁?
         self.music: MusicController = None
         self.lol: LoLRuntime = None
         self.voice: VoiceRuntime = None
@@ -70,101 +70,128 @@ class Application:
         self.event_log: EventLog = None
         self.automation = None
 
-        # 状态
+        # 鐘舵€?
         self._running = False
         self._shutdown_event = threading.Event()
 
     def initialize(self):
-        """初始化所有子系统"""
+        """鍒濆鍖栨墍鏈夊瓙绯荤粺"""
         print("=" * 60)
-        print("  LoL × 本地音乐 × 语音 Agent")
+        print("  LoL 脳 鏈湴闊充箰 脳 璇煶 Agent")
         print("=" * 60)
 
-        # 0. Event Log（最先启动，记录所有事件）
-        print("\n[0/5] 初始化 Event Log...")
+        # 0. Event Log锛堟渶鍏堝惎鍔紝璁板綍鎵€鏈変簨浠讹級
+        print("\n[0/5] 鍒濆鍖?Event Log...")
         self.event_log = EventLog(
             log_dir=self.config.get("events.log_dir", "./data/events")
         )
 
-        # 1. 音乐模块
-        print("\n[1/5] 初始化音乐模块...")
+        # 1. 闊充箰妯″潡
+        print("\n[1/5] 鍒濆鍖栭煶涔愭ā鍧?..")
         self.music = MusicController(self.config.get_section("music"))
+        # 娉ㄥ唽 online music source
+        try:
+            from app.music.online.manager import OnlineSourceManager
+            from app.music.online.sources.demo_source import DemoSource
+            from app.music.online.sources.archive_source import ArchiveSource
+            self.online_music_manager = OnlineSourceManager()
+            self.online_music_manager.register(DemoSource())
+            self.online_music_manager.register(ArchiveSource())
+            import os
+            custom_dir = os.path.join(".", "data", "music_sources")
+            try:
+                self.online_music_manager.load_custom_sources(custom_dir)
+            except Exception as e:
+                print(f"[Music] 鑷畾涔夋簮鍔犺浇澶辫触: {e}")
+            try:
+                from pathlib import Path as _P
+                from app.music.online.sources.js_source import JSMusicSource
+                _mf = str(_P("data/music_sources/musicfree").absolute())
+                _lx = str(_P("data/music_sources/lx").absolute())
+                self._js_source = JSMusicSource(_mf, _lx, user_variables=(self.config_data.get("online_music", {}).get("js_bridge", {}) or {}).get("user_variables") or {})
+                self.online_music_manager.register(self._js_source)
+            except Exception as e:
+                print(f"[Music] JS bridge 鍒濆鍖栧け璐? {e}")
+            self.music.set_online_manager(self.online_music_manager)
+            print(f"[Music] online source 宸叉敞鍐? {self.online_music_manager.list_sources()}")
+        except Exception as e:
+            print(f"[Music] online source 鍒濆鍖栧け璐? {e}")
 
-        # 2. LoL 模块
-        print("[2/5] 初始化 LoL 模块...")
+        # 2. LoL 妯″潡
+        print("[2/5] 鍒濆鍖?LoL 妯″潡...")
         self.lol = LoLRuntime(self.config_data)
 
-        # 3. 语音输出
-        print("[3/5] 初始化语音输出 (TTS)...")
+        # 3. 璇煶杈撳嚭
+        print("[3/5] 鍒濆鍖栬闊宠緭鍑?(TTS)...")
         tts_config = self.config.get_section("tts")
         tts_config["mpv_path"] = self.config.get("music.mpv_path")
         self.tts = TTSController(tts_config)
 
         # 4. Speech Queue + Judge
-        print("[4/5] 初始化语音播报队列 (SpeechQueue + SpeechJudge)...")
+        print("[4/5] 鍒濆鍖栬闊虫挱鎶ラ槦鍒?(SpeechQueue + SpeechJudge)...")
         self.speech_queue = SpeechQueue(self.tts)
         self.speech_judge = SpeechJudge(
             self.config.get_section("speech_judge"),
             queue=self.speech_queue,
         )
 
-        # 5. 语音输入
-        print("[5/5] 初始化语音输入 (ASR + Intent)...")
+        # 5. 璇煶杈撳叆
+        print("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
         self.voice = VoiceRuntime(self.config_data)
 
-        # 注册 GameAlarm 命令处理（通过事件）
+        # 娉ㄥ唽 GameAlarm 鍛戒护澶勭悊锛堥€氳繃浜嬩欢锛?
         self._register_alarm_events()
 
-        # 注册 Player Query 命令
+        # 娉ㄥ唽 Player Query 鍛戒护
         self._register_player_query()
 
-        # 注册 LoL 自动化（auto accept / auto banpick）
+        # 娉ㄥ唽 LoL 鑷姩鍖栵紙auto accept / auto banpick锛?
         self._register_automation()
 
-        # 注册手动技能计时器（cooldown）
+        # 娉ㄥ唽鎵嬪姩鎶€鑳借鏃跺櫒锛坈ooldown锛?
         self._register_cooldown()
 
-        # 注册 OngoingGameService（ChampSelect 加载 10 玩家）
+        # 娉ㄥ唽 OngoingGameService锛圕hampSelect 鍔犺浇 10 鐜╁锛?
         self._register_ongoing()
 
-        print("\n初始化完成！")
+        print("\n鍒濆鍖栧畬鎴愶紒")
 
     def start(self):
-        """启动所有子系统"""
+        """鍚姩鎵€鏈夊瓙绯荤粺"""
         if self._running:
             return
 
         self._running = True
-        print("\n正在启动系统...")
+        print("\n姝ｅ湪鍚姩绯荤粺...")
 
-        # 启动 Event Log（最先启动）
+        # 鍚姩 Event Log锛堟渶鍏堝惎鍔級
         self.event_log.start()
 
-        # 启动调度器
+        # 鍚姩璋冨害鍣?
         self.scheduler.start()
 
-        # 启动音乐模块
+        # 鍚姩闊充箰妯″潡
         self.music.start()
 
-        # 扫描音乐库（后台）
+        # 鎵弿闊充箰搴擄紙鍚庡彴锛?
         threading.Thread(target=self._scan_music_library, daemon=True).start()
 
-        # 启动 LoL 模块
+        # 鍚姩 LoL 妯″潡
         self.lol.start()
 
-        # 启动 TTS
+        # 鍚姩 TTS
         self.tts.start()
 
-        # 启动 Speech Queue
+        # 鍚姩 Speech Queue
         self.speech_queue.start()
 
-        # 启动 Speech Judge
+        # 鍚姩 Speech Judge
         self.speech_judge.start()
 
-        # 启动语音输入
+        # 鍚姩璇煶杈撳叆
         self.voice.start()
 
-        # 发布启动事件
+        # 鍙戝竷鍚姩浜嬩欢
         self.event_bus.publish(Event(
             event_type=EventType.SYSTEM_STARTUP,
             data={"timestamp": time.time()},
@@ -172,25 +199,25 @@ class Application:
         ))
 
         self.state_store.set(StateNamespace.SYSTEM, "running", True)
-        print("\n系统已启动！按 Ctrl+C 停止。")
+        print("\n绯荤粺宸插惎鍔紒鎸?Ctrl+C 鍋滄銆?)
         print("-" * 60)
 
     def stop(self):
-        """停止所有子系统"""
+        """鍋滄鎵€鏈夊瓙绯荤粺"""
         if not self._running:
             return
 
-        print("\n正在停止系统...")
+        print("\n姝ｅ湪鍋滄绯荤粺...")
         self._running = False
 
-        # 发布停止事件
+        # 鍙戝竷鍋滄浜嬩欢
         self.event_bus.publish(Event(
             event_type=EventType.SYSTEM_SHUTDOWN,
             data={},
             source="system"
         ))
 
-        # 按顺序停止
+        # 鎸夐『搴忓仠姝?
         if self.voice:
             self.voice.stop()
         if self.speech_judge:
@@ -209,24 +236,24 @@ class Application:
         self.scheduler.stop()
         self.state_store.set(StateNamespace.SYSTEM, "running", False)
 
-        # 最后停止 Event Log（确保所有停止事件都被记录）
+        # 鏈€鍚庡仠姝?Event Log锛堢‘淇濇墍鏈夊仠姝簨浠堕兘琚褰曪級
         if self.event_log:
             self.event_log.stop()
 
-        print("系统已停止。")
+        print("绯荤粺宸插仠姝€?)
 
     def _scan_music_library(self):
-        """后台扫描音乐库"""
+        """鍚庡彴鎵弿闊充箰搴?""
         try:
-            print("[Music] 开始扫描音乐库...")
+            print("[Music] 寮€濮嬫壂鎻忛煶涔愬簱...")
             result = self.music.rescan()
-            print(f"[Music] 扫描完成: 共 {result.get('scanned', 0)} 个文件, "
-                  f"新增 {result.get('added', 0)}, 更新 {result.get('updated', 0)}")
+            print(f"[Music] 鎵弿瀹屾垚: 鍏?{result.get('scanned', 0)} 涓枃浠? "
+                  f"鏂板 {result.get('added', 0)}, 鏇存柊 {result.get('updated', 0)}")
         except Exception as e:
-            print(f"[Music] 扫描失败: {e}")
+            print(f"[Music] 鎵弿澶辫触: {e}")
 
     def _register_alarm_events(self):
-        """注册 GameAlarm 事件处理"""
+        """娉ㄥ唽 GameAlarm 浜嬩欢澶勭悊"""
         def on_create_flash(event: Event):
             champion = event.get("champion", "")
             if champion and self.lol:
@@ -236,16 +263,16 @@ class Application:
             champion = event.get("champion", "")
             spell = event.get("spell", "")
             if champion and spell and self.lol:
-                # 简化：默认冷却 60 秒
+                # 绠€鍖栵細榛樿鍐峰嵈 60 绉?
                 self.lol.game_alarm.create_spell_alarm(champion, spell, cooldown=60)
 
         def on_create_ward(event: Event):
-            location = event.get("location", "当前位置")
+            location = event.get("location", "褰撳墠浣嶇疆")
             if self.lol:
                 self.lol.game_alarm.create_ward_alarm(location)
 
         def on_create_custom(event: Event):
-            title = event.get("title", "提醒")
+            title = event.get("title", "鎻愰啋")
             duration = event.get("duration", 120)
             if self.lol:
                 self.lol.game_alarm.create_custom_alarm(title, duration)
@@ -256,7 +283,7 @@ class Application:
         self.event_bus.subscribe("alarm.create_custom", on_create_custom)
 
     def _register_player_query(self):
-        """注册 Player Query 命令处理器"""
+        """娉ㄥ唽 Player Query 鍛戒护澶勭悊鍣?""
         try:
             db_path = "data/player.db"
             events_dir = self.config.get(
@@ -272,12 +299,12 @@ class Application:
                 state_store=self.state_store,
             )
             self.command_bus.register(CommandType.PLAYER_QUERY, handler)
-            print("[PlayerQuery] handler 已注册")
+            print("[PlayerQuery] handler 宸叉敞鍐?)
         except Exception as e:
-            print(f"[PlayerQuery] 注册失败: {e}")
+            print(f"[PlayerQuery] 娉ㄥ唽澶辫触: {e}")
 
     def _register_automation(self):
-        """注册 LoL 自动化服务与 auto accept / auto banpick 命令。"""
+        """娉ㄥ唽 LoL 鑷姩鍖栨湇鍔′笌 auto accept / auto banpick 鍛戒护銆?""
         try:
             cfg = AutomationConfig.from_dict(self.config.get("automation", {}))
             self.automation = LoLAutomationService(
@@ -297,12 +324,12 @@ class Application:
             self.command_bus.register(CommandType.AUTO_BANPICK_TOGGLE, on_banpick_toggle)
             if cfg.enabled:
                 self.automation.start()
-            print(f"[Automation] 已注册 enabled={cfg.enabled}")
+            print(f"[Automation] 宸叉敞鍐?enabled={cfg.enabled}")
         except Exception as e:
-            print(f"[Automation] 注册失败: {e}")
+            print(f"[Automation] 娉ㄥ唽澶辫触: {e}")
 
     def _register_cooldown(self):
-        """注册手动技能计时器 CooldownManager + 4 个 CommandType。"""
+        """娉ㄥ唽鎵嬪姩鎶€鑳借鏃跺櫒 CooldownManager + 4 涓?CommandType銆?""
         try:
             from app.lol.cooldown import CooldownManager
             from app.lol.cooldown.manager import CooldownManager as _CM
@@ -310,13 +337,13 @@ class Application:
                 COOLDOWN_REMIND,
             )
 
-            # SpeechQueue 适配：把 reminder 文本塞进 SpeechQueue（若已初始化）
+            # SpeechQueue 閫傞厤锛氭妸 reminder 鏂囨湰濉炶繘 SpeechQueue锛堣嫢宸插垵濮嬪寲锛?
             def _speech_enqueue(text: str, event_id: str):
                 try:
                     sq = getattr(self, "speech_queue", None) or getattr(self, "tts_queue", None)
                     if sq is None:
                         return
-                    # 适配 SpeechQueue.enqueue(SpeechItem)
+                    # 閫傞厤 SpeechQueue.enqueue(SpeechItem)
                     from app.speech.speech_queue import SpeechItem
                     item = SpeechItem(priority="A", text=text, event_id=event_id)
                     sq.enqueue(item)
@@ -324,7 +351,7 @@ class Application:
                     pass
 
             def _on_event(code: str, data: dict):
-                # 简单日志；TTS 由 _speech_enqueue 负责
+                # 绠€鍗曟棩蹇楋紱TTS 鐢?_speech_enqueue 璐熻矗
                 print(f"[Cooldown] {code}: {data.get('text') or data}")
 
             self.cooldown_manager = _CM(
@@ -339,9 +366,9 @@ class Application:
                                      self.cooldown_manager.handle_cancel_all)
             self.command_bus.register(CommandType.COOLDOWN_LIST,
                                      self.cooldown_manager.handle_list)
-            print("[Cooldown] 已注册")
+            print("[Cooldown] 宸叉敞鍐?)
         except Exception as e:
-            print(f"[Cooldown] 注册失败: {e}")
+            print(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")
 
     def _register_ongoing(self):
         try:
@@ -351,19 +378,19 @@ class Application:
                 on_event=lambda code, data: print(f"[Ongoing] {code}: {data}"),
             )
             self.ongoing_service.start()
-            print("[Ongoing] 已注册")
+            print("[Ongoing] 宸叉敞鍐?)
         except Exception as e:
-            print(f"[Ongoing] 注册失败: {e}")
+            print(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
 
     def run(self):
-        """运行主循环（阻塞）。UI 模式下主线程跑 Qt event loop。"""
+        """杩愯涓诲惊鐜紙闃诲锛夈€俇I 妯″紡涓嬩富绾跨▼璺?Qt event loop銆?""
         self.initialize()
         self.start()
 
         def signal_handler(sig, frame):
-            print("\n收到停止信号...")
+            print("\n鏀跺埌鍋滄淇″彿...")
             self._shutdown_event.set()
-            # UI 模式下：让 Qt 事件循环退出（headless 模式 QApplication.instance() 为 None）
+            # UI 妯″紡涓嬶細璁?Qt 浜嬩欢寰幆閫€鍑猴紙headless 妯″紡 QApplication.instance() 涓?None锛?
             try:
                 from PySide6.QtWidgets import QApplication
                 app = QApplication.instance()
@@ -375,7 +402,7 @@ class Application:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        # headless 模式：原阻塞循环
+        # headless 妯″紡锛氬師闃诲寰幆
         if "--headless" in sys.argv:
             try:
                 while not self._shutdown_event.is_set():
@@ -386,13 +413,13 @@ class Application:
                 self.stop()
             return
 
-        # UI 模式：主线程跑 Qt（QApplication 必须在主线程创建）
+        # UI 妯″紡锛氫富绾跨▼璺?Qt锛圦Application 蹇呴』鍦ㄤ富绾跨▼鍒涘缓锛?
         try:
             from PySide6.QtWidgets import QApplication
             from app.ui.main_window import MainWindow
             from app.ui.tray import TrayIcon
         except Exception as e:
-            print(f"[UI] PySide6 未安装，使用 headless: {e}")
+            print(f"[UI] PySide6 鏈畨瑁咃紝浣跨敤 headless: {e}")
             try:
                 while not self._shutdown_event.is_set():
                     time.sleep(0.5)
@@ -414,7 +441,7 @@ class Application:
             except Exception:
                 pass
 
-        # Overlay（只读悬浮窗）
+        # Overlay锛堝彧璇绘偓娴獥锛?
         try:
             from app.ui.overlay.overlay_model import OverlayModel
             from app.ui.overlay.overlay_window import OverlayWindow
@@ -432,21 +459,21 @@ class Application:
             )
             self._overlay = OverlayWindow(self._overlay_model)
             window.set_overlay_refs(self._overlay_model, self._overlay)
-            print("[Overlay] 已创建（数据驱动显示，无数据时自动隐藏）")
+            print("[Overlay] 宸插垱寤猴紙鏁版嵁椹卞姩鏄剧ず锛屾棤鏁版嵁鏃惰嚜鍔ㄩ殣钘忥級")
         except Exception as e:
-            print(f"[Overlay] 初始化失败: {e}")
+            print(f"[Overlay] 鍒濆鍖栧け璐? {e}")
 
         tray = TrayIcon(window, _on_quit)
         tray.show()
         window.show()
-        print("[UI] 已启动（主线程 Qt event loop）")
+        print("[UI] 宸插惎鍔紙涓荤嚎绋?Qt event loop锛?)
         try:
             app.exec()
         finally:
             self.stop()
 
     def get_status(self) -> Dict[str, Any]:
-        """获取系统状态"""
+        """鑾峰彇绯荤粺鐘舵€?""
         return {
             "running": self._running,
             "music": {
@@ -466,10 +493,11 @@ class Application:
 
 
 def main():
-    """主函数"""
+    """涓诲嚱鏁?""
     app = Application()
     app.run()
 
 
 if __name__ == "__main__":
     main()
+
