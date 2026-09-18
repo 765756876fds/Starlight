@@ -347,7 +347,6 @@ class Application:
     def _register_cooldown(self):
         """doc"""
         try:
-            from app.lol.cooldown import CooldownManager
             from app.lol.cooldown.manager import CooldownManager as _CM
             from app.lol.cooldown.events import (
                 COOLDOWN_REMIND,

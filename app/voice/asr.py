@@ -2,8 +2,8 @@
 语音识别 ASR 接口层
 
 设计成可替换的接口：
-- Qwen3ASR（主候选，本地运行）
-- FasterWhisperASR（备用）
+- Qwen3ServerASR（主，llama-server HTTP API）
+- Qwen3ASR（备用，llama.cpp 本地加载）
 
 ASREngine 是统一接口，以后可以直接换模型。
 """
@@ -223,73 +223,6 @@ class Qwen3ServerASR(ASREngine):
         self._loaded = False
 
 
-class FasterWhisperASR(ASREngine):
-    """
-    Faster-Whisper ASR（备用引擎）
-
-    配合 Silero VAD 使用。
-    """
-
-    def __init__(self, model_size: str = "small",
-                 device: str = "cpu", compute_type: str = "int8"):
-        self.model_size = model_size
-        self.device = device
-        self.compute_type = compute_type
-        self._model = None
-        self._loaded = False
-
-    def load(self):
-        """加载模型"""
-        if self._loaded:
-            return
-        try:
-            from faster_whisper import WhisperModel
-            self._model = WhisperModel(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-            )
-            self._loaded = True
-            print(f"[ASR] Faster-Whisper 模型已加载: {self.model_size}")
-        except ImportError:
-            print("[ASR] faster-whisper 未安装")
-        except Exception as e:
-            print(f"[ASR] Faster-Whisper 加载失败: {e}")
-
-    def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
-        """转录音频"""
-        if not self._loaded or not self._model:
-            return ""
-
-        try:
-            import numpy as np
-            import io
-            import wave
-
-            # 将 PCM 数据转为 numpy 数组
-            audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-
-            segments, _ = self._model.transcribe(
-                audio_array,
-                language="zh",
-                beam_size=5,
-                vad_filter=True,
-            )
-
-            text = " ".join(seg.text.strip() for seg in segments)
-            return text
-        except Exception as e:
-            print(f"[ASR] Faster-Whisper 转录失败: {e}")
-            return ""
-
-    def is_available(self) -> bool:
-        return self._loaded and self._model is not None
-
-    def unload(self):
-        self._model = None
-        self._loaded = False
-
-
 class ASRManager:
     """
     ASR 管理器 - 统一管理多个 ASR 引擎
@@ -329,15 +262,6 @@ class ASRManager:
                 self.engines.append(qwen)
             except ImportError:
                 print("[ASR] llama-cpp-python 未安装，跳过 Qwen3-ASR")
-
-        # Faster-Whisper 引擎（fallback）
-        fw_config = self.config.get("faster_whisper", {})
-        faster = FasterWhisperASR(
-            model_size=fw_config.get("model_size", "small"),
-            device=fw_config.get("device", "cpu"),
-            compute_type=fw_config.get("compute_type", "int8"),
-        )
-        self.engines.append(faster)
 
         # 加载第一个可用引擎
         self._load_next_engine()

@@ -12,12 +12,6 @@ from typing import Any, Callable, Dict, Optional
 from ...core.event_bus import Event, EventBus, get_event_bus
 from .action_executor import ChampSelectActionExecutor
 from .champ_select_controller import ChampSelectController
-from .features.auto_accept import AutoAcceptFeature
-from .features.auto_ban import AutoBanFeature, AutoPickFeature
-from .features.auto_queue import AutoQueueFeature
-from .features.fallback import FallbackFeature
-from .features.safe_stop import SafeStopFeature
-from .features.verification import VerificationFeature
 from .models import AutomationConfig, AutomationState
 from .queue_controller import QueueController
 from .ready_check_controller import ReadyCheckController
@@ -59,31 +53,16 @@ class LoLAutomationService:
             _request_with_status, self._executor, self._stop_event, self._on_event
         )
 
-        # --- feature 注册（独立可观察）---
-        self._features = {
-            "auto_queue": AutoQueueFeature(_request_with_status, self._on_event, enabled=False),
-            "auto_accept": AutoAcceptFeature(
-                _request_with_status, self._stop_event, self._on_event,
-                accept_delay=self._config.accept_delay, enabled=False,
-            ),
-            "auto_ban": AutoBanFeature(self._champ_select, enabled=False),
-            "auto_pick": AutoPickFeature(self._champ_select, enabled=False),
-            "fallback": FallbackFeature(enabled=True),
-            "verification": VerificationFeature(enabled=True),
-            "safe_stop": SafeStopFeature(self._stop_event, enabled=True),
-        }
-        self._sync_feature_switches()
-
-    def _sync_feature_switches(self) -> None:
-        """根据当前 config 同步各 feature 的 enabled。"""
-        cfg = self._config
-        self._features["auto_queue"].enabled = bool(cfg.auto_queue)
-        self._features["auto_accept"].enabled = bool(cfg.auto_accept)
-        self._features["auto_ban"].enabled = bool(cfg.auto_ban)
-        self._features["auto_pick"].enabled = bool(cfg.auto_pick)
-
     def feature_status(self) -> dict:
-        return {name: f.status() for name, f in self._features.items()}
+        """开关状态直接取自 config（单一事实源）。
+        真实执行路径由 self._queue/_ready_check/_champ_select 驱动。"""
+        c = self._config
+        return {
+            "auto_queue": {"enabled": bool(c.auto_queue)},
+            "auto_accept": {"enabled": bool(c.auto_accept)},
+            "auto_ban": {"enabled": bool(c.auto_ban)},
+            "auto_pick": {"enabled": bool(c.auto_pick)},
+        }
 
     @staticmethod
     def print_feature_banner(cfg: "AutomationConfig") -> None:
@@ -99,8 +78,6 @@ class LoLAutomationService:
     def update_config(self, cfg: AutomationConfig) -> None:
         with self._lock:
             self._config = cfg
-            self._sync_feature_switches()
-
     @property
     def config(self) -> AutomationConfig:
         with self._lock:
@@ -115,14 +92,12 @@ class LoLAutomationService:
     def set_auto_accept(self, enabled: bool) -> None:
         with self._lock:
             self._config.auto_accept = bool(enabled)
-            self._sync_feature_switches()
         if enabled:
             self._ensure_worker_running()
 
     def set_auto_queue(self, enabled: bool) -> None:
         with self._lock:
             self._config.auto_queue = bool(enabled)
-            self._sync_feature_switches()
         if enabled:
             self._ensure_worker_running()
 
@@ -130,7 +105,6 @@ class LoLAutomationService:
         with self._lock:
             self._config.auto_ban = bool(enabled)
             self._config.auto_pick = bool(enabled)
-            self._sync_feature_switches()
         if enabled:
             self._ensure_worker_running()
 
@@ -138,21 +112,18 @@ class LoLAutomationService:
         with self._lock:
             new_val = not self._config.auto_accept
             self._config.auto_accept = new_val
-            self._sync_feature_switches()
         self._ensure_worker_running()
         return new_val
 
     def set_auto_ban(self, enabled: bool) -> None:
         with self._lock:
             self._config.auto_ban = bool(enabled)
-            self._sync_feature_switches()
         if enabled:
             self._ensure_worker_running()
 
     def set_auto_pick(self, enabled: bool) -> None:
         with self._lock:
             self._config.auto_pick = bool(enabled)
-            self._sync_feature_switches()
         if enabled:
             self._ensure_worker_running()
 
@@ -170,7 +141,6 @@ class LoLAutomationService:
             new_val = not (self._config.auto_ban or self._config.auto_pick)
             self._config.auto_ban = new_val
             self._config.auto_pick = new_val
-            self._sync_feature_switches()
         self._ensure_worker_running()
         return new_val
 

@@ -12,25 +12,32 @@
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| 🎵 本地音乐控制 | ✅ | mpv + JSON IPC，播放/暂停/下一首/音量 |
-| 🎵 音乐模糊搜索 | ✅ | SQLite FTS5 + BM25 + 字符串相似度 |
-| 🎵 音乐扫描入库 | ✅ | mutagen 读取标签，支持 FLAC/MP3/M4A |
-| 🎮 2999 游戏状态 | ✅ | Live Client Data API，快照+状态差异 |
-| 🎮 GameAlarm 计时 | ✅ | 闪现/技能/眼位/自定义计时器 |
-| 🎮 LCU 客户端连接 | ✅ | 游戏流程、英雄选择、自动接受预留 |
-| 🎙️ 语音识别 ASR | ⚙️ | Qwen3-ASR 本地模型，接口可替换 |
-| 🧠 意图理解 Intent | ⚙️ | 规则匹配优先 + Qwen3 Function Calling |
-| 🔊 TTS 语音输出 | ✅ | Edge TTS，后续可换 Kokoro |
-| 🎯 Speech Judge | ✅ | S/A/B/C/DROP 等级，击杀聚合 |
-| 👥 玩家数据分析 | 📋 | 预留架构 |
-| 🖥️ UI 控制台 | 📋 | 预留架构 |
+| 🎵 本地音乐控制 | INTEGRATED | mpv + JSON IPC，播放/暂停/下一首/音量/随机/单曲循环 |
+| 🎵 音乐模糊搜索 | INTEGRATED | SQLite FTS5 + BM25 + 字符串相似度 |
+| 🎵 音乐扫描入库 | INTEGRATED | mutagen 读取标签，支持 FLAC/MP3/M4A |
+| 🎵 音乐 Highlight | IMPLEMENTED | 跳高潮 / 高潮段自动轮播 / 手动标记（SQLite 持久化） |
+| 🎧 在线音乐 | SKELETON | 框架已接，archive 源可用，JS/MusicFree 源需 node+音源数据 |
+| 🎮 2999 游戏状态 | IMPLEMENTED | Live Client Data API，快照+状态差异→EventBus |
+| 🎮 GameAlarm 计时 | IMPLEMENTED | 闪现/技能/眼位/自定义计时器 |
+| 🎮 LCU 客户端连接 | IMPLEMENTED | 游戏流程、英雄选择、国服锁文件/进程双通道 |
+| 🤖 对局自动化 | IMPLEMENTED（未真测） | Auto Queue / Accept / Ban / Pick / Safe Stop，默认关闭 |
+| ⏱️ 手动技能冷却提醒 | IMPLEMENTED | CooldownManager + 英雄/技能数据 + TTS（语音入口待接） |
+| 👥 玩家/队友/对手信息 | IMPLEMENTED | 对局内分析 + 语音历史查询 + ChampSelect 10 人快照 |
+| 🎙️ 语音识别 ASR | IMPLEMENTED | Qwen3-ASR（llama-server 主，llama.cpp 备） |
+| 🧠 意图理解 Intent | IMPLEMENTED | 规则匹配优先 + Qwen3 Function Calling + OpenAI API |
+| 🔊 TTS 语音输出 | INTEGRATED | Edge TTS → mpv |
+| 🎯 Speech Judge | INTEGRATED | S/A/B/C/DROP 等级 + 频控 + 优先级播报队列 |
+| 🖥️ UI 控制台 / Overlay | IMPLEMENTED（未目视真测） | PySide6 主窗口 + 面板 + 托盘 + 对局内 Overlay |
+
+> 状态词：NOT_STARTED / SKELETON / IMPLEMENTED / INTEGRATED / REAL_TESTED / DONE。
+> "未真测"表示代码已实现但尚未在真实对局/选人中验证。
 
 ## 技术栈
 
 - **语言**: Python 3.11
 - **音频引擎**: mpv (JSON IPC / Named Pipe)
 - **数据库**: SQLite + FTS5
-- **ASR**: Qwen3-ASR (llama.cpp) / Faster-Whisper (备用)
+- **ASR**: Qwen3-ASR（llama-server HTTP 为主，llama.cpp 本地为备）
 - **Intent**: Qwen3-4B (llama.cpp Function Calling)
 - **TTS**: Edge TTS
 - **游戏数据**: Riot Live Client Data API (2999) + LCU
@@ -72,12 +79,19 @@ lol-music-agent/
 │   │   ├── asr.py           # ASR 引擎接口
 │   │   ├── intent.py        # 意图识别
 │   │   └── runtime.py       # 语音运行时
-│   ├── speech/              # 语音输出
-│   │   ├── tts.py           # TTS 控制
-│   │   ├── speech_judge.py  # 播报评判
-│   │   └── kill_aggregator.py  # 击杀聚合
-│   ├── player/              # 玩家数据（预留）
-│   └── ui/                  # UI（预留）
+│   ├── speech/             # 语音输出
+│   │   ├── tts.py           # TTS 控制（Edge TTS → mpv）
+│   │   ├── speech_judge.py  # 播报分级与频控
+│   │   ├── speech_queue.py  # 优先级播报队列
+│   │   └── rule_engine.py   # 游戏事件→播报文案
+│   ├── player/             # 玩家数据（身份/历史/分析/语音查询）
+│   ├── lol/
+│   │   ├── runtime.py       # LoL 运行时（2999 + LCU 轮询）
+│   │   ├── automation/      # Auto Queue/Accept/Ban/Pick/SafeStop
+│   │   ├── cooldown/        # 手动技能冷却提醒
+│   │   ├── ongoing/         # ChampSelect 对局内选手快照
+│   │   └── data/            # 英雄/技能/召唤师技能目录
+│   └── ui/                 # PySide6 控制台 + Overlay
 ├── data/                    # 数据目录
 ├── logs/                    # 日志目录
 └── tests/                   # 测试
