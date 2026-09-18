@@ -10,11 +10,26 @@ from ...core.scheduler import get_scheduler
 from ..data.ability_catalog import AbilityCatalog
 from ..data.champion_catalog import ChampionCatalog
 from ..data.summoner_spell_catalog import SummonerSpellCatalog
+from .calculator import CooldownCalculator
 from .events import COOLDOWN_CANCELLED, COOLDOWN_REMIND, COOLDOWN_STARTED, COOLDOWN_READY
 from .models import CooldownReminder, ReminderStatus
+from .policy import ReminderPolicy
 
 _SLOT_ZH = {"Q": "Q", "W": "W", "E": "E", "R": "大招"}
 _SIDE_ZH = {"enemy": "敌方", "ally": "我方", "self": "你的"}
+# 语音别名 → 标准槽位
+_SLOT_ALIAS = {"大招": "R", "大": "R", "ULT": "R", "U": "R", "r": "R"}
+
+
+def _normalize_slot(skill: str) -> str:
+    """把语音/UI 传来的技能名归一化为 Q/W/E/R。"""
+    s = (skill or "").strip()
+    if s in _SLOT_ALIAS:
+        return _SLOT_ALIAS[s]
+    up = s.upper()
+    if up in ("Q", "W", "E", "R"):
+        return up
+    return up
 
 
 class CooldownManager:
@@ -27,6 +42,7 @@ class CooldownManager:
         speech_enqueue: Optional[Callable[[str, str], None]] = None,
         remind_before: float = 5.0,
         scheduler=None,
+        policy: Optional[ReminderPolicy] = None,
     ):
         self._champions = champions or ChampionCatalog()
         self._abilities = abilities or AbilityCatalog()
@@ -35,6 +51,7 @@ class CooldownManager:
         # speech_enqueue(text, event_id) — 由 main.py 注入 SpeechQueue 适配
         self._speech_enqueue = speech_enqueue
         self._remind_before = remind_before
+        self._policy = policy or ReminderPolicy()
         self._scheduler = scheduler or get_scheduler()
 
         self._reminders: Dict[str, CooldownReminder] = {}
@@ -47,6 +64,10 @@ class CooldownManager:
         champion_name: Optional[str],
         skill: str,
         side: str = "enemy",
+        ability_rank: Optional[int] = None,
+        ability_haste: float = 0.0,
+        ultimate_haste: float = 0.0,
+        summoner_spell_haste: float = 0.0,
     ) -> Optional[CooldownReminder]:
         if not skill:
             return None
@@ -55,11 +76,12 @@ class CooldownManager:
         cid = champ.cid if champ else None
         cname = champ.name_zh if champ else (champion_name or "未知英雄")
 
-        slot = skill.strip().upper()
+        slot = _normalize_slot(skill)
         if slot in ("Q", "W", "E", "R"):
             if cid is None:
                 return None
-            cd = self._abilities.get_cooldown(cid, slot)
+            rank = ability_rank or 1
+            cd = self._abilities.get_cooldown_by_level(cid, slot, rank)
             if cd is None:
                 self._on_event("cooldown.invalid_skill", {
                     "champion": champion_name, "skill": skill,
@@ -75,6 +97,9 @@ class CooldownManager:
                 return None
             display = _SLOT_ZH.get(slot, slot)
             stype = "ability"
+            estimated = CooldownCalculator.for_ability(
+                cd, slot, ability_haste=ability_haste,
+                ultimate_haste=ultimate_haste)
         else:
             sp = self._spells.get_by_name(skill)
             if sp is None:
@@ -82,7 +107,12 @@ class CooldownManager:
             display = sp.name_zh
             cd = sp.cooldown
             stype = "summoner_spell"
+            estimated = CooldownCalculator.for_summoner(
+                cd, summoner_spell_haste=summoner_spell_haste)
 
+        base_cd = cd
+        est_cd = estimated if estimated is not None else float(cd)
+        remind_before = self._policy.for_skill(stype, slot)
         rid = uuid.uuid4().hex[:8]
         now = time.monotonic()
         r = CooldownReminder(
@@ -91,10 +121,10 @@ class CooldownManager:
             champion_name=cname,
             skill=display,
             skill_type=stype,
-            base_cooldown=cd,
-            estimated_cooldown=cd,
+            base_cooldown=base_cd,
+            estimated_cooldown=est_cd,
             used_at=now,
-            remind_before=self._remind_before,
+            remind_before=remind_before,
             side=side,
         )
         with self._lock:
@@ -143,6 +173,62 @@ class CooldownManager:
             skill=p.get("skill") or p.get("spell"),
             side=p.get("side", "enemy"),
         )
+
+    # ----- 静态 CD 查询（cooldown.query）-----
+    def query_cooldown(self, champion_name: Optional[str],
+                       skill: str) -> dict:
+        """查询静态基础 CD，返回结构化结果（不创建计时器）。"""
+        slot = _normalize_slot(skill)
+        sp = self._spells.get_by_name(skill)
+        if sp is not None and slot not in ("Q", "W", "E", "R"):
+            return {
+                "kind": "summoner_spell",
+                "champion": None,
+                "skill": sp.name_zh,
+                "base_cooldown": sp.cooldown,
+                "text": f"{sp.name_zh}基础冷却约{int(sp.cooldown)}秒。",
+            }
+
+        champ = self._champions.get_by_name(champion_name) if champion_name else None
+        cname = champ.name_zh if champ else (champion_name or "该英雄")
+        if champ is None or slot not in ("Q", "W", "E", "R"):
+            return {
+                "kind": "unknown", "champion": champion_name, "skill": skill,
+                "base_cooldown": None,
+                "text": "没有找到对应的技能冷却数据。",
+            }
+        cd1 = self._abilities.get_cooldown_by_level(champ.cid, slot, 1)
+        cd5 = self._abilities.get_cooldown_by_level(champ.cid, slot, 5)
+        if cd1 is None:
+            return {
+                "kind": "no_fixed", "champion": cname, "skill": slot,
+                "base_cooldown": None,
+                "text": f"{cname}的{_SLOT_ZH.get(slot, slot)}没有固定冷却时间。",
+            }
+        base = int(round(cd1))
+        if cd5 is not None and abs(cd5 - cd1) > 0.5:
+            text = (f"{cname}{_SLOT_ZH.get(slot, slot)}基础冷却约{base}秒，"
+                    f"随技能等级降低，满级约{int(round(cd5))}秒。")
+        else:
+            text = f"{cname}{_SLOT_ZH.get(slot, slot)}基础冷却约{base}秒。"
+        return {
+            "kind": "ability", "champion": cname, "skill": slot,
+            "base_cooldown": cd1, "max_level_cooldown": cd5, "text": text,
+        }
+
+    def handle_query(self, command) -> dict:
+        p = getattr(command, "params", command) or {}
+        champion = p.get("champion")
+        skill = p.get("skill") or p.get("spell") or ""
+        result = self.query_cooldown(champion, skill)
+        text = result.get("text") or ""
+        if self._speech_enqueue and text:
+            try:
+                self._speech_enqueue(text, "cooldown.query")
+            except Exception:
+                pass
+        self._on_event("cooldown.queried", result)
+        return result
 
     def handle_cancel(self, command) -> bool:
         p = getattr(command, "params", command) or {}

@@ -381,6 +381,8 @@ class Application:
                                      self.cooldown_manager.handle_cancel_all)
             self.command_bus.register(CommandType.COOLDOWN_LIST,
                                      self.cooldown_manager.handle_list)
+            self.command_bus.register(CommandType.COOLDOWN_QUERY,
+                                     self.cooldown_manager.handle_query)
             print("...")
         except Exception as e:
             print(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")

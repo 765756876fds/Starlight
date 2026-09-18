@@ -121,6 +121,14 @@ class RuleBasedIntent:
     COOLDOWN_RULES = [
         (r"取消所有(?:技能)?计时", "cooldown.cancel_all", {}),
         (r"取消(.+?)(?:计时|的计时)$", "cooldown.cancel", {"champion_group": 1}),
+        # --- 静态 CD 查询（cooldown.query）：纯召唤师技能 ---
+        (r"^(闪现|点燃|治疗|净化|屏障|虚弱|疾跑|传送|惩戒|tp|TP)\s*(?:的)?(?:冷却多久|冷却时间|CD多久|cd多久|冷却|CD|cd|多久|多长)$",
+         "cooldown.query", {"skill_group": 1}),
+        # --- 静态 CD 查询：指定英雄 / 召唤师技能 ---
+        (r"^(?:对面|敌方)?(.+?)\s*(?:的)?\s*(闪现|点燃|治疗|净化|屏障|虚弱|疾跑|传送|惩戒|tp|TP)\s*(?:的)?(?:冷却多久|冷却时间|CD多久|cd多久|冷却|CD|cd|多久|多长)$",
+         "cooldown.query", {"champion_group": 1, "skill_group": 2}),
+        (r"^(?:对面|敌方)?(.+?)\s*(?:的)?\s*([QqWwEeRr]|大招)\s*(?:的)?(?:冷却多久|冷却时间|CD多久|cd多久|冷却|CD|cd|多久|多长)$",
+         "cooldown.query", {"champion_group": 1, "skill_group": 2}),
         # 召唤师技能：必须出现闪现/点燃等关键词，允许 side 前缀
         (r"^(对面|敌方|我方|队友)?(.+?)(闪现|点燃|治疗|净化|屏障|虚弱|疾跑|传送|惩戒|tp|TP)"
          r"(?:交了|用了|放了|没了|好了)",
@@ -129,6 +137,11 @@ class RuleBasedIntent:
         (r"^(对面|敌方|我方|队友)(?:的)?(.*?)([QqWwEeRr]|大招)"
          r"(?:交了|用了|放了|没了|好了)",
          "cooldown.start", {"champion_group": 2, "skill_group": 3, "side_group": 1}),
+        # 英雄技能：无 side 前缀短指令（"莎弥拉 W 用了"/"石头人 R 了"）
+        (r"^(?:对面|敌方|我方|队友)?(?:的)?(.+?)\s*(?:的)?\s*([QqWwEeRr]|大招)\s*(?:的)?(?:用了|交了|放了)$",
+         "cooldown.start", {"champion_group": 1, "skill_group": 2}),
+        (r"^(?:对面|敌方|我方|队友)?(?:的)?(.+?)\s*(?:的)?\s*([QqWwEeRr])\s*(?:的)?了$",
+         "cooldown.start", {"champion_group": 1, "skill_group": 2}),
     ]
 
     @classmethod
