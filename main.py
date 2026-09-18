@@ -124,6 +124,9 @@ class Application:
         # 注册手动技能计时器（cooldown）
         self._register_cooldown()
 
+        # 注册 OngoingGameService（ChampSelect 加载 10 玩家）
+        self._register_ongoing()
+
         print("\n初始化完成！")
 
     def start(self):
@@ -340,6 +343,18 @@ class Application:
         except Exception as e:
             print(f"[Cooldown] 注册失败: {e}")
 
+    def _register_ongoing(self):
+        try:
+            from app.lol.ongoing.service import OngoingGameService
+            self.ongoing_service = OngoingGameService(
+                lcu=self.lol.lcu if self.lol else None,
+                on_event=lambda code, data: print(f"[Ongoing] {code}: {data}"),
+            )
+            self.ongoing_service.start()
+            print("[Ongoing] 已注册")
+        except Exception as e:
+            print(f"[Ongoing] 注册失败: {e}")
+
     def run(self):
         """运行主循环（阻塞）。UI 模式下主线程跑 Qt event loop。"""
         self.initialize()
@@ -390,6 +405,7 @@ class Application:
             automation_service=getattr(self, "automation", None),
             cooldown_manager=getattr(self, "cooldown_manager", None),
             music=getattr(self, "music", None),
+            ongoing_service=getattr(self, "ongoing_service", None),
         )
 
         def _on_quit():

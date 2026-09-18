@@ -1,0 +1,5 @@
+"""ongoing.* 事件。"""
+ONGOING_LOADED = "ongoing.loaded"
+ONGOING_MATCH_HISTORY_UNAVAILABLE = "ongoing.match_history_unavailable"
+ONGOING_ERROR = "ongoing.error"
+ONGOING_STARTED = "ongoing.started"

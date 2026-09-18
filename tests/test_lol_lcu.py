@@ -1,0 +1,39 @@
+"""lcu.py 线程安全测试（mock session）。"""
+import threading
+from unittest.mock import MagicMock
+
+from app.lol.lcu import LCUConnection as LCUClient
+
+
+def _make_client():
+    c = LCUClient.__new__(LCUClient)
+    c._port = 0
+    c._protocol = "https"
+    c._host = "127.0.0.1"
+    c._connected = True
+    c._request_lock = threading.Lock()
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.content = b'{"ok": true}'
+    fake_resp.json.return_value = {"ok": True}
+    c._session = MagicMock()
+    c._session.get.return_value = fake_resp
+    return c
+
+
+def test_concurrent_request_raw_no_exception():
+    c = _make_client()
+    errors = []
+    def worker():
+        try:
+            for _ in range(100):
+                s, b = c.request_raw("GET", "/lol-gameflow/v1/gameflow-phase")
+                assert s == 200
+        except Exception as e:
+            errors.append(e)
+    threads = [threading.Thread(target=worker) for _ in range(10)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    assert not errors, f"errors: {errors}"
+    # 共 1000 次调用
+    assert c._session.get.call_count == 1000

@@ -111,6 +111,7 @@ class LCUConnection:
         self._session = requests.Session()
         self._session.verify = False
         self._session.auth = requests.auth.HTTPBasicAuth("riot", self._auth_token)
+        self._request_lock = threading.Lock()
         self._session.headers.update({
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -371,26 +372,28 @@ class LCUConnection:
 
         url = f"{self.base_url}{endpoint}"
         try:
-            if method.upper() == "GET":
-                resp = self._session.get(url, timeout=5)
-            elif method.upper() == "POST":
-                resp = self._session.post(url, json=data, timeout=5)
-            elif method.upper() == "PUT":
-                resp = self._session.put(url, json=data, timeout=5)
-            elif method.upper() == "PATCH":
-                resp = self._session.patch(url, json=data, timeout=5)
-            elif method.upper() == "DELETE":
-                resp = self._session.delete(url, timeout=5)
-            else:
-                return 0, None
+            with self._request_lock:
+                if method.upper() == "GET":
+                    resp = self._session.get(url, timeout=5)
+                elif method.upper() == "POST":
+                    resp = self._session.post(url, json=data, timeout=5)
+                elif method.upper() == "PUT":
+                    resp = self._session.put(url, json=data, timeout=5)
+                elif method.upper() == "PATCH":
+                    resp = self._session.patch(url, json=data, timeout=5)
+                elif method.upper() == "DELETE":
+                    resp = self._session.delete(url, timeout=5)
+                else:
+                    return 0, None
 
-            body = None
-            if resp.content:
-                try:
-                    body = resp.json()
-                except json.JSONDecodeError:
-                    body = resp.text
-            return resp.status_code, body
+                body = None
+                if resp.content:
+                    try:
+                        body = resp.json()
+                    except json.JSONDecodeError:
+                        body = resp.text
+                status = resp.status_code
+            return status, body
         except Exception as e:
             print(f"[LCU] 请求失败 {method} {endpoint}: {e}")
             return 0, None
