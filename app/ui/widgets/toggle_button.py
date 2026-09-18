@@ -34,7 +34,8 @@ class ToggleButton(QPushButton):
         return self._state
 
     def _refresh(self):
-        self.setText(f"{self._label}: {'ON' if self._state else 'OFF'}")
+        self.setText(f"{self._label}: {'开' if self._state else '关'}")
+        self.setMinimumWidth(120)
         style = "background-color: #2e7d32; color: white;" if self._state \
             else "background-color: #555; color: white;"
         self.setStyleSheet(style + " border-radius: 6px; padding: 4px 12px;")

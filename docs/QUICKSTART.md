@@ -25,3 +25,9 @@
 - `data/music_sources/` 已加入 .gitignore，不会提交到仓库
 - 音源文件来自第三方，本项目不为其内容负责
 - VIP 歌曲可能无法播放
+
+### Windows CMD 中文显示
+如果启动日志里中文显示为乱码（如鍒濆鍖?），在运行 main.py 前先执行：
+``nchcp 65001
+``n这会把 cmd 切到 UTF-8 代码页。或直接用 Windows Terminal（默认 UTF-8）。
+

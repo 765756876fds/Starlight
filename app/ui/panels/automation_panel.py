@@ -16,15 +16,15 @@ class AutomationPanel(QWidget):
         box = QGroupBox("LoL 自动化")
         form = QVBoxLayout(box)
 
-        self.lbl_state = QLabel("state: ?")
-        self.lbl_phase = QLabel("phase: ?")
+        self.lbl_state = QLabel("状态：?")
+        self.lbl_phase = QLabel("游戏阶段：?")
         form.addWidget(self.lbl_phase)
         form.addWidget(self.lbl_state)
 
-        self.btn_queue = ToggleButton("Auto Queue", False)
-        self.btn_accept = ToggleButton("Auto Accept", False)
-        self.btn_ban = ToggleButton("Auto Ban", False)
-        self.btn_pick = ToggleButton("Auto Pick", False)
+        self.btn_queue = ToggleButton("自动排队", False)
+        self.btn_accept = ToggleButton("自动接受", False)
+        self.btn_ban = ToggleButton("自动禁用", False)
+        self.btn_pick = ToggleButton("自动选择", False)
 
         for b in (self.btn_queue, self.btn_accept, self.btn_ban, self.btn_pick):
             form.addWidget(b)
@@ -53,8 +53,12 @@ class AutomationPanel(QWidget):
         try:
             state = self._svc._state.value if hasattr(self._svc, "_state") else "?"
             phase = getattr(self._svc, "_last_phase", "?")
-            self.lbl_state.setText(f"state: {state}")
-            self.lbl_phase.setText(f"phase: {phase}")
+            _STATE_ZH = {"idle":"空闲","in_lobby":"在大厅","queue_searching":"排队中",
+                         "ready_check":"确认对局","champ_select":"英雄选择","in_game":"游戏中",
+                         "settlement":"结算中","safe_stop":"已停止"}
+            state_zh = _STATE_ZH.get(state, state)
+            self.lbl_state.setText(f"状态：{state_zh}")
+            self.lbl_phase.setText(f"游戏阶段：{phase}")
             cfg = getattr(self._svc, "config", None)
             if cfg is not None:
                 self.btn_queue.set_state(bool(getattr(cfg, "auto_queue", False)))

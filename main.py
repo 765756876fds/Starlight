@@ -1,8 +1,5 @@
-﻿"""
-LoL 脳 鏈湴闊充箰 脳 璇煶 Agent - 涓诲叆鍙?
+"""LoL Music Agent main entry."""
 
-鏁村悎鎵€鏈夋ā鍧楋紝鍚姩绯荤粺銆?
-"""
 import os
 import sys
 import signal
@@ -39,11 +36,11 @@ from app.lol.automation.models import AutomationConfig
 
 
 class Application:
-    """
-    涓诲簲鐢ㄧ被
+    """doc"""
+    # stray
 
-    鏁村悎鎵€鏈夊瓙绯荤粺锛岀鐞嗙敓鍛藉懆鏈熴€?
-    """
+    # syntax-replaced
+    """doc"""
 
     def __init__(self, config_path: str = None):
         # 鍔犺浇閰嶇疆
@@ -157,7 +154,7 @@ class Application:
         print("\n鍒濆鍖栧畬鎴愶紒")
 
     def start(self):
-        """鍚姩鎵€鏈夊瓙绯荤粺"""
+        """doc"""
         if self._running:
             return
 
@@ -199,11 +196,11 @@ class Application:
         ))
 
         self.state_store.set(StateNamespace.SYSTEM, "running", True)
-        print("\n绯荤粺宸插惎鍔紒鎸?Ctrl+C 鍋滄銆?)
+        print("\nSystem started! Press Ctrl+C to stop.")
         print("-" * 60)
 
     def stop(self):
-        """鍋滄鎵€鏈夊瓙绯荤粺"""
+        """doc"""
         if not self._running:
             return
 
@@ -240,12 +237,12 @@ class Application:
         if self.event_log:
             self.event_log.stop()
 
-        print("绯荤粺宸插仠姝€?)
+        print("...")
 
     def _scan_music_library(self):
-        """鍚庡彴鎵弿闊充箰搴?""
+        """doc"""
         try:
-            print("[Music] 寮€濮嬫壂鎻忛煶涔愬簱...")
+            print("...")
             result = self.music.rescan()
             print(f"[Music] 鎵弿瀹屾垚: 鍏?{result.get('scanned', 0)} 涓枃浠? "
                   f"鏂板 {result.get('added', 0)}, 鏇存柊 {result.get('updated', 0)}")
@@ -283,7 +280,7 @@ class Application:
         self.event_bus.subscribe("alarm.create_custom", on_create_custom)
 
     def _register_player_query(self):
-        """娉ㄥ唽 Player Query 鍛戒护澶勭悊鍣?""
+        """doc"""
         try:
             db_path = "data/player.db"
             events_dir = self.config.get(
@@ -299,12 +296,12 @@ class Application:
                 state_store=self.state_store,
             )
             self.command_bus.register(CommandType.PLAYER_QUERY, handler)
-            print("[PlayerQuery] handler 宸叉敞鍐?)
+            print("...")
         except Exception as e:
             print(f"[PlayerQuery] 娉ㄥ唽澶辫触: {e}")
 
     def _register_automation(self):
-        """娉ㄥ唽 LoL 鑷姩鍖栨湇鍔′笌 auto accept / auto banpick 鍛戒护銆?""
+        """doc"""
         try:
             cfg = AutomationConfig.from_dict(self.config.get("automation", {}))
             self.automation = LoLAutomationService(
@@ -329,7 +326,7 @@ class Application:
             print(f"[Automation] 娉ㄥ唽澶辫触: {e}")
 
     def _register_cooldown(self):
-        """娉ㄥ唽鎵嬪姩鎶€鑳借鏃跺櫒 CooldownManager + 4 涓?CommandType銆?""
+        """doc"""
         try:
             from app.lol.cooldown import CooldownManager
             from app.lol.cooldown.manager import CooldownManager as _CM
@@ -366,7 +363,7 @@ class Application:
                                      self.cooldown_manager.handle_cancel_all)
             self.command_bus.register(CommandType.COOLDOWN_LIST,
                                      self.cooldown_manager.handle_list)
-            print("[Cooldown] 宸叉敞鍐?)
+            print("...")
         except Exception as e:
             print(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")
 
@@ -378,12 +375,12 @@ class Application:
                 on_event=lambda code, data: print(f"[Ongoing] {code}: {data}"),
             )
             self.ongoing_service.start()
-            print("[Ongoing] 宸叉敞鍐?)
+            print("...")
         except Exception as e:
             print(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
 
     def run(self):
-        """杩愯涓诲惊鐜紙闃诲锛夈€俇I 妯″紡涓嬩富绾跨▼璺?Qt event loop銆?""
+        """doc"""
         self.initialize()
         self.start()
 
@@ -466,14 +463,14 @@ class Application:
         tray = TrayIcon(window, _on_quit)
         tray.show()
         window.show()
-        print("[UI] 宸插惎鍔紙涓荤嚎绋?Qt event loop锛?)
+        print("...")
         try:
             app.exec()
         finally:
             self.stop()
 
     def get_status(self) -> Dict[str, Any]:
-        """鑾峰彇绯荤粺鐘舵€?""
+        """doc"""
         return {
             "running": self._running,
             "music": {
@@ -493,7 +490,7 @@ class Application:
 
 
 def main():
-    """涓诲嚱鏁?""
+    """doc"""
     app = Application()
     app.run()
 

@@ -32,10 +32,29 @@ class JSMusicSource(MusicSource):
         self._ready = threading.Event()
         self._start_bridge()
 
+    def _find_node(self):
+        import shutil
+        p = os.environ.get("NODE_EXE")
+        if p and os.path.exists(p): return p
+        p = shutil.which("node")
+        if p: return p
+        for c in [r"C:\Program Files\nodejs\node.exe",
+                  r"C:\Program Files (x86)\nodejs\node.exe",
+                  os.path.expanduser(r"~\AppData\Roaming\npm\node.exe"),
+                  os.path.expanduser(r"~\AppData\Local\Programs\nodejs\node.exe"),
+                  os.path.expanduser(r"~\scoop\apps\nodejs\current\node.exe"),
+                  r"C:\tools\nodejs\node.exe"]:
+            if os.path.exists(c): return c
+        return None
+
     def _start_bridge(self) -> None:
         bridge_js = self._bridge_dir / "bridge.js"
         if not bridge_js.exists():
             print(f"[JSBridge] bridge.js 不存在: {bridge_js}")
+            return
+        node = self._find_node()
+        if not node:
+            print("[JSBridge] 未找到 node.exe，在线音乐 JS 源不可用")
             return
         env = os.environ.copy()
         env["MF_PLUGIN_DIR"] = self._mf_dir
@@ -44,7 +63,7 @@ class JSMusicSource(MusicSource):
             env["MF_USER_VARIABLES"] = json.dumps(self._user_variables, ensure_ascii=False)
         try:
             self._proc = subprocess.Popen(
-                ["node", str(bridge_js)],
+                [node, str(bridge_js)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

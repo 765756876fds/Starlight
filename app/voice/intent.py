@@ -477,8 +477,8 @@ class OpenAIAPIIntent:
             try:
                 models = self._client.models.list()
                 if models.data:
-                    self.model = models.data[0].id
-                    print(f"[Intent] LM Studio 已连接，使用模型: {self.model}")
+                    available = [m.id for m in models.data]
+                    print(f"[Intent] LM Studio 已连接，使用配置模型: {self.model}（可用: {available}）")
                 self._loaded = True
             except Exception as e:
                 print(f"[Intent] LM Studio 连接测试失败（模型可能未加载）: {e}")
