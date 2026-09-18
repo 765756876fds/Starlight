@@ -45,9 +45,9 @@ class ObjectiveRuleset:
 
 _FALLBACK: Dict[str, ObjectiveRule] = {
     "void_grubs": ObjectiveRule("void_grubs", "巢虫", True, 480.0, None, True, 885.0, (60.0,)),
-    "dragon": ObjectiveRule("dragon", "小龙", True, 300.0, 300.0, False, None, (60.0, 30.0)),
-    "baron": ObjectiveRule("baron", "大龙", True, 1200.0, 360.0, False, None, (60.0, 30.0)),
-    "elder": ObjectiveRule("elder", "远古龙", True, None, 360.0, False, None, (60.0, 30.0),
+    "dragon": ObjectiveRule("dragon", "小龙", True, 300.0, 300.0, False, None, (40.0)),
+    "baron": ObjectiveRule("baron", "大龙", True, 1200.0, 360.0, False, None, (40.0)),
+    "elder": ObjectiveRule("elder", "远古龙", True, None, 360.0, False, None, (40.0),
                            trigger="after_dragon_soul"),
 }
 

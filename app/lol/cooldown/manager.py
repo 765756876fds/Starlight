@@ -306,7 +306,8 @@ class CooldownManager:
     @staticmethod
     def _remind_text(r: CooldownReminder) -> str:
         side_zh = _SIDE_ZH.get(r.side, "")
+        secs = int(round(r.remind_before))
         if r.side == "self":
-            return f"你的{r.skill}即将转好"
+            return f"你的{r.skill}大约{secs}秒好"
         name = r.champion_name or ""
-        return f"{side_zh}{name}{r.skill}即将转好"
+        return f"{side_zh}{name}{r.skill}大约{secs}秒好"

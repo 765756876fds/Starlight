@@ -98,6 +98,9 @@ class ObjectiveTimer:
             key = (obj_type, round(float(spawn_at), 2), round(float(lead), 2))
             if key in self._scheduled:
                 continue
+            now = getattr(self.game_alarm, "_current_game_time", 0.0) or 0.0
+            if float(spawn_at) - float(lead) <= now:
+                continue
             self._scheduled.add(key)
             self.game_alarm.schedule_objective_reminder(
                 f"{int(lead)}秒后{name_zh}刷新",
