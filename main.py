@@ -121,6 +121,9 @@ class Application:
         # 注册 LoL 自动化（auto accept / auto banpick）
         self._register_automation()
 
+        # 注册手动技能计时器（cooldown）
+        self._register_cooldown()
+
         print("\n初始化完成！")
 
     def start(self):
@@ -295,25 +298,112 @@ class Application:
         except Exception as e:
             print(f"[Automation] 注册失败: {e}")
 
+    def _register_cooldown(self):
+        """注册手动技能计时器 CooldownManager + 4 个 CommandType。"""
+        try:
+            from app.lol.cooldown import CooldownManager
+            from app.lol.cooldown.manager import CooldownManager as _CM
+            from app.lol.cooldown.events import (
+                COOLDOWN_REMIND,
+            )
+
+            # SpeechQueue 适配：把 reminder 文本塞进 SpeechQueue（若已初始化）
+            def _speech_enqueue(text: str, event_id: str):
+                try:
+                    sq = getattr(self, "speech_queue", None) or getattr(self, "tts_queue", None)
+                    if sq is None:
+                        return
+                    # 适配 SpeechQueue.enqueue(SpeechItem)
+                    from app.speech.speech_queue import SpeechItem
+                    item = SpeechItem(priority="A", text=text, event_id=event_id)
+                    sq.enqueue(item)
+                except Exception:
+                    pass
+
+            def _on_event(code: str, data: dict):
+                # 简单日志；TTS 由 _speech_enqueue 负责
+                print(f"[Cooldown] {code}: {data.get('text') or data}")
+
+            self.cooldown_manager = _CM(
+                on_event=_on_event,
+                speech_enqueue=_speech_enqueue,
+            )
+            self.command_bus.register(CommandType.COOLDOWN_START,
+                                     self.cooldown_manager.handle_start)
+            self.command_bus.register(CommandType.COOLDOWN_CANCEL,
+                                     self.cooldown_manager.handle_cancel)
+            self.command_bus.register(CommandType.COOLDOWN_CANCEL_ALL,
+                                     self.cooldown_manager.handle_cancel_all)
+            self.command_bus.register(CommandType.COOLDOWN_LIST,
+                                     self.cooldown_manager.handle_list)
+            print("[Cooldown] 已注册")
+        except Exception as e:
+            print(f"[Cooldown] 注册失败: {e}")
+
     def run(self):
-        """运行主循环（阻塞）"""
+        """运行主循环（阻塞）。UI 模式下主线程跑 Qt event loop。"""
         self.initialize()
         self.start()
 
-        # 注册信号处理
         def signal_handler(sig, frame):
             print("\n收到停止信号...")
             self._shutdown_event.set()
+            # UI 模式下：让 Qt 事件循环退出（headless 模式 QApplication.instance() 为 None）
+            try:
+                from PySide6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app is not None:
+                    app.quit()
+            except Exception:
+                pass
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        # 主循环
+        # headless 模式：原阻塞循环
+        if "--headless" in sys.argv:
+            try:
+                while not self._shutdown_event.is_set():
+                    time.sleep(0.5)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                self.stop()
+            return
+
+        # UI 模式：主线程跑 Qt（QApplication 必须在主线程创建）
         try:
-            while not self._shutdown_event.is_set():
-                time.sleep(0.5)
-        except KeyboardInterrupt:
-            pass
+            from PySide6.QtWidgets import QApplication
+            from app.ui.main_window import MainWindow
+            from app.ui.tray import TrayIcon
+        except Exception as e:
+            print(f"[UI] PySide6 未安装，使用 headless: {e}")
+            try:
+                while not self._shutdown_event.is_set():
+                    time.sleep(0.5)
+            finally:
+                self.stop()
+            return
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        window = MainWindow(
+            automation_service=getattr(self, "automation", None),
+            cooldown_manager=getattr(self, "cooldown_manager", None),
+            music=getattr(self, "music", None),
+        )
+
+        def _on_quit():
+            try:
+                self.stop()
+            except Exception:
+                pass
+
+        tray = TrayIcon(window, _on_quit)
+        tray.show()
+        window.show()
+        print("[UI] 已启动（主线程 Qt event loop）")
+        try:
+            app.exec()
         finally:
             self.stop()
 
