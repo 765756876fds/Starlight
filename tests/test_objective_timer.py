@@ -269,3 +269,41 @@ class TestAlarmSpeechPath:
         )
         text = judge._generate_speech_text(event, 1)
         assert text == "40秒后小龙刷新"
+
+
+
+class TestGetNextTimers:
+    def test_empty_before_start(self):
+        from app.lol.objective_timer import ObjectiveTimer
+        class FakeAlarm:
+            _current_game_time = 0
+            def schedule_objective_reminder(self, *a, **kw): pass
+        ot = ObjectiveTimer(FakeAlarm())
+        assert ot.get_next_timers() == []
+
+    def test_after_game_start(self):
+        from app.lol.objective_timer import ObjectiveTimer
+        class FakeAlarm:
+            _current_game_time = 0
+            def schedule_objective_reminder(self, *a, **kw): pass
+        ot = ObjectiveTimer(FakeAlarm())
+        ot._on_game_start(None)
+        names = [t["name"] for t in ot.get_next_timers()]
+        assert "小龙" in names
+        assert "大龙" in names
+        assert "先锋" in names
+
+    def test_dragon_respawn_remaining(self):
+        from app.lol.objective_timer import ObjectiveTimer
+        class FakeAlarm:
+            _current_game_time = 0
+            def schedule_objective_reminder(self, *a, **kw): pass
+        ot = ObjectiveTimer(FakeAlarm())
+        ot._on_game_start(None)
+        class E:
+            data = {"dragon_type": "normal"}
+            def get(self, k, d=None): return 200
+        ot._on_dragon_killed(E())
+        ot.game_alarm._current_game_time = 400
+        timers = {t["name"]: t["seconds_remaining"] for t in ot.get_next_timers()}
+        assert abs(timers["小龙"] - 100) < 1

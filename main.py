@@ -414,6 +414,28 @@ class Application:
             except Exception:
                 pass
 
+        # Overlay（只读悬浮窗）
+        try:
+            from app.ui.overlay.overlay_model import OverlayModel
+            from app.ui.overlay.overlay_window import OverlayWindow
+            def _phase_provider():
+                try:
+                    if self.lol and self.lol.lcu:
+                        return self.lol.lcu.get_gameflow_phase() or "None"
+                except Exception:
+                    pass
+                return "None"
+            self._overlay_model = OverlayModel(
+                cooldown_manager=getattr(self, "cooldown_manager", None),
+                objective_timer=getattr(self, "objective_timer", None),
+                phase_provider=_phase_provider,
+            )
+            self._overlay = OverlayWindow(self._overlay_model)
+            window.set_overlay_refs(self._overlay_model, self._overlay)
+            print("[Overlay] 已创建（数据驱动显示，无数据时自动隐藏）")
+        except Exception as e:
+            print(f"[Overlay] 初始化失败: {e}")
+
         tray = TrayIcon(window, _on_quit)
         tray.show()
         window.show()
