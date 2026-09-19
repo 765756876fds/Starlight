@@ -29,6 +29,7 @@ print("T no puuid OK")
 def fake_lcu(ep):
     if ep=="/lol-summoner/v1/current-summoner": return {"puuid":"ME"}
     if ep=="/entitlements/v1/token": return {"accessToken":"tok"}
+    if ep=="/lol-rso-auth/v1/authorization": return {"currentPlatformId":"HN10"}
 fake = {
   "games":[{"json":{"gameId":1,"gameCreation":200,"queueId":420,
     "participants":[{"puuid":"ME","championName":"Ahri","win":True,"kills":1,"deaths":0,"assists":2,"totalMinionsKilled":10,"goldEarned":5000}]}}]}
@@ -43,6 +44,7 @@ sp.SgpMatchHistoryProvider.recent = lambda self,p,start_index=0,count=20: sp.Mat
 def lcu2(ep):
     if ep=="/lol-summoner/v1/current-summoner": return {"puuid":"ME"}
     if ep=="/entitlements/v1/token": return {"accessToken":"tok"}
+    if ep=="/lol-rso-auth/v1/authorization": return {"currentPlatformId":"HN10"}
     if ep.startswith("/lol-match-history/v1"):
         return {"games":{"games":[{"json":{"gameId":9,"gameCreation":100,"queueId":870,
           "participants":[{"puuid":"ME","championName":"Ashe","win":False,"kills":0,"deaths":1,"assists":0}]}}]}}

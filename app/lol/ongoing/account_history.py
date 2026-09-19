@@ -40,6 +40,7 @@ class AccountMatchHistoryService:
         self._lcu_post = lcu_post or (lambda ep, b: None)
         self._n = recent_n
 
+    def _entitlements_token(self):
         r = self._lcu_get("/entitlements/v1/token")
         if isinstance(r, dict):
             t = r.get("accessToken")
