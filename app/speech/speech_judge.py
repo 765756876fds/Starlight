@@ -299,7 +299,8 @@ class SpeechJudge:
         # 敌方技能使用（用户主动记录的）
         if event.event_type == EventType.ALARM_TRIGGERED:
             alarm = event.get("alarm", {})
-            if alarm.get("type") in ("flash", "spell"):
+            # 用户主动记录的提醒（闪现/技能/眼位/自定义计时）都必须能播报
+            if alarm.get("type") in ("flash", "spell", "ward", "custom"):
                 level = SpeechLevel.B
 
         return level
