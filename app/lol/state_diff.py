@@ -225,8 +225,8 @@ class StateDiff:
             if not old_p:
                 continue
 
-            old_items = {item.get("itemID") for item in old_p.items}
-            new_items = {item.get("itemID") for item in new_p.items}
+            old_items = {item.get("itemID") for item in old_p.items if isinstance(item, dict)}
+            new_items = {item.get("itemID") for item in new_p.items if isinstance(item, dict)}
 
             added = new_items - old_items
             removed = old_items - new_items
