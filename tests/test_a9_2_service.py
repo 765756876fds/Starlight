@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 sys.path.insert(0, ".")
 from app.lol.ongoing.account_history import AccountMatchHistoryService, queue_label
 from app.lol.ongoing.match_model import AVAILABLE, NO_DATA, ERROR
@@ -17,7 +17,7 @@ assert r.records[0].queue_type == "单双排位"
 print("T sort+queue label OK")
 
 # T queue map
-assert queue_label(3140)=="新手/训练"; assert queue_label(870)=="人机"; assert queue_label(9999)=="未知模式"
+assert queue_label(3140)=="新手/训练"; assert queue_label(870)=="人机"; assert queue_label(9999)=="未知模式(9999)"
 print("T queue map OK")
 
 # T no puuid -> ERROR

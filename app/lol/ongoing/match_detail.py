@@ -50,10 +50,10 @@ class MatchDetailService:
     def get(self, game_id: int, self_puuid: str, sub_id: str = None):
         token = self._token()
         from .sgp_server import SgpServerResolver
-        _, base, sid = SgpServerResolver(self._lcu).resolve()
-        sub_id = sub_id or sid or "HN10"
-        if not base:
-            base = "https://hn10-k8s-sgp.lol.qq.com:21019"
+        state, base, sid = SgpServerResolver(self._lcu).resolve()
+        sub_id = sub_id or sid
+        if not base or not sub_id:
+            raise RuntimeError(f"sgp server unresolved: state={state}")
         url = f"{base}/match-history-query/v1/products/lol/{sub_id}_{game_id}/SUMMARY"
         import json, ssl, urllib.request
         ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE

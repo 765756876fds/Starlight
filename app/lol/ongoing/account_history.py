@@ -127,7 +127,7 @@ class AccountMatchHistoryService:
         from .sgp_server import SgpServerResolver
         if sub_id is None:
             _, base, sub_id = SgpServerResolver(self._lcu_get).resolve()
-        return MatchDetailService(self._lcu_get).get(game_id, self_puuid, sub_id or "HN10")
+        return MatchDetailService(self._lcu_get).get(game_id, self_puuid, sub_id)
 
     @staticmethod
     def _finalize(r: MatchHistoryResult) -> MatchHistoryResult:
