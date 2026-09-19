@@ -226,7 +226,8 @@ class GameAlarmEngine:
 
     def create_custom_alarm(self, title: str, duration: float,
                             game_time: Optional[float] = None,
-                            lead_time: float = 10.0) -> Alarm:
+                            lead_time: float = 10.0,
+                            content: str = "") -> Alarm:
         """
         创建自定义计时器
 
@@ -240,7 +241,7 @@ class GameAlarmEngine:
             game_time_start=gt,
             duration=duration,
             lead_time=lead_time,
-            data={"source": "USER_MEMORY"},
+            data={"source": "USER_MEMORY", "content": content},
         )
         with self._lock:
             self.alarms[alarm.alarm_id] = alarm

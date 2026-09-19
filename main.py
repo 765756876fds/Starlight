@@ -307,9 +307,13 @@ class Application:
         def on_create_custom(event):
             title = event.get("title", "")
             duration = event.get("duration", 0)
+            content = event.get("content", "")
             if self.lol and duration and duration > 0:
-                self.lol.game_alarm.create_custom_alarm(title or "提醒", duration)
-                _say("记好了，到点提醒你")
+                self.lol.game_alarm.create_custom_alarm(
+                    title or "提醒", duration, lead_time=0.0, content=content)
+                m, s = divmod(int(duration), 60)
+                t = (f"{m}分" if m else "") + f"{s}秒"
+                _say(f"记好了，{t}后提醒你{content}" if content else "记好了，到点提醒你")
             else:
                 _say("没有确认提醒时间")
 

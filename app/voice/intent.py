@@ -271,6 +271,10 @@ class RuleBasedIntent:
                         unit = base_params.get("unit", "minute")
                         params["duration"] = value * 60 if unit == "minute" else value
                         params["title"] = f"{raw_value}{'分钟' if unit == 'minute' else '秒'}提醒"
+                        # 提取"提醒我/叫我"后面的宾语作为 content（如"喝水"），到期播报它
+                        tail = match.string[match.end():].strip("，。,. ")
+                        if tail:
+                            params["content"] = tail
                         params.pop("time_group", None)
                         params.pop("unit", None)
                     except (IndexError, ValueError):

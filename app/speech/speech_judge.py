@@ -402,8 +402,11 @@ class SpeechJudge:
         # 提醒触发（Objective Reminder 等）
         if event_type == EventType.ALARM_TRIGGERED:
             alarm = data.get("alarm", {})
-            title = alarm.get("title", "提醒")
-            return title
+            # 用户主动提醒：到期播报用户要的内容，而不是内部占位 title
+            adata = alarm.get("data", {}) or {}
+            if adata.get("source") == "USER_MEMORY" and adata.get("content"):
+                return f"提醒你{adata['content']}"
+            return alarm.get("title", "提醒")
 
         # 召唤师技能使用（敌方）
         if event_type == EventType.PLAYER_SUMMONER_SPELL_USED:
