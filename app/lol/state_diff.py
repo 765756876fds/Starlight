@@ -390,17 +390,19 @@ class StateDiff:
         """
         if not name:
             return "UNKNOWN"
+        def base(x):
+            return (x or "").split("#", 1)[0].strip()
         n = name.strip()
+        nb = base(n)
         cp = snapshot.current_player
         if cp is not None:
-            cn = (cp.summoner_name or "").strip()
-            cc = (cp.champion_name or "").strip()
-            if n == cn or n == cc:
+            if n == (cp.summoner_name or "").strip() or n == (cp.champion_name or "").strip() \
+               or nb == base(cp.summoner_name):
                 return cp.team
         for p in snapshot.players:
             pn = (p.summoner_name or "").strip()
             pc = (p.champion_name or "").strip()
-            if n == pn or n == pc:
+            if n == pn or n == pc or nb == base(pn):
                 return p.team
         return "UNKNOWN"
 
