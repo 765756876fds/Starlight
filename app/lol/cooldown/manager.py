@@ -57,9 +57,11 @@ class CooldownManager:
         self._reminders: Dict[str, CooldownReminder] = {}
         self._task_ids: Dict[str, List[str]] = {}
         self._lock = threading.Lock()
-        # 游戏内时钟（跟随 2999 游戏时间；暂停时不前进）。
-        # <0 表示尚未与游戏时钟同步，此时回退到现实单调时钟。
-        self._game_time: float = -1.0
+        # 唯一时间基准：2999 游戏内 gameTime。
+        # _clock_synced=True 表示已收到有效 game.time_update；
+        # 未同步时禁止创建任何计时，绝不回退现实时间。
+        self._game_time: float = 0.0
+        self._clock_synced: bool = False
 
     # ----- public API -----
     def start_reminder(
@@ -116,9 +118,19 @@ class CooldownManager:
         base_cd = cd
         est_cd = estimated if estimated is not None else float(cd)
         remind_before = self._policy.for_skill(stype, slot, est_cd)
+        if not self._clock_synced:
+            # 未同步游戏时钟：不建计时，也不回退现实时间。
+            self._on_event("cooldown.not_synced", {"champion": champion_name, "skill": skill})
+            if self._speech_enqueue:
+                try:
+                    self._speech_enqueue("游戏时间尚未同步，暂时无法计时。",
+                                         f"cooldown.not_synced.{uuid.uuid4().hex[:8]}")
+                except Exception:
+                    pass
+            return None
+
         rid = uuid.uuid4().hex[:8]
-        use_game = self._game_time > 0.0
-        now = self._game_time if use_game else time.monotonic()
+        now = self._game_time  # 唯一基准：游戏内 gameTime
         r = CooldownReminder(
             id=rid,
             champion_id=cid,
@@ -130,7 +142,7 @@ class CooldownManager:
             used_at=now,
             remind_before=remind_before,
             side=side,
-            game_clock=use_game,
+            game_clock=True,
         )
         with self._lock:
             self._reminders[rid] = r
@@ -180,13 +192,16 @@ class CooldownManager:
             pass
 
     def set_game_time(self, t: float) -> None:
+        """收到有效 game.time_update：标记同步并推进计时。"""
         self._game_time = float(t)
+        self._clock_synced = True
         self._tick_game_clock()
 
     def reset_clock(self) -> None:
-        """GAME_ENDED / 新一局：清空全部计时并回到未同步状态。"""
+        """GAME_ENDED：清空全部计时并回到未同步状态。"""
         self.cancel_all()
-        self._game_time = -1.0
+        self._game_time = 0.0
+        self._clock_synced = False
 
     # ----- CommandBus handlers -----
     def handle_start(self, command) -> Optional[CooldownReminder]:
@@ -314,36 +329,9 @@ class CooldownManager:
             self._pop_ready(rid)
 
     def _schedule(self, r: CooldownReminder) -> None:
-        # 游戏内时钟计时：不挂现实定时器，由 set_game_time() 驱动；
-        # 立即扫一次，处理“启动时已到点”的边界。
-        if r.game_clock:
-            self._tick_game_clock()
-            return
-
-        now = time.monotonic()
-        rid = r.id
-        tids: List[str] = []
-
-        def _remind_cb():
-            with self._lock:
-                rem = self._reminders.get(rid)
-                if rem is None or rem.status != ReminderStatus.ACTIVE.value:
-                    return
-                rem.status = ReminderStatus.REMINDED.value
-            self._fire_remind(rem)
-
-        def _ready_cb():
-            self._pop_ready(rid)
-
-        if r.remind_before > 0:
-            delay = max(0.0, r.remind_at - now)
-            tids.append(self._scheduler.schedule_once(
-                delay, _remind_cb, task_id=f"cd-remind-{r.id}"))
-
-        ready_delay = max(0.0, r.ready_at - now)
-        tids.append(self._scheduler.schedule_once(
-            ready_delay, _ready_cb, task_id=f"cd-ready-{r.id}"))
-        self._task_ids[r.id] = tids
+        # 唯一计时基准：游戏内 gameTime。不挂任何现实定时器，
+        # 完全由 set_game_time() 推进；立即扫一次处理“已到点”边界。
+        self._tick_game_clock()
 
     def _payload(self, r: CooldownReminder) -> dict:
         return {
