@@ -54,7 +54,7 @@ class MainWindow(QMainWindow):
             root.addLayout(top)
             tabs_w = QTabWidget()
             tabs_w.addTab(AutomationPanel(self._automation_service), "自动化")
-            tabs_w.addTab(OngoingPanel(self._ongoing_service), "对局信息")
+            tabs_w.addTab(OngoingPanel(self._ongoing_service, account_history_service=self._build_account_history()), "对局信息")
             tabs_w.addTab(CooldownPanel(self._cooldown_manager), "计时器")
             tabs_w.addTab(MusicPanel(self._music), "音乐")
             root.addWidget(tabs_w)
@@ -72,6 +72,23 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         print("[UI] switched")
+
+    def _build_account_history(self):
+        try:
+            lcu_get = None
+            lcu = self._services.get("lcu") if isinstance(self._services, dict) else None
+            if lcu is not None and hasattr(lcu, "get"):
+                lcu_get = lcu.get
+            elif self._ongoing_service is not None:
+                lcu = getattr(self._ongoing_service, "_lcu", None)
+                if lcu is not None and hasattr(lcu, "get"):
+                    lcu_get = lcu.get
+            if lcu_get is None:
+                return None
+            from app.lol.ongoing.account_history import AccountMatchHistoryService
+            return AccountMatchHistoryService(lcu_get)
+        except Exception:
+            return None
 
     def set_overlay_refs(self, model, window) -> None:
         self._overlay_model = model

@@ -3,6 +3,20 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
+import datetime
+
+
+def _match_row(m) -> QLabel:
+    dt = datetime.datetime.fromtimestamp(m.game_creation / 1000).strftime("%m-%d") if m.game_creation else "--"
+    win = "胜" if m.win else "负"
+    c = "#2e7d32" if m.win else "#c62828"
+    k = m.kills if m.kills is not None else "-"
+    d = m.deaths if m.deaths is not None else "-"
+    a = m.assists if m.assists is not None else "-"
+    return QLabel(
+        f'<span style="color:{c}">{win}</span> {dt} {m.queue_type or ""} '
+        f'{m.champion_name or "?"} {k}/{d}/{a}'
+    )
 
 
 def _card(snap, is_enemy: bool) -> QFrame:
@@ -41,14 +55,23 @@ def _card(snap, is_enemy: bool) -> QFrame:
 
 
 class OngoingPanel(QWidget):
-    def __init__(self, ongoing_service=None, parent=None):
+    def __init__(self, ongoing_service=None, account_history_service=None, parent=None):
         super().__init__(parent)
         self._svc = ongoing_service
+        self._acct = account_history_service
+        self._acct_next = 0.0
         root = QVBoxLayout(self)
 
         self.lbl_hint = QLabel("⚠️ 战绩信息来自公开数据，仅供参考")
         self.lbl_hint.setStyleSheet("color: #888; font-size: 11px;")
         root.addWidget(self.lbl_hint)
+
+        # 我的近期战绩（SGP），与下方 10 人当前对局互不影响
+        root.addWidget(QLabel("<b>我的近期战绩</b>"))
+        self._acct_box = QVBoxLayout()
+        self._acct_status = QLabel("")
+        self._acct_box.addWidget(self._acct_status)
+        root.addLayout(self._acct_box)
 
         self.lbl_status = QLabel("未进入选人阶段")
         root.addWidget(self.lbl_status)
@@ -65,6 +88,7 @@ class OngoingPanel(QWidget):
         self._timer.start(1000)
 
     def refresh(self):
+        self._refresh_account()
         if self._svc is None:
             return
         try:
@@ -95,3 +119,34 @@ class OngoingPanel(QWidget):
         row += 1
         for i, s in enumerate(en):
             self._grid.addWidget(_card(s, is_enemy=True), row, i)
+
+    def _refresh_account(self):
+        import time
+        if self._acct is None:
+            return
+        now = time.time()
+        if now < self._acct_next:
+            return
+        self._acct_next = now + 60.0
+        try:
+            res = self._acct.recent_matches()
+        except Exception:
+            self._acct_status.setText("近期战绩暂时不可用")
+            return
+        # 清空旧行
+        while self._acct_box.count() > 1:
+            it = self._acct_box.takeAt(1)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+        if res.state == "AVAILABLE":
+            wins = sum(1 for m in res.records if m.win)
+            self._acct_status.setText(
+                f"近{len(res.records)}场: {wins}胜/{len(res.records)-wins}负"
+            )
+            for m in res.records[:10]:
+                self._acct_box.addWidget(_match_row(m))
+        elif res.state == "NO_DATA":
+            self._acct_status.setText("暂无近期战绩")
+        else:
+            self._acct_status.setText("近期战绩暂时不可用")
