@@ -291,7 +291,7 @@ class VoiceRuntime:
             title = params.get("title", "自定义提醒")
             self.event_bus.publish(Event(
                 event_type="alarm.create_custom",
-                data={"title": title, "duration": duration},
+                data={"title": title, "duration": duration, "content": params.get("content", "")},
                 source="voice"
             ))
 
