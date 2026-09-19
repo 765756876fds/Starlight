@@ -1,4 +1,4 @@
-﻿"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
+"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -52,7 +52,7 @@ def _show_detail(m, svc=None) -> None:
                 lay.addWidget(QLabel(title))
                 for p in [x for x in det.players if x.team_id == team]:
                     lay.addWidget(QLabel(
-                        f"  {_zh(p.champion_name)} {p.position or ''} "
+                        f"  {p.name or '?'}  {_zh(p.champion_name)} {p.position or ''} "
                         f"{p.kills}/{p.deaths}/{p.assists}  CS{p.cs}  金{p.gold}"
                     ))
         except Exception:
