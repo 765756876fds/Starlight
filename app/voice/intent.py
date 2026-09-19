@@ -621,6 +621,10 @@ class IntentRouter:
     - OpenAI 兼容 API（LM Studio / Ollama）
     """
 
+    # Fallback 安全门：仅当 Rule 未命中、由 LLM 补全出 C 类写操作意图时，拒绝执行。
+    # Rule 直接命中的同名意图不受影响。
+    LLM_FALLBACK_FORBIDDEN_PREFIXES = ("alarm.",)
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.rule_based = RuleBasedIntent()
@@ -677,14 +681,22 @@ class IntentRouter:
             return intent
 
         # 2. LLM 解析（优先 llama-cpp，其次 API）
+        #    注意：走到这里说明 Rule 未命中。LLM 补全出的 C 类写操作意图
+    #    （alarm.* 等）一律拒绝，不允许 LLM 猜测直接产生副作用。
         if self.llm_intent and self.llm_intent.is_available():
             intent = self.llm_intent.parse(text)
             if intent.confidence > 0.3:
+                if intent.intent_type.startswith(self.LLM_FALLBACK_FORBIDDEN_PREFIXES):
+                    print(f"[Intent] fallback 安全门拒绝 C 类意图: {intent.intent_type}")
+                    return Intent("system.unknown", confidence=0.0)
                 return intent
 
         if self.api_intent and self.api_intent.is_available():
             intent = self.api_intent.parse(text)
             if intent.confidence > 0.3:
+                if intent.intent_type.startswith(self.LLM_FALLBACK_FORBIDDEN_PREFIXES):
+                    print(f"[Intent] fallback 安全门拒绝 C 类意图: {intent.intent_type}")
+                    return Intent("system.unknown", confidence=0.0)
                 return intent
 
         return Intent("system.unknown", confidence=0.0)
