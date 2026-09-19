@@ -142,23 +142,36 @@ class GameAlarmEngine:
 
     def create_flash_alarm(self, champion_name: str,
                             game_time: Optional[float] = None,
-                            cooldown: float = 300.0) -> Alarm:
+                            cooldown: float = 300.0,
+                            source_snapshot: Optional[Dict[str, Any]] = None) -> Optional[Alarm]:
         """
         记录敌方闪现
 
         用户说："对面莎弥拉闪现了，帮我记一下"
+        cooldown：调用方按 catalog base + 当前 SSH 计算后传入（T0 冻结）。
+        同一 (champion, spell=flash) 已有 active 时返回已有 alarm，不重复建。
         """
         gt = game_time if game_time is not None else self._current_game_time
-        alarm = Alarm(
-            alarm_id=str(uuid.uuid4()),
-            alarm_type=AlarmType.FLASH,
-            title=f"{champion_name} 闪现",
-            game_time_start=gt,
-            duration=cooldown,
-            lead_time=self.config.get("flash_lead", 15.0),
-            data={"champion": champion_name, "spell": "flash", "source": "USER_MEMORY"},
-        )
+        spell = "flash"
         with self._lock:
+            for a in self.alarms.values():
+                if (a.status == AlarmStatus.ACTIVE
+                        and a.data.get("champion") == champion_name
+                        and a.data.get("spell") == spell):
+                    return a
+            alarm = Alarm(
+                alarm_id=str(uuid.uuid4()),
+                alarm_type=AlarmType.FLASH,
+                title=f"{champion_name} 闪现",
+                game_time_start=gt,
+                duration=cooldown,
+                lead_time=self.config.get("flash_lead", 15.0),
+                data={
+                    "champion": champion_name, "spell": spell, "source": "USER_MEMORY",
+                    "base_cooldown": cooldown,
+                    "source_snapshot": source_snapshot or {},
+                },
+            )
             self.alarms[alarm.alarm_id] = alarm
 
         self.event_bus.publish(Event(

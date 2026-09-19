@@ -283,11 +283,36 @@ class Application:
 
         def on_create_flash(event):
             champion = event.get("champion", "")
-            if champion and self.lol:
-                self.lol.game_alarm.create_flash_alarm(champion)
-                _say(f"记好了，{champion}闪现")
-            else:
+            if not (champion and self.lol):
                 _say("没确认到目标")
+                return
+            # T0：报告瞬间读当前 2999 快照，算 base + SSH，冻结 effective CD。
+            eff = 300.0
+            snap = None
+            ssh = 0.0
+            ssh_src = []
+            base = 300.0
+            try:
+                from app.lol.data.summoner_spell_catalog import SummonerSpellCatalog
+                from app.lol.cooldown.calculator import CooldownCalculator
+                from app.lol.cooldown.ssh_provider import summoner_spell_haste
+                snap = self.lol.current_snapshot()
+                enemy = snap.get_player_by_champion(champion) if snap else None
+                sp = SummonerSpellCatalog().get_by_name("Flash")
+                base = float(sp.cooldown) if sp else 300.0
+                if enemy is not None:
+                    ssh, ssh_src, _st = summoner_spell_haste(enemy.items, enemy.runes)
+                eff = CooldownCalculator.for_summoner(base, summoner_spell_haste=ssh) or base
+            except Exception:
+                eff = base
+            src = {
+                "champion": champion, "spell": "flash",
+                "game_time": snap.game_time if snap else None,
+                "base_cd": base, "ssh": ssh, "ssh_sources": ssh_src,
+                "effective_cd": eff,
+            }
+            self.lol.game_alarm.create_flash_alarm(champion, cooldown=eff, source_snapshot=src)
+            _say(f"记好了，{champion}闪现")
 
         def on_create_spell(event):
             champion = event.get("champion", "")
