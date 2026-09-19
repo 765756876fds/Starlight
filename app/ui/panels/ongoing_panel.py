@@ -1,7 +1,7 @@
 ﻿"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 import datetime, os, json
 
@@ -133,22 +133,34 @@ class OngoingPanel(QWidget):
         self._svc = ongoing_service
         self._acct = account_history_service
         self._acct_next = 0.0
-        root = QVBoxLayout(self)
+        root = QHBoxLayout(self)
 
+        # 左侧导航
+        self.nav = QListWidget()
+        self.nav.setFixedWidth(110)
+        self.nav.addItem("我的战绩")
+        self.nav.addItem("当前对局")
+        root.addWidget(self.nav)
+
+        self.stack = QStackedWidget()
+        root.addWidget(self.stack)
+
+        # ---- Page 0: 我的战绩 ----
+        page_acct = QWidget()
+        pl = QVBoxLayout(page_acct)
+        pl.setContentsMargins(8, 8, 8, 8)
         self.lbl_hint = QLabel("⚠️ 战绩信息来自公开数据，仅供参考")
         self.lbl_hint.setStyleSheet("color: #888; font-size: 11px;")
-        root.addWidget(self.lbl_hint)
+        pl.addWidget(self.lbl_hint)
 
-        # 我的近期战绩（SGP），与下方 10 人当前对局互不影响
         head = QHBoxLayout()
         head.addWidget(QLabel("<b>我的近期战绩</b>"))
         self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.clicked.connect(self._force_refresh_account)
         head.addWidget(self.btn_refresh)
         head.addStretch()
-        root.addLayout(head)
-        # 玩家战绩搜索（独立状态，不污染我的战绩）
-        root.addWidget(QLabel("<b>查询玩家战绩（Riot ID：名称#标签）</b>"))
+        pl.addLayout(head)
+        pl.addWidget(QLabel("<b>查询玩家战绩（Riot ID：名称#标签）</b>"))
         srow = QHBoxLayout()
         self.in_search = QLineEdit()
         self.in_search.setPlaceholderText("例如：果子#48230")
@@ -156,25 +168,38 @@ class OngoingPanel(QWidget):
         btn = QPushButton("搜索")
         btn.clicked.connect(self._do_search)
         srow.addWidget(self.in_search); srow.addWidget(btn)
-        root.addLayout(srow)
+        pl.addLayout(srow)
         self._search_status = QLabel("")
-        root.addWidget(self._search_status)
+        pl.addWidget(self._search_status)
         self._search_box = QVBoxLayout()
-        root.addLayout(self._search_box)
+        pl.addLayout(self._search_box)
         self._acct_box = QVBoxLayout()
         self._acct_status = QLabel("")
         self._acct_box.addWidget(self._acct_status)
-        root.addLayout(self._acct_box)
+        pl.addLayout(self._acct_box)
+        pl.addStretch()
 
+        acct_scroll = QScrollArea()
+        acct_scroll.setWidgetResizable(True)
+        acct_scroll.setWidget(page_acct)
+        self.stack.addWidget(acct_scroll)
+
+        # ---- Page 1: 当前对局 ----
+        page_cur = QWidget()
+        cl = QVBoxLayout(page_cur)
+        cl.setContentsMargins(8, 8, 8, 8)
         self.lbl_status = QLabel("未进入选人阶段")
-        root.addWidget(self.lbl_status)
-
+        cl.addWidget(self.lbl_status)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self._inner = QWidget()
         self._grid = QGridLayout(self._inner)
         self.scroll.setWidget(self._inner)
-        root.addWidget(self.scroll)
+        cl.addWidget(self.scroll)
+        self.stack.addWidget(page_cur)
+
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav.setCurrentRow(0)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
