@@ -23,7 +23,7 @@ def _zh(name: str) -> str:
     return _ZH.get(name, name)
 
 
-def _show_detail(m) -> None:
+def _show_detail(m, svc=None) -> None:
     dlg = QDialog()
     dlg.setWindowTitle("对局详情")
     lay = QVBoxLayout(dlg)
@@ -42,10 +42,25 @@ def _show_detail(m) -> None:
         f"位置: {m.team_position or '--'}",
     ]:
         lay.addWidget(QLabel(r))
+    # 10 人详情（SGP 单场 SUMMARY）
+    if svc is not None and m.game_id:
+        try:
+            pu = svc.self_puuid()
+            det = svc.get_detail(m.game_id, pu)
+            lay.addWidget(QLabel("<b>双方阵容</b>"))
+            for team, title in [(100, "蓝方"), (200, "红方")]:
+                lay.addWidget(QLabel(title))
+                for p in [x for x in det.players if x.team_id == team]:
+                    lay.addWidget(QLabel(
+                        f"  {_zh(p.champion_name)} {p.position or ''} "
+                        f"{p.kills}/{p.deaths}/{p.assists}  CS{p.cs}  金{p.gold}"
+                    ))
+        except Exception:
+            lay.addWidget(QLabel("<i>详细数据暂时不可用</i>"))
     dlg.exec()
 
 
-def _match_row(m) -> QPushButton:
+def _match_row(m, svc=None) -> QPushButton:
     dt = datetime.datetime.fromtimestamp(m.game_creation / 1000).strftime("%m-%d") if m.game_creation else "--"
     win = "胜" if m.win else "负"
     k = m.kills if m.kills is not None else "-"
@@ -54,7 +69,7 @@ def _match_row(m) -> QPushButton:
     btn = QPushButton(f"{win}  {dt}  {m.queue_type or ''}  {_zh(m.champion_name or '?')}  {k}/{d}/{a}")
     btn.setStyleSheet("text-align:left; border:none; padding:2px; color:#ddd;")
     btn.setFlat(True)
-    btn.clicked.connect(lambda: _show_detail(m))
+    btn.clicked.connect(lambda: _show_detail(m, svc))
     return btn
 
 
@@ -184,7 +199,7 @@ class OngoingPanel(QWidget):
                 f"近{len(res.records)}场: {wins}胜/{len(res.records)-wins}负"
             )
             for m in res.records[:10]:
-                self._acct_box.addWidget(_match_row(m))
+                self._acct_box.addWidget(_match_row(m, self._acct))
         elif res.state == "NO_DATA":
             self._acct_status.setText("暂无近期战绩")
         else:

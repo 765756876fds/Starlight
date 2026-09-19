@@ -98,6 +98,13 @@ class AccountMatchHistoryService:
             return MatchHistoryResult(state=NO_DATA)
         return self._finalize(MatchHistoryResult(state=AVAILABLE, records=out))
 
+    def self_puuid(self):
+        return self._current_puuid()
+
+    def get_detail(self, game_id: int, self_puuid: str, sub_id: str = "HN10"):
+        from .match_detail import MatchDetailService
+        return MatchDetailService(self._lcu_get).get(game_id, self_puuid, sub_id)
+
     @staticmethod
     def _finalize(r: MatchHistoryResult) -> MatchHistoryResult:
         r.records.sort(key=lambda m: m.game_creation, reverse=True)
