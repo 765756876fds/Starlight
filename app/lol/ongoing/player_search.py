@@ -51,27 +51,34 @@ class PlayerSearchService:
 
     def search(self, riot_id: str) -> PlayerSearchResult:
         gn, tag = parse_riot_id(riot_id)
-        if not gn:
-            return PlayerSearchResult(status=INVALID_RIOT_ID, message="请输入 名称#标签")
+        if not gn or not tag:
+            return PlayerSearchResult(status=INVALID_RIOT_ID, message="请输入 名称#标签，例如 名字#48230")
+
+        # LeagueAkari 已确认的真实 Riot ID -> puuid 接口：
+        # POST /lol-summoner/v1/summoners/aliases  body=[{gameName, tagLine}]
+        # lcu_post 在 2xx 返回 body(list)，否则返回 None。
         try:
-            rows = self._post("/lol-summoner/v1/summoners", [{"name": gn}])
+            rows = self._post(
+                "/lol-summoner/v1/summoners/aliases",
+                [{"gameName": gn, "tagLine": tag}],
+            )
         except Exception:
             return PlayerSearchResult(status=SEARCH_UNAVAILABLE, message="搜索服务不可用")
+
+        if rows is None:
+            # LCU HTTP / 认证 / 连接异常，不是“玩家不存在”
+            return PlayerSearchResult(status=SEARCH_UNAVAILABLE, message="搜索服务不可用")
+
         if not isinstance(rows, list):
-            rows = []
-        # 匹配 tagLine / gameName
-        target = None
-        for r in rows:
-            if not isinstance(r, dict):
-                continue
-            rn = r.get("gameName") or r.get("displayName") or ""
-            rt = str(r.get("tagLine") or "")
-            if rn == gn and (not tag or rt == tag or r.get("puuid", "").endswith("")):
-                target = r; break
-        if target is None and rows:
-            target = rows[0]
-        if not target or not target.get("puuid"):
+            return PlayerSearchResult(status=SEARCH_UNAVAILABLE, message="搜索服务返回异常")
+
+        if not rows:
             return PlayerSearchResult(status=NOT_FOUND, message="未找到玩家")
+
+        target = rows[0] if isinstance(rows[0], dict) else None
+        if not target or not target.get("puuid"):
+            return PlayerSearchResult(status=SEARCH_UNAVAILABLE, message="搜索结果异常，缺少 PUUID")
+
         puuid = target["puuid"]
         # SGP 战绩
         from .sgp_provider import SgpMatchHistoryProvider
@@ -82,10 +89,10 @@ class PlayerSearchService:
         prov = SgpMatchHistoryProvider(lambda: token, lambda: base)
         res = prov.recent(puuid, start_index=0, count=self._n)
         recs = sorted(res.records, key=lambda m: m.game_creation, reverse=True)
-        for m in recs:
-            m.queue_type = m.queue_type
         return PlayerSearchResult(
             status=FOUND if recs else NO_DATA,
-            puuid=puuid, game_name=target.get("gameName") or gn,
-            tag_line=tag, matches=recs,
+            puuid=puuid,
+            game_name=target.get("gameName") or gn,
+            tag_line=target.get("tagLine") or tag,
+            matches=recs,
         )
