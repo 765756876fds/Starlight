@@ -64,7 +64,24 @@ _EVT_ZH = {
     "DRAGON_SOUL_GIVEN": "获得龙魂", "OBJECTIVE_BOUNTY_PRESTART": "赏金目标",
     "TURRET_PLATE_DESTROYED": "摧毁镀层", "GAME_END": "游戏结束", "PAUSE_END": "继续",
 }
-_HIGH_VALUE = {"CHAMPION_KILL","CHAMPION_SPECIAL_KILL","BUILDING_KILL","ELITE_MONSTER_KILL",
+
+_MONSTER_ZH = {
+    "DRAGON": "巨龙", "ELDER_DRAGON": "远古巨龙", "ELDER_DRAGON": "远古巨龙",
+    "BARON_NASHOR": "纳什男爵", "BARON": "纳什男爵",
+    "RIFTHERALD": "峡谷先锋", "HORDE": "虚空虫群", "ATAKHAN": "亚塔坎",
+}
+_BUILD_ZH = {
+    "TOWER_BUILDING": "防御塔", "INHIBITOR_BUILDING": "水晶枢纽", "NEXUS_BUILDING": "召唤水晶",
+    "OUTER_TURRET": "外塔", "INNER_TURRET": "二塔", "BASE_TURRET": "高地塔", "NEXUS_TURRET": "基地塔",
+}
+
+def _monster_zh(m):
+    return _MONSTER_ZH.get(m, m or "大型野怪")
+
+def _build_zh(b):
+    return _BUILD_ZH.get(b, b or "建筑")
+
+_HIGH_VALUE = {_HIGH_VALUE = {"CHAMPION_KILL","CHAMPION_SPECIAL_KILL","BUILDING_KILL","ELITE_MONSTER_KILL",
                "DRAGON_SOUL_GIVEN","TURRET_PLATE_DESTROYED","ITEM_PURCHASED","ITEM_SOLD",
                "WARD_KILL","GAME_END"}
 from app.lol.ongoing.match_detail import MatchTimelineService, _fmt_ms
@@ -194,9 +211,9 @@ def _show_detail(m, svc=None) -> None:
                 elif e.event_type in ("ITEM_PURCHASED","ITEM_SOLD"):
                     txt = f"{nm(e.participant_id)} {zh} {_item_zh(e.item_id) or ('装备'+str(e.item_id))}"
                 elif e.event_type == "BUILDING_KILL":
-                    txt = f"{nm(e.killer_id)} 摧毁 {e.building_type or '建筑'}"
+                    txt = f"{nm(e.killer_id)} 摧毁 {_build_zh(e.building_type)}"
                 elif e.event_type == "ELITE_MONSTER_KILL":
-                    txt = f"{nm(e.killer_id)} 击杀 {e.monster_type or '大型野怪'}"
+                    txt = f"{nm(e.killer_id)} 击杀 {_monster_zh(e.monster_type)}"
                 elif e.event_type == "WARD_KILL":
                     txt = f"{nm(e.killer_id)} 摧毁眼位"
                 else:
