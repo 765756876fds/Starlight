@@ -38,7 +38,7 @@ sj = SpeechJudge({})
 alarm_dict = eng._alarm_to_dict(a)
 ev = Event(event_type=EventType.ALARM_TRIGGERED, data={"alarm": alarm_dict})
 text = sj._generate_speech_text(ev, "B")
-chk("到期文本=提醒你喝水", text == "提醒你喝水", )
+chk("到期文本=该喝水了", text == "该喝水了", )
 
 # 4. flash 无 content，回退 title
 af = eng.create_flash_alarm("莎弥拉")
@@ -61,3 +61,10 @@ if fails:
     print("FAILURES:", fails); raise SystemExit(1)
 print("ALL REMINDER SEMANTICS TESTS PASS")
 
+
+
+# 7. content 空 -> 回退 title
+b = eng.create_custom_alarm('十秒提醒', 10.0, lead_time=0.0, content='')
+evb = Event(event_type=EventType.ALARM_TRIGGERED, data={'alarm': eng._alarm_to_dict(b)})
+chk('空content回退title', sj._generate_speech_text(evb,'B') == '十秒提醒')
+print('extra ok')

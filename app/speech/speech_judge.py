@@ -402,10 +402,13 @@ class SpeechJudge:
         # 提醒触发（Objective Reminder 等）
         if event_type == EventType.ALARM_TRIGGERED:
             alarm = data.get("alarm", {})
-            # 用户主动提醒：到期播报用户要的内容，而不是内部占位 title
             adata = alarm.get("data", {}) or {}
-            if adata.get("source") == "USER_MEMORY" and adata.get("content"):
-                return f"提醒你{adata['content']}"
+            # CUSTOM 用户提醒：到期直接执行动作语义"该X了"；content 为空则回退 title
+            # 只对 custom 生效；flash/spell/ward 仍用各自 title。
+            if alarm.get("type") == "custom" \
+                    and adata.get("source") == "USER_MEMORY" \
+                    and adata.get("content"):
+                return f"该{adata['content']}了"
             return alarm.get("title", "提醒")
 
         # 召唤师技能使用（敌方）
