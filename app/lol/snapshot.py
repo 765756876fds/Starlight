@@ -250,10 +250,12 @@ class SnapshotBuilder:
         player.runes = p_data.get("runes", []) or []
 
         # 召唤师技能
-        spells = p_data.get("summonerSpells", {})
+        spells = p_data.get("summonerSpells") or {}
+        if not isinstance(spells, dict):
+            spells = {}
         player.summoner_spells = [
-            spells.get("summonerSpellOne", {}),
-            spells.get("summonerSpellTwo", {}),
+            spells.get("summonerSpellOne") or {},
+            spells.get("summonerSpellTwo") or {},
         ]
 
         # 生命值
