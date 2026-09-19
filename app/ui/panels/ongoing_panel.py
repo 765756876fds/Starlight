@@ -114,6 +114,48 @@ def _zh(name: str) -> str:
     return _ZH.get(name, name)
 
 
+class _LineChart(QWidget):
+    """最小折线图：points = [(ts_ms, value)]，None 断开。"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pts = []
+        self.setMinimumHeight(220)
+    def set_points(self, pts):
+        self._pts = pts or []
+        self.update()
+    def paintEvent(self, ev):
+        from PySide6.QtGui import QPainter, QColor, QPen
+        from PySide6.QtCore import Qt
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(24,24,28))
+        if not self._pts:
+            p.setPen(QColor("#888")); p.drawText(self.rect(), Qt.AlignCenter, "暂无数据"); p.end(); return
+        ts = [x[0] for x in self._pts if x[1] is not None]
+        vs = [x[1] for x in self._pts if x[1] is not None]
+        if not ts:
+            p.end(); return
+        t0, t1 = min(ts), max(ts)
+        v0, v1 = min(vs), max(vs)
+        if t1 == t0: t1 = t0 + 1
+        if v1 == v0: v1 = v0 + 1
+        w, h = self.width(), self.height()
+        pad = 30
+        pen = QPen(QColor("#4fc3f7"), 2)
+        p.setPen(pen)
+        prev = None
+        for t, v in self._pts:
+            if v is None:
+                prev = None; continue
+            x = pad + (t - t0) / (t1 - t0) * (w - 2*pad)
+            y = (h - pad) - (v - v0) / (v1 - v0) * (h - 2*pad)
+            pt = (int(x), int(y))
+            if prev: p.drawLine(prev[0], prev[1], pt[0], pt[1])
+            prev = pt
+        p.setPen(QColor("#aaa"))
+        p.drawText(4, 12, f"{v0:.0f} ~ {v1:.0f}")
+        p.end()
+
+
 def _show_detail(m, svc=None) -> None:
     from PySide6.QtWidgets import QTabWidget
     dlg = QDialog()
@@ -172,7 +214,9 @@ def _show_detail(m, svc=None) -> None:
     squad_scroll = QScrollArea(); squad_scroll.setWidgetResizable(True); squad_scroll.setWidget(squad)
     tabs.addTab(squad_scroll, "阵容")
 
-    # ---- Tab 2: 事件时间线（切到该 tab 才加载，避免打开即卡）----
+    tl_svc = MatchTimelineService(svc._lcu_get) if (svc is not None and m.game_id) else None
+
+    # ---- Tab 2: 事件时间线 ----
     tl = QWidget()
     tl_lay = QVBoxLayout(tl)
     tl_lay.addWidget(QLabel("<i>点击此页加载事件时间线…</i>"))
@@ -184,17 +228,15 @@ def _show_detail(m, svc=None) -> None:
         if getattr(load_timeline, "done", False):
             return
         load_timeline.done = True
-        # 清空提示
         while tl_lay.count():
-            it = tl_lay.takeAt(0)
-            w = it.widget()
+            it = tl_lay.takeAt(0); w = it.widget()
             if w: w.deleteLater()
-        if not (svc is not None and m.game_id):
+        if tl_svc is None:
             tl_lay.addWidget(QLabel("<i>暂无可加载数据</i>")); tl_lay.addStretch(1); return
         try:
             from app.lol.ongoing.sgp_server import SgpServerResolver
             _, _, sub = SgpServerResolver(svc._lcu_get).resolve()
-            events, pid_puuid = MatchTimelineService(svc._lcu_get).get_events(m.game_id, sub)
+            events, pid_puuid = tl_svc.get_events(m.game_id, sub)
             pu_name = {pl.puuid: (pl.name or "?") for pl in (det.players if det else [])}
             def nm(pid):
                 if not pid: return "?"
@@ -224,7 +266,88 @@ def _show_detail(m, svc=None) -> None:
             tl_lay.addWidget(QLabel("<i>事件时间线暂不可用</i>"))
             tl_lay.addStretch(1)
 
-    tabs.currentChanged.connect(lambda idx: load_timeline() if idx == 1 else None)
+    # ---- Tab 3: 数据曲线 ----
+    from PySide6.QtWidgets import QComboBox, QPushButton
+    dat = QWidget()
+    dat_lay = QVBoxLayout(dat)
+    head = QHBoxLayout()
+    player_cb = QComboBox()
+    metric_cb = QComboBox()
+    metric_cb.addItems(["总金币", "当前金币", "补刀", "等级", "经验"])
+    head.addWidget(QLabel("玩家:")); head.addWidget(player_cb, 1)
+    head.addWidget(QLabel("指标:")); head.addWidget(metric_cb)
+    dat_lay.addLayout(head)
+    summary_lbl = QLabel("")
+    dat_lay.addWidget(summary_lbl)
+    chart = _LineChart()
+    dat_lay.addWidget(chart, 1)
+    dat_lay.addWidget(QLabel("<i>点击此页加载数据曲线…</i>"))
+    dat_lay.addStretch(1)
+    dat_scroll = QScrollArea(); dat_scroll.setWidgetResizable(True); dat_scroll.setWidget(dat)
+    tabs.addTab(dat_scroll, "数据")
+
+    series_holder = {}
+    def load_data():
+        if getattr(load_data, "done", False):
+            return
+        load_data.done = True
+        while dat_lay.count():
+            it = dat_lay.takeAt(0); w = it.widget()
+            if w: w.deleteLater()
+        dat_lay.addLayout(head)
+        if tl_svc is None:
+            dat_lay.addWidget(QLabel("<i>数据暂不可用</i>")); dat_lay.addStretch(1); return
+        try:
+            from app.lol.ongoing.sgp_server import SgpServerResolver
+            _, _, sub = SgpServerResolver(svc._lcu_get).resolve()
+            pmap, series = tl_svc.get_stats(m.game_id, sub)  # 与事件共用同一 DETAILS
+            pu_name = {pl.puuid: (pl.name or "?") for pl in (det.players if det else [])}
+            pu_champ = {pl.puuid: _zh(pl.champion_name) for pl in (det.players if det else [])}
+            # pid -> 显示名
+            options = []
+            self_pu = svc.self_puuid()
+            default_idx = 0
+            for pid in sorted(series.keys()):
+                pu = pmap.get(pid, "")
+                name = pu_name.get(pu, f"P{pid}")
+                options.append((pid, name, pu))
+            for i,(pid,name,pu) in enumerate(options):
+                player_cb.addItem(name)
+                if pu == self_pu:
+                    default_idx = i
+            player_cb.setCurrentIndex(default_idx)
+            dat_lay.addWidget(summary_lbl)
+            dat_lay.addWidget(chart, 1)
+
+            def redraw():
+                idx = player_cb.currentIndex()
+                if idx < 0: return
+                pid, name, pu = options[idx]
+                fr = series.get(pid, [])
+                metric = metric_cb.currentText()
+                key = {"总金币":"total_gold","当前金币":"current_gold","补刀":None,"等级":"level","经验":"xp"}[metric]
+                pts = []
+                for f in fr:
+                    if metric == "补刀":
+                        v = (f.get("minions") or 0) + (f.get("jungle") or 0) if (f.get("minions") is not None or f.get("jungle") is not None) else None
+                    else:
+                        v = f.get(key)
+                    pts.append((f["ts"], v))
+                chart.set_points(pts)
+                last = fr[-1] if fr else {}
+                cs = ((last.get("minions") or 0)+(last.get("jungle") or 0)) if fr else "--"
+                summary_lbl.setText(
+                    f"玩家: {name}  英雄: {pu_champ.get(pu,'?')}  最终等级: {last.get('level','--')}  "
+                    f"最终补刀: {cs}  最终总金币: {last.get('total_gold','--')}")
+            player_cb.currentIndexChanged.connect(lambda _: redraw())
+            metric_cb.currentIndexChanged.connect(lambda _: redraw())
+            redraw()
+        except Exception:
+            dat_lay.addWidget(QLabel("<i>数据暂不可用</i>"))
+            dat_lay.addStretch(1)
+
+    tabs.currentChanged.connect(lambda idx: (load_timeline() if idx == 1 else None,
+                                              load_data() if idx == 2 else None))
     dlg.exec()
 
 

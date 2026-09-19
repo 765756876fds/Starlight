@@ -184,12 +184,15 @@ def parse_details_events(details_json: dict, participant_map: dict = None) -> li
 class MatchTimelineService:
     def __init__(self, lcu_get):
         self._lcu = lcu_get
+        self._cache = None
 
     def _token(self):
         r = self._lcu("/entitlements/v1/token")
         return r.get("accessToken") if isinstance(r, dict) else None
 
-    def get_events(self, game_id: int, sub_id: str = None) -> list:
+    def _fetch(self, game_id, sub_id=None):
+        if self._cache is not None:
+            return self._cache
         token = self._token()
         from .sgp_server import SgpServerResolver
         state, base, sid = SgpServerResolver(self._lcu).resolve()
@@ -210,4 +213,28 @@ class MatchTimelineService:
             pid = pp.get("participantId")
             if pid:
                 pmap[pid] = pp.get("puuid")
-        return parse_details_events(j, pmap), pmap
+        events = parse_details_events(j, pmap)
+        series = {}
+        for fr in j.get("frames", []) or []:
+            ts = fr.get("timestamp", 0)
+            for sid2, cf in (fr.get("participantFrames") or {}).items():
+                pid = int(sid2)
+                series.setdefault(pid, []).append({
+                    "ts": ts,
+                    "current_gold": cf.get("currentGold"),
+                    "total_gold": cf.get("totalGold"),
+                    "level": cf.get("level"),
+                    "xp": cf.get("xp"),
+                    "minions": cf.get("minionsKilled"),
+                    "jungle": cf.get("jungleMinionsKilled"),
+                })
+        self._cache = {"pmap": pmap, "events": events, "series": series}
+        return self._cache
+
+    def get_events(self, game_id, sub_id=None):
+        d = self._fetch(game_id, sub_id)
+        return d["events"], d["pmap"]
+
+    def get_stats(self, game_id, sub_id=None):
+        d = self._fetch(game_id, sub_id)
+        return d["pmap"], d["series"]
