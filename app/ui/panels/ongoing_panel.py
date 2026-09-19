@@ -81,7 +81,7 @@ def _monster_zh(m):
 def _build_zh(b):
     return _BUILD_ZH.get(b, b or "建筑")
 
-_HIGH_VALUE = {_HIGH_VALUE = {"CHAMPION_KILL","CHAMPION_SPECIAL_KILL","BUILDING_KILL","ELITE_MONSTER_KILL",
+_HIGH_VALUE = {"CHAMPION_KILL","CHAMPION_SPECIAL_KILL","BUILDING_KILL","ELITE_MONSTER_KILL",
                "DRAGON_SOUL_GIVEN","TURRET_PLATE_DESTROYED","ITEM_PURCHASED","ITEM_SOLD",
                "WARD_KILL","GAME_END"}
 from app.lol.ongoing.match_detail import MatchTimelineService, _fmt_ms
