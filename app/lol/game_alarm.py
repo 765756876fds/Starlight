@@ -156,7 +156,7 @@ class GameAlarmEngine:
             game_time_start=gt,
             duration=cooldown,
             lead_time=self.config.get("flash_lead", 15.0),
-            data={"champion": champion_name, "spell": "flash"},
+            data={"champion": champion_name, "spell": "flash", "source": "USER_MEMORY"},
         )
         with self._lock:
             self.alarms[alarm.alarm_id] = alarm
@@ -184,7 +184,7 @@ class GameAlarmEngine:
             game_time_start=gt,
             duration=cooldown,
             lead_time=10.0,
-            data={"champion": champion_name, "spell": spell_name},
+            data={"champion": champion_name, "spell": spell_name, "source": "USER_MEMORY"},
         )
         with self._lock:
             self.alarms[alarm.alarm_id] = alarm
@@ -212,7 +212,7 @@ class GameAlarmEngine:
             game_time_start=gt,
             duration=duration,
             lead_time=5.0,
-            data={"location": location},
+            data={"location": location, "source": "USER_MEMORY"},
         )
         with self._lock:
             self.alarms[alarm.alarm_id] = alarm
@@ -240,7 +240,7 @@ class GameAlarmEngine:
             game_time_start=gt,
             duration=duration,
             lead_time=lead_time,
-            data={},
+            data={"source": "USER_MEMORY"},
         )
         with self._lock:
             self.alarms[alarm.alarm_id] = alarm
@@ -287,7 +287,7 @@ class GameAlarmEngine:
                 game_time_start=self._current_game_time,
                 duration=game_time_end - self._current_game_time,
                 lead_time=lead_time,
-                data=data or {},
+                data={**(data or {}), "source": "SYSTEM"},
             )
             self.alarms[alarm.alarm_id] = alarm
 
@@ -303,6 +303,31 @@ class GameAlarmEngine:
         with self._lock:
             return [a for a in self.alarms.values()
                     if a.status == AlarmStatus.ACTIVE]
+
+    def get_user_memories(self) -> List[Alarm]:
+        """获取用户主动创建的临时记忆（USER_MEMORY，排除系统提醒）"""
+        with self._lock:
+            return [a for a in self.alarms.values()
+                    if a.status == AlarmStatus.ACTIVE
+                    and (a.data or {}).get("source", "USER_MEMORY") == "USER_MEMORY"]
+
+    def cancel_last_user_memory(self):
+        """取消最近一个用户临时记忆，返回被取消的 Alarm 或 None"""
+        with self._lock:
+            users = [a for a in self.alarms.values()
+                     if a.status == AlarmStatus.ACTIVE
+                     and (a.data or {}).get("source", "USER_MEMORY") == "USER_MEMORY"]
+            if not users:
+                return None
+            a = sorted(users, key=lambda x: x.created_at, reverse=True)[0]
+            a.status = AlarmStatus.CANCELLED
+            self.alarms[a.alarm_id] = a
+        self.event_bus.publish(Event(
+            event_type=EventType.ALARM_CANCELLED,
+            data={"alarm_id": a.alarm_id},
+            source="game_alarm"
+        ))
+        return a
 
     def get_alarm_by_id(self, alarm_id: str) -> Optional[Alarm]:
         """按 ID 获取提醒"""
@@ -367,7 +392,7 @@ class GameAlarmEngine:
             game_time_start=self._current_game_time,
             duration=duration,
             lead_time=lead_time,
-            data={"objective_type": objective_type},
+            data={"objective_type": objective_type, "source": "SYSTEM"},
         )
         with self._lock:
             self.alarms[alarm.alarm_id] = alarm

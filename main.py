@@ -316,7 +316,7 @@ class Application:
         def on_alarm_list(event):
             if not self.lol:
                 _say("当前没有记录"); return
-            active = self.lol.game_alarm.get_active_alarms()
+            active = self.lol.game_alarm.get_user_memories()
             if not active:
                 _say("当前没有记录"); return
             names = "、".join(a.title for a in active[:5])
@@ -325,7 +325,7 @@ class Application:
         def on_alarm_remaining(event):
             if not self.lol:
                 _say("当前没有记录"); return
-            active = self.lol.game_alarm.get_active_alarms()
+            active = self.lol.game_alarm.get_user_memories()
             if not active:
                 _say("当前没有记录"); return
             a = sorted(active, key=lambda x: x.game_time_end)[0]
@@ -337,11 +337,9 @@ class Application:
         def on_alarm_cancel_last(event):
             if not self.lol:
                 _say("当前没有记录"); return
-            active = self.lol.game_alarm.get_active_alarms()
-            if not active:
+            a = self.lol.game_alarm.cancel_last_user_memory()
+            if a is None:
                 _say("当前没有记录"); return
-            a = sorted(active, key=lambda x: x.created_at, reverse=True)[0]
-            self.lol.game_alarm.cancel_alarm(a.alarm_id)
             _say(f"已取消：{a.title}")
 
         self.event_bus.subscribe("alarm.create_flash", on_create_flash)
