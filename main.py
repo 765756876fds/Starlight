@@ -292,12 +292,17 @@ class Application:
             ssh = 0.0
             ssh_src = []
             base = 300.0
+            raw_champ = champion
+            from app.lol.champion.normalizer import normalize_champion_name
+            canonical = normalize_champion_name(champion) or champion
+            enemy = None
             try:
                 from app.lol.data.summoner_spell_catalog import SummonerSpellCatalog
                 from app.lol.cooldown.calculator import CooldownCalculator
                 from app.lol.cooldown.ssh_provider import summoner_spell_haste
                 snap = self.lol.current_snapshot()
-                enemy = snap.get_player_by_champion(champion) if snap else None
+                if canonical and snap:
+                    enemy = snap.get_player_by_champion(canonical)
                 sp = SummonerSpellCatalog().get_by_name("Flash")
                 base = float(sp.cooldown) if sp else 300.0
                 if enemy is not None:
@@ -305,14 +310,18 @@ class Application:
                 eff = CooldownCalculator.for_summoner(base, summoner_spell_haste=ssh) or base
             except Exception:
                 eff = base
+            print(f"[P0CD] raw={raw_champ} normalized={canonical} enemy_found={enemy is not None} "
+                  f"base={base} ssh={ssh} src={ssh_src} eff={eff} "
+                  f"gt={snap.game_time if snap else None}")
+            disp = canonical or champion
             src = {
-                "champion": champion, "spell": "flash",
+                "champion": disp, "raw": raw_champ, "spell": "flash",
                 "game_time": snap.game_time if snap else None,
                 "base_cd": base, "ssh": ssh, "ssh_sources": ssh_src,
                 "effective_cd": eff,
             }
-            self.lol.game_alarm.create_flash_alarm(champion, cooldown=eff, source_snapshot=src)
-            _say(f"记好了，{champion}闪现")
+            self.lol.game_alarm.create_flash_alarm(disp, cooldown=eff, source_snapshot=src)
+            _say(f"记好了，{disp}闪现")
 
         def on_create_spell(event):
             champion = event.get("champion", "")
