@@ -5,7 +5,7 @@ from ..core.command_bus import Command
 from ..speech.speech_queue import SpeechItem, PRIORITY_B
 from .query_service import PlayerQueryService
 from .response_formatter import format_query_result
-from .current_game_analysis import richest as _richest, self_kda as _self_kda
+from .current_game_analysis import richest as _richest, self_kda as _self_kda, economy as _economy
 
 
 def _resolve_self_puuid(state_store) -> str:
@@ -76,15 +76,26 @@ def make_player_query_handler(service: PlayerQueryService,
 
         qt = params.get("query_type", "recent")
         # --- 当前对局实时分析（纯确定性，读 live snapshot）---
-        if qt in ("current_richest", "current_self_kda"):
+        if qt in ("current_richest", "current_self_kda", "economy_diff"):
             snap = snapshot_provider() if snapshot_provider else None
             text = "现在读不到对局数据。"
             if snap is not None:
+                if qt == "economy_diff":
+                    e = _economy(snap)
+                    if e["our_n"] == 0:
+                        text = "现在读不到对局经济数据。"
+                    else:
+                        if e["state"] == "ahead":
+                            text = f"我们经济领先约 {e['abs_diff']} 块。"
+                        elif e["state"] == "behind":
+                            text = f"我们经济落后约 {e['abs_diff']} 块。"
+                        else:
+                            text = "双方经济接近。"
                 if qt == "current_self_kda":
                     k = _self_kda(snap)
                     text = (f"你现在是 {k['champion']}，{k['kills']} 杀 {k['deaths']} 死 "
                             f"{k['assists']} 助攻，{k['cs']} 刀。") if k else text
-                else:
+                elif qt == "current_richest":
                     side = params.get("side", "enemy")
                     r = _richest(snap, side)
                     if r:

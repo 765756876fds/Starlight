@@ -314,6 +314,9 @@ class RuleBasedIntent:
                           params={"query_type": "champion_stats"})
 
         # ===== 当前对局实时查询（确定性，读 live snapshot）=====
+        if text in ("双方经济差多少", "经济差多少", "我们领先多少经济", "我们经济领先吗", "现在经济怎么样"):
+            return Intent("player.query", confidence=0.95,
+                          params={"query_type": "economy_diff"})
         if text in ("对面谁最肥", "对面谁最有钱", "对面谁发育最好", "对面最肥的是谁"):
             return Intent("player.query", confidence=0.95,
                           params={"query_type": "current_richest", "side": "enemy"})

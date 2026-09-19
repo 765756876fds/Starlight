@@ -69,8 +69,50 @@ def self_kda(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
     }
 
 
+def team_kda(snapshot: GameSnapshot, side: str = "self") -> Dict[str, int]:
+    players = _players_in_side(snapshot, side)
+    return {
+        "kills": sum(int(p.kills) for p in players),
+        "deaths": sum(int(p.deaths) for p in players),
+        "assists": sum(int(p.assists) for p in players),
+        "n": len(players),
+    }
+
+
+# 经济差“接近”阈值（金）：|diff| < 该值视为接近。简单固定阈值，代码内写明。
+ECONOMY_EVEN_THRESHOLD = 2000
+
+
+def economy(snapshot: GameSnapshot) -> Dict[str, Any]:
+    """双方总经济 + 差值 + 领先/落后/接近。纯确定性，不用 LLM/胜率。
+
+    “接近/领先/落后”只基于固定阈值 ECONOMY_EVEN_THRESHOLD。
+    team=UNKNOWN 的玩家不计入任何一方（也不在这里统计，由调用方决定）。
+    """
+    ours = _players_in_side(snapshot, "self")
+    enemies = _players_in_side(snapshot, "enemy")
+    our_total = sum(int(p.gold) for p in ours)
+    enemy_total = sum(int(p.gold) for p in enemies)
+    diff = our_total - enemy_total
+    if abs(diff) < ECONOMY_EVEN_THRESHOLD:
+        state = "even"
+    elif diff > 0:
+        state = "ahead"
+    else:
+        state = "behind"
+    return {
+        "our_total": our_total,
+        "enemy_total": enemy_total,
+        "diff": diff,
+        "abs_diff": abs(diff),
+        "state": state,
+        "our_n": len(ours),
+        "enemy_n": len(enemies),
+    }
+
+
 def team_rankings(snapshot: GameSnapshot, side: str = "self") -> List[Dict[str, Any]]:
-    """该方按发育排序的完整列表。"""
+    """该方按发育排序的完整列表（gold↓→level↓→cs↓）。"""
     players = _players_in_side(snapshot, side)
     ordered = sorted(players, key=_score, reverse=True)
     return [
