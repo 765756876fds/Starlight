@@ -44,7 +44,7 @@ class TrayIcon:
         self._window.activateWindow()
 
     def _on_activated(self, reason):
-        if reason == QSystemTrayIcon.DoubleClick:
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self._show_window()
 
     def _quit(self):

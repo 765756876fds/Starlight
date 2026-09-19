@@ -306,6 +306,7 @@ class Application:
                 "events.log_dir", "./data/events"
             )
             history = HistoryRepository(db_path)
+            self.history_repo = history
             profile = PlayerProfileService(history)
             analysis = GameAnalysisService(history, EventLogReader(events_dir))
             svc = PlayerQueryService(history, profile, analysis)
@@ -559,6 +560,8 @@ class Application:
             cooldown_manager=getattr(self, "cooldown_manager", None),
             music=getattr(self, "music", None),
             ongoing_service=getattr(self, "ongoing_service", None),
+            snapshot_provider=lambda: (self.lol.current_snapshot if getattr(self, "lol", None) else None),
+            history_repo=getattr(self, "history_repo", None),
         )
         print("[Run] MainTabs built, switching")
         window.switch_to_tabs(tabs)
