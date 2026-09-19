@@ -300,7 +300,7 @@ class Application:
                 from app.lol.data.summoner_spell_catalog import SummonerSpellCatalog
                 from app.lol.cooldown.calculator import CooldownCalculator
                 from app.lol.cooldown.ssh_provider import summoner_spell_haste
-                snap = self.lol.current_snapshot()
+                snap = self.lol.current_snapshot
                 if canonical and snap:
                     enemy = snap.get_player_by_champion(canonical)
                 sp = SummonerSpellCatalog().get_by_name("Flash")
