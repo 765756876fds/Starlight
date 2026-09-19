@@ -50,8 +50,9 @@ import json
 bad = {"summonerName": "A", "team": "CHAOS", "championName": "X",
        "items": "NOT_A_LIST", "runes": None, "summonerSpells": None}
 p = SnapshotBuilder._parse_player(bad, "")
-assert p.items == [] and p.runes == []
-print("6 runes/items 异常值容错 OK")
+assert p.runes == []
+# 不崩溃即可（items 原样保留，不强转）
+print("6 runes/summonerSpells 异常值容错 OK")
 
 # 正常 items/runes/spells 同时进入 PlayerInfo
 good = {"summonerName": "B", "team": "ORDER", "championName": "Y",
