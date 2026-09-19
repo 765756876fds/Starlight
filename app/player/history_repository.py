@@ -18,17 +18,20 @@ class HistoryRepository:
 
     # 1. get_match
     def get_match(self, local_match_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            conn = self._connect()
-            row = conn.execute(
-                "SELECT * FROM match_records WHERE local_match_id=?",
-                (local_match_id,)
-            ).fetchone()
-            players = conn.execute(
-                "SELECT * FROM match_players WHERE local_match_id=? ORDER BY id",
-                (local_match_id,)
-            ).fetchall()
-            conn.close()
+        try:
+            with self._lock:
+                conn = self._connect()
+                row = conn.execute(
+                    "SELECT * FROM match_records WHERE local_match_id=?",
+                    (local_match_id,)
+                ).fetchone()
+                players = conn.execute(
+                    "SELECT * FROM match_players WHERE local_match_id=? ORDER BY id",
+                    (local_match_id,)
+                ).fetchall()
+                conn.close()
+        except sqlite3.OperationalError:
+            return None
         if row:
             return {
                 "match": dict(row),
@@ -38,13 +41,16 @@ class HistoryRepository:
 
     # 2. get_match_players
     def get_match_players(self, local_match_id: str) -> List[Dict[str, Any]]:
-        with self._lock:
-            conn = self._connect()
-            rows = conn.execute(
-                "SELECT * FROM match_players WHERE local_match_id=? ORDER BY id",
-                (local_match_id,)
-            ).fetchall()
-            conn.close()
+        try:
+            with self._lock:
+                conn = self._connect()
+                rows = conn.execute(
+                    "SELECT * FROM match_players WHERE local_match_id=? ORDER BY id",
+                    (local_match_id,)
+                ).fetchall()
+                conn.close()
+        except sqlite3.OperationalError:
+            return []
         return [dict(r) for r in rows]
 
     # 3. get_recent_matches
@@ -54,10 +60,13 @@ class HistoryRepository:
         if not include_incomplete:
             sql += " WHERE end_time IS NOT NULL"
         sql += " ORDER BY start_time DESC LIMIT ?"
-        with self._lock:
-            conn = self._connect()
-            rows = conn.execute(sql, (limit,)).fetchall()
-            conn.close()
+        try:
+            with self._lock:
+                conn = self._connect()
+                rows = conn.execute(sql, (limit,)).fetchall()
+                conn.close()
+        except sqlite3.OperationalError:
+            return []
         return [dict(r) for r in rows]
 
     # 4. get_player_matches
@@ -86,10 +95,13 @@ class HistoryRepository:
             LIMIT ?
         """
         params.append(limit)
-        with self._lock:
-            conn = self._connect()
-            rows = conn.execute(sql, params).fetchall()
-            conn.close()
+        try:
+            with self._lock:
+                conn = self._connect()
+                rows = conn.execute(sql, params).fetchall()
+                conn.close()
+        except sqlite3.OperationalError:
+            return []
         return [dict(r) for r in rows]
 
     # 5. get_champion_stats

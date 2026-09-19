@@ -220,7 +220,10 @@ class LoLRuntime:
                 ))
 
         except Exception as e:
-            print(f"[LoL] 数据轮询异常: {e}")
+            import traceback
+            tb = traceback.format_exc().strip().splitlines()
+            src = tb[-1] if tb else str(e)
+            print(f"[LoL] 数据轮询异常: {type(e).__name__}: {e}  @ {src}")
 
     def _handle_game_end_detection(self):
         """

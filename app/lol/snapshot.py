@@ -192,9 +192,15 @@ class SnapshotBuilder:
                     snapshot.enemy_team.append(player)
                     snapshot.enemy_champions.append(player.champion_name)
 
-            # 事件
-            events = all_data.get("events", {}).get("Events", [])
-            snapshot.recent_events = events[-50:] if events else []
+            # 事件（数据边界：events 可能不是 dict，容错）
+            events_raw = all_data.get("events", {})
+            if isinstance(events_raw, dict):
+                events = events_raw.get("Events", [])
+            elif isinstance(events_raw, list):
+                events = events_raw
+            else:
+                events = []
+            snapshot.recent_events = events[-50:] if isinstance(events, list) and events else []
 
         # 用单独的 API 数据覆盖/补充
         if game_stats:
