@@ -63,5 +63,35 @@ a3["on_time_update"]()
 assert len(q2.items) == 1, q2.items
 print("T6 one enqueue on cross only OK")
 
+# --- A5 数据边界收口：金币不可得时安全静音 ---
+def snap_nogold():
+    s = GameSnapshot()
+    s.current_player = PlayerInfo(champion_name="A", team="ORDER")  # gold 默认0（模拟 playerlist gold 空）
+    s.players = [s.current_player, PlayerInfo(champion_name="C", team="CHAOS")]
+    return s
+
+class Q3:
+    def __init__(self): self.items=[]
+    def enqueue(self, it): self.items.append(it)
+q3=Q3()
+a4 = make_economy_advisor(snap_nogold, q3, enabled=True)
+for _ in range(3):
+    a4["on_time_update"]()
+assert len(q3.items)==0, q3.items
+print("T1/T2 gold missing -> silent, no enqueue OK")
+
+a4["on_game_reset"]()
+a4["on_time_update"]()
+assert len(q3.items)==0
+print("T3 cross-game reset still silent OK")
+
+from app.player.query_handler import make_player_query_handler
+class C:
+    def __init__(self, q): self.params=q
+h = make_player_query_handler(None, speech_queue=Q3(), state_store=None, snapshot_provider=snap_nogold)
+res = h(C({"query_type":"economy_diff"}))
+assert ("读不到" in res["result"]) and ("接近" not in res["result"]), res
+print("T4 A4 honest unknown wording OK")
+
 print("ALL A5 OK")
 import os; os._exit(0)

@@ -23,6 +23,12 @@ def make_economy_advisor(snapshot_provider, speech_queue, enabled: bool = True):
             e = economy(snap)
             if e["our_n"] == 0:
                 return
+            # 数据边界收口：2999 playerlist 不提供双方当前金币（gold 为空）。
+            # 双方金币都为 0 = 数据不可得，此时绝不把缺失当 0 去判断经济状态。
+            # 安全静默：不更新 EconomyState、不产生 proactive 播报。
+            if e["our_total"] == 0 and e["enemy_total"] == 0:
+                detector.reset()
+                return
             text = detector.update(int(e["diff"]))
             if text and speech_queue is not None:
                 speech_queue.enqueue(SpeechItem(
