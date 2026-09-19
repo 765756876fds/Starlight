@@ -175,7 +175,9 @@ class VoiceRuntime:
             return
 
         # ASR 识别
+        _t0 = time.monotonic()
         text = self.asr.transcribe(audio_data, sample_rate)
+        _t_asr = time.monotonic()
         if not text or not text.strip():
             return
 
@@ -190,6 +192,7 @@ class VoiceRuntime:
 
         # 意图解析
         intent = self.intent_router.parse(text)
+        _t_intent = time.monotonic()
         print(f"[Voice] 意图: {intent}")
 
         # 发布意图事件
@@ -201,6 +204,10 @@ class VoiceRuntime:
 
         # 执行命令
         self._execute_intent(intent, text)
+        _t_cmd = time.monotonic()
+        print("[PERF] asr=%.0fms intent=%.0fms command=%.0fms total=%.0fms i=%s" % (
+            (_t_asr-_t0)*1000, (_t_intent-_t_asr)*1000,
+            (_t_cmd-_t_intent)*1000, (_t_cmd-_t0)*1000, intent.intent_type))
 
     def _execute_intent(self, intent: Intent, original_text: str):
         """执行意图对应的命令"""

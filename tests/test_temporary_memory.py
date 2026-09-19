@@ -16,9 +16,12 @@ for text, expect in [
     assert it.intent_type == expect, f"{text} -> {it.intent_type}, expect {expect}"
 print("1 intent rules OK")
 
-# 闪现/自定义计时规则仍正常
-it = RuleBasedIntent.match("对面莎弥拉闪现了")
+# 闪现规则：必须有明确"记"动作才创建 USER_MEMORY（裸陈述不再自动创建）
+it = RuleBasedIntent.match("对面莎弥拉闪现了，帮我记一下")
 assert it.intent_type == "alarm.flash" and it.params.get("champion"), it
+# 裸陈述不再误创建
+it_bare = RuleBasedIntent.match("对面莎弥拉闪现了")
+assert not (it_bare and it_bare.intent_type == "alarm.flash"), it_bare
 it = RuleBasedIntent.match("3分30秒后提醒我")
 assert it.intent_type == "alarm.custom" and it.params.get("duration"), it
 print("2 flash/custom intent OK, dur=", it.params.get("duration"))
