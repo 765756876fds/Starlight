@@ -18,6 +18,34 @@ def _zh_map() -> dict:
 
 _ZH = _zh_map()
 
+_SPELL_ZH = {}
+try:
+    _sp = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                 "data", "lol_data", "summoner_spells.json"), encoding="utf-8"))
+    _SPELL_ZH = {s["sid"]: s["name_zh"] for s in _sp.get("spells", [])}
+except Exception:
+    pass
+
+_RUNE_TREE = {8000: "精密", 8100: "主宰", 8200: "巫术", 8300: "坚决", 8400: "启迪"}
+
+def _spell_zh(sid):
+    if not sid:
+        return ""
+    return _SPELL_ZH.get(sid, str(sid))
+
+def _multikill_zh(p):
+    if (p.penta_kills or 0) > 0: return f"五杀x{p.penta_kills}"
+    if (p.quadra_kills or 0) > 0: return f"四杀x{p.quadra_kills}"
+    if (p.triple_kills or 0) > 0: return f"三杀x{p.triple_kills}"
+    if (p.double_kills or 0) > 0: return f"双杀x{p.double_kills}"
+    return ""
+
+def _runes_zh(p):
+    parts = []
+    if p.primary_style: parts.append(_RUNE_TREE.get(p.primary_style, str(p.primary_style)))
+    if p.secondary_style: parts.append(_RUNE_TREE.get(p.secondary_style, str(p.secondary_style)))
+    return "/".join(parts) if parts else "--"
+
 _POS_ZH = {
     "TOP": "上路",
     "JUNGLE": "打野",
@@ -68,10 +96,18 @@ def _show_detail(m, svc=None) -> None:
             for team, title in [(100, "蓝方"), (200, "红方")]:
                 lay.addWidget(QLabel(title))
                 for p in [x for x in det.players if x.team_id == team]:
-                    lay.addWidget(QLabel(
-                        f"  {p.name or '?'}  {_zh(p.champion_name)} {_zh_pos(p.position)} "
-                        f"{p.kills}/{p.deaths}/{p.assists}  补刀{p.cs}  金币{p.gold}"
-                    ))
+                    mk = _multikill_zh(p)
+                    spells = "/".join(x for x in [_spell_zh(p.spell1), _spell_zh(p.spell2)] if x)
+                    items = " ".join(str(i) for i in (p.items or []) if i)
+                    dmg = f"  伤害{p.dmg_to_champ or '--'}/承伤{p.dmg_taken or '--'}"
+                    vis = f"  视野{p.vision_score or '--'}"
+                    line1 = (f"  {p.name or '?'}  {_zh(p.champion_name)} Lv{p.level or '--'} {_zh_pos(p.position)} "
+                             f"{p.kills}/{p.deaths}/{p.assists}  补刀{p.cs}  金币{p.gold}")
+                    line2 = (f"    符文{_runes_zh(p)}  技能{spells or '--'}  {mk}{vis}{dmg}")
+                    line3 = f"    装备: {items or '--'}"
+                    lay.addWidget(QLabel(line1))
+                    lay.addWidget(QLabel(line2))
+                    lay.addWidget(QLabel(line3))
         except Exception:
             lay.addWidget(QLabel("<i>详细数据暂时不可用</i>"))
     dlg.exec()

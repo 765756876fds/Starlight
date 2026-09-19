@@ -7,7 +7,7 @@ DETAILS 主要是时间线 frames，10 人核心统计在 SUMMARY 单场里。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from .match_model import AVAILABLE, NO_DATA, ERROR
@@ -31,12 +31,49 @@ class DetailPlayer:
     items: List[int]
     spell1: Optional[int]
     spell2: Optional[int]
+    level: Optional[int] = None
+    double_kills: Optional[int] = None
+    triple_kills: Optional[int] = None
+    quadra_kills: Optional[int] = None
+    penta_kills: Optional[int] = None
+    vision_score: Optional[int] = None
+    wards_placed: Optional[int] = None
+    wards_killed: Optional[int] = None
+    dmg_to_champ: Optional[int] = None
+    dmg_taken: Optional[int] = None
+    magic_dmg: Optional[int] = None
+    phys_dmg: Optional[int] = None
+    true_dmg: Optional[int] = None
+    # 符文：(主系 tree id, 副系 tree id, [主系 perk ids], [副系 perk ids], {小符文:id})
+    primary_style: Optional[int] = None
+    secondary_style: Optional[int] = None
+    primary_perks: List[int] = field(default_factory=list)
+    secondary_perks: List[int] = field(default_factory=list)
+    stat_perks: List[int] = field(default_factory=list)
 
 
 @dataclass
 class MatchDetail:
     game_id: int
     players: List[DetailPlayer]
+
+
+def _parse_perks(perks: dict):
+    if not isinstance(perks, dict):
+        return None, None, [], [], []
+    styles = perks.get("styles") or []
+    primary_style = secondary_style = None
+    primary_perks, secondary_perks = [], []
+    ordered = [s for s in styles if isinstance(s, dict)]
+    if len(ordered) >= 1:
+        primary_style = ordered[0].get("style")
+        primary_perks = [x.get("perk") for x in (ordered[0].get("selections") or []) if isinstance(x, dict)]
+    if len(ordered) >= 2:
+        secondary_style = ordered[1].get("style")
+        secondary_perks = [x.get("perk") for x in (ordered[1].get("selections") or []) if isinstance(x, dict)]
+    sp = perks.get("statPerks") or {}
+    stat = [sp.get("offense"), sp.get("flex"), sp.get("defense")]
+    return primary_style, secondary_style, primary_perks, secondary_perks, stat
 
 
 class MatchDetailService:
@@ -66,6 +103,7 @@ class MatchDetailService:
         players = []
         for p in j.get("participants", []):
             cs = (p.get("totalMinionsKilled") or 0) + (p.get("neutralMinionsKilled") or 0)
+            ps, ss, pp, sp, statp = _parse_perks(p.get("perks"))
             players.append(DetailPlayer(
                 puuid=p.get("puuid", ""),
                 name=p.get("gameName") or p.get("summonerName") or p.get("riotIdGameName") or "",
@@ -77,5 +115,17 @@ class MatchDetailService:
                 cs=cs, gold=p.get("goldEarned"),
                 items=[p.get(f"item{i}", 0) or 0 for i in range(7)],
                 spell1=p.get("spell1Id"), spell2=p.get("spell2Id"),
+                level=p.get("champLevel"),
+                double_kills=p.get("doubleKills"), triple_kills=p.get("tripleKills"),
+                quadra_kills=p.get("quadraKills"), penta_kills=p.get("pentaKills"),
+                vision_score=p.get("visionScore"),
+                wards_placed=p.get("wardsPlaced"), wards_killed=p.get("wardsKilled"),
+                dmg_to_champ=p.get("totalDamageDealtToChampions"),
+                dmg_taken=p.get("totalDamageTaken"),
+                magic_dmg=p.get("magicDamageDealtToChampions"),
+                phys_dmg=p.get("physicalDamageDealtToChampions"),
+                true_dmg=p.get("trueDamageDealtToChampions"),
+                primary_style=ps, secondary_style=ss,
+                primary_perks=pp, secondary_perks=sp, stat_perks=statp,
             ))
         return MatchDetail(game_id=int(j.get("gameId") or game_id), players=players)
