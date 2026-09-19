@@ -43,6 +43,7 @@ class CooldownManager:
         remind_before: float = 5.0,
         scheduler=None,
         policy: Optional[ReminderPolicy] = None,
+        haste_provider=None,
     ):
         self._champions = champions or ChampionCatalog()
         self._abilities = abilities or AbilityCatalog()
@@ -53,6 +54,8 @@ class CooldownManager:
         self._remind_before = remind_before
         self._policy = policy or ReminderPolicy()
         self._scheduler = scheduler or get_scheduler()
+        # callable(champion_name, side) -> float ability_haste；可选，缺省 0
+        self._haste_provider = haste_provider
 
         self._reminders: Dict[str, CooldownReminder] = {}
         self._task_ids: Dict[str, List[str]] = {}
@@ -206,10 +209,17 @@ class CooldownManager:
     # ----- CommandBus handlers -----
     def handle_start(self, command) -> Optional[CooldownReminder]:
         p = getattr(command, "params", command) or {}
+        ah = 0.0
+        if self._haste_provider is not None:
+            try:
+                ah = float(self._haste_provider(p.get("champion"), p.get("side", "enemy")) or 0.0)
+            except Exception:
+                ah = 0.0
         return self.start_reminder(
             champion_name=p.get("champion"),
             skill=p.get("skill") or p.get("spell"),
             side=p.get("side", "enemy"),
+            ability_haste=ah,
         )
 
     # ----- 静态 CD 查询（cooldown.query）-----

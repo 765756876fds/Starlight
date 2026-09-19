@@ -370,9 +370,27 @@ class Application:
                 # 绠€鍗曟棩蹇楋紱TTS 鐢?_speech_enqueue 璐熻矗
                 print(f"[Cooldown] {code}: {data.get('text') or data}")
 
+            def _haste_provider(champion, side="enemy"):
+                # 从当前 2999 snapshot 读敌方装备 -> Ability Haste；读不到则 0
+                try:
+                    rt = getattr(self, "lol", None)
+                    snap = rt.current_snapshot() if rt else None
+                    if not snap or not champion:
+                        return 0.0
+                    from app.lol.enemy.roster import EnemyRoster
+                    from app.lol.data.item_haste import sum_ability_haste
+                    prof = EnemyRoster().find(snap, champion)
+                    if not prof:
+                        return 0.0
+                    ah, _src = sum_ability_haste(prof.items)
+                    return ah
+                except Exception:
+                    return 0.0
+
             self.cooldown_manager = _CM(
                 on_event=_on_event,
                 speech_enqueue=_speech_enqueue,
+                haste_provider=_haste_provider,
             )
             self.command_bus.register(CommandType.COOLDOWN_START,
                                      self.cooldown_manager.handle_start)

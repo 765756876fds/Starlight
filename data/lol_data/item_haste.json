@@ -1,0 +1,890 @@
+{
+  "version": "16.18.1",
+  "source": "Data Dragon 16.18.1 description scan",
+  "items": {
+    "1111": {
+      "name": "Jarvan I's",
+      "ah": 10
+    },
+    "123430": {
+      "name": "Rite of Ruin",
+      "ah": 10
+    },
+    "124011": {
+      "name": "Sword of Blossoming Dawn",
+      "ah": 15
+    },
+    "126697": {
+      "name": "Hubris",
+      "ah": 10
+    },
+    "2020": {
+      "name": "The Brutalizer",
+      "ah": 10
+    },
+    "2022": {
+      "name": "Glowing Mote",
+      "ah": 5
+    },
+    "2049": {
+      "name": "Guardian's Amulet",
+      "ah": 20
+    },
+    "2050": {
+      "name": "Guardian's Shroud",
+      "ah": 15
+    },
+    "2065": {
+      "name": "Shurelya's Battlesong",
+      "ah": 15
+    },
+    "222022": {
+      "name": "Glowing Mote",
+      "ah": 5
+    },
+    "222065": {
+      "name": "Shurelya's Battlesong",
+      "ah": 15
+    },
+    "222502": {
+      "name": "Unending Despair",
+      "ah": 10
+    },
+    "222503": {
+      "name": "Blackfire Torch",
+      "ah": 20
+    },
+    "222510": {
+      "name": "Dusk and Dawn",
+      "ah": 20
+    },
+    "222522": {
+      "name": "Actualizer",
+      "ah": 10
+    },
+    "222524": {
+      "name": "Bandlepipes",
+      "ah": 10
+    },
+    "222525": {
+      "name": "Protoplasm Harness",
+      "ah": 15
+    },
+    "223001": {
+      "name": "Evenshroud",
+      "ah": 20
+    },
+    "223003": {
+      "name": "Archangel's Staff",
+      "ah": 25
+    },
+    "223004": {
+      "name": "Manamune",
+      "ah": 15
+    },
+    "223011": {
+      "name": "Chemtech Putrifier",
+      "ah": 15
+    },
+    "223040": {
+      "name": "Seraph's Embrace",
+      "ah": 25
+    },
+    "223042": {
+      "name": "Muramana",
+      "ah": 15
+    },
+    "223050": {
+      "name": "Zeke's Convergence",
+      "ah": 15
+    },
+    "223057": {
+      "name": "Sheen",
+      "ah": 10
+    },
+    "223065": {
+      "name": "Spirit Visage",
+      "ah": 10
+    },
+    "223067": {
+      "name": "Kindlegem",
+      "ah": 10
+    },
+    "223068": {
+      "name": "Sunfire Aegis",
+      "ah": 10
+    },
+    "223069": {
+      "name": "Void Immolation",
+      "ah": 25
+    },
+    "223071": {
+      "name": "Black Cleaver",
+      "ah": 20
+    },
+    "223074": {
+      "name": "Ravenous Hydra",
+      "ah": 15
+    },
+    "223078": {
+      "name": "Trinity Force",
+      "ah": 20
+    },
+    "223100": {
+      "name": "Lich Bane",
+      "ah": 20
+    },
+    "223105": {
+      "name": "Aegis of the Legion",
+      "ah": 10
+    },
+    "223107": {
+      "name": "Redemption",
+      "ah": 15
+    },
+    "223109": {
+      "name": "Knight's Vow",
+      "ah": 15
+    },
+    "223110": {
+      "name": "Frozen Heart",
+      "ah": 15
+    },
+    "223112": {
+      "name": "Guardian's Orb",
+      "ah": 25
+    },
+    "223115": {
+      "name": "Nashor's Tooth",
+      "ah": 10
+    },
+    "223118": {
+      "name": "Malignance",
+      "ah": 20
+    },
+    "223119": {
+      "name": "Winter's Approach",
+      "ah": 15
+    },
+    "223121": {
+      "name": "Fimbulwinter",
+      "ah": 15
+    },
+    "223137": {
+      "name": "Cryptbloom",
+      "ah": 15
+    },
+    "223152": {
+      "name": "Hextech Rocketbelt",
+      "ah": 20
+    },
+    "223156": {
+      "name": "Maw of Malmortius",
+      "ah": 15
+    },
+    "223158": {
+      "name": "Ionian Boots of Lucidity",
+      "ah": 40
+    },
+    "223165": {
+      "name": "Morellonomicon",
+      "ah": 15
+    },
+    "223172": {
+      "name": "Zephyr",
+      "ah": 30
+    },
+    "223177": {
+      "name": "Guardian's Blade",
+      "ah": 15
+    },
+    "223185": {
+      "name": "Guardian's Dirk",
+      "ah": 10
+    },
+    "223190": {
+      "name": "Locket of the Iron Solari",
+      "ah": 25
+    },
+    "223193": {
+      "name": "Gargoyle Stoneplate",
+      "ah": 15
+    },
+    "223508": {
+      "name": "Essence Reaver",
+      "ah": 20
+    },
+    "224005": {
+      "name": "Imperial Mandate",
+      "ah": 15
+    },
+    "224403": {
+      "name": "The Golden Spatula",
+      "ah": 20
+    },
+    "224628": {
+      "name": "Horizon Focus",
+      "ah": 25
+    },
+    "224629": {
+      "name": "Cosmic Drive",
+      "ah": 35
+    },
+    "224633": {
+      "name": "Riftmaker",
+      "ah": 15
+    },
+    "224636": {
+      "name": "Night Harvester",
+      "ah": 25
+    },
+    "224644": {
+      "name": "Crown of the Shattered Queen",
+      "ah": 20
+    },
+    "226333": {
+      "name": "Death's Dance",
+      "ah": 10
+    },
+    "226609": {
+      "name": "Chempunk Chainsword",
+      "ah": 15
+    },
+    "226610": {
+      "name": "Sundered Sky",
+      "ah": 10
+    },
+    "226616": {
+      "name": "Staff of Flowing Water",
+      "ah": 15
+    },
+    "226617": {
+      "name": "Moonstone Renewer",
+      "ah": 30
+    },
+    "226620": {
+      "name": "Echoes of Helia",
+      "ah": 30
+    },
+    "226630": {
+      "name": "Goredrinker",
+      "ah": 20
+    },
+    "226632": {
+      "name": "Divine Sunderer",
+      "ah": 20
+    },
+    "226655": {
+      "name": "Luden's Echo",
+      "ah": 25
+    },
+    "226656": {
+      "name": "Everfrost",
+      "ah": 20
+    },
+    "226660": {
+      "name": "",
+      "ah": 5
+    },
+    "226662": {
+      "name": "Iceborn Gauntlet",
+      "ah": 15
+    },
+    "226664": {
+      "name": "Hollow Radiance",
+      "ah": 10
+    },
+    "226667": {
+      "name": "Radiant Virtue",
+      "ah": 10
+    },
+    "226668": {
+      "name": "Ultra Hydra",
+      "ah": 25
+    },
+    "226691": {
+      "name": "Duskblade of Draktharr",
+      "ah": 15
+    },
+    "226692": {
+      "name": "Eclipse",
+      "ah": 15
+    },
+    "226693": {
+      "name": "Prowler's Claw",
+      "ah": 15
+    },
+    "226694": {
+      "name": "Serylda's Grudge",
+      "ah": 15
+    },
+    "226696": {
+      "name": "Axiom Arc",
+      "ah": 20
+    },
+    "226697": {
+      "name": "Hubris",
+      "ah": 10
+    },
+    "226698": {
+      "name": "Profane Hydra",
+      "ah": 15
+    },
+    "226699": {
+      "name": "Voltaic Cyclosword",
+      "ah": 20
+    },
+    "228001": {
+      "name": "Anathema's Chains",
+      "ah": 20
+    },
+    "228020": {
+      "name": "Abyssal Mask",
+      "ah": 15
+    },
+    "2502": {
+      "name": "Unending Despair",
+      "ah": 15
+    },
+    "2503": {
+      "name": "Blackfire Torch",
+      "ah": 20
+    },
+    "2510": {
+      "name": "Dusk and Dawn",
+      "ah": 20
+    },
+    "2520": {
+      "name": "Bastionbreaker",
+      "ah": 15
+    },
+    "2522": {
+      "name": "Actualizer",
+      "ah": 10
+    },
+    "2524": {
+      "name": "Bandlepipes",
+      "ah": 15
+    },
+    "2525": {
+      "name": "Protoplasm Harness",
+      "ah": 20
+    },
+    "3001": {
+      "name": "Evenshroud",
+      "ah": 20
+    },
+    "3003": {
+      "name": "Archangel's Staff",
+      "ah": 25
+    },
+    "3004": {
+      "name": "Manamune",
+      "ah": 15
+    },
+    "3011": {
+      "name": "Chemtech Putrifier",
+      "ah": 15
+    },
+    "3023": {
+      "name": "Lifewell Pendant",
+      "ah": 5
+    },
+    "3024": {
+      "name": "Glacial Buckler",
+      "ah": 10
+    },
+    "3039": {
+      "name": "Atma's Reckoning",
+      "ah": 10
+    },
+    "3040": {
+      "name": "Seraph's Embrace",
+      "ah": 25
+    },
+    "3042": {
+      "name": "Muramana",
+      "ah": 15
+    },
+    "3050": {
+      "name": "Zeke's Convergence",
+      "ah": 10
+    },
+    "3057": {
+      "name": "Sheen",
+      "ah": 10
+    },
+    "3065": {
+      "name": "Spirit Visage",
+      "ah": 10
+    },
+    "3067": {
+      "name": "Kindlegem",
+      "ah": 10
+    },
+    "3068": {
+      "name": "Sunfire Aegis",
+      "ah": 10
+    },
+    "3071": {
+      "name": "Black Cleaver",
+      "ah": 20
+    },
+    "3074": {
+      "name": "Ravenous Hydra",
+      "ah": 15
+    },
+    "3078": {
+      "name": "Trinity Force",
+      "ah": 15
+    },
+    "3100": {
+      "name": "Lich Bane",
+      "ah": 10
+    },
+    "3105": {
+      "name": "Aegis of the Legion",
+      "ah": 10
+    },
+    "3107": {
+      "name": "Redemption",
+      "ah": 15
+    },
+    "3108": {
+      "name": "Fiendish Codex",
+      "ah": 10
+    },
+    "3109": {
+      "name": "Knight's Vow",
+      "ah": 10
+    },
+    "3110": {
+      "name": "Frozen Heart",
+      "ah": 20
+    },
+    "3115": {
+      "name": "Nashor's Tooth",
+      "ah": 15
+    },
+    "3118": {
+      "name": "Malignance",
+      "ah": 15
+    },
+    "3119": {
+      "name": "Winter's Approach",
+      "ah": 15
+    },
+    "3121": {
+      "name": "Fimbulwinter",
+      "ah": 15
+    },
+    "3128": {
+      "name": "Deathfire Grasp",
+      "ah": 10
+    },
+    "3133": {
+      "name": "Caulfield's Warhammer",
+      "ah": 10
+    },
+    "3137": {
+      "name": "Cryptbloom",
+      "ah": 20
+    },
+    "3152": {
+      "name": "Hextech Rocketbelt",
+      "ah": 20
+    },
+    "3156": {
+      "name": "Maw of Malmortius",
+      "ah": 15
+    },
+    "3158": {
+      "name": "Ionian Boots of Lucidity",
+      "ah": 10
+    },
+    "3165": {
+      "name": "Morellonomicon",
+      "ah": 15
+    },
+    "3171": {
+      "name": "Crimson Lucidity",
+      "ah": 20
+    },
+    "3177": {
+      "name": "Guardian's Blade",
+      "ah": 15
+    },
+    "3179": {
+      "name": "Umbral Glaive",
+      "ah": 15
+    },
+    "3190": {
+      "name": "Locket of the Iron Solari",
+      "ah": 10
+    },
+    "3193": {
+      "name": "Gargoyle Stoneplate",
+      "ah": 15
+    },
+    "322065": {
+      "name": "Shurelya's Battlesong",
+      "ah": 15
+    },
+    "3222": {
+      "name": "Mikael's Blessing",
+      "ah": 15
+    },
+    "323003": {
+      "name": "Archangel's Staff",
+      "ah": 25
+    },
+    "323004": {
+      "name": "Manamune",
+      "ah": 15
+    },
+    "323040": {
+      "name": "Seraph's Embrace",
+      "ah": 25
+    },
+    "323042": {
+      "name": "Muramana",
+      "ah": 15
+    },
+    "323050": {
+      "name": "Zeke's Convergence",
+      "ah": 10
+    },
+    "323107": {
+      "name": "Redemption",
+      "ah": 15
+    },
+    "323109": {
+      "name": "Knight's Vow",
+      "ah": 10
+    },
+    "323110": {
+      "name": "Frozen Heart",
+      "ah": 25
+    },
+    "323119": {
+      "name": "Winter's Approach",
+      "ah": 15
+    },
+    "323121": {
+      "name": "Fimbulwinter",
+      "ah": 15
+    },
+    "323190": {
+      "name": "Locket of the Iron Solari",
+      "ah": 10
+    },
+    "323222": {
+      "name": "Mikael's Blessing",
+      "ah": 15
+    },
+    "324005": {
+      "name": "Imperial Mandate",
+      "ah": 15
+    },
+    "326616": {
+      "name": "Staff of Flowing Water",
+      "ah": 10
+    },
+    "326617": {
+      "name": "Moonstone Renewer",
+      "ah": 20
+    },
+    "326620": {
+      "name": "Echoes of Helia",
+      "ah": 20
+    },
+    "328020": {
+      "name": "Abyssal Mask",
+      "ah": 15
+    },
+    "3430": {
+      "name": "Rite Of Ruin",
+      "ah": 15
+    },
+    "3508": {
+      "name": "Essence Reaver",
+      "ah": 20
+    },
+    "3802": {
+      "name": "Lost Chapter",
+      "ah": 10
+    },
+    "4005": {
+      "name": "Imperial Mandate",
+      "ah": 15
+    },
+    "4010": {
+      "name": "Bloodletter's Curse",
+      "ah": 15
+    },
+    "4011": {
+      "name": "Sword of Blossoming Dawn",
+      "ah": 15
+    },
+    "4016": {
+      "name": "Wordless Promise",
+      "ah": 25
+    },
+    "4402": {
+      "name": "Innervating Locket",
+      "ah": 10
+    },
+    "4403": {
+      "name": "The Golden Spatula",
+      "ah": 20
+    },
+    "443061": {
+      "name": "Force Of Entropy",
+      "ah": 30
+    },
+    "443062": {
+      "name": "Sanguine Gift",
+      "ah": 20
+    },
+    "443063": {
+      "name": "Eleisa's Miracle",
+      "ah": 25
+    },
+    "443193": {
+      "name": "Gargoyle Stoneplate",
+      "ah": 15
+    },
+    "444636": {
+      "name": "Night Harvester",
+      "ah": 25
+    },
+    "444644": {
+      "name": "Crown of the Shattered Queen",
+      "ah": 25
+    },
+    "446632": {
+      "name": "Divine Sunderer",
+      "ah": 20
+    },
+    "446656": {
+      "name": "Everfrost",
+      "ah": 25
+    },
+    "446691": {
+      "name": "Duskblade of Draktharr",
+      "ah": 20
+    },
+    "446693": {
+      "name": "Prowler's Claw",
+      "ah": 20
+    },
+    "447101": {
+      "name": "Gambler's Blade",
+      "ah": 40
+    },
+    "447103": {
+      "name": "Hemomancer's Helm",
+      "ah": 30
+    },
+    "447104": {
+      "name": "Innervating Locket",
+      "ah": 20
+    },
+    "447105": {
+      "name": "Empyrean Promise",
+      "ah": 30
+    },
+    "447108": {
+      "name": "Runecarver",
+      "ah": 20
+    },
+    "447112": {
+      "name": "Flesheater",
+      "ah": 20
+    },
+    "447113": {
+      "name": "Detonation Orb",
+      "ah": 20
+    },
+    "447116": {
+      "name": "Kinkou Jitte",
+      "ah": 30
+    },
+    "447118": {
+      "name": "Pyromancer's Cloak",
+      "ah": 15
+    },
+    "447119": {
+      "name": "Lightning Rod",
+      "ah": 20
+    },
+    "447122": {
+      "name": "Black Hole Gauntlet",
+      "ah": 25
+    },
+    "447123": {
+      "name": "Puppeteer",
+      "ah": 40
+    },
+    "4628": {
+      "name": "Horizon Focus",
+      "ah": 25
+    },
+    "4629": {
+      "name": "Cosmic Drive",
+      "ah": 25
+    },
+    "4633": {
+      "name": "Riftmaker",
+      "ah": 15
+    },
+    "4636": {
+      "name": "Night Harvester",
+      "ah": 25
+    },
+    "4638": {
+      "name": "Watchful Wardstone",
+      "ah": 10
+    },
+    "4642": {
+      "name": "Bandleglass Mirror",
+      "ah": 10
+    },
+    "4643": {
+      "name": "Vigilant Wardstone",
+      "ah": 20
+    },
+    "4644": {
+      "name": "Crown of the Shattered Queen",
+      "ah": 20
+    },
+    "6333": {
+      "name": "Death's Dance",
+      "ah": 15
+    },
+    "6609": {
+      "name": "Chempunk Chainsword",
+      "ah": 15
+    },
+    "6610": {
+      "name": "Sundered Sky",
+      "ah": 10
+    },
+    "6616": {
+      "name": "Staff of Flowing Water",
+      "ah": 10
+    },
+    "6617": {
+      "name": "Moonstone Renewer",
+      "ah": 20
+    },
+    "6620": {
+      "name": "Echoes of Helia",
+      "ah": 20
+    },
+    "6630": {
+      "name": "Goredrinker",
+      "ah": 20
+    },
+    "663172": {
+      "name": "Zephyr",
+      "ah": 25
+    },
+    "663193": {
+      "name": "Gargoyle Stoneplate",
+      "ah": 10
+    },
+    "6632": {
+      "name": "Divine Sunderer",
+      "ah": 20
+    },
+    "664011": {
+      "name": "Sword of Blossoming Dawn",
+      "ah": 10
+    },
+    "664403": {
+      "name": "The Golden Spatula",
+      "ah": 20
+    },
+    "664644": {
+      "name": "Crown of the Shattered Queen",
+      "ah": 15
+    },
+    "6655": {
+      "name": "Luden's Echo",
+      "ah": 10
+    },
+    "6656": {
+      "name": "Everfrost",
+      "ah": 20
+    },
+    "6660": {
+      "name": "Bami's Cinder",
+      "ah": 5
+    },
+    "6662": {
+      "name": "Iceborn Gauntlet",
+      "ah": 15
+    },
+    "6664": {
+      "name": "Hollow Radiance",
+      "ah": 10
+    },
+    "6667": {
+      "name": "Radiant Virtue",
+      "ah": 10
+    },
+    "667101": {
+      "name": "Gambler's Blade",
+      "ah": 10
+    },
+    "6691": {
+      "name": "Duskblade of Draktharr",
+      "ah": 15
+    },
+    "6692": {
+      "name": "Eclipse",
+      "ah": 15
+    },
+    "6693": {
+      "name": "Prowler's Claw",
+      "ah": 15
+    },
+    "6694": {
+      "name": "Serylda's Grudge",
+      "ah": 15
+    },
+    "6696": {
+      "name": "Axiom Arc",
+      "ah": 20
+    },
+    "6697": {
+      "name": "Hubris",
+      "ah": 10
+    },
+    "6698": {
+      "name": "Profane Hydra",
+      "ah": 10
+    },
+    "6699": {
+      "name": "Voltaic Cyclosword",
+      "ah": 10
+    },
+    "8001": {
+      "name": "Anathema's Chains",
+      "ah": 20
+    },
+    "8010": {
+      "name": "Bloodletter's Curse",
+      "ah": 15
+    },
+    "8020": {
+      "name": "Abyssal Mask",
+      "ah": 15
+    },
+    "994403": {
+      "name": "Golden Spatula",
+      "ah": 20
+    }
+  }
+}
