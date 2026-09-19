@@ -384,6 +384,11 @@ class Application:
                                      self.cooldown_manager.handle_list)
             self.command_bus.register(CommandType.COOLDOWN_QUERY,
                                      self.cooldown_manager.handle_query)
+            # 冷却计时锚定游戏内时钟（暂停时不前进）
+            self.event_bus.subscribe("game.time_update",
+                                     self.cooldown_manager.on_game_time_update)
+            self.event_bus.subscribe("game.ended",
+                                     lambda e: self.cooldown_manager.reset_clock())
             print("...")
         except Exception as e:
             print(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")

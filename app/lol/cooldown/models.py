@@ -27,6 +27,7 @@ class CooldownReminder:
     side: str                  # 'enemy' | 'ally' | 'self'
     source: str = "USER_REPORTED"
     status: str = ReminderStatus.ACTIVE.value
+    game_clock: bool = False     # True=used_at/ready_at 锚定游戏内时钟（跟随游戏暂停）
 
     @property
     def ready_at(self) -> float:

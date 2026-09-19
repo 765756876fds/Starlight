@@ -57,6 +57,9 @@ class CooldownManager:
         self._reminders: Dict[str, CooldownReminder] = {}
         self._task_ids: Dict[str, List[str]] = {}
         self._lock = threading.Lock()
+        # 游戏内时钟（跟随 2999 游戏时间；暂停时不前进）。
+        # <0 表示尚未与游戏时钟同步，此时回退到现实单调时钟。
+        self._game_time: float = -1.0
 
     # ----- public API -----
     def start_reminder(
@@ -114,7 +117,8 @@ class CooldownManager:
         est_cd = estimated if estimated is not None else float(cd)
         remind_before = self._policy.for_skill(stype, slot, est_cd)
         rid = uuid.uuid4().hex[:8]
-        now = time.monotonic()
+        use_game = self._game_time > 0.0
+        now = self._game_time if use_game else time.monotonic()
         r = CooldownReminder(
             id=rid,
             champion_id=cid,
@@ -126,10 +130,11 @@ class CooldownManager:
             used_at=now,
             remind_before=remind_before,
             side=side,
+            game_clock=use_game,
         )
         with self._lock:
             self._reminders[rid] = r
-            self._schedule(r)
+        self._schedule(r)  # 在锁外调度，避免 _tick_game_clock 重入非重入锁死锁
         self._on_event(COOLDOWN_STARTED, {"id": rid, **self._payload(r)})
         return r
 
@@ -164,6 +169,24 @@ class CooldownManager:
     def get(self, reminder_id: str) -> Optional[CooldownReminder]:
         with self._lock:
             return self._reminders.get(reminder_id)
+
+    # ----- 游戏内时钟接入 -----
+    def on_game_time_update(self, event) -> None:
+        """EventBus: game.time_update。冷却计时锚定游戏内时钟。"""
+        t = event.get("game_time", 0.0) if hasattr(event, "get") else 0.0
+        try:
+            self.set_game_time(float(t or 0.0))
+        except Exception:
+            pass
+
+    def set_game_time(self, t: float) -> None:
+        self._game_time = float(t)
+        self._tick_game_clock()
+
+    def reset_clock(self) -> None:
+        """GAME_ENDED / 新一局：清空全部计时并回到未同步状态。"""
+        self.cancel_all()
+        self._game_time = -1.0
 
     # ----- CommandBus handlers -----
     def handle_start(self, command) -> Optional[CooldownReminder]:
@@ -250,7 +273,53 @@ class CooldownManager:
         return [self._payload(r) for r in self.list_active()]
 
     # ----- internals -----
+    def _fire_remind(self, rem: CooldownReminder) -> None:
+        self._on_event(COOLDOWN_REMIND, {
+            **self._payload(rem),
+            "text": self._remind_text(rem),
+        })
+        if self._speech_enqueue:
+            try:
+                self._speech_enqueue(self._remind_text(rem),
+                                     f"cooldown.remind.{rem.id}")
+            except Exception:
+                pass
+
+    def _pop_ready(self, rid: str) -> None:
+        with self._lock:
+            rem = self._reminders.pop(rid, None)
+            self._task_ids.pop(rid, [])
+        if rem is None:
+            return
+        rem.status = ReminderStatus.EXPIRED.value
+        self._on_event(COOLDOWN_READY, self._payload(rem))
+
+    def _tick_game_clock(self) -> None:
+        """游戏内时钟推进：扫描 game_clock 计时，到达 remind/ready 点即触发。"""
+        now = self._game_time
+        if now < 0:
+            return
+        fired_ready = []
+        with self._lock:
+            for rem in list(self._reminders.values()):
+                if not rem.game_clock:
+                    continue
+                if rem.status == ReminderStatus.ACTIVE.value and now >= rem.remind_at:
+                    rem.status = ReminderStatus.REMINDED.value
+                    self._fire_remind(rem)
+                if rem.status in (ReminderStatus.ACTIVE.value,
+                                  ReminderStatus.REMINDED.value) and now >= rem.ready_at:
+                    fired_ready.append(rem.id)
+        for rid in fired_ready:
+            self._pop_ready(rid)
+
     def _schedule(self, r: CooldownReminder) -> None:
+        # 游戏内时钟计时：不挂现实定时器，由 set_game_time() 驱动；
+        # 立即扫一次，处理“启动时已到点”的边界。
+        if r.game_clock:
+            self._tick_game_clock()
+            return
+
         now = time.monotonic()
         rid = r.id
         tids: List[str] = []
@@ -261,25 +330,10 @@ class CooldownManager:
                 if rem is None or rem.status != ReminderStatus.ACTIVE.value:
                     return
                 rem.status = ReminderStatus.REMINDED.value
-            self._on_event(COOLDOWN_REMIND, {
-                **self._payload(rem),
-                "text": self._remind_text(rem),
-            })
-            if self._speech_enqueue:
-                try:
-                    self._speech_enqueue(self._remind_text(rem),
-                                         f"cooldown.remind.{rid}")
-                except Exception:
-                    pass
+            self._fire_remind(rem)
 
         def _ready_cb():
-            with self._lock:
-                rem = self._reminders.pop(rid, None)
-                tids = self._task_ids.pop(rid, [])
-            if rem is None:
-                return
-            rem.status = ReminderStatus.EXPIRED.value
-            self._on_event(COOLDOWN_READY, self._payload(rem))
+            self._pop_ready(rid)
 
         if r.remind_before > 0:
             delay = max(0.0, r.remind_at - now)
