@@ -177,6 +177,11 @@ class RuleBasedIntent:
         text = text.strip()
         # 去除首尾常见句末标点（ASR 常在句尾自动加 。！？；等）
         text = text.strip("。！？；，,.!?,;:：")
+        # 确定性归一化（P2）：
+        # 1) "R大招"/"W大招" 重复说法 -> 只保留技能字母
+        text = re.sub(r'([QqWwEeRr])\s*大招', r'\1', text)
+        # 2) 英雄名与技能字母之间的中文标点 -> 去掉（"石头人，R" -> "石头人R"）
+        text = re.sub(r'([一-鿿])\s*[，,、]\s*([QqWwEeRr])', r'\1\2', text)
 
         # 音乐控制
         for pattern, command, base_params in cls.MUSIC_RULES:
@@ -208,6 +213,7 @@ class RuleBasedIntent:
                     if cg:
                         v = match.group(int(cg)).strip() if match.group(int(cg)) else ""
                         v = re.sub(r"^(对面|敌方|对面的|敌方的|我方|队友|的)", "", v)
+                        v = v.strip("，。！？、,.!?;： ")
                         params["champion"] = v or None
                     if sg:
                         params["skill"] = match.group(int(sg)).strip()

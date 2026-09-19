@@ -381,9 +381,26 @@ class StateDiff:
         return events
 
     def _find_team(self, snapshot: GameSnapshot, name: str) -> str:
-        """查找玩家所属队伍"""
+        """查找玩家所属队伍（P1）。
+
+        匹配顺序：
+        1) 本地 active player 身份（eventdata KillerName 对自己用 summoner 名）；
+        2) playerlist 中同 summoner_name / champion_name。
+        全部归一化 strip；确实无法匹配才返回 UNKNOWN，不猜测。
+        """
+        if not name:
+            return "UNKNOWN"
+        n = name.strip()
+        cp = snapshot.current_player
+        if cp is not None:
+            cn = (cp.summoner_name or "").strip()
+            cc = (cp.champion_name or "").strip()
+            if n == cn or n == cc:
+                return cp.team
         for p in snapshot.players:
-            if p.summoner_name == name or p.champion_name == name:
+            pn = (p.summoner_name or "").strip()
+            pc = (p.champion_name or "").strip()
+            if n == pn or n == pc:
                 return p.team
         return "UNKNOWN"
 
