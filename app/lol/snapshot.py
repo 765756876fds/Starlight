@@ -244,7 +244,10 @@ class SnapshotBuilder:
         player.cs = int(scores.get("creepScore", 0))
 
         # 物品
-        player.items = p_data.get("items", [])
+        player.items = p_data.get("items", []) or []
+
+        # 符文（playerlist 若提供 runes 则原样保留；缺失时保持空）
+        player.runes = p_data.get("runes", []) or []
 
         # 召唤师技能
         spells = p_data.get("summonerSpells", {})

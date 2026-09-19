@@ -269,34 +269,88 @@ class Application:
             print(f"[Music] 鎵弿澶辫触: {e}")
 
     def _register_alarm_events(self):
-        """娉ㄥ唽 GameAlarm 浜嬩欢澶勭悊"""
-        def on_create_flash(event: Event):
+        """注册 GameAlarm 事件处理"""
+        def _say(text, priority="high"):
+            # 快速语音反馈：直接走 SPEECH_SAY -> TTS，绕过普通游戏播报队列
+            try:
+                self.event_bus.publish(Event(
+                    event_type=EventType.SPEECH_SAY,
+                    data={"text": text, "priority": priority},
+                    source="alarm_feedback",
+                ))
+            except Exception:
+                pass
+
+        def on_create_flash(event):
             champion = event.get("champion", "")
             if champion and self.lol:
                 self.lol.game_alarm.create_flash_alarm(champion)
+                _say(f"记好了，{champion}闪现")
+            else:
+                _say("没确认到目标")
 
-        def on_create_spell(event: Event):
+        def on_create_spell(event):
             champion = event.get("champion", "")
             spell = event.get("spell", "")
             if champion and spell and self.lol:
-                # 绠€鍖栵細榛樿鍐峰嵈 60 绉?
                 self.lol.game_alarm.create_spell_alarm(champion, spell, cooldown=60)
+                _say(f"记好了，{champion} {spell}")
+            else:
+                _say("没确认到目标")
 
-        def on_create_ward(event: Event):
-            location = event.get("location", "褰撳墠浣嶇疆")
+        def on_create_ward(event):
+            location = event.get("location", "当前位置")
             if self.lol:
                 self.lol.game_alarm.create_ward_alarm(location)
+                _say("记好眼位了")
 
-        def on_create_custom(event: Event):
-            title = event.get("title", "鎻愰啋")
-            duration = event.get("duration", 120)
-            if self.lol:
-                self.lol.game_alarm.create_custom_alarm(title, duration)
+        def on_create_custom(event):
+            title = event.get("title", "")
+            duration = event.get("duration", 0)
+            if self.lol and duration and duration > 0:
+                self.lol.game_alarm.create_custom_alarm(title or "提醒", duration)
+                _say("记好了，到点提醒你")
+            else:
+                _say("没有确认提醒时间")
+
+        def on_alarm_list(event):
+            if not self.lol:
+                _say("当前没有记录"); return
+            active = self.lol.game_alarm.get_active_alarms()
+            if not active:
+                _say("当前没有记录"); return
+            names = "、".join(a.title for a in active[:5])
+            _say(f"记了 {len(active)} 个：{names}")
+
+        def on_alarm_remaining(event):
+            if not self.lol:
+                _say("当前没有记录"); return
+            active = self.lol.game_alarm.get_active_alarms()
+            if not active:
+                _say("当前没有记录"); return
+            a = sorted(active, key=lambda x: x.game_time_end)[0]
+            gt = self.lol.game_alarm._current_game_time
+            secs = max(0, int(a.remaining(gt)))
+            m, s = divmod(secs, 60)
+            _say(f"{a.title}，还有 {m} 分 {s} 秒")
+
+        def on_alarm_cancel_last(event):
+            if not self.lol:
+                _say("当前没有记录"); return
+            active = self.lol.game_alarm.get_active_alarms()
+            if not active:
+                _say("当前没有记录"); return
+            a = sorted(active, key=lambda x: x.created_at, reverse=True)[0]
+            self.lol.game_alarm.cancel_alarm(a.alarm_id)
+            _say(f"已取消：{a.title}")
 
         self.event_bus.subscribe("alarm.create_flash", on_create_flash)
         self.event_bus.subscribe("alarm.create_spell", on_create_spell)
         self.event_bus.subscribe("alarm.create_ward", on_create_ward)
         self.event_bus.subscribe("alarm.create_custom", on_create_custom)
+        self.event_bus.subscribe("alarm.list", on_alarm_list)
+        self.event_bus.subscribe("alarm.remaining", on_alarm_remaining)
+        self.event_bus.subscribe("alarm.cancel_last", on_alarm_cancel_last)
 
     def _register_player_query(self):
         """doc"""

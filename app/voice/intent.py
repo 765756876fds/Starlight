@@ -108,6 +108,13 @@ class RuleBasedIntent:
          "alarm.custom", {"time_group": 1, "unit": "second"}),
         (r"([\d一二两三四五六七八九十半]+)(?:分钟|分)(?:后)?提醒",
          "alarm.custom", {"time_group": 1, "unit": "minute"}),
+        # 查询/取消 临时记忆
+        (r"(刚才|之前|刚刚)?记了(什么|哪些|啥|哪几个)",
+         "alarm.list", {}),
+        (r"(还有多久|还剩多久|还有多长时间|还有多少时间|什么时候提醒|几点提醒)",
+         "alarm.remaining", {}),
+        (r"(取消|删掉|不要|取消掉)(刚才|之前|刚刚)?(那个|上一个|这个|那条)?(提醒|记录|计时)?",
+         "alarm.cancel_last", {}),
     ]
 
     # 中文数字映射
