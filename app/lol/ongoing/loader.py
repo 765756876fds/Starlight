@@ -141,10 +141,9 @@ class OngoingGameLoader:
                     break
 
         # 3. match history v1 → fallback v3
-        matches = self._fetch_matches(puuid)
-        load_error = None if matches else "no_matches"
+        matches, state = self._fetch_matches(puuid)
 
-        win = sum(1 for m in matches if m.win)
+        wins = sum(1 for m in matches if m.win)
         total = len(matches)
         k_sum = sum(m.kills + m.assists for m in matches)
         d_sum = sum(m.deaths for m in matches) or 1
@@ -160,40 +159,76 @@ class OngoingGameLoader:
             ranked_division=division,
             ranked_lp=lp,
             recent_matches=matches,
-            kda_ratio=round(k_sum / d_sum, 2),
-            win_rate=round(win / total, 3) if total else 0.0,
+            data_state=state,
+            kda_ratio=round(k_sum / d_sum, 2) if state == "AVAILABLE" and matches else 0.0,
+            win_rate=round(wins / total, 3) if total else 0.0,
             loaded_at=time.monotonic(),
-            load_error=load_error,
+            load_error=None if state == "AVAILABLE" else state,
         )
         self._cache.put(snap)
         return snap
 
-    def _fetch_matches(self, puuid: str) -> List[MatchSummary]:
+    def _fetch_matches(self, puuid: str):
+        """返回 (List[MatchSummary], state)。
+
+        LCU /lol-match-history/v1 每条 game 的 `json` 是一段 JSON 字符串，
+        真正的个人 stats 在 json.participants[] 里，必须按 puuid 匹配自己那一条。
+        旧实现把 g["json"] 当 dict 直接取 win/kills，永远落空 → 全部退化成 loss/0。
+        """
         n = self._recent_n
-        # v1
         self._limiter.wait()
         data = self._get(
-            f"/lol-match-history/v1/products/lol/{puuid}/matches?begIndex=0&endIndex={n}")
+            f"/lol-match-history/v1/products/lol/{puuid}/games?begIndex=0&endIndex={n}")
         if data is None:
-            # v3 fallback
             self._limiter.wait()
             data = self._get(f"/lol-match-history/v3/matchlist/{puuid}")
         if not isinstance(data, dict):
             self._on_event("ongoing.match_history_unavailable", {"puuid": puuid})
-            return []
+            return [], "ERROR"
 
         games = data.get("games", {}).get("games") or data.get("matches") or []
         out: List[MatchSummary] = []
         for g in games[:n]:
-            stats = g.get("json") or g.get("stats") or {}
+            stats = self._extract_own_stats(g, puuid)
+            if stats is None:
+                # 这条对局无法定位自己的数据 → 跳过，不伪造 0
+                continue
             out.append(MatchSummary(
-                champion_id=int(g.get("championId") or 0),
+                champion_id=int(g.get("championId") or stats.get("championId") or 0),
                 champion_name="",
                 win=bool(stats.get("win", False)),
                 kills=int(stats.get("kills") or 0),
                 deaths=int(stats.get("deaths") or 0),
                 assists=int(stats.get("assists") or 0),
-                duration_seconds=int(g.get("timePlayed") or g.get("gameDuration") or 0),
+                duration_seconds=int(g.get("timePlayed") or g.get("gameDuration")
+                                   or stats.get("timePlayed") or 0),
                 game_creation=int(g.get("gameCreation") or 0),
             ))
-        return out
+        if not out:
+            return [], "NO_DATA"
+        return out, "AVAILABLE"
+
+    @staticmethod
+    def _extract_own_stats(game: dict, puuid: str):
+        """从单条 game 里取出属于 puuid 的 stats dict；取不到返回 None。"""
+        import json as _json
+        raw = game.get("json")
+        if isinstance(raw, str):
+            try:
+                raw = _json.loads(raw)
+            except Exception:
+                raw = None
+        if not isinstance(raw, dict):
+            raw = game.get("stats")
+            if isinstance(raw, dict):
+                return raw
+            return None
+        # participants[] 里找自己
+        parts = raw.get("participants") or []
+        for p in parts:
+            if p.get("puuid") == puuid:
+                return p.get("stats") or {}
+        # 兜底：旧结构直接把 stats 放在顶层
+        if "win" in raw or "kills" in raw:
+            return raw
+        return None

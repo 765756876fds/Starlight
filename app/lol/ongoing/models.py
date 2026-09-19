@@ -30,6 +30,8 @@ class PlayerSnapshot:
     ranked_division: Optional[str] = None
     ranked_lp: int = 0
     recent_matches: List[MatchSummary] = field(default_factory=list)
+    # 近场战绩可用性：AVAILABLE / NO_DATA(请求成功但无对局) / ERROR(请求失败/解析失败)
+    data_state: str = "ERROR"
     kda_ratio: float = 0.0
     win_rate: float = 0.0
     loaded_at: float = 0.0

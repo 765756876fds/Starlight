@@ -20,19 +20,20 @@ def _card(snap, is_enemy: bool) -> QFrame:
         lay.addWidget(QLabel(f"段位: {tier}"))
     else:
         lay.addWidget(QLabel("段位: 未定级/不可用"))
-    if snap.load_error:
-        lay.addWidget(QLabel("<i>数据不可用</i>"))
+    state = getattr(snap, "data_state", "ERROR")
+    if state == "ERROR":
+        lay.addWidget(QLabel("<i>近期战绩：数据不可用</i>"))
+    elif state == "NO_DATA":
+        lay.addWidget(QLabel("<i>近期战绩：暂无对局记录</i>"))
     else:
         wins = sum(1 for m in snap.recent_matches if m.win)
-        total = len(snap.recent_matches) or 1
+        total = len(snap.recent_matches)
         kda = f"{snap.kda_ratio:.2f}"
         lay.addWidget(QLabel(f"近{total}场: {wins}胜 / {total-wins}负  KDA={kda}"))
         row = QLabel()
-        colors = []
-        for m in snap.recent_matches[:5]:
-            colors.append("#2e7d32" if m.win else "#c62828")
+        colors = ["#2e7d32" if m.win else "#c62828" for m in snap.recent_matches[:5]]
         row.setText("".join(
-            f'<span style="background:{c}; color:white; padding:2px 6px;">{"W" if i<len(colors) and snap.recent_matches[i].win else "L"}</span> '
+            f'<span style="background:{c}; color:white; padding:2px 6px;">{"W" if snap.recent_matches[i].win else "L"}</span> '
             for i, c in enumerate(colors)
         ))
         lay.addWidget(row)
