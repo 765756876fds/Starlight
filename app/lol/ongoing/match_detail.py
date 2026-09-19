@@ -50,6 +50,7 @@ class DetailPlayer:
     primary_perks: List[int] = field(default_factory=list)
     secondary_perks: List[int] = field(default_factory=list)
     stat_perks: List[int] = field(default_factory=list)
+    privacy: str = ""  # PUBLIC / PRIVATE / 空（未知）
 
 
 @dataclass
@@ -128,4 +129,12 @@ class MatchDetailService:
                 primary_style=ps, secondary_style=ss,
                 primary_perks=pp, secondary_perks=sp, stat_perks=statp,
             ))
+        # A10.2：一次批量查询 10 人 privacy，失败不影响基础详情
+        try:
+            from .summoner_privacy import SummonerPrivacyService
+            batch = SummonerPrivacyService(self._lcu).batch_privacy([pl.puuid for pl in players])
+            for pl in players:
+                pl.privacy = batch.get(pl.puuid, "")
+        except Exception:
+            pass
         return MatchDetail(game_id=int(j.get("gameId") or game_id), players=players)

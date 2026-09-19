@@ -114,7 +114,12 @@ def _show_detail(m, svc=None) -> None:
                     items = " ".join(_item_zh(i) for i in (p.items or []) if i)
                     dmg = f"  伤害{p.dmg_to_champ or '--'}/承伤{p.dmg_taken or '--'}"
                     vis = f"  视野{p.vision_score or '--'}"
-                    line1 = (f"  {p.name or '?'}  {_zh(p.champion_name)} Lv{p.level or '--'} {_zh_pos(p.position)} "
+                    priv = ""
+                    if getattr(p, "privacy", "") == "PRIVATE":
+                        priv = " [隐藏战绩]"
+                    elif getattr(p, "privacy", "") == "PUBLIC":
+                        priv = " [战绩公开]"
+                    line1 = (f"  {p.name or '?'}{priv}  {_zh(p.champion_name)} Lv{p.level or '--'} {_zh_pos(p.position)} "
                              f"{p.kills}/{p.deaths}/{p.assists}  补刀{p.cs}  金币{p.gold}")
                     line2 = (f"    符文{_runes_zh(p)}  技能{spells or '--'}  {mk}{vis}{dmg}")
                     line3 = f"    装备: {items or '--'}"

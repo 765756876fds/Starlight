@@ -88,3 +88,54 @@ class SummonerPrivacyService:
         if priv == "PUBLIC":
             return PUBLIC
         return ERROR
+
+    def batch_privacy(self, puuids) -> dict:
+        """一次 HTTP 请求批量查询多个 puuid，返回 {puuid: status}。
+
+        LeagueAkari postSummonersByPuuids(puuids: string[])，body 为数组。
+        按返回项的 puuid 精确匹配，不依赖数组顺序。
+        空/重复 puuid 不发送；调用失败时全部映射 ERROR（不影响调用方展示）。
+        """
+        uniq = []
+        seen = set()
+        for pu in puuids:
+            pu = (pu or "").strip()
+            if pu and pu not in seen:
+                seen.add(pu)
+                uniq.append(pu)
+        if not uniq:
+            return {}
+        token = self._league_session_token()
+        _, base, sub = SgpServerResolver(self._lcu_get).resolve()
+        out = {pu: ERROR for pu in uniq}
+        if not (token and base and sub):
+            return out
+        url = f"{base}/summoner-ledge/v1/regions/{sub}/summoners/puuids"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "x-akari-sgp-server-id": sub,
+            "x-akari-token-type": "league-session",
+            "x-akari-force-stream-collect": "true",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        try:
+            data = self._https_post(url, uniq, headers)
+        except Exception:
+            return out
+        if not isinstance(data, list):
+            return out
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            pu = item.get("puuid")
+            priv = item.get("privacy")
+            if not pu:
+                continue
+            if priv == "PRIVATE":
+                out[pu] = PRIVATE
+            elif priv == "PUBLIC":
+                out[pu] = PUBLIC
+            else:
+                out[pu] = ERROR
+        return out
