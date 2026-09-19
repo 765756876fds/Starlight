@@ -29,7 +29,9 @@ class ObjectiveTimer:
 
     def start(self):
         self._running = True
+        self._first_spawns_scheduled = False
         self.event_bus.subscribe(EventType.GAME_STARTED, self._on_game_start)
+        self.event_bus.subscribe(EventType.GAME_TIME_UPDATE, self._on_time_update)
         self.event_bus.subscribe(EventType.GAME_ENDED, self._on_game_end)
         self.event_bus.subscribe(EventType.DRAGON_KILLED, self._on_dragon_killed)
         self.event_bus.subscribe(EventType.BARON_KILLED, self._on_baron_killed)
@@ -39,31 +41,51 @@ class ObjectiveTimer:
 
     def stop(self):
         self._running = False
-        self.tracker.on_game_end()
+        self.tracker.on_game_end(); self._first_spawns_scheduled=True
 
     # ----- 事件处理 -----
-    def _on_game_start(self, event: Event):
-        # 修复：Agent 重启附着到进行中对局时，首帧 GAME_STARTED 携带真实 game_time。
-        # 必须先把它同步为当前游戏时钟，再排首次刷新提醒，否则 _schedule_for 会看到 now=0，
-        # 把早已过去的首次刷新（如巢虫 480s）错误排程并在真实时钟到达后立即补播。
-        gt = event.get("game_time", 0.0) or 0.0
-        try:
-            self.game_alarm._current_game_time = float(gt)
-        except Exception:
-            pass
-        print(f"[ObjectiveTimer] GAME_STARTED game_time={gt:.0f}, "
-              f"alarm_now={getattr(self.game_alarm, '_current_game_time', 0):.0f}")
-        self.tracker.on_game_start()
-        self._scheduled.clear()
-        # 为每个有首次刷新时间的资源安排各 lead 提醒
+    def _schedule_first_spawns(self) -> None:
         for o in self.tracker.snapshot():
             rule = self.ruleset.get(o["type"])
             if not rule or o["next_spawn"] is None:
                 continue
             self._schedule_for(o["type"], rule.name_zh, o["next_spawn"], rule.leads)
 
+    def _on_time_update(self, event: Event):
+        # Agent 重启附着到进行中对局：首帧 GAME_STARTED 的 game_time 可能还是 0（连接未就绪），
+        # 此时不能排首次刷新。等第一个真实 game_time(>0) 到达后再排一次。
+        if self._first_spawns_scheduled:
+            return
+        gt = event.get("game_time", 0.0) or 0.0
+        if gt <= 0:
+            return
+        try:
+            self.game_alarm._current_game_time = float(gt)
+        except Exception:
+            pass
+        self._first_spawns_scheduled = True
+        print(f"[ObjectiveTimer] 首次排程按真实 game_time={gt:.0f}")
+        self._schedule_first_spawns()
+
+    def _on_game_start(self, event: Event):
+        # 重启附着到进行中对局时，首帧可能 game_time=0。先同步已知时间；
+        # 只有 game_time>0 才立即排程，否则等第一个 GAME_TIME_UPDATE。
+        gt = float(event.get("game_time", 0.0) or 0.0)
+        try:
+            self.game_alarm._current_game_time = gt
+        except Exception:
+            pass
+        self.tracker.on_game_start()
+        self._scheduled.clear()
+        self._first_spawns_scheduled = False
+        print(f"[ObjectiveTimer] GAME_STARTED game_time={gt:.0f}, "
+              f"alarm_now={getattr(self.game_alarm, '_current_game_time', 0):.0f}")
+        if gt > 0:
+            self._first_spawns_scheduled = True
+            self._schedule_first_spawns()
+
     def _on_game_end(self, event: Event):
-        self.tracker.on_game_end()
+        self.tracker.on_game_end(); self._first_spawns_scheduled=True
         self._scheduled.clear()
 
     def _on_dragon_killed(self, event: Event):
