@@ -314,12 +314,15 @@ class GameAlarmEngine:
     def cancel_last_user_memory(self):
         """取消最近一个用户临时记忆，返回被取消的 Alarm 或 None"""
         with self._lock:
-            users = [a for a in self.alarms.values()
-                     if a.status == AlarmStatus.ACTIVE
-                     and (a.data or {}).get("source", "USER_MEMORY") == "USER_MEMORY"]
-            if not users:
+            # 按字典插入顺序（即创建顺序）取最近一条用户记忆。
+            # 不使用 created_at：同一秒创建的多条记忆时间相同，排序会不稳定。
+            a = None
+            for v in self.alarms.values():
+                if v.status == AlarmStatus.ACTIVE \
+                        and (v.data or {}).get("source", "USER_MEMORY") == "USER_MEMORY":
+                    a = v
+            if a is None:
                 return None
-            a = sorted(users, key=lambda x: x.created_at, reverse=True)[0]
             a.status = AlarmStatus.CANCELLED
             self.alarms[a.alarm_id] = a
         self.event_bus.publish(Event(
