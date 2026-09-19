@@ -18,6 +18,7 @@ AVAILABLE = AVAILABLE
 @dataclass
 class DetailPlayer:
     puuid: str
+    name: str
     champion_name: str
     team_id: int
     position: str
@@ -67,6 +68,7 @@ class MatchDetailService:
             cs = (p.get("totalMinionsKilled") or 0) + (p.get("neutralMinionsKilled") or 0)
             players.append(DetailPlayer(
                 puuid=p.get("puuid", ""),
+                name=p.get("gameName") or p.get("summonerName") or p.get("riotIdGameName") or "",
                 champion_name=p.get("championName", ""),
                 team_id=int(p.get("teamId") or 0),
                 position=p.get("teamPosition") or "",

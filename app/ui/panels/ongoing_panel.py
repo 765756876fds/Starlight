@@ -180,6 +180,10 @@ class OngoingPanel(QWidget):
         for i, s in enumerate(en):
             self._grid.addWidget(_card(s, is_enemy=True), row, i)
 
+    def _force_refresh_account(self):
+        self._acct_next = 0.0
+        self._refresh_account()
+
     def _refresh_account(self):
         import time
         if self._acct is None:
