@@ -313,6 +313,16 @@ class RuleBasedIntent:
             return Intent("player.query", confidence=0.99,
                           params={"query_type": "champion_stats"})
 
+        # ===== 当前对局实时查询（确定性，读 live snapshot）=====
+        if text in ("对面谁最肥", "对面谁最有钱", "对面谁发育最好", "对面最肥的是谁"):
+            return Intent("player.query", confidence=0.95,
+                          params={"query_type": "current_richest", "side": "enemy"})
+        if text in ("我们谁最肥", "我们谁最有钱", "我们谁发育最好", "我们最肥的是谁"):
+            return Intent("player.query", confidence=0.95,
+                          params={"query_type": "current_richest", "side": "self"})
+        if text in ("我现在几杀几死", "我现在战绩", "我现在杀了多少"):
+            return Intent("player.query", confidence=0.95,
+                          params={"query_type": "current_self_kda"})
         # role_stats
         if text in ("主要位置", "常玩位置", "位置统计", "位置战绩"):
             return Intent("player.query", confidence=0.99,

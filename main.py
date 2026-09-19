@@ -309,10 +309,16 @@ class Application:
             profile = PlayerProfileService(history)
             analysis = GameAnalysisService(history, EventLogReader(events_dir))
             svc = PlayerQueryService(history, profile, analysis)
+            def _snapshot_provider():
+                try:
+                    return self.lol.current_snapshot if self.lol else None
+                except Exception:
+                    return None
             handler = make_player_query_handler(
                 svc,
                 speech_queue=self.speech_queue,
                 state_store=self.state_store,
+                snapshot_provider=_snapshot_provider,
             )
             self.command_bus.register(CommandType.PLAYER_QUERY, handler)
             print("...")
