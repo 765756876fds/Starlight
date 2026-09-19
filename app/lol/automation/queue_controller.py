@@ -32,6 +32,11 @@ class QueueController:
             return bool(payload.get("isCurrentlyInQueue"))
         return False
 
+    def reset(self) -> None:
+        self._search_posted = False
+        self._prompted_user = False
+        self._verified = False
+
     def _mark_verified(self) -> None:
         if not self._verified:
             self._verified = True

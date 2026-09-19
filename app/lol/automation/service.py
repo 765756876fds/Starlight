@@ -217,6 +217,16 @@ class LoLAutomationService:
             self._champ_select.clear_state()
         self._last_phase = phase
 
+        # 训练模式 / 自定义房间：Agent 完全不接管（不排队、不 accept、不选人）。
+        # 这是用户实测 Bug 的根因：practice 出现 ChampSelect 被无差别接管，
+        # 退出后下一 tick 又因 phase==ChampSelect/Lobby 被重新推进。
+        if self._is_unmanaged_flow():
+            self._champ_select.clear_state()
+            self._queue.reset()
+            self._tick_hint = "训练/自定义房间：Automation 已忽略"
+            self._set_state(AutomationState.IDLE)
+            return
+
         hints = []
         if cfg.auto_queue:
             if phase == "Lobby":
@@ -254,6 +264,22 @@ class LoLAutomationService:
 
     def get_status_hint(self) -> str:
         return getattr(self, "_tick_hint", "")
+
+    def _is_unmanaged_flow(self) -> bool:
+        """True=当前不是 Agent 应接管的匹配流程（训练模式/自定义/人机练习房）。
+
+        依据 LCU /lol-lobby/v2/lobby 的 gameConfig：gameMode=PRACTICETOOL 或
+        isCustom=True。读取失败时保守返回 False（不误伤正常排位）。
+        """
+        try:
+            status, lobby = self._request_with_status("GET", "/lol-lobby/v2/lobby", None)
+            if status == 200 and isinstance(lobby, dict):
+                gc = lobby.get("gameConfig") or {}
+                if gc.get("gameMode") == "PRACTICETOOL" or gc.get("isCustom"):
+                    return True
+        except Exception:
+            pass
+        return False
 
     @staticmethod
     def _log(feature: str, msg: str) -> None:
