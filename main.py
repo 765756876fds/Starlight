@@ -414,6 +414,17 @@ class Application:
             self.event_bus.subscribe("game.ended",
                                      lambda e: self.cooldown_manager.reset_clock())
             print("...")
+            # A5 经济状态边沿提醒（仅跨边界时一句短话，低噪音）
+            try:
+                from app.player.economy_advisor import make_economy_advisor
+                def _snap_provider():
+                    return self.lol.current_snapshot if self.lol else None
+                adv = make_economy_advisor(_snap_provider, self.speech_queue, enabled=True)
+                self.event_bus.subscribe("game.time_update", adv["on_time_update"])
+                self.event_bus.subscribe("game.ended", adv["on_game_reset"])
+                print("[A5] economy advisor registered")
+            except Exception as _e:
+                print(f"[A5] economy advisor 注册失败: {_e}")
         except Exception as e:
             print(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")
 
