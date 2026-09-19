@@ -98,9 +98,11 @@ def _zh(name: str) -> str:
 
 
 def _show_detail(m, svc=None) -> None:
+    from PySide6.QtWidgets import QTabWidget
     dlg = QDialog()
     dlg.setWindowTitle("对局详情")
-    lay = QVBoxLayout(dlg)
+    dlg.resize(520, 720)
+    root = QVBoxLayout(dlg)
     dt = datetime.datetime.fromtimestamp(m.game_creation / 1000).strftime("%Y-%m-%d %H:%M") if m.game_creation else "--"
     dur = f"{m.game_duration // 60}分{m.game_duration % 60}秒" if m.game_duration else "--"
     win = "胜利" if m.win else "失败"
@@ -109,73 +111,103 @@ def _show_detail(m, svc=None) -> None:
     a = m.assists if m.assists is not None else "-"
     for r in [
         f"<b>{_zh(m.champion_name or '?')}</b>  {win}",
-        f"时间: {dt}", f"模式: {m.queue_type or '未知'}", f"时长: {dur}",
-        f"K/D/A: {k} / {d} / {a}",
-        f"补刀: {m.cs if m.cs is not None else '--'}",
-        f"金币: {m.gold if m.gold is not None else '--'}",
-        f"位置: {_zh_pos(m.team_position) or '--'}",
+        f"时间: {dt}  模式: {m.queue_type or '未知'}  时长: {dur}",
+        f"K/D/A: {k} / {d} / {a}   补刀: {m.cs if m.cs is not None else '--'}   金币: {m.gold if m.gold is not None else '--'}",
     ]:
-        lay.addWidget(QLabel(r))
-    # 10 人详情（SGP 单场 SUMMARY）
+        root.addWidget(QLabel(r))
+
+    tabs = QTabWidget()
+    root.addWidget(tabs)
+
+    # ---- Tab 1: 阵容 ----
+    squad = QWidget()
+    squad_lay = QVBoxLayout(squad)
     if svc is not None and m.game_id:
         try:
             pu = svc.self_puuid()
             det = svc.get_detail(m.game_id, pu)
-            lay.addWidget(QLabel("<b>双方阵容</b>"))
+            squad_lay.addWidget(QLabel("<b>双方阵容</b>"))
             for team, title in [(100, "蓝方"), (200, "红方")]:
-                lay.addWidget(QLabel(title))
-                for p in [x for x in det.players if x.team_id == team]:
-                    mk = _multikill_zh(p)
-                    spells = "/".join(x for x in [_spell_zh(p.spell1), _spell_zh(p.spell2)] if x)
-                    items = " ".join(_item_zh(i) for i in (p.items or []) if i)
-                    dmg = f"  伤害{p.dmg_to_champ or '--'}/承伤{p.dmg_taken or '--'}"
-                    vis = f"  视野{p.vision_score or '--'}"
+                squad_lay.addWidget(QLabel(title))
+                for pl in [x for x in det.players if x.team_id == team]:
+                    mk = _multikill_zh(pl)
+                    spells = "/".join(x for x in [_spell_zh(pl.spell1), _spell_zh(pl.spell2)] if x)
+                    items = " ".join(_item_zh(i) for i in (pl.items or []) if i)
+                    dmg = f"  伤害{pl.dmg_to_champ or '--'}/承伤{pl.dmg_taken or '--'}"
+                    vis = f"  视野{pl.vision_score or '--'}"
                     priv = ""
-                    if getattr(p, "privacy", "") == "PRIVATE":
+                    if getattr(pl, "privacy", "") == "PRIVATE":
                         priv = " [隐藏战绩]"
-                    elif getattr(p, "privacy", "") == "PUBLIC":
+                    elif getattr(pl, "privacy", "") == "PUBLIC":
                         priv = " [战绩公开]"
-                    line1 = (f"  {p.name or '?'}{priv}  {_zh(p.champion_name)} Lv{p.level or '--'} {_zh_pos(p.position)} "
-                             f"{p.kills}/{p.deaths}/{p.assists}  补刀{p.cs}  金币{p.gold}")
-                    line2 = (f"    符文{_runes_zh(p)}  技能{spells or '--'}  {mk}{vis}{dmg}")
-                    line3 = f"    装备: {items or '--'}"
-                    lay.addWidget(QLabel(line1))
-                    lay.addWidget(QLabel(line2))
-                    lay.addWidget(QLabel(line3))
-            # A10.3 事件时间线（按需 DETAILS，失败不影响 10 人）
-            try:
-                from app.lol.ongoing.sgp_server import SgpServerResolver
-                _, _, sub = SgpServerResolver(svc._lcu_get).resolve()
-                events, pid_puuid = MatchTimelineService(svc._lcu_get).get_events(m.game_id, sub)
-                pu_name = {pl.puuid: (pl.name or "?") for pl in det.players}
-                def nm(pid):
-                    if not pid: return "?"
-                    return pu_name.get(pid_puuid.get(pid, ""), f"P{pid}")
-                lay.addWidget(QLabel("<b>事件时间线</b>"))
-                shown = [e for e in events if e.event_type in _HIGH_VALUE]
-                if not shown:
-                    lay.addWidget(QLabel("<i>暂无事件数据</i>"))
-                for e in shown:
-                    zh = _EVT_ZH.get(e.event_type, f"未知事件({e.event_type})")
-                    if e.event_type == "CHAMPION_KILL":
-                        txt = f"{nm(e.killer_id)} 击杀 {nm(e.victim_id)}"
-                        if e.assist_ids:
-                            txt += " 助攻:" + ",".join(nm(a) for a in e.assist_ids)
-                    elif e.event_type in ("ITEM_PURCHASED","ITEM_SOLD"):
-                        txt = f"{nm(e.participant_id)} {zh} {_item_zh(e.item_id) or ('装备'+str(e.item_id))}"
-                    elif e.event_type == "BUILDING_KILL":
-                        txt = f"{nm(e.killer_id)} 摧毁 {e.building_type or '建筑'}"
-                    elif e.event_type == "ELITE_MONSTER_KILL":
-                        txt = f"{nm(e.killer_id)} 击杀 {e.monster_type or '大型野怪'}"
-                    elif e.event_type == "WARD_KILL":
-                        txt = f"{nm(e.killer_id)} 摧毁眼位"
-                    else:
-                        txt = zh
-                    lay.addWidget(QLabel(f"  {_fmt_ms(e.timestamp_ms)}  {txt}"))
-            except Exception:
-                lay.addWidget(QLabel("<i>事件时间线暂不可用</i>"))
+                    squad_lay.addWidget(QLabel(
+                        f"  {pl.name or '?'}{priv}  {_zh(pl.champion_name)} Lv{pl.level or '--'} {_zh_pos(pl.position)} "
+                        f"{pl.kills}/{pl.deaths}/{pl.assists}  补刀{pl.cs}  金币{pl.gold}"))
+                    squad_lay.addWidget(QLabel(
+                        f"    符文{_runes_zh(pl)}  技能{spells or '--'}  {mk}{vis}{dmg}"))
+                    squad_lay.addWidget(QLabel(f"    装备: {items or '--'}"))
         except Exception:
-            lay.addWidget(QLabel("<i>详细数据暂时不可用</i>"))
+            det = None
+            squad_lay.addWidget(QLabel("<i>详细数据暂时不可用</i>"))
+    else:
+        det = None
+    squad_lay.addStretch(1)
+    squad_scroll = QScrollArea(); squad_scroll.setWidgetResizable(True); squad_scroll.setWidget(squad)
+    tabs.addTab(squad_scroll, "阵容")
+
+    # ---- Tab 2: 事件时间线（切到该 tab 才加载，避免打开即卡）----
+    tl = QWidget()
+    tl_lay = QVBoxLayout(tl)
+    tl_lay.addWidget(QLabel("<i>点击此页加载事件时间线…</i>"))
+    tl_lay.addStretch(1)
+    tl_scroll = QScrollArea(); tl_scroll.setWidgetResizable(True); tl_scroll.setWidget(tl)
+    tabs.addTab(tl_scroll, "事件时间线")
+
+    def load_timeline():
+        if getattr(load_timeline, "done", False):
+            return
+        load_timeline.done = True
+        # 清空提示
+        while tl_lay.count():
+            it = tl_lay.takeAt(0)
+            w = it.widget()
+            if w: w.deleteLater()
+        if not (svc is not None and m.game_id):
+            tl_lay.addWidget(QLabel("<i>暂无可加载数据</i>")); tl_lay.addStretch(1); return
+        try:
+            from app.lol.ongoing.sgp_server import SgpServerResolver
+            _, _, sub = SgpServerResolver(svc._lcu_get).resolve()
+            events, pid_puuid = MatchTimelineService(svc._lcu_get).get_events(m.game_id, sub)
+            pu_name = {pl.puuid: (pl.name or "?") for pl in (det.players if det else [])}
+            def nm(pid):
+                if not pid: return "?"
+                return pu_name.get(pid_puuid.get(pid, ""), f"P{pid}")
+            shown = [e for e in events if e.event_type in _HIGH_VALUE]
+            if not shown:
+                tl_lay.addWidget(QLabel("<i>暂无事件数据</i>"))
+            for e in shown:
+                zh = _EVT_ZH.get(e.event_type, f"未知事件({e.event_type})")
+                if e.event_type == "CHAMPION_KILL":
+                    txt = f"{nm(e.killer_id)} 击杀 {nm(e.victim_id)}"
+                    if e.assist_ids:
+                        txt += " 助攻:" + ",".join(nm(a) for a in e.assist_ids)
+                elif e.event_type in ("ITEM_PURCHASED","ITEM_SOLD"):
+                    txt = f"{nm(e.participant_id)} {zh} {_item_zh(e.item_id) or ('装备'+str(e.item_id))}"
+                elif e.event_type == "BUILDING_KILL":
+                    txt = f"{nm(e.killer_id)} 摧毁 {e.building_type or '建筑'}"
+                elif e.event_type == "ELITE_MONSTER_KILL":
+                    txt = f"{nm(e.killer_id)} 击杀 {e.monster_type or '大型野怪'}"
+                elif e.event_type == "WARD_KILL":
+                    txt = f"{nm(e.killer_id)} 摧毁眼位"
+                else:
+                    txt = zh
+                tl_lay.addWidget(QLabel(f"  {_fmt_ms(e.timestamp_ms)}  {txt}"))
+            tl_lay.addStretch(1)
+        except Exception:
+            tl_lay.addWidget(QLabel("<i>事件时间线暂不可用</i>"))
+            tl_lay.addStretch(1)
+
+    tabs.currentChanged.connect(lambda idx: load_timeline() if idx == 1 else None)
     dlg.exec()
 
 
