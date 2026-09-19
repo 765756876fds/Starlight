@@ -28,6 +28,19 @@ except Exception:
 
 _RUNE_TREE = {8000: "精密", 8100: "主宰", 8200: "巫术", 8300: "坚决", 8400: "启迪"}
 
+_ITEM_ZH = {}
+try:
+    _it = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                  "data", "lol_data", "items.json"), encoding="utf-8"))
+    _ITEM_ZH = {int(k): v for k, v in _it.get("items", {}).items()}
+except Exception:
+    pass
+
+def _item_zh(iid):
+    if not iid:
+        return ""
+    return _ITEM_ZH.get(int(iid), str(iid))
+
 def _spell_zh(sid):
     if not sid:
         return ""
@@ -98,7 +111,7 @@ def _show_detail(m, svc=None) -> None:
                 for p in [x for x in det.players if x.team_id == team]:
                     mk = _multikill_zh(p)
                     spells = "/".join(x for x in [_spell_zh(p.spell1), _spell_zh(p.spell2)] if x)
-                    items = " ".join(str(i) for i in (p.items or []) if i)
+                    items = " ".join(_item_zh(i) for i in (p.items or []) if i)
                     dmg = f"  伤害{p.dmg_to_champ or '--'}/承伤{p.dmg_taken or '--'}"
                     vis = f"  视野{p.vision_score or '--'}"
                     line1 = (f"  {p.name or '?'}  {_zh(p.champion_name)} Lv{p.level or '--'} {_zh_pos(p.position)} "
