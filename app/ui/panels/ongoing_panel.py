@@ -1,22 +1,61 @@
 """对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QDialog, QFrame, QGridLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
-import datetime
+import datetime, os, json
 
 
-def _match_row(m) -> QLabel:
-    dt = datetime.datetime.fromtimestamp(m.game_creation / 1000).strftime("%m-%d") if m.game_creation else "--"
-    win = "胜" if m.win else "负"
-    c = "#2e7d32" if m.win else "#c62828"
+def _zh_map() -> dict:
+    try:
+        p = os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                         "data", "lol_data", "champions.json")
+        d = json.load(open(p, encoding="utf-8"))
+        return {c.get("alias"): c.get("name") for c in d}
+    except Exception:
+        return {}
+
+
+_ZH = _zh_map()
+
+
+def _zh(name: str) -> str:
+    return _ZH.get(name, name)
+
+
+def _show_detail(m) -> None:
+    dlg = QDialog()
+    dlg.setWindowTitle("对局详情")
+    lay = QVBoxLayout(dlg)
+    dt = datetime.datetime.fromtimestamp(m.game_creation / 1000).strftime("%Y-%m-%d %H:%M") if m.game_creation else "--"
+    dur = f"{m.game_duration // 60}分{m.game_duration % 60}秒" if m.game_duration else "--"
+    win = "胜利" if m.win else "失败"
     k = m.kills if m.kills is not None else "-"
     d = m.deaths if m.deaths is not None else "-"
     a = m.assists if m.assists is not None else "-"
-    return QLabel(
-        f'<span style="color:{c}">{win}</span> {dt} {m.queue_type or ""} '
-        f'{m.champion_name or "?"} {k}/{d}/{a}'
-    )
+    for r in [
+        f"<b>{_zh(m.champion_name or '?')}</b>  {win}",
+        f"时间: {dt}", f"模式: {m.queue_type or '未知'}", f"时长: {dur}",
+        f"K/D/A: {k} / {d} / {a}",
+        f"补刀: {m.cs if m.cs is not None else '--'}",
+        f"金币: {m.gold if m.gold is not None else '--'}",
+        f"位置: {m.team_position or '--'}",
+    ]:
+        lay.addWidget(QLabel(r))
+    dlg.exec()
+
+
+def _match_row(m) -> QPushButton:
+    dt = datetime.datetime.fromtimestamp(m.game_creation / 1000).strftime("%m-%d") if m.game_creation else "--"
+    win = "胜" if m.win else "负"
+    k = m.kills if m.kills is not None else "-"
+    d = m.deaths if m.deaths is not None else "-"
+    a = m.assists if m.assists is not None else "-"
+    btn = QPushButton(f"{win}  {dt}  {m.queue_type or ''}  {_zh(m.champion_name or '?')}  {k}/{d}/{a}")
+    btn.setStyleSheet("text-align:left; border:none; padding:2px; color:#ddd;")
+    btn.setFlat(True)
+    btn.clicked.connect(lambda: _show_detail(m))
+    return btn
 
 
 def _card(snap, is_enemy: bool) -> QFrame:
