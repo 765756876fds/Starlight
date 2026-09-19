@@ -9,6 +9,21 @@ from app.ui.panels.music_panel import MusicPanel
 from app.ui.panels.ongoing_panel import OngoingPanel
 
 
+def _build_acct(ongoing_service, services_dict):
+    try:
+        lcu = None
+        if isinstance(services_dict, dict):
+            lcu = services_dict.get("lcu")
+        if lcu is None and ongoing_service is not None:
+            lcu = getattr(ongoing_service, "_lcu", None)
+        if lcu is None or not hasattr(lcu, "get"):
+            return None
+        from app.lol.ongoing.account_history import AccountMatchHistoryService
+        return AccountMatchHistoryService(lcu.get)
+    except Exception:
+        return None
+
+
 class MainTabs(QWidget):
     def __init__(self, automation_service, cooldown_manager, music,
                  ongoing_service=None, services_dict=None,
@@ -32,7 +47,7 @@ class MainTabs(QWidget):
         _add(lambda: CurrentGamePanel(snapshot_provider), "当前对局")
         _add(lambda: HistoryPanel(history_repo), "历史")
         _add(lambda: AutomationPanel(automation_service), "自动化")
-        _add(lambda: OngoingPanel(ongoing_service), "对局信息")
+        _add(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息")
         _add(lambda: CooldownPanel(cooldown_manager), "计时器")
         _add(lambda: MusicPanel(music), "音乐")
         layout.addWidget(tabs)
