@@ -1,7 +1,7 @@
-"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
+﻿"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 import datetime, os, json
 
@@ -128,6 +128,20 @@ class OngoingPanel(QWidget):
         head.addWidget(self.btn_refresh)
         head.addStretch()
         root.addLayout(head)
+        # 玩家战绩搜索（独立状态，不污染我的战绩）
+        root.addWidget(QLabel("<b>查询玩家战绩（Riot ID：名称#标签）</b>"))
+        srow = QHBoxLayout()
+        self.in_search = QLineEdit()
+        self.in_search.setPlaceholderText("例如：果子#48230")
+        self.in_search.returnPressed.connect(self._do_search)
+        btn = QPushButton("搜索")
+        btn.clicked.connect(self._do_search)
+        srow.addWidget(self.in_search); srow.addWidget(btn)
+        root.addLayout(srow)
+        self._search_status = QLabel("")
+        root.addWidget(self._search_status)
+        self._search_box = QVBoxLayout()
+        root.addLayout(self._search_box)
         self._acct_box = QVBoxLayout()
         self._acct_status = QLabel("")
         self._acct_box.addWidget(self._acct_status)
@@ -184,6 +198,36 @@ class OngoingPanel(QWidget):
         self._acct_next = 0.0
         self._refresh_account()
 
+    def _do_search(self):
+        from app.lol.ongoing.player_search import PlayerSearchService
+        from app.lol.ongoing.player_search import parse_riot_id
+        if not self._acct:
+            self._search_status.setText("服务未就绪"); return
+        txt = self.in_search.text()
+        gn, tag = parse_riot_id(txt)
+        if not gn:
+            self._search_status.setText("请输入 名称#标签"); return
+        self._search_status.setText("正在查询玩家…")
+        try:
+            svc = PlayerSearchService(self._acct._lcu_get, self._acct._lcu_post)
+            r = svc.search(txt)
+        except Exception as e:
+            self._search_status.setText(f"查询失败：{e}"); return
+        while self._search_box.count():
+            it = self._search_box.takeAt(0); w=it.widget()
+            if w: w.deleteLater()
+        if r.status == "NOT_FOUND":
+            self._search_status.setText("未找到玩家，请检查 Riot ID")
+        elif r.status == "INVALID_RIOT_ID":
+            self._search_status.setText("请输入 名称#标签")
+        elif r.status == "SEARCH_UNAVAILABLE":
+            self._search_status.setText("战绩数据源暂时不可用")
+        elif not r.matches:
+            self._search_status.setText("该玩家暂无可查询的近期战绩")
+        else:
+            self._search_status.setText(f"{r.game_name}#{r.tag_line} 近期战绩")
+            for m in r.matches[:10]:
+                self._search_box.addWidget(_match_row(m, self._acct))
     def _refresh_account(self):
         import time
         if self._acct is None:

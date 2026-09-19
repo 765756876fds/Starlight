@@ -1,4 +1,4 @@
-﻿"""账号近期战绩服务：SGP primary，LCU fallback（腾讯服）。
+"""账号近期战绩服务：SGP primary，LCU fallback（腾讯服）。
 
 调用链：
   LCU entitlements token + current puuid
@@ -34,15 +34,12 @@ def queue_label(queue_id: int) -> str:
 
 
 class AccountMatchHistoryService:
-    def __init__(
-        self,
-        lcu_get: Callable[[str], Optional[dict]],
-        recent_n: int = 20,
-    ):
+
+    def __init__(self, lcu_get, lcu_post=None, recent_n=20):
         self._lcu_get = lcu_get
+        self._lcu_post = lcu_post or (lambda ep, b: None)
         self._n = recent_n
 
-    def _entitlements_token(self) -> Optional[str]:
         r = self._lcu_get("/entitlements/v1/token")
         if isinstance(r, dict):
             t = r.get("accessToken")

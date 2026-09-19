@@ -1,4 +1,4 @@
-"""主界面 Tab 容器：4 个 Tab + 底部状态栏。"""
+﻿"""主界面 Tab 容器：4 个 Tab + 底部状态栏。"""
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QLabel
 
 from app.ui.panels.automation_panel import AutomationPanel
@@ -19,7 +19,7 @@ def _build_acct(ongoing_service, services_dict):
         if lcu is None or not hasattr(lcu, "get"):
             return None
         from app.lol.ongoing.account_history import AccountMatchHistoryService
-        return AccountMatchHistoryService(lcu.get)
+        return AccountMatchHistoryService(lcu.get, lcu.post)
     except Exception:
         return None
 
