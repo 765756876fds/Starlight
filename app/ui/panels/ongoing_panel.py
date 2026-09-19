@@ -1,7 +1,7 @@
-"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
+﻿"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QGridLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 import datetime, os, json
 
@@ -121,7 +121,13 @@ class OngoingPanel(QWidget):
         root.addWidget(self.lbl_hint)
 
         # 我的近期战绩（SGP），与下方 10 人当前对局互不影响
-        root.addWidget(QLabel("<b>我的近期战绩</b>"))
+        head = QHBoxLayout()
+        head.addWidget(QLabel("<b>我的近期战绩</b>"))
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.clicked.connect(self._force_refresh_account)
+        head.addWidget(self.btn_refresh)
+        head.addStretch()
+        root.addLayout(head)
         self._acct_box = QVBoxLayout()
         self._acct_status = QLabel("")
         self._acct_box.addWidget(self._acct_status)
