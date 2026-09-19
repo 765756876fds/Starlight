@@ -7,7 +7,6 @@ from app.ui.panels.current_game_panel import CurrentGamePanel
 from app.ui.panels.history_panel import HistoryPanel
 from app.ui.panels.music_panel import MusicPanel
 from app.ui.panels.ongoing_panel import OngoingPanel
-from app.ui.panels.status_bar import StatusBar
 
 
 class MainTabs(QWidget):
@@ -37,15 +36,5 @@ class MainTabs(QWidget):
         _add(lambda: CooldownPanel(cooldown_manager), "计时器")
         _add(lambda: MusicPanel(music), "音乐")
         layout.addWidget(tabs)
-
-        try:
-            status = StatusBar(services_dict or {
-                "lcu": getattr(automation_service, "_lcu", None) if automation_service else None,
-                "asr": None,
-                "intent": None,
-            })
-            layout.addWidget(status)
-        except Exception as e:
-            print(f"[UI] StatusBar failed: {e}")
 
         print("[UI] MainTabs 完成")

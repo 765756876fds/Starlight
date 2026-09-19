@@ -564,6 +564,15 @@ class Application:
             history_repo=getattr(self, "history_repo", None),
         )
         print("[Run] MainTabs built, switching")
+        # 统一运行时状态：MainWindow 底部唯一 StatusBar 读取这套真实服务
+        try:
+            window._services = {
+                "lcu": getattr(getattr(self, "automation", None), "_lcu", None),
+                "asr": getattr(getattr(self, "voice", None), "asr", None),
+                "intent": getattr(getattr(self, "voice", None), "intent_router", None),
+            }
+        except Exception as e:
+            print(f"[UI] services wiring failed: {e}")
         window.switch_to_tabs(tabs)
         print("[Run] switched, showing tray")
         from app.ui.tray import TrayIcon

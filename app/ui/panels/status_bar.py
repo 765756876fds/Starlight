@@ -35,11 +35,12 @@ class StatusBar(QStatusBar):
         asr_label = "未就绪"
         asr_ok = False
         if asr is not None:
-            engines = getattr(asr, "engines", []) or []
-            names = [getattr(e, "name", type(e).__name__) for e in engines]
-            if names:
+            # 真实健康：active engine 是否可连通（8080 health）
+            if hasattr(asr, "is_available") and asr.is_available():
                 asr_ok = True
-                asr_label = "/".join(names)
+                engines = getattr(asr, "engines", []) or []
+                names = [getattr(e, "name", type(e).__name__) for e in engines]
+                asr_label = "/".join(names) if names else "READY"
         self.lbl_asr.setText(f"{_dot(asr_ok)} ASR {asr_label}")
 
         intent = self._svc.get("intent")
