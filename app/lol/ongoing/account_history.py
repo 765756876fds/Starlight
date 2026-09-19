@@ -1,4 +1,4 @@
-"""账号近期战绩服务：SGP primary，LCU fallback（腾讯服）。
+﻿"""账号近期战绩服务：SGP primary，LCU fallback（腾讯服）。
 
 调用链：
   LCU entitlements token + current puuid
@@ -20,17 +20,38 @@ from .sgp_provider import SgpMatchHistoryProvider, tencent_sgp_base_from_platfor
 
 # 最小 queueId -> 模式标签
 _QUEUE_LABELS = {
+    0: "自定义",
     3140: "新手/训练",
     870: "人机",
+    840: "人机",
+    830: "人机",
+    850: "人机",
+    400: "匹配",
+    430: "匹配",
+    460: "匹配",
+    490: "匹配",
+    900: "无限火力",
+    1010: "无限火力",
+    450: "大乱斗",
+    900: "无限火力",
+    1900: "无限火力",
     420: "单双排位",
     430: "匹配",
     440: "灵活排位",
-    450: "大乱斗",
+    470: "双人排位",
+    700: "克隆",
+    720: "围场",
+    800: "人机",
+    820: "人机",
+    900: "无限火力",
+    1020: "ONE for ALL",
+    1300: "纳什男爵",
 }
 
 
 def queue_label(queue_id: int) -> str:
-    return _QUEUE_LABELS.get(int(queue_id), "未知模式")
+    q = int(queue_id or 0)
+    return _QUEUE_LABELS.get(q, f'未知模式({q})')
 
 
 class AccountMatchHistoryService:
@@ -113,3 +134,5 @@ class AccountMatchHistoryService:
         for m in r.records:
             m.queue_type = queue_label(m.queue_id)
         return r
+
+

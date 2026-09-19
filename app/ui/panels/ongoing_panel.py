@@ -18,6 +18,23 @@ def _zh_map() -> dict:
 
 _ZH = _zh_map()
 
+_POS_ZH = {
+    "TOP": "上路",
+    "JUNGLE": "打野",
+    "MIDDLE": "中路",
+    "BOTTOM": "下路",
+    "UTILITY": "辅助",
+    "NONE": "",
+    "": "",
+}
+
+
+def _zh_pos(p):
+    if not p:
+        return ""
+    s = str(p).strip().upper()
+    return _POS_ZH.get(s, str(p))
+
 
 def _zh(name: str) -> str:
     return _ZH.get(name, name)
@@ -39,7 +56,7 @@ def _show_detail(m, svc=None) -> None:
         f"K/D/A: {k} / {d} / {a}",
         f"补刀: {m.cs if m.cs is not None else '--'}",
         f"金币: {m.gold if m.gold is not None else '--'}",
-        f"位置: {m.team_position or '--'}",
+        f"位置: {_zh_pos(m.team_position) or '--'}",
     ]:
         lay.addWidget(QLabel(r))
     # 10 人详情（SGP 单场 SUMMARY）
@@ -51,9 +68,11 @@ def _show_detail(m, svc=None) -> None:
             for team, title in [(100, "蓝方"), (200, "红方")]:
                 lay.addWidget(QLabel(title))
                 for p in [x for x in det.players if x.team_id == team]:
+                    hidden = (not p.puuid) or str(p.puuid).startswith('00000000')
+                    tag = '  [隐藏战绩]' if hidden else ''
                     lay.addWidget(QLabel(
-                        f"  {p.name or '?'}  {_zh(p.champion_name)} {p.position or ''} "
-                        f"{p.kills}/{p.deaths}/{p.assists}  CS{p.cs}  金{p.gold}"
+                        f"  {p.name or '?'}  {_zh(p.champion_name)} {_zh_pos(p.position)} {tag} "
+                        f"{p.kills}/{p.deaths}/{p.assists}  补刀{p.cs}  金币{p.gold}"
                     ))
         except Exception:
             lay.addWidget(QLabel("<i>详细数据暂时不可用</i>"))
