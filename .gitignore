@@ -29,11 +29,19 @@ events/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+# SQLite WAL/SHM sidecars (runtime only; schema/seed not here)
+*.db-shm
+*.db-wal
 
-# Audio outputs
+# Audio outputs (TTS runtime)
+data/tts/
 data/*.mp3
 data/*.wav
 data/*.flac
+
+# Runtime screenshots / live samples (local debug only)
+data/*.png
+data/_*.json
 
 # Models (large files, never commit)
 *.gguf
