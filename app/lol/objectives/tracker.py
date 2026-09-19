@@ -72,6 +72,10 @@ class ObjectiveTracker:
             for o in self._objs.values():
                 o.state = ObjectiveState.GAME_ENDED
                 o.next_spawn = None
+            # 彻底清空跨局状态：队伍龙计数 / Soul / Elder
+            self._dragon_kills_by_team = {}
+            self._soul_team = None
+            self._elder_reached = False
 
     def on_dragon_killed(self, game_time: float, dragon_type: str = "",
                           killer_team: str = "") -> None:
