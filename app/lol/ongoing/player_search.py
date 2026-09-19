@@ -1,4 +1,4 @@
-"""A9.6 玩家战绩搜索：Riot ID -> puuid -> SGP 近期战绩。
+﻿"""A9.6 玩家战绩搜索：Riot ID -> puuid -> SGP 近期战绩。
 
 只支持当前所在腾讯大区（与登录账号同服务器）。
 Riot ID 格式：name#tag，如 果子#48230。
@@ -88,7 +88,10 @@ class PlayerSearchService:
             return PlayerSearchResult(status=SEARCH_UNAVAILABLE, message="战绩源不可用")
         prov = SgpMatchHistoryProvider(lambda: token, lambda: base)
         res = prov.recent(puuid, start_index=0, count=self._n)
+        from .account_history import queue_label
         recs = sorted(res.records, key=lambda m: m.game_creation, reverse=True)
+        for m in recs:
+            m.queue_type = queue_label(m.queue_id)
         return PlayerSearchResult(
             status=FOUND if recs else NO_DATA,
             puuid=puuid,
