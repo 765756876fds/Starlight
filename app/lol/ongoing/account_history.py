@@ -1,4 +1,4 @@
-"""账号近期战绩服务：SGP primary，LCU fallback（腾讯服）。
+﻿"""账号近期战绩服务：SGP primary，LCU fallback（腾讯服）。
 
 调用链：
   LCU entitlements token + current puuid
@@ -61,8 +61,9 @@ class AccountMatchHistoryService:
         if not puuid:
             return MatchHistoryResult(state=ERROR, message="no_self_puuid")
 
+        from .sgp_server import SgpServerResolver
+        state, base, sub_id = SgpServerResolver(self._lcu_get).resolve()
         token = self._entitlements_token()
-        base = tencent_sgp_base_from_platform("HN10")  # 腾讯服固定
         if token and base:
             prov = SgpMatchHistoryProvider(lambda: token, lambda: base)
             r = prov.recent(puuid, start_index=0, count=self._n)
@@ -101,9 +102,12 @@ class AccountMatchHistoryService:
     def self_puuid(self):
         return self._current_puuid()
 
-    def get_detail(self, game_id: int, self_puuid: str, sub_id: str = "HN10"):
+    def get_detail(self, game_id: int, self_puuid: str, sub_id: str = None):
         from .match_detail import MatchDetailService
-        return MatchDetailService(self._lcu_get).get(game_id, self_puuid, sub_id)
+        from .sgp_server import SgpServerResolver
+        if sub_id is None:
+            _, base, sub_id = SgpServerResolver(self._lcu_get).resolve()
+        return MatchDetailService(self._lcu_get).get(game_id, self_puuid, sub_id or "HN10")
 
     @staticmethod
     def _finalize(r: MatchHistoryResult) -> MatchHistoryResult:

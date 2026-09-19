@@ -46,9 +46,13 @@ class MatchDetailService:
         r = self._lcu("/entitlements/v1/token")
         return r.get("accessToken") if isinstance(r, dict) else None
 
-    def get(self, game_id: int, self_puuid: str, sub_id: str = "HN10"):
+    def get(self, game_id: int, self_puuid: str, sub_id: str = None):
         token = self._token()
-        base = "https://hn10-k8s-sgp.lol.qq.com:21019"
+        from .sgp_server import SgpServerResolver
+        _, base, sid = SgpServerResolver(self._lcu).resolve()
+        sub_id = sub_id or sid or "HN10"
+        if not base:
+            base = "https://hn10-k8s-sgp.lol.qq.com:21019"
         url = f"{base}/match-history-query/v1/products/lol/{sub_id}_{game_id}/SUMMARY"
         import json, ssl, urllib.request
         ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
