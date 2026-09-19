@@ -27,6 +27,7 @@ class PlayerSearchResult:
     tag_line: str = ""
     matches: Optional[List[MatchRecord]] = None
     message: str = ""
+    privacy: str = ""  # PUBLIC / PRIVATE / ERROR / ""
 
 
 def parse_riot_id(text: str):
@@ -92,10 +93,18 @@ class PlayerSearchService:
         recs = sorted(res.records, key=lambda m: m.game_creation, reverse=True)
         for m in recs:
             m.queue_type = queue_label(m.queue_id)
+        # 隐私状态独立查询，失败不影响战绩展示
+        privacy = ""
+        try:
+            from .summoner_privacy import SummonerPrivacyService
+            privacy = SummonerPrivacyService(self._lcu).get_privacy(puuid)
+        except Exception:
+            privacy = "ERROR"
         return PlayerSearchResult(
             status=FOUND if recs else NO_DATA,
             puuid=puuid,
             game_name=target.get("gameName") or gn,
             tag_line=target.get("tagLine") or tag,
             matches=recs,
+            privacy=privacy,
         )

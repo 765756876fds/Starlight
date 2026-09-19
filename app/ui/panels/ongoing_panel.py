@@ -68,10 +68,8 @@ def _show_detail(m, svc=None) -> None:
             for team, title in [(100, "蓝方"), (200, "红方")]:
                 lay.addWidget(QLabel(title))
                 for p in [x for x in det.players if x.team_id == team]:
-                    hidden = (not p.puuid) or str(p.puuid).startswith('00000000')
-                    tag = '  [隐藏战绩]' if hidden else ''
                     lay.addWidget(QLabel(
-                        f"  {p.name or '?'}  {_zh(p.champion_name)} {_zh_pos(p.position)} {tag} "
+                        f"  {p.name or '?'}  {_zh(p.champion_name)} {_zh_pos(p.position)} "
                         f"{p.kills}/{p.deaths}/{p.assists}  补刀{p.cs}  金币{p.gold}"
                     ))
         except Exception:
@@ -269,7 +267,14 @@ class OngoingPanel(QWidget):
         elif not r.matches:
             self._search_status.setText("该玩家暂无可查询的近期战绩")
         else:
-            self._search_status.setText(f"{r.game_name}#{r.tag_line} 近期战绩")
+            priv_tag = ""
+            if getattr(r, "privacy", "") == "PRIVATE":
+                priv_tag = "  [隐藏战绩]"
+            elif getattr(r, "privacy", "") == "PUBLIC":
+                priv_tag = "  [战绩公开]"
+            elif getattr(r, "privacy", "") == "ERROR":
+                priv_tag = "  [隐私状态未知]"
+            self._search_status.setText(f"{r.game_name}#{r.tag_line} 近期战绩{priv_tag}")
             for m in r.matches[:10]:
                 self._search_box.addWidget(_match_row(m, self._acct))
     def _refresh_account(self):
