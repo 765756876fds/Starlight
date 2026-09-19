@@ -316,6 +316,8 @@ def _show_detail(m, svc=None) -> None:
                 if pu == self_pu:
                     default_idx = i
             player_cb.setCurrentIndex(default_idx)
+            summary_lbl = QLabel("")
+            chart = _LineChart()
             dat_lay.addWidget(summary_lbl)
             dat_lay.addWidget(chart, 1)
 
