@@ -138,3 +138,76 @@ class MatchDetailService:
         except Exception:
             pass
         return MatchDetail(game_id=int(j.get("gameId") or game_id), players=players)
+
+
+@dataclass
+class MatchTimelineEvent:
+    timestamp_ms: int
+    event_type: str
+    participant_id: Optional[int] = None
+    item_id: Optional[int] = None
+    building_type: Optional[str] = None
+    monster_type: Optional[str] = None
+    killer_id: Optional[int] = None
+    victim_id: Optional[int] = None
+    assist_ids: list = field(default_factory=list)
+
+
+def _fmt_ms(ms: int) -> str:
+    total = int(ms or 0) // 1000
+    m, sec = total // 60, total % 60
+    return f"{m:02d}:{sec:02d}"
+
+
+def parse_details_events(details_json: dict, participant_map: dict = None) -> list:
+    events = []
+    for frame in (details_json or {}).get("frames", []) or []:
+        ts = frame.get("timestamp", 0)
+        for ev in frame.get("events", []) or []:
+            et = ev.get("type")
+            if not et:
+                continue
+            events.append(MatchTimelineEvent(
+                timestamp_ms=ts,
+                event_type=et,
+                participant_id=ev.get("participantId"),
+                item_id=ev.get("itemId") if et in ("ITEM_PURCHASED","ITEM_SOLD","ITEM_DESTROYED") else None,
+                building_type=ev.get("buildingType") if et == "BUILDING_KILL" else None,
+                monster_type=ev.get("monsterType") if et == "ELITE_MONSTER_KILL" else None,
+                killer_id=ev.get("killerId") if et in ("CHAMPION_KILL","BUILDING_KILL","ELITE_MONSTER_KILL","WARD_KILL") else None,
+                victim_id=ev.get("victimId") if et == "CHAMPION_KILL" else None,
+                assist_ids=ev.get("assistingParticipantIds") or [] if et in ("CHAMPION_KILL","BUILDING_KILL","ELITE_MONSTER_KILL") else [],
+            ))
+    return events
+
+
+class MatchTimelineService:
+    def __init__(self, lcu_get):
+        self._lcu = lcu_get
+
+    def _token(self):
+        r = self._lcu("/entitlements/v1/token")
+        return r.get("accessToken") if isinstance(r, dict) else None
+
+    def get_events(self, game_id: int, sub_id: str = None) -> list:
+        token = self._token()
+        from .sgp_server import SgpServerResolver
+        state, base, sid = SgpServerResolver(self._lcu).resolve()
+        sub_id = sub_id or sid
+        if not base or not sub_id:
+            raise RuntimeError(f"sgp server unresolved: state={state}")
+        url = f"{base}/match-history-query/v1/products/lol/{sub_id}_{game_id}/DETAILS"
+        import json, ssl, urllib.request
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {token}",
+            "x-akari-token-type": "entitlements",
+        })
+        raw = json.load(urllib.request.urlopen(req, context=ctx, timeout=20))
+        j = raw.get("json", raw)
+        pmap = {}
+        for pp in j.get("participants", []) or []:
+            pid = pp.get("participantId")
+            if pid:
+                pmap[pid] = pp.get("puuid")
+        return parse_details_events(j, pmap), pmap
