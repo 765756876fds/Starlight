@@ -84,6 +84,9 @@ def make_player_query_handler(service: PlayerQueryService,
                     e = _economy(snap)
                     if e["our_n"] == 0:
                         text = "现在读不到对局经济数据。"
+                    elif e["our_total"] == 0 and e["enemy_total"] == 0:
+                        # 2999 playerlist 不提供金币 -> 不要假装能算
+                        text = "读不到双方金币，暂时算不了经济差。"
                     else:
                         if e["state"] == "ahead":
                             text = f"我们经济领先约 {e['abs_diff']} 块。"
@@ -100,15 +103,21 @@ def make_player_query_handler(service: PlayerQueryService,
                     r = _richest(snap, side)
                     if r:
                         who = "对面" if side == "enemy" else "我们"
-                        text = f"{who}最肥的是 {r['champion']}，{r['level']} 级 {r['gold']} 块。"
+                        if r["gold"]:
+                            text = f"{who}最肥的是 {r['champion']}，{r['level']} 级 {r['gold']} 块。"
+                        else:
+                            text = f"{who}等级最高的是 {r['champion']}，{r['level']} 级。"
             if speech_queue is not None and text:
                 try:
                     speech_queue.enqueue(SpeechItem(
                         text=text, priority=PRIORITY_B,
                         expire_at=time.time() + 30.0,
                         category="player_query", interruptible=True))
-                except Exception:
-                    pass
+                    print(f"[PlayerQuery] enqueued: {text}")
+                except Exception as _e:
+                    print(f"[PlayerQuery] enqueue failed: {_e}")
+            else:
+                print(f"[PlayerQuery] skip: sq={speech_queue is not None} text={text!r}")
             return {"query_type": qt, "result": text, "data_quality": {"status": "OK"}}
 
         result = service.query(
