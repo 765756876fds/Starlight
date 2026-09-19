@@ -43,6 +43,16 @@ class ObjectiveTimer:
 
     # ----- 事件处理 -----
     def _on_game_start(self, event: Event):
+        # 修复：Agent 重启附着到进行中对局时，首帧 GAME_STARTED 携带真实 game_time。
+        # 必须先把它同步为当前游戏时钟，再排首次刷新提醒，否则 _schedule_for 会看到 now=0，
+        # 把早已过去的首次刷新（如巢虫 480s）错误排程并在真实时钟到达后立即补播。
+        gt = event.get("game_time", 0.0) or 0.0
+        try:
+            self.game_alarm._current_game_time = float(gt)
+        except Exception:
+            pass
+        print(f"[ObjectiveTimer] GAME_STARTED game_time={gt:.0f}, "
+              f"alarm_now={getattr(self.game_alarm, '_current_game_time', 0):.0f}")
         self.tracker.on_game_start()
         self._scheduled.clear()
         # 为每个有首次刷新时间的资源安排各 lead 提醒
