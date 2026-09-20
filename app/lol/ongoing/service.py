@@ -7,6 +7,7 @@ import time
 from typing import Any, Callable, List, Optional
 
 from .loader import OngoingGameLoader
+from .diagnostic import ChampSelectDiagnostic
 from .models import PlayerSnapshot
 
 
@@ -18,7 +19,7 @@ class OngoingGameService:
         cache_ttl: float = 300.0,
         max_workers: int = 4,
         rps: float = 20.0,
-        recent_n: int = 10,
+        recent_n: int = 20, account_history_service=None,
         poll_interval: float = 1.0,
     ):
         self._lcu = lcu
@@ -29,13 +30,14 @@ class OngoingGameService:
             on_event=self._on_event,
             max_workers=max_workers,
             rps=rps,
-            recent_matches_count=recent_n,
+            recent_matches_count=recent_n, account_history_service=account_history_service,
         )
         self._snapshots: List[PlayerSnapshot] = []
         self._current_session_key: Optional[str] = None
         self._loading_in_progress = False
         self._poll_interval = poll_interval
 
+        self._diag = ChampSelectDiagnostic(lcu.request_raw, on_event=self._on_event) if lcu is not None else None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -45,11 +47,13 @@ class OngoingGameService:
         if self._thread is not None:
             return
         self._stop_event.clear()
+        if self._diag: self._diag.start()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
+        if self._diag: self._diag.stop()
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
