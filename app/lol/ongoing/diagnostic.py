@@ -36,6 +36,8 @@ class ChampSelectDiagnostic:
         self._thread: Optional[threading.Thread] = None
         self._last_session_exists = False
         self._capture_seq = 0
+        self._timeline: Deque[Dict[str, Any]] = deque(maxlen=600)
+        self._first_session_200: Optional[float] = None
         os.makedirs(self._dir, exist_ok=True)
 
     def start(self):
@@ -63,72 +65,103 @@ class ChampSelectDiagnostic:
                 self._on_event("cs_diag.error", {"err": str(e)})
 
     def _tick(self):
-        # gameflow phase
-        t0 = time.time()
+        # 1. gameflow phase
         gs, gb = self._req("GET", "/lol-gameflow/v1/gameflow-phase", None)
-        phase = gb if isinstance(gb, str) and not isinstance(gb, (dict, list)) else (gb or "")
-        phase = str(phase).strip('"')
-        elapsed_g = int((time.time() - t0) * 1000)
+        phase = str(gb).strip('"') if gb is not None else ""
 
-        # champ-select session
-        t1 = time.time()
+        # 2. gameflow session（含 gameId/queue/gameMode）
+        gss, gsb = self._req("GET", "/lol-gameflow/v1/session", None)
+        game_id = queue_id = game_mode = None
+        if gss == 200 and isinstance(gsb, dict):
+            gd = gsb.get("gameData") or {}
+            q = gd.get("queue") or {}
+            game_id = gd.get("gameId")
+            queue_id = q.get("id")
+            game_mode = gd.get("gameMode")
+
+        # 3. champ-select session
         ss, sb = self._req("GET", "/lol-champ-select/v1/session", None)
-        elapsed_s = int((time.time() - t1) * 1000)
         players: List[Dict] = []
-        puuid_count = 0
         if ss == 200 and isinstance(sb, dict):
             for team in ("myTeam", "theirTeam"):
                 for cell in sb.get(team) or []:
-                    pu = cell.get("puuid") or ""
                     players.append({
-                        "puuid": pu,
+                        "puuid": cell.get("puuid") or "",
                         "name": cell.get("name") or "",
                         "team": team,
                         "championId": cell.get("championId"),
                         "assignedPosition": cell.get("assignedPosition"),
                     })
-                    if pu:
-                        puuid_count += 1
-            unique = len({p["puuid"] for p in players if p["puuid"]})
-        else:
-            unique = 0
+        unique = len({p["puuid"] for p in players if p["puuid"]})
 
         now = time.time()
         entry = {
             "ts": now,
-            "gameflow_status": gs,
             "gameflow_phase": phase,
+            "gfs_status": gss,
+            "game_id": game_id,
+            "queue_id": queue_id,
+            "game_mode": game_mode,
             "cs_status": ss,
-            "cs_elapsed_ms": elapsed_s,
             "player_count": len(players),
             "unique_puuid": unique,
+            "case": self._classify(phase, ss, gss),
         }
         self._ring.append(entry)
 
-        # 状态变化
-        if phase != entry.get("_last_phase"):
-            self._on_event("cs_diag.phase", {"phase": phase, "gameflow_status": gs})
-            entry["_last_phase"] = phase
+        # 状态转换
+        prev = self._ring[-2] if len(self._ring) > 1 else None
+        if prev and prev["gameflow_phase"] != phase:
+            self._on_event("cs_diag.transition", {
+                "from": prev["gameflow_phase"], "to": phase,
+                "game_id": game_id, "queue_id": queue_id,
+            })
 
-        # session 200 就 capture（不等 10 人）
+        # session 200 时间记录
         if ss == 200:
-            self._save_capture(phase, ss, players, unique, now)
+            if self._first_session_200 is None:
+                self._first_session_200 = now
+                self._on_event("cs_diag.first_session_200", {
+                    "gameflow_phase": phase, "game_id": game_id,
+                })
+            self._save_capture(entry, players, now)
             if unique >= 10 and not self._last_session_exists:
                 self._on_event("cs_diag.room_complete", {
                     "players": len(players), "unique": unique,
                 })
         self._last_session_exists = (ss == 200)
 
-    def _save_capture(self, phase, status, players, unique, now):
+    @staticmethod
+    def _classify(phase, cs_status, gfs_status):
+        if phase == "ChampSelect" and cs_status == 200:
+            return "CASE_A_NORMAL"
+        if phase == "InProgress" and cs_status == 200:
+            return "CASE_B_CONFLICT"
+        if phase == "InProgress" and cs_status == 404 and gfs_status == 200:
+            return "CASE_C_NO_CS_API"
+        if phase == "Lobby" and cs_status == 200:
+            return "CASE_D_CONFLICT"
+        if phase == "ChampSelect" and cs_status == 404:
+            return "CASE_E_CONFLICT"
+        if phase == "GameStart" and cs_status == 404:
+            return "CASE_F_TRANSITION"
+        return "CASE_OTHER"
+
+    def _save_capture(self, entry, players, now):
         self._capture_seq += 1
         doc = {
             "capture_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
             "seq": self._capture_seq,
-            "gameflow_phase": phase,
-            "cs_http_status": status,
+            "gameflow_phase": entry["gameflow_phase"],
+            "gfs_status": entry["gfs_status"],
+            "game_id": entry["game_id"],
+            "queue_id": entry["queue_id"],
+            "game_mode": entry["game_mode"],
+            "cs_http_status": entry["cs_status"],
             "session_exists": True,
             "player_count": len(players),
-            "unique_puuid_count": unique,
+            "unique_puuid_count": entry["unique_puuid"],
+            "case": entry["case"],
             "players": players,
         }
         fn = os.path.join(
