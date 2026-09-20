@@ -80,13 +80,23 @@ class AccountMatchHistoryService:
         puuid = self._current_puuid()
         if not puuid:
             return MatchHistoryResult(state=ERROR, message="no_self_puuid")
+        return self.recent(puuid)
+
+    def recent(self, puuid: str, count: Optional[int] = None) -> MatchHistoryResult:
+        """按 puuid 查任意玩家最近战绩（SGP primary，LCU fallback）。
+
+        房间 10 人批量查询统一入口。以 puuid 为主键，不依赖昵称。
+        """
+        if not puuid:
+            return MatchHistoryResult(state=ERROR, message="no_puuid")
+        n = self._n if count is None else int(count)
 
         from .sgp_server import SgpServerResolver
         state, base, sub_id = SgpServerResolver(self._lcu_get).resolve()
         token = self._entitlements_token()
         if token and base:
             prov = SgpMatchHistoryProvider(lambda: token, lambda: base)
-            r = prov.recent(puuid, start_index=0, count=self._n)
+            r = prov.recent(puuid, start_index=0, count=n)
             if r.ok or r.state == NO_DATA:
                 return self._finalize(r)
 

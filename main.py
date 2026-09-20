@@ -522,12 +522,15 @@ class Application:
     def _register_ongoing(self):
         try:
             from app.lol.ongoing.service import OngoingGameService
+            from app.lol.ongoing.account_history import AccountMatchHistoryService
+            lcu_get = self.lol.lcu.get if self.lol and self.lol.lcu else None
+            acct = AccountMatchHistoryService(lcu_get) if lcu_get else None
             self.ongoing_service = OngoingGameService(
                 lcu=self.lol.lcu if self.lol else None,
                 on_event=lambda code, data: print(f"[Ongoing] {code}: {data}"),
+                account_history_service=acct,
+                recent_n=20,
             )
-            self.ongoing_service.start()
-            print("...")
         except Exception as e:
             print(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
 

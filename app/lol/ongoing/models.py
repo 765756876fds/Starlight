@@ -34,5 +34,8 @@ class PlayerSnapshot:
     data_state: str = "ERROR"
     kda_ratio: float = 0.0
     win_rate: float = 0.0
+    win_streak: int = 0          # >0 连胜, <0 连败, 0 无数据
+    top_champions: List[str] = field(default_factory=list)  # 常用英雄 Top3
+    main_position: Optional[str] = None
     loaded_at: float = 0.0
     load_error: Optional[str] = None

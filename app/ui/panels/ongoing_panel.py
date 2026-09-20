@@ -1,4 +1,4 @@
-﻿"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
+"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
@@ -391,6 +391,18 @@ def _card(snap, is_enemy: bool) -> QFrame:
         total = len(snap.recent_matches)
         kda = f"{snap.kda_ratio:.2f}"
         lay.addWidget(QLabel(f"近{total}场: {wins}胜 / {total-wins}负  KDA={kda}"))
+        extras = []
+        if getattr(snap, "main_position", None):
+            extras.append(f"位置:{snap.main_position}")
+        if getattr(snap, "top_champions", None):
+            extras.append("英雄:" + "/".join(snap.top_champions[:3]))
+        st = getattr(snap, "win_streak", 0) or 0
+        if st > 0:
+            extras.append(f"{st}连胜")
+        elif st < 0:
+            extras.append(f"{-st}连败")
+        if extras:
+            lay.addWidget(QLabel("<small>" + "  ".join(extras) + "</small>"))
         row = QLabel()
         colors = ["#2e7d32" if m.win else "#c62828" for m in snap.recent_matches[:5]]
         row.setText("".join(

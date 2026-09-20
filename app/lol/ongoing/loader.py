@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional
 
 from .cache import SnapshotCache
-from .models import MatchSummary, PlayerSnapshot
+from .match_model import MatchHistoryResult, MatchRecord
+from .models import PlayerSnapshot
 
 
 class RateLimiter:
@@ -34,7 +35,8 @@ class OngoingGameLoader:
         cache: Optional[SnapshotCache] = None,
         max_workers: int = 4,
         rps: float = 20.0,
-        recent_matches_count: int = 10,
+        recent_matches_count: int = 20,
+        account_history_service: Any = None,
     ):
         self._get = lcu_get
         self._on_event = on_event or (lambda c, d: None)
@@ -42,6 +44,7 @@ class OngoingGameLoader:
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._limiter = RateLimiter(rps)
         self._recent_n = recent_matches_count
+        self._acct = account_history_service
         self._errors: List[str] = []
         self._loading = False
 
@@ -63,6 +66,11 @@ class OngoingGameLoader:
         players = self._extract_players(session)
         if not players:
             return []
+        seen=set(); uniq=[]
+        for p in players:
+            if p['puuid'] in seen: continue
+            seen.add(p['puuid']); uniq.append(p)
+        players = uniq
 
         self._loading = True
         self._on_event("ongoing.started", {"count": len(players)})
@@ -140,13 +148,17 @@ class OngoingGameLoader:
                     lp = int(q.get("leaguePoints") or 0)
                     break
 
-        # 3. match history v1 → fallback v3
-        matches, state = self._fetch_matches(puuid)
+        # 3. 历史战绩：统一走 SGP AccountMatchHistoryService（SUMMARY, count=n）
+        result = self._fetch_history(puuid)
+        records = result.records
+        state = result.state
 
-        wins = sum(1 for m in matches if m.win)
-        total = len(matches)
-        k_sum = sum(m.kills + m.assists for m in matches)
-        d_sum = sum(m.deaths for m in matches) or 1
+        wins = sum(1 for m in records if m.win)
+        total = len(records)
+        k_sum = sum((m.kills or 0) + (m.assists or 0) for m in records)
+        d_sum = sum(m.deaths or 0 for m in records) or 1
+        top_champs, main_pos = self._summarize(records)
+        streak = self._streak(records)
         snap = PlayerSnapshot(
             puuid=puuid,
             summoner_id=int(summoner.get("summonerId") or summoner_id or 0),
@@ -158,77 +170,77 @@ class OngoingGameLoader:
             ranked_tier=tier,
             ranked_division=division,
             ranked_lp=lp,
-            recent_matches=matches,
+            recent_matches=[self._to_summary(m) for m in records],
             data_state=state,
-            kda_ratio=round(k_sum / d_sum, 2) if state == "AVAILABLE" and matches else 0.0,
+            kda_ratio=round(k_sum / d_sum, 2) if state == "AVAILABLE" and records else 0.0,
             win_rate=round(wins / total, 3) if total else 0.0,
+            win_streak=streak,
+            top_champions=top_champs,
+            main_position=main_pos,
             loaded_at=time.monotonic(),
             load_error=None if state == "AVAILABLE" else state,
         )
         self._cache.put(snap)
+        self._on_event("room.player", {
+            "puuid": puuid, "name": snap.display_name,
+            "matches": total, "wins": wins, "state": state,
+        })
         return snap
 
-    def _fetch_matches(self, puuid: str):
-        """返回 (List[MatchSummary], state)。
-
-        LCU /lol-match-history/v1 每条 game 的 `json` 是一段 JSON 字符串，
-        真正的个人 stats 在 json.participants[] 里，必须按 puuid 匹配自己那一条。
-        旧实现把 g["json"] 当 dict 直接取 win/kills，永远落空 → 全部退化成 loss/0。
-        """
-        n = self._recent_n
-        self._limiter.wait()
-        data = self._get(
-            f"/lol-match-history/v1/products/lol/{puuid}/games?begIndex=0&endIndex={n}")
-        if data is None:
-            self._limiter.wait()
-            data = self._get(f"/lol-match-history/v3/matchlist/{puuid}")
-        if not isinstance(data, dict):
-            self._on_event("ongoing.match_history_unavailable", {"puuid": puuid})
-            return [], "ERROR"
-
-        games = data.get("games", {}).get("games") or data.get("matches") or []
-        out: List[MatchSummary] = []
-        for g in games[:n]:
-            stats = self._extract_own_stats(g, puuid)
-            if stats is None:
-                # 这条对局无法定位自己的数据 → 跳过，不伪造 0
-                continue
-            out.append(MatchSummary(
-                champion_id=int(g.get("championId") or stats.get("championId") or 0),
-                champion_name="",
-                win=bool(stats.get("win", False)),
-                kills=int(stats.get("kills") or 0),
-                deaths=int(stats.get("deaths") or 0),
-                assists=int(stats.get("assists") or 0),
-                duration_seconds=int(g.get("timePlayed") or g.get("gameDuration")
-                                   or stats.get("timePlayed") or 0),
-                game_creation=int(g.get("gameCreation") or 0),
-            ))
-        if not out:
-            return [], "NO_DATA"
-        return out, "AVAILABLE"
+    def _fetch_history(self, puuid: str) -> MatchHistoryResult:
+        if self._acct is None:
+            return MatchHistoryResult(state="ERROR", message="no_account_service")
+        try:
+            return self._acct.recent(puuid, count=self._recent_n)
+        except Exception as e:  # 单人失败隔离
+            self._errors.append(f"history failed {puuid}: {e}")
+            return MatchHistoryResult(state="ERROR", message=f"exception: {e}")
 
     @staticmethod
-    def _extract_own_stats(game: dict, puuid: str):
-        """从单条 game 里取出属于 puuid 的 stats dict；取不到返回 None。"""
-        import json as _json
-        raw = game.get("json")
-        if isinstance(raw, str):
-            try:
-                raw = _json.loads(raw)
-            except Exception:
-                raw = None
-        if not isinstance(raw, dict):
-            raw = game.get("stats")
-            if isinstance(raw, dict):
-                return raw
-            return None
-        # participants[] 里找自己
-        parts = raw.get("participants") or []
-        for p in parts:
-            if p.get("puuid") == puuid:
-                return p.get("stats") or {}
-        # 兜底：旧结构直接把 stats 放在顶层
-        if "win" in raw or "kills" in raw:
-            return raw
-        return None
+    def _to_summary(m: MatchRecord):
+        from .models import MatchSummary
+        return MatchSummary(
+            champion_id=m.champion_id,
+            champion_name=m.champion_name,
+            win=bool(m.win) if m.win is not None else False,
+            kills=m.kills or 0,
+            deaths=m.deaths or 0,
+            assists=m.assists or 0,
+            duration_seconds=m.game_duration,
+            game_creation=m.game_creation,
+        )
+
+    @staticmethod
+    def _summarize(records: List[MatchRecord]):
+        """Top3 常用英雄(次数降序, 同次数最近优先) + 主要位置(出现最多)。"""
+        if not records:
+            return [], None
+        champ_count: dict = {}
+        champ_last: dict = {}
+        pos_count: dict = {}
+        for m in records:
+            cn = m.champion_name or "?"
+            champ_count[cn] = champ_count.get(cn, 0) + 1
+            champ_last[cn] = max(champ_last.get(cn, 0), m.game_creation)
+            pos = (m.team_position or "").upper()
+            if pos:
+                pos_count[pos] = pos_count.get(pos, 0) + 1
+        ranked = sorted(champ_count, key=lambda c: (-champ_count[c], -champ_last[c]))
+        top3 = ranked[:3]
+        main_pos = max(pos_count, key=pos_count.get) if pos_count else None
+        return top3, main_pos
+
+    @staticmethod
+    def _streak(records: List[MatchRecord]) -> int:
+        """最新→最旧的连续胜/负。返回 >0 连胜, <0 连败。"""
+        if not records:
+            return 0
+        first_win = records[0].win
+        if first_win is None:
+            return 0
+        n = 0
+        for m in records:  # records 已按 game_creation 降序
+            if m.win is None or m.win != first_win:
+                break
+            n += 1
+        return n if first_win else -n
