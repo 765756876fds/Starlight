@@ -644,6 +644,22 @@ class Application:
         finally:
             self.stop()
 
+    def _start_overlay(self):
+        try:
+            from app.ui.overlay.overlay_model import OverlayModel
+            from app.ui.overlay.overlay_window import OverlayWindow
+            cm = getattr(self, "cooldown_manager", None)
+            def phase():
+                try:
+                    sn = getattr(getattr(self, "lol", None), "current_snapshot", None)
+                    return getattr(sn, "phase", "None") if sn else "None"
+                except Exception:
+                    return "None"
+            m = OverlayModel(cooldown_manager=cm, phase_provider=phase)
+            self._overlay_window = OverlayWindow(m)
+            print("[Run] overlay started")
+        except Exception:
+            import traceback; traceback.print_exc()
     def _switch_to_tabs(self, window):
         print("[Run] _switch_to_tabs start")
         from app.ui.widgets.main_tabs import MainTabs

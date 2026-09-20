@@ -1,25 +1,25 @@
-"""OverlayWindow：Qt 透明无边框置顶鼠标穿透悬浮窗。"""
+"""OverlayWindow：Qt 透明无边框置顶鼠标穿透浮窗（敌方召唤师技能 CD）。"""
 from __future__ import annotations
 
 import sys
-from typing import Optional
-
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication, QLabel, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from .overlay_model import OverlayModel
 
 
 def _fmt(sec: float) -> str:
-    sec = max(0, int(sec))
+    """Akari 式：>=10s 整数 mm:ss，<10s 一位小数，<=0 显 OK。"""
+    if sec <= 0:
+        return "OK"
+    if sec < 10:
+        return f"{sec:.1f}"
+    sec = int(sec)
     m, s = divmod(sec, 60)
-    if m >= 60:
-        h, m = divmod(m, 60)
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
 
 
 class OverlayWindow(QWidget):
@@ -36,13 +36,13 @@ class OverlayWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(10, 10, 10, 10)
-        self._layout.setSpacing(4)
+        self._root = QVBoxLayout(self)
+        self._root.setContentsMargins(8, 8, 8, 8)
+        self._root.setSpacing(4)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
-        self._timer.start(1000)
+        self._timer.start(100)  # UI 100ms 刷新，不触发 2999 轮询
 
         self._place_default()
         self._apply_ws_ex_transparent()
@@ -58,54 +58,50 @@ class OverlayWindow(QWidget):
             WS_EX_LAYERED = 0x00080000
             WS_EX_TRANSPARENT = 0x00000020
             user32 = ctypes.windll.user32
-            current = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            user32.SetWindowLongW(
-                hwnd, GWL_EXSTYLE,
-                current | WS_EX_LAYERED | WS_EX_TRANSPARENT,
-            )
+            cur = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, cur | WS_EX_LAYERED | WS_EX_TRANSPARENT)
         except Exception as e:
-            print(f"[overlay] WS_EX_TRANSPARENT 设置失败: {e}")
+            print(f"[overlay] WS_EX_TRANSPARENT 失败: {e}")
 
     def _place_default(self) -> None:
         screen = QApplication.primaryScreen().availableGeometry()
-        self.setGeometry(screen.width() - 320, 80, 300, 400)
+        self.setGeometry(screen.width() - 260, 80, 240, 360)
 
-    def set_position(self, pos: str) -> None:
-        screen = QApplication.primaryScreen().availableGeometry()
-        w, h = 300, 400
-        positions = {
-            "top-right": (screen.width() - w - 20, 20),
-            "top-left": (20, 20),
-            "bottom-right": (screen.width() - w - 20, screen.height() - h - 60),
-            "bottom-left": (20, screen.height() - h - 60),
-        }
-        x, y = positions.get(pos, positions["top-right"])
-        self.setGeometry(x, y, w, h)
-
-    def _refresh(self) -> None:
-        try:
-            items = self._model.get_items()
-        except Exception:
-            items = []
-        # 清空
-        while self._layout.count():
-            it = self._layout.takeAt(0)
+    def _clear(self):
+        while self._root.count():
+            it = self._root.takeAt(0)
             w = it.widget()
             if w:
                 w.deleteLater()
-        if not items:
+
+    def _refresh(self) -> None:
+        try:
+            entries = self._model.get_entries()
+        except Exception:
+            entries = []
+        self._clear()
+        if not entries:
             if self.isVisible():
                 self.hide()
             return
-        for it in items:
-            label = QLabel(f"{it.text}   {_fmt(it.seconds_remaining)}")
-            color = "#ff5252" if it.urgent else "#e0e0e0"
-            label.setStyleSheet(
-                f"color: {color}; background: rgba(30,30,30,180);"
-                " padding: 4px 8px; border-radius: 4px;"
-            )
-            f = QFont("Segoe UI", 10, QFont.Bold)
-            label.setFont(f)
-            self._layout.addWidget(label)
+        for e in entries:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(4)
+            champ = QLabel(e.champion_name)
+            champ.setStyleSheet("color:#fff; background:rgba(20,20,20,180); padding:2px 6px; border-radius:3px;")
+            champ.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+            h.addWidget(champ)
+            for s in e.skills:
+                lbl = QLabel(_fmt(s.seconds_remaining))
+                urgent = s.seconds_remaining < 30
+                col = "#ff5252" if urgent else "#e0e0e0"
+                lbl.setStyleSheet(
+                    f"color:{col}; background:rgba(60,30,60,200); padding:2px 6px; border-radius:3px;")
+                lbl.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+                lbl.setToolTip(s.skill)
+                h.addWidget(lbl)
+            self._root.addWidget(row)
         if not self.isVisible():
             self.show()

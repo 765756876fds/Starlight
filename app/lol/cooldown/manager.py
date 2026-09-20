@@ -181,6 +181,9 @@ class CooldownManager:
             return [r for r in self._reminders.values()
                     if r.status == ReminderStatus.ACTIVE.value]
 
+    def current_game_time(self) -> float:
+        return self._game_time
+
     def get(self, reminder_id: str) -> Optional[CooldownReminder]:
         with self._lock:
             return self._reminders.get(reminder_id)

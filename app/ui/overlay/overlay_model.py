@@ -1,74 +1,124 @@
-"""OverlayModel：聚合 cooldown / objective 数据为 overlay 项。"""
+"""OverlayModel：把敌方召唤师技能 cooldown 聚合成浮窗行（按敌人分组）。"""
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-from typing import Callable, List, Optional
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional
 
 
 @dataclass
-class OverlayItem:
-    text: str
+class OverlaySkill:
+    skill: str
     seconds_remaining: float
-    urgent: bool  # < 30s
+    source: str = "USER_MEMORY"
+
+
+@dataclass
+class OverlayEntry:
+    champion_name: str
+    skills: List[OverlaySkill] = field(default_factory=list)
+
+
+_POSITION_ORDER = {"TOP": 0, "JUNGLE": 1, "MIDDLE": 2, "BOTTOM": 3, "UTILITY": 4}
+
+
+def _norm_position(p: str) -> str:
+    p = (p or "").upper()
+    if p == "MID":
+        return "MIDDLE"
+    if p in ("BOT", "ADC"):
+        return "BOTTOM"
+    if p in ("SUP", "SUPPORT"):
+        return "UTILITY"
+    return p
 
 
 class OverlayModel:
-    """从 CooldownManager + ObjectiveTimer 拉数据，不读敌方隐藏数据。"""
+    """只读 CooldownManager，不创建任何计时器。"""
 
     def __init__(self, cooldown_manager=None, objective_timer=None,
                  phase_provider: Optional[Callable[[], str]] = None,
+                 position_provider: Optional[Callable[[str], str]] = None,
                  max_items: int = 8):
         self._cd = cooldown_manager
         self._obj = objective_timer
         self._phase_provider = phase_provider or (lambda: "None")
+        self._position_provider = position_provider
         self._max = max_items
-        self._overlay_enabled = True
+        self._enabled = True
 
     def set_enabled(self, on: bool) -> None:
-        self._overlay_enabled = bool(on)
+        self._enabled = bool(on)
 
     def is_enabled(self) -> bool:
-        return self._overlay_enabled
+        return self._enabled
 
-    def get_items(self) -> List[OverlayItem]:
-        if not self._overlay_enabled:
+    def get_entries(self) -> List[OverlayEntry]:
+        """按敌方英雄分组的召唤师技能；游戏外/无数据返回空。"""
+        if not self._enabled:
             return []
         try:
             phase = self._phase_provider() or "None"
         except Exception:
             phase = "None"
-        if phase not in ("InProgress", "ChampSelect"):
+        if phase not in ("InProgress",):
             return []
 
-        items: List[OverlayItem] = []
-        now = time.monotonic()
+        now = 0.0
+        try:
+            now = self._cd.current_game_time() if self._cd else 0.0
+        except Exception:
+            now = 0.0
+
+        grouped: Dict[str, OverlayEntry] = {}
+        order: List[str] = []
         try:
             reminders = self._cd.list_active() if self._cd else []
         except Exception:
             reminders = []
-        side_label = {"enemy": "敌方", "ally": "我方", "self": "你"}
         for r in reminders:
-            remaining = r.ready_at - now
+            if getattr(r, "side", None) != "enemy":
+                continue
+            if getattr(r, "skill_type", "") != "summoner_spell":
+                continue  # 第一版只显示召唤师技能，QWER BLOCKED
+            remaining = (r.used_at + r.estimated_cooldown) - now
             if remaining <= 0:
                 continue
-            label = side_label.get(r.side, r.side)
-            champ = r.champion_name or "?"
-            items.append(OverlayItem(
-                text=f"{label} {champ} {r.skill}",
+            name = r.champion_name or "?"
+            if name not in grouped:
+                grouped[name] = OverlayEntry(champion_name=name)
+                order.append(name)
+            grouped[name].skills.append(OverlaySkill(
+                skill=r.skill,
                 seconds_remaining=remaining,
-                urgent=remaining < 30,
+                source=getattr(r, "source", "USER_REPORTED"),
             ))
-        # objective timer
-        try:
-            timers = self._obj.get_next_timers() if self._obj else []
-        except Exception:
-            timers = []
-        for t in timers:
-            items.append(OverlayItem(
-                text=f"{t['name']}刷新",
-                seconds_remaining=float(t["seconds_remaining"]),
-                urgent=float(t["seconds_remaining"]) < 30,
-            ))
+
+        # 排序：有 position 则按 Akari 顺序，否则原序
+        def pos_key(name: str):
+            if self._position_provider:
+                try:
+                    return _POSITION_ORDER.get(_norm_position(self._position_provider(name)), 99)
+                except Exception:
+                    return 99
+            return 99
+
+        entries = [grouped[n] for n in order]
+        entries.sort(key=lambda e: (pos_key(e.champion_name),))
+        for e in entries:
+            e.skills.sort(key=lambda s: s.seconds_remaining)
+        return entries[: self._max]
+
+    # 兼容旧测试/调用：返回扁平文字项
+    def get_items(self):
+        from .overlay_window import _fmt
+        items = []
+        for e in self.get_entries():
+            for s in e.skills:
+                items.append(type("I", (), {
+                    "text": f"敌方 {e.champion_name} {s.skill}",
+                    "seconds_remaining": s.seconds_remaining,
+                    "urgent": s.seconds_remaining < 30,
+                })())
         items.sort(key=lambda x: x.seconds_remaining)
         return items[: self._max]
