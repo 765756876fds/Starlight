@@ -23,7 +23,6 @@ from .game_alarm import GameAlarmEngine
 from .objective_timer import ObjectiveTimer
 from .lcu import LCUConnection
 from ..player import PlayerRepository, PlayerAnalysisService
-from ..player.match_repository import MatchRepository
 
 
 class LoLRuntime:
@@ -53,8 +52,6 @@ class LoLRuntime:
         self.objective_timer = ObjectiveTimer(self.game_alarm)
         self.player_repo = PlayerRepository("data/player.db")
         self.player_analysis = PlayerAnalysisService(self.player_repo, self.lcu)
-        self.match_repo = MatchRepository("data/player.db")
-        self._local_match_id: Optional[str] = None
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -190,28 +187,8 @@ class LoLRuntime:
                     if self._cached_game_end_result and not event.data.get('result'):
                         event.data['result'] = self._cached_game_end_result
 
-                # GAME_STARTED → 创建 local_match_id
-                if event.event_type == EventType.GAME_STARTED:
-                    import uuid
-                    self._local_match_id = str(uuid.uuid4())
-                    event.data["local_match_id"] = self._local_match_id
-                    try:
-                        self.match_repo.create_match(
-                            self._local_match_id,
-                            start_time=time.time(),
-                            game_mode=snapshot.game_mode,
-                            map_name=snapshot.map_name,
-                        )
-                    except Exception as e:
-                        print(f"[MatchHistory] create_match 失败: {e}")
-
-                # 注入 local_match_id 到所有事件
-                if self._local_match_id and event.event_type != EventType.GAME_STARTED:
-                    event.data.setdefault("local_match_id", self._local_match_id)
-
-                # GAME_ENDED → 持久化 match players
-                if event.event_type == EventType.GAME_ENDED:
-                    self._persist_match_end(event)
+                # GAME_STARTED / GAME_ENDED 由其他模块处理（GameAlarm/ObjectiveTimer）
+                # 本地对局历史已下线，不再创建 local_match_id
 
                 self.event_bus.publish(Event(
                     event_type=event.event_type,
@@ -260,47 +237,10 @@ class LoLRuntime:
 
         self._game_end_published = True
         self.state_store.set(StateNamespace.GAME, "is_active", False)
-
-    def _persist_match_end(self, event):
-        """GameEnd 时持久化 MatchRecord + MatchPlayer"""
-        if not self._local_match_id:
-            return
-        mid = self._local_match_id
-        try:
-            result = event.data.get("result", "Unknown")
-            snapshot = self._current_snapshot
-            duration = snapshot.game_time if snapshot else 0.0
-            end_time = time.time()
-            self.match_repo.finish_match(mid, end_time=end_time, duration=duration, result=result)
-
-            players_data = []
-            if snapshot and snapshot.players:
-                self_puuid = ""
-                if self.lcu and self.lcu.connected:
-                    summ = self.lcu.get_current_summoner()
-                    if summ:
-                        self_puuid = summ.get("puuid", "")
-                for p in snapshot.players:
-                    players_data.append({
-                        "puuid": self_puuid if p.is_current_player else None,
-                        "riot_id": p.riot_id or p.summoner_name,
-                        "team": p.team,
-                        "champion_name": p.champion_name,
-                        "champion_id": p.champion_id,
-                        "position": p.position,
-                        "kills": p.kills,
-                        "deaths": p.deaths,
-                        "assists": p.assists,
-                        "gold": p.gold,
-                        "is_self": p.is_current_player,
-                    })
-            if players_data:
-                self.match_repo.save_match_players(mid, players_data)
-            print(f"[MatchHistory] match {mid[:8]} persisted: {len(players_data)} players, result={result}, duration={duration:.0f}s")
-        except Exception as e:
-            print(f"[MatchHistory] persist 失败: {e}")
-        finally:
-            self._local_match_id = None
+        
+        # 清空当前 snapshot，避免跨局残留
+        self._current_snapshot = None
+        print("[Runtime] GAME_ENDED: cleared _current_snapshot")
 
     def _poll_lcu(self):
         """轮询 LCU 状态，检测 GameFlow 变化并发布事件"""

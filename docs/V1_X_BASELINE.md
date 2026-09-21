@@ -54,14 +54,14 @@ ObjectiveTimer 在真实 `game_time>0` 到达后才排首次刷新（重启附�
 ## 3. External Services (must be started separately)
 Agent **不负责**拉起这些服务：
 - ASR：Qwen3-ASR-0.6B llama-server，`http://127.0.0.1:8080/v1`。
-- Intent LLM：Qwen3-4B，LM Studio OpenAI 兼容 `http://127.0.0.1:1234/v1`。
+- Intent：纯规则 RuleBasedIntent（无 LLM，无需外部服务）。
 - LoL：游戏客户端自带 2999（Live Client Data）与 LCU。
 - 本地播放：mpv。
 
 启动：`启动.bat`（开发）或 `启动_无窗口.vbs`（pythonw）。Agent 会在 ASR 未就绪时重试连接。
 
 ## 4. Frozen Boundary
-- **CORE**：语音输入(Qwen3-ASR)、Rule-first Intent + 安全 fallback、本地音乐(mpv+FTS5)、2999 Snapshot/StateDiff/EventBus、GameAlarmEngine、ObjectiveTimer、TemporaryGameMemory(flash/spell/ward/custom)、SpeechJudge/Queue/TTS、ActionFeedback 直连。
+- **CORE**：语音输入(Qwen3-ASR)、纯规则 Intent（RuleBasedIntent，无 LLM fallback）、本地音乐(mpv+FTS5)、2999 Snapshot/StateDiff/EventBus、GameAlarmEngine、ObjectiveTimer、TemporaryGameMemory(flash/spell/ward/custom)、SpeechJudge/Queue/TTS、ActionFeedback 直连。
 - **INFRASTRUCTURE**：SGP 战绩线（数据/UI）、LCU 身份与 gameflow、DataDragon 静态数据、UI 面板。
 - **FROZEN**：SGP 历史产品化、Highlight、AI 教练、自动敌方技能追踪。
 - **REJECTED**：自动战斗 / 视觉 Bot / 内存读取 / DLL / 游戏文件修改 / RAG / 向量库 / Faster-Whisper 生产备用。

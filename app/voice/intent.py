@@ -2,14 +2,13 @@
 Intent / 人话理解
 
 将用户自然语言转换为结构化意图。
-采用：规则匹配优先 -> Qwen Function Calling 兜底
+采用：RuleBasedIntent 规则匹配（纯确定性，无 LLM fallback）
 
-AI 只负责"人话 -> 意图"，不直接控制电脑。
+AI 不参与意图识别。规则要求明确动词才产生写操作副作用，
+裸陈述（如"对面莎弥拉闪现了"）返回 system.unknown。
 """
-import json
 import re
-import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from ..core.command_bus import CommandType
 
@@ -36,10 +35,11 @@ class Intent:
 
 class RuleBasedIntent:
     """
-    规则匹配意图识别
+    规则匹配意图识别（唯一意图来源）
 
-    明确命令不走 LLM，直接用规则匹配。
-    覆盖最常用的音乐控制和游戏提醒命令。
+    明确命令直接用规则匹配，无 LLM fallback。
+    覆盖音乐控制、游戏提醒、冷却计时、玩家查询。
+    写操作（alarm.* / cooldown.*）要求明确动词，裸陈述不命中。
     """
 
     # 音乐控制规则
@@ -49,7 +49,8 @@ class RuleBasedIntent:
          CommandType.MUSIC_NEXT, {}),
         (r"(下一首|下一曲|换一首|切歌)", CommandType.MUSIC_NEXT, {}),
         # 上一首
-        (r"^(上一首|上一曲|前一首|回到上一首)$", CommandType.MUSIC_PREV, {}),
+        (r"^(上一首|上一曲|前一首|回到上一首)$",
+         CommandType.MUSIC_PREV, {}),
         # 暂停
         (r"^(暂停|暂停一下|暂停音乐|停一下|停下|别放了)$",
          CommandType.MUSIC_PAUSE, {}),
@@ -304,28 +305,7 @@ class RuleBasedIntent:
                         params={"query": query}
                     )
 
-        # ===== Player Query 规则 =====
-        # recent: 最近N场 / 最近战绩 / 玩了几场
-        m = re.match(r"^最近([\d一二两三四五六七八九十]+)场$", text)
-        if m:
-            n = int(cls._parse_number(m.group(1)))
-            return Intent("player.query", confidence=0.99,
-                          params={"query_type": "recent", "limit": n})
-        m = re.match(r"^最近([\d一二两三四五六七八九十]+)局$", text)
-        if m:
-            n = int(cls._parse_number(m.group(1)))
-            return Intent("player.query", confidence=0.99,
-                          params={"query_type": "recent", "limit": n})
-        if text in ("最近战绩", "最近比赛", "最近几场", "玩了几场", "玩了几局"):
-            return Intent("player.query", confidence=0.99,
-                          params={"query_type": "recent", "limit": 10})
-
-        # champion_stats
-        if text in ("最常玩的英雄", "最常玩什么英雄", "英雄统计", "英雄战绩", "常用英雄"):
-            return Intent("player.query", confidence=0.99,
-                          params={"query_type": "champion_stats"})
-
-        # ===== 当前对局实时查询（确定性，读 live snapshot）=====
+        # ===== Player Query 规则（仅当前局实时查询，历史战绩已下线）=====
         # 用子串包含匹配，容忍 ASR 句尾语气词（啊/呢/呀）和问号。
         if any(k in text for k in ("双方经济", "经济差", "经济领先", "经济怎么样", "现在经济")):
             return Intent("player.query", confidence=0.95,
@@ -339,374 +319,61 @@ class RuleBasedIntent:
         if any(k in text for k in ("几杀几死", "我现在战绩", "现在杀了多少", "我现在几杀")):
             return Intent("player.query", confidence=0.95,
                           params={"query_type": "current_self_kda"})
-        # role_stats
-        if text in ("主要位置", "常玩位置", "位置统计", "位置战绩"):
-            return Intent("player.query", confidence=0.99,
-                          params={"query_type": "role_stats"})
-
+        # 对面都有谁
+        if any(k in text for k in ("对面都有谁", "敌方都有谁", "对面有哪些人", "对面都有哪些人")):
+            return Intent("player.query", confidence=0.95,
+                          params={"query_type": "enemy_roster"})
+        # 谁死得最多
+        if any(k in text for k in ("谁死得最多", "谁死亡最多", "现在谁死得最多", "谁死的最多")):
+            return Intent("player.query", confidence=0.95,
+                          params={"query_type": "most_deaths"})
+        # 我几级
+        if any(k in text for k in ("我几级", "我现在多少级", "我当前等级", "我多少级")):
+            return Intent("player.query", confidence=0.95,
+                          params={"query_type": "current_self_level"})
+        # 某英雄几级 / 某英雄战绩
+        # 匹配 "XX几级" / "XX战绩" 模式
+        # 英雄几级
+        m = re.match(r'.*?([\u4e00-\u9fa5A-Za-z]{1,10})(几级|多少级|多少等级).*', text)
+        if m and "我" not in m.group(1):
+            champ_name = m.group(1)
+            return Intent("player.query", confidence=0.9,
+                          params={"query_type": "champion_level", "champion_name": champ_name})
+        # 英雄战绩
+        m = re.match(r'.*?([\u4e00-\u9fa5A-Za-z]{1,10})(战绩怎么样|战绩|几杀几死|几杀).*', text)
+        if m and "我" not in m.group(1):
+            champ_name = m.group(1)
+            return Intent("player.query", confidence=0.9,
+                          params={"query_type": "champion_kda", "champion_name": champ_name})
         return None
-
-
-class LLMIntent:
-    """
-    LLM 意图识别（Qwen3 Function Calling）
-
-    只在规则匹配失败时使用。
-    输出结构化 JSON，不直接执行操作。
-    """
-
-    # 支持的意图列表（用于 prompt）
-    SUPPORTED_INTENTS = {
-        "music.next": "下一首/换一首",
-        "music.previous": "上一首",
-        "music.pause": "暂停播放",
-        "music.resume": "继续播放",
-        "music.volume_set": "设置音量，参数 volume (0-100)",
-        "music.volume_up": "音量增加",
-        "music.volume_down": "音量减少",
-        "music.search_play": "搜索并播放，参数 query",
-        "music.highlight": "跳到高潮部分",
-        "music.highlight_mode": "开启或关闭高潮模式，参数 enabled (bool)",
-        "music.set_play_mode": "设置播放模式，参数 mode (sequential/shuffle/repeat_one)",
-        "alarm.flash": "记录闪现，参数 champion",
-        "alarm.spell": "记录技能，参数 champion, spell, cooldown",
-        "alarm.ward": "记录眼位，参数 location",
-        "alarm.custom": "自定义计时器，参数 duration(秒), title",
-        "voice.disable": "关闭语音识别",
-        "tts.disable": "关闭语音播报",
-        "player.query": "查询玩家本地历史数据。query_type: recent/champion_stats/role_stats/match_analysis。identity 仅支持明确 puuid 或 riot_id，不要使用 self/current_player。",
-        "system.unknown": "无法识别的意图",
-    }
-
-    def __init__(self, model_path: str, n_ctx: int = 4096,
-                 n_threads: int = 6, temperature: float = 0.1):
-        self.model_path = model_path
-        self.n_ctx = n_ctx
-        self.n_threads = n_threads
-        self.temperature = temperature
-        self._model = None
-        self._lock = threading.Lock()
-        self._loaded = False
-
-    def load(self):
-        """加载模型"""
-        if self._loaded:
-            return
-        try:
-            from llama_cpp import Llama
-            self._model = Llama(
-                model_path=self.model_path,
-                n_ctx=self.n_ctx,
-                n_threads=self.n_threads,
-                verbose=False,
-            )
-            self._loaded = True
-            print(f"[Intent] Qwen3 模型已加载: {self.model_path}")
-        except ImportError:
-            print("[Intent] llama-cpp-python 未安装")
-        except Exception as e:
-            print(f"[Intent] 模型加载失败: {e}")
-
-    def parse(self, text: str) -> Intent:
-        """
-        使用 LLM 解析意图
-
-        Returns:
-            结构化 Intent
-        """
-        if not self._loaded or not self._model:
-            return Intent("system.unknown", confidence=0.0)
-
-        with self._lock:
-            try:
-                # 构建 prompt
-                intent_list = "\n".join(
-                    f"- {k}: {v}" for k, v in self.SUPPORTED_INTENTS.items()
-                )
-
-                prompt = f"""你是一个意图识别助手。将用户的自然语言转换为结构化意图。
-
-支持的意图类型：
-{intent_list}
-
-用户输入："{text}"
-
-请输出 JSON 格式，包含以下字段：
-- intent: 意图类型（必须是上面列出的类型之一）
-- confidence: 置信度 (0.0-1.0)
-- params: 参数对象
-
-只输出 JSON，不要输出其他内容。"""
-
-                response = self._model.create_chat_completion(
-                    messages=[
-                        {"role": "system", "content": "你是一个专业的意图识别助手，只输出 JSON。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=self.temperature,
-                    max_tokens=256,
-                    response_format={"type": "json_object"},
-                )
-
-                content = response["choices"][0]["message"]["content"].strip()
-
-                # 解析 JSON
-                try:
-                    result = json.loads(content)
-                    intent_type = result.get("intent", "system.unknown")
-                    confidence = float(result.get("confidence", 0.5))
-                    params = result.get("params", {})
-                    return Intent(intent_type, confidence, params)
-                except json.JSONDecodeError:
-                    # 尝试从文本中提取 JSON
-                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                    if json_match:
-                        try:
-                            result = json.loads(json_match.group())
-                            return Intent(
-                                result.get("intent", "system.unknown"),
-                                float(result.get("confidence", 0.5)),
-                                result.get("params", {})
-                            )
-                        except json.JSONDecodeError:
-                            pass
-                    return Intent("system.unknown", confidence=0.0)
-
-            except Exception as e:
-                print(f"[Intent] LLM 解析失败: {e}")
-                return Intent("system.unknown", confidence=0.0)
-
-    def is_available(self) -> bool:
-        return self._loaded and self._model is not None
-
-    def unload(self):
-        self._model = None
-        self._loaded = False
-
-
-class OpenAIAPIIntent:
-    """
-    OpenAI 兼容 API 意图识别（用于 LM Studio / Ollama）
-
-    通过 HTTP API 调用本地模型，不需要 llama-cpp-python。
-    默认启用 non-thinking（/no_think）模式。
-    """
-
-    SUPPORTED_INTENTS = LLMIntent.SUPPORTED_INTENTS
-
-    # 允许的 Intent 白名单（安全校验）
-    ALLOWED_INTENTS = set(SUPPORTED_INTENTS.keys()) | {"system.unknown"}
-
-    def __init__(self, base_url: str = "http://127.0.0.1:1234/v1",
-                 model: str = "local-model",
-                 api_key: str = "lm-studio",
-                 temperature: float = 0.1,
-                 enable_no_think: bool = True):
-        self.base_url = base_url
-        self.model = model
-        self.api_key = api_key
-        self.temperature = temperature
-        self.enable_no_think = enable_no_think
-        self._client = None
-        self._loaded = False
-
-    def load(self):
-        """初始化 OpenAI 客户端"""
-        try:
-            from openai import OpenAI
-            self._client = OpenAI(
-                base_url=self.base_url,
-                api_key=self.api_key,
-            )
-            # 测试连接
-            try:
-                models = self._client.models.list()
-                if models.data:
-                    available = [m.id for m in models.data]
-                    print(f"[Intent] LM Studio 已连接，使用配置模型: {self.model}（可用: {available}）")
-                self._loaded = True
-            except Exception as e:
-                print(f"[Intent] LM Studio 连接测试失败（模型可能未加载）: {e}")
-                # 即使连接测试失败，也标记为已加载，运行时再试
-                self._loaded = True
-        except ImportError:
-            print("[Intent] openai 库未安装")
-        except Exception as e:
-            print(f"[Intent] OpenAI API 初始化失败: {e}")
-
-    def parse(self, text: str) -> Intent:
-        """使用 API 解析意图"""
-        if not self._loaded or not self._client:
-            return Intent("system.unknown", confidence=0.0)
-
-        try:
-            intent_list = "\n".join(
-                f"- {k}: {v}" for k, v in self.SUPPORTED_INTENTS.items()
-            )
-
-            # system prompt：non-thinking 模式
-            sys_prompt = "你是一个专业的意图识别助手，只输出 JSON。"
-            if self.enable_no_think:
-                sys_prompt = "/no_think\n" + sys_prompt
-
-            prompt = f"""将用户的自然语言转换为结构化意图。
-
-支持的意图类型：
-{intent_list}
-
-用户输入："{text}"
-
-请输出 JSON 格式，包含以下字段：
-- intent: 意图类型（必须是上面列出的类型之一）
-- confidence: 置信度 (0.0-1.0)
-- params: 参数对象
-
-只输出 JSON，不要输出其他内容。"""
-
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.temperature,
-                max_tokens=256,
-            )
-
-            content = response.choices[0].message.content.strip()
-
-            # 解析 JSON
-            try:
-                result = json.loads(content)
-            except json.JSONDecodeError:
-                json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                if json_match:
-                    try:
-                        result = json.loads(json_match.group())
-                    except json.JSONDecodeError:
-                        return Intent("system.unknown", confidence=0.0)
-                else:
-                    return Intent("system.unknown", confidence=0.0)
-
-            # 安全校验：Intent 白名单
-            intent_type = result.get("intent", "system.unknown")
-            if intent_type not in self.ALLOWED_INTENTS:
-                print(f"[Intent] 未知 Intent（安全拦截）: {intent_type}")
-                return Intent("system.unknown", confidence=0.0)
-
-            return Intent(
-                intent_type,
-                float(result.get("confidence", 0.5)),
-                result.get("params", {})
-            )
-
-        except Exception as e:
-            print(f"[Intent] API 解析失败: {e}")
-            return Intent("system.unknown", confidence=0.0)
-
-    def is_available(self) -> bool:
-        return self._loaded and self._client is not None
-
-    def unload(self):
-        self._client = None
-        self._loaded = False
 
 
 class IntentRouter:
     """
-    意图路由器
+    意图路由器（纯规则版）
 
     处理流程：
-    语音文本 -> 规则匹配 -> 明确命令？ -> 是 -> 直接执行
-                                    -> 否 -> LLM -> 结构化意图 -> 执行
+    语音文本 -> RuleBasedIntent.match -> 命中：返回 Intent
+                                    -> 未命中：返回 system.unknown
 
-    支持多种 LLM 后端：
-    - llama-cpp-python（直接加载 GGUF）
-    - OpenAI 兼容 API（LM Studio / Ollama）
+    无 LLM fallback。写操作（alarm.* / cooldown.*）只由规则产生，
+    规则要求明确动词（"记一下"/"用了"/"插了"/"提醒我"），
+    裸陈述（如"对面莎弥拉闪现了"）不会产生任何副作用。
     """
-
-    # Fallback 安全门：仅当 Rule 未命中、由 LLM 补全出 C 类写操作意图时，拒绝执行。
-    # Rule 直接命中的同名意图不受影响。
-    LLM_FALLBACK_FORBIDDEN_PREFIXES = ("alarm.",)
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.rule_based = RuleBasedIntent()
-        self.llm_intent: Optional[LLMIntent] = None
-        self.api_intent: Optional[OpenAIAPIIntent] = None
-        self._llm_enabled = config.get("rule_based_first", True)
-
-    def initialize(self):
-        """初始化 LLM 意图识别（尝试多种后端）"""
-        # 1. 尝试 llama-cpp-python 直接加载
-        model_path = self.config.get("model_path", "")
-        if model_path:
-            try:
-                import llama_cpp
-                self.llm_intent = LLMIntent(
-                    model_path=model_path,
-                    n_ctx=self.config.get("n_ctx", 4096),
-                    n_threads=self.config.get("n_threads", 6),
-                    temperature=self.config.get("temperature", 0.1),
-                )
-                self.llm_intent.load()
-                if self.llm_intent.is_available():
-                    print("[Intent] 使用 llama-cpp-python 后端")
-                    return
-            except ImportError:
-                print("[Intent] llama-cpp-python 不可用，尝试 API 后端")
-
-        # 2. 尝试 OpenAI 兼容 API（LM Studio）
-        api_config = self.config.get("openai_api", {})
-        if api_config.get("enabled", True):
-            self.api_intent = OpenAIAPIIntent(
-                base_url=api_config.get("base_url", "http://127.0.0.1:1234/v1"),
-                model=api_config.get("model", "local-model"),
-                api_key=api_config.get("api_key", "lm-studio"),
-                temperature=self.config.get("temperature", 0.1),
-                enable_no_think=api_config.get("enable_no_think", True),
-            )
-            self.api_intent.load()
-            if self.api_intent.is_available():
-                print("[Intent] 使用 OpenAI API 后端（LM Studio）")
 
     def parse(self, text: str) -> Intent:
         """
-        解析意图
-
-        优先规则匹配，失败时用 LLM。
+        解析意图：规则命中返回 Intent，否则返回 system.unknown。
         """
         if not text or not text.strip():
             return Intent("system.unknown", confidence=0.0)
 
-        # 1. 规则匹配
         intent = self.rule_based.match(text)
         if intent:
             return intent
 
-        # 2. LLM 解析（优先 llama-cpp，其次 API）
-        #    注意：走到这里说明 Rule 未命中。LLM 补全出的 C 类写操作意图
-    #    （alarm.* 等）一律拒绝，不允许 LLM 猜测直接产生副作用。
-        if self.llm_intent and self.llm_intent.is_available():
-            intent = self.llm_intent.parse(text)
-            if intent.confidence > 0.3:
-                if intent.intent_type.startswith(self.LLM_FALLBACK_FORBIDDEN_PREFIXES):
-                    print(f"[Intent] fallback 安全门拒绝 C 类意图: {intent.intent_type}")
-                    return Intent("system.unknown", confidence=0.0)
-                return intent
-
-        if self.api_intent and self.api_intent.is_available():
-            intent = self.api_intent.parse(text)
-            if intent.confidence > 0.3:
-                if intent.intent_type.startswith(self.LLM_FALLBACK_FORBIDDEN_PREFIXES):
-                    print(f"[Intent] fallback 安全门拒绝 C 类意图: {intent.intent_type}")
-                    return Intent("system.unknown", confidence=0.0)
-                return intent
-
         return Intent("system.unknown", confidence=0.0)
-
-    def unload(self):
-        if self.llm_intent:
-            self.llm_intent.unload()
-        if self.api_intent:
-            self.api_intent.unload()

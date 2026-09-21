@@ -81,3 +81,33 @@ class CooldownCalculator:
     @staticmethod
     def for_summoner(base: Number, summoner_spell_haste: Number = 0.0) -> Optional[float]:
         return effective_summoner_cooldown(base, summoner_spell_haste)
+
+
+# ===== Axiom Arc (公理圆弧) Flux 退款 =====
+# 版本：26.18
+# 公式：refund_ratio = 10% + 0.25% × total_lethality
+# 退款基于：Ultimate Ability 的 total cooldown
+# 注意：26.18 官方描述未提及 0.5 秒下限（旧版本曾有，但 26.9 重做后未再提及）
+#       ready_at < used_at 的安全边界由 CooldownManager.apply_adjustment() 负责
+
+def calculate_axiom_arc_refund(
+    total_ultimate_cooldown: float,
+    total_lethality: float,
+) -> float:
+    """计算 Axiom Arc Flux 退款秒数。
+    
+    参数：
+        total_ultimate_cooldown: R 技能总冷却时间（秒）
+        total_lethality: 该英雄总 Lethality（来自 cast_snapshot.items）
+    
+    返回：
+        退款秒数
+    """
+    if total_ultimate_cooldown <= 0:
+        return 0.0
+    
+    # 公式：固定 15%（产品规则：refund = total_R_CD × 15%）
+    refund_ratio = 0.15
+    refund_seconds = total_ultimate_cooldown * refund_ratio
+    
+    return refund_seconds

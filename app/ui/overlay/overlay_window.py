@@ -1,4 +1,9 @@
-"""OverlayWindow：Qt 透明无边框置顶鼠标穿透浮窗（敌方召唤师技能 CD）。"""
+"""OverlayWindow：Qt 透明无边框置顶（鼠标穿透）浮窗（敌方召唤师技能 CD）。
+
+窗口属性沿用现有实现（frameless / always-on-top / transparent / click-through），
+只按 OverlayModel.get_rows() 渲染：每行 = Champion + 两个召唤师技能槽。
+UI 100ms presentation 刷新，不轮询 2999。
+"""
 from __future__ import annotations
 
 import sys
@@ -8,18 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
-from .overlay_model import OverlayModel
-
-
-def _fmt(sec: float) -> str:
-    """Akari 式：>=10s 整数 mm:ss，<10s 一位小数，<=0 显 OK。"""
-    if sec <= 0:
-        return "OK"
-    if sec < 10:
-        return f"{sec:.1f}"
-    sec = int(sec)
-    m, s = divmod(sec, 60)
-    return f"{m:02d}:{s:02d}"
+from .overlay_model import OverlayModel, OverlaySpell, fmt_remaining
 
 
 class OverlayWindow(QWidget):
@@ -65,7 +59,7 @@ class OverlayWindow(QWidget):
 
     def _place_default(self) -> None:
         screen = QApplication.primaryScreen().availableGeometry()
-        self.setGeometry(screen.width() - 260, 80, 240, 360)
+        self.setGeometry(screen.width() - 280, 80, 260, 420)
 
     def _clear(self):
         while self._root.count():
@@ -74,34 +68,76 @@ class OverlayWindow(QWidget):
             if w:
                 w.deleteLater()
 
+    def _spell_cell(self, sp: OverlaySpell) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        if sp.active:
+            txt = fmt_remaining(sp.remaining)
+            urgent = 0 <= sp.remaining < 10
+            color = "#ff5252" if urgent else "#ffffff"
+            lbl = QLabel(txt)
+            lbl.setStyleSheet(
+                f"color:{color}; background:rgba(60,30,60,210); padding:2px 6px; border-radius:3px;")
+            lbl.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        else:
+            lbl = QLabel(sp.spell_name or "—")
+            lbl.setStyleSheet("color:#8a8a8a; padding:2px 6px;")
+            lbl.setFont(QFont("Microsoft YaHei", 8))
+        v.addWidget(lbl)
+        return w
+
+    def _skill_cell(self, sk) -> QWidget:
+        """显示 Q/W/E/R 技能冷却。"""
+        from .overlay_model import OverlaySkill
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        if sk.active:
+            txt = fmt_remaining(sk.remaining)
+            urgent = 0 <= sk.remaining < 10
+            color = "#ff9800" if urgent else "#ffcc80"  # 橙色系区分召唤师技能
+            lbl = QLabel(txt)
+            lbl.setStyleSheet(
+                f"color:{color}; background:rgba(60,40,20,210); padding:2px 6px; border-radius:3px;")
+            lbl.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        else:
+            lbl = QLabel("Ready")
+            lbl.setStyleSheet("color:#4caf50; padding:2px 6px;")
+            lbl.setFont(QFont("Microsoft YaHei", 8))
+        v.addWidget(lbl)
+        return w
+
     def _refresh(self) -> None:
         try:
-            entries = self._model.get_entries()
+            rows = self._model.get_rows()
         except Exception:
-            entries = []
+            import traceback; traceback.print_exc()
+            rows = []
         self._clear()
-        if not entries:
+        if not rows:
             if self.isVisible():
                 self.hide()
             return
-        for e in entries:
-            row = QWidget()
-            h = QHBoxLayout(row)
+        for row in rows:
+            rw = QWidget()
+            h = QHBoxLayout(rw)
             h.setContentsMargins(0, 0, 0, 0)
             h.setSpacing(4)
-            champ = QLabel(e.champion_name)
+            champ = QLabel(row.champion_name)
             champ.setStyleSheet("color:#fff; background:rgba(20,20,20,180); padding:2px 6px; border-radius:3px;")
             champ.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
             h.addWidget(champ)
-            for s in e.skills:
-                lbl = QLabel(_fmt(s.seconds_remaining))
-                urgent = s.seconds_remaining < 30
-                col = "#ff5252" if urgent else "#e0e0e0"
-                lbl.setStyleSheet(
-                    f"color:{col}; background:rgba(60,30,60,200); padding:2px 6px; border-radius:3px;")
-                lbl.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
-                lbl.setToolTip(s.skill)
-                h.addWidget(lbl)
-            self._root.addWidget(row)
+            # Q/W/E/R
+            h.addWidget(self._skill_cell(row.skill_q))
+            h.addWidget(self._skill_cell(row.skill_w))
+            h.addWidget(self._skill_cell(row.skill_e))
+            h.addWidget(self._skill_cell(row.skill_r))
+            # 召唤师技能
+            h.addWidget(self._spell_cell(row.spell1))
+            h.addWidget(self._spell_cell(row.spell2))
+            self._root.addWidget(rw)
         if not self.isVisible():
             self.show()

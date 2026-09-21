@@ -10,9 +10,10 @@ from ..dialogs.ban_pick_config_dialog import BanPickConfigDialog
 
 
 class AutomationPanel(QWidget):
-    def __init__(self, service=None, parent=None):
+    def __init__(self, service=None, lcu=None, parent=None):
         super().__init__(parent)
         self._svc = service
+        self._lcu = lcu
         layout = QVBoxLayout(self)
 
         box = QGroupBox("LoL 自动化")
@@ -115,17 +116,36 @@ class AutomationPanel(QWidget):
                 pass
 
     def refresh(self):
-        if self._svc is None:
-            return
         try:
-            state = self._svc._state.value if hasattr(self._svc, "_state") else "?"
-            phase = getattr(self._svc, "_last_phase", "?")
+            # 优先从 LCU 直接读取 gameflow（automation 禁用时也能更新）
+            phase = "?"
+            if self._lcu is not None:
+                try:
+                    phase = self._lcu.get_gameflow_phase() or "?"
+                except Exception:
+                    pass
+            # fallback 到 automation service
+            if phase == "?" and self._svc is not None:
+                phase = getattr(self._svc, "_last_phase", "?")
+            
+            # gameflow 中文映射
+            _PHASE_ZH = {
+                "None": "未开始", "Lobby": "大厅",
+                "ChampSelect": "英雄选择", "GameStart": "游戏开始",
+                "InProgress": "游戏中", "WaitingForStats": "等待结算",
+                "EndOfGame": "已结束",
+            }
+            phase_zh = _PHASE_ZH.get(phase, phase)
+            
+            state = "?"
+            if self._svc is not None and hasattr(self._svc, "_state"):
+                state = self._svc._state.value
             _STATE_ZH = {"idle":"空闲","in_lobby":"在大厅","queue_searching":"排队中",
                          "ready_check":"确认对局","champ_select":"英雄选择","in_game":"游戏中",
                          "settlement":"结算中","safe_stop":"已停止"}
             state_zh = _STATE_ZH.get(state, state)
             self.lbl_state.setText(f"状态：{state_zh}")
-            self.lbl_phase.setText(f"游戏阶段：{phase}")
+            self.lbl_phase.setText(f"游戏阶段：{phase_zh}")
             try:
                 self._lbl_hint.setText(service.get_status_hint() or "")
             except Exception:

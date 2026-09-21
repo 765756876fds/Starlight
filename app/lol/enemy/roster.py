@@ -21,6 +21,7 @@ class EnemyProfile:
     level: int
     items: tuple = field(default_factory=tuple)        # itemID 列表
     summoner_spells: tuple = field(default_factory=tuple)  # displayName 列表
+    runes: tuple = field(default_factory=tuple)       # 符文原始数据
     ability_haste: float = 0.0
     ultimate_haste: float = 0.0
     haste_source: str = "unavailable"   # unavailable | base_only | live_inventory
@@ -49,6 +50,7 @@ class EnemyRoster:
                 level=int(p.level or 0),
                 items=item_ids,
                 summoner_spells=spell_names,
+                runes=tuple(p.runes or []),
                 ability_haste=0.0,        # 2999 不提供，不猜
                 ultimate_haste=0.0,
                 haste_source="unavailable",

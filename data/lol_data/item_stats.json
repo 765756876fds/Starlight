@@ -1,0 +1,31 @@
+{
+  "version": "26.18.0",
+  "source": "Static item stats - lethality",
+  "items": {
+    "6696": {
+      "name": "Axiom Arc",
+      "name_zh": "公理圆弧",
+      "lethality": 18
+    },
+    "3147": {
+      "name": "Ghostblade",
+      "name_zh": "幽梦之灵",
+      "lethality": 18
+    },
+    "3036": {
+      "name": "Duskblade of Draktharr",
+      "name_zh": "德拉克萨的暮刃",
+      "lethality": 18
+    },
+    "3179": {
+      "name": "Umbral Glaive",
+      "name_zh": "暗影阔剑",
+      "lethality": 18
+    },
+    "3812": {
+      "name": "Youmuu's Ghostblade",
+      "name_zh": "幽梦之灵",
+      "lethality": 18
+    }
+  }
+}

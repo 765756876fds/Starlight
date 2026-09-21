@@ -400,6 +400,8 @@ class LCUConnection:
             return status, body
         except Exception as e:
             print(f"[LCU] 请求失败 {method} {endpoint}: {e}")
+            # 标记断开，让 _reconnect_loop() 重新 discovery 新端口
+            self._disconnect()
             return 0, None
 
     def get(self, endpoint: str) -> Optional[Any]:

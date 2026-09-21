@@ -4,7 +4,6 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QLabel
 from app.ui.panels.automation_panel import AutomationPanel
 from app.ui.panels.cooldown_panel import CooldownPanel
 from app.ui.panels.current_game_panel import CurrentGamePanel
-from app.ui.panels.history_panel import HistoryPanel
 from app.ui.panels.music_panel import MusicPanel
 from app.ui.panels.ongoing_panel import OngoingPanel
 
@@ -45,8 +44,7 @@ class MainTabs(QWidget):
                 tabs.addTab(QLabel(f"{title} 加载失败: {e}"), title)
 
         _add(lambda: CurrentGamePanel(snapshot_provider), "当前对局")
-        _add(lambda: HistoryPanel(history_repo), "历史")
-        _add(lambda: AutomationPanel(automation_service), "自动化")
+        _add(lambda: AutomationPanel(automation_service, lcu=(services_dict or {}).get("lcu")), "自动化")
         _add(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息")
         _add(lambda: CooldownPanel(cooldown_manager), "计时器")
         _add(lambda: MusicPanel(music), "音乐")

@@ -16,10 +16,33 @@ _RUNE_SSH = {
     "cosmic insight": 18.0,
     "星界洞悉": 18.0,
 }
-# 装备：明朗之靴 Ionian Boots of Lucency（itemID 3158，通常 +12）
+# 装备：明朗之靴 Ionian Boots of Lucidity（itemID 3158，通常 +12）
 _ITEM_ID_SSH = {
     3158: 12.0,
 }
+
+# 启迪系 rune tree ID
+_INSPIRATION_TREE_IDS = {8400}
+
+
+def _has_inspiration_runes(runes: List[Any]) -> bool:
+    """检查是否主系或副系是启迪（Inspiration）。"""
+    for r in runes or []:
+        if not isinstance(r, dict):
+            continue
+        # 检查 rune tree ID
+        tree_id = r.get("primaryRuneTree") or r.get("runeTree") or r.get("treeId")
+        if tree_id:
+            try:
+                if int(tree_id) in _INSPIRATION_TREE_IDS:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        # 检查 displayName
+        name = str(r.get("displayName") or r.get("name") or "")
+        if "启迪" in name or "Inspiration" in name or "inspiration" in name.lower():
+            return True
+    return False
 
 
 def summoner_spell_haste(items: List[Any], runes: List[Any]) -> Tuple[float, List[str], str]:
@@ -27,11 +50,14 @@ def summoner_spell_haste(items: List[Any], runes: List[Any]) -> Tuple[float, Lis
 
     返回 (ssh, sources, status)。
       status: "ok" 至少识别到一个确定来源；"unavailable" 无来源/数据缺失。
-    任何无法确定的条件型效果都不计入。
+      星界洞悉是启发式假设：启迪系 → 假设拥有星界洞悉。
+      source 标记为 cosmic_insight_assumed。
     """
     total = 0.0
     sources: List[str] = []
 
+    # 1. 直接检测星界洞悉符文
+    cosmic_detected = False
     for r in runes or []:
         if not isinstance(r, dict):
             continue
@@ -40,8 +66,15 @@ def summoner_spell_haste(items: List[Any], runes: List[Any]) -> Tuple[float, Lis
             if key in name:
                 total += val
                 sources.append(f"rune:{key}")
+                cosmic_detected = True
                 break
 
+    # 2. 启发式：启迪系 → 假设星界洞悉（仅在未直接检测到时）
+    if not cosmic_detected and _has_inspiration_runes(runes):
+        total += 18.0
+        sources.append("rune:cosmic_insight_assumed")
+
+    # 3. 装备：明朗之靴
     for it in items or []:
         iid = None
         if isinstance(it, dict):

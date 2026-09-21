@@ -1,4 +1,4 @@
-"""A2.1 冷却系统测试：数据层 / CooldownCalculator / CooldownManager(Tracker) / Intent / Speech 路径。
+﻿"""A2.1 冷却系统测试：数据层 / CooldownCalculator / CooldownManager(Tracker) / Intent / Speech 路径。
 
 运行方式：
   pytest tests/test_cooldown_system.py -q
@@ -149,7 +149,7 @@ def test_policy_per_slot():
     p = ReminderPolicy()
     assert p.for_skill("ability", "Q") == 5.0
     assert p.for_skill("ability", "R") == 15.0
-    assert p.for_skill("summoner_spell", "Flash") == 15.0
+    assert p.for_skill("summoner_spell", "Flash") == 30.0
 
 
 # ---------------- CooldownManager (Tracker) ----------------

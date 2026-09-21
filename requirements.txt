@@ -18,8 +18,8 @@ librosa>=0.10.0
 soundfile>=0.12.0
 
 # ===== 语音识别 ASR =====
-# llama-cpp-python 用于本地 Qwen3-ASR / Qwen3 推理
-llama-cpp-python>=0.2.50
+# 主后端 Qwen3ServerASR 通过 HTTP 调用（8080），无需 llama-cpp-python。
+# 历史备用后端 Qwen3ASR（直接加载 GGUF）如需使用，可自行安装 llama-cpp-python。
 
 # ===== 麦克风 / VAD =====
 pyaudio>=0.2.14

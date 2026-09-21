@@ -127,25 +127,56 @@ class MusicController:
                 self.queue.add_all(songs)
                 self._play_song(self.queue.next())
         else:
-            self.mpv.play()
-            self._update_state(playing=True)
+            # 检查 mpv 是否有文件加载（stop/eof 后没有文件，pause=false 不起作用）
+            try:
+                is_idle = self.mpv.is_idle()
+                has_file = bool(self.mpv.get_filename())
+            except Exception:
+                is_idle = True
+                has_file = False
+
+            if is_idle or not has_file:
+                # 没有文件，重新加载当前歌曲
+                current = self.queue.get_current()
+                if current:
+                    self._play_song(current)
+                else:
+                    song = self.queue.next()
+                    if song:
+                        self._play_song(song)
+            else:
+                self.mpv.play()
+                self._update_state(playing=True)
 
     def pause(self):
         """暂停"""
         self.mpv.pause()
+        # 实时同步状态
+        try:
+            self.mpv._properties["pause"] = True
+        except Exception:
+            pass
         self._update_state(playing=False)
 
     def resume(self):
         """继续播放"""
         self.mpv.play()
+        # 实时同步状态
+        try:
+            self.mpv._properties["pause"] = False
+        except Exception:
+            pass
         self._update_state(playing=True)
 
     def toggle(self):
-        """切换播放/暂停"""
-        if self.mpv.is_paused():
-            self.resume()
-        else:
-            self.pause()
+        """切换播放/暂停（直接让 mpv 处理，不依赖缓存状态）"""
+        self.mpv.toggle_pause()
+        # 同步更新状态
+        try:
+            paused = self.mpv.get_property("pause", timeout=1.0)
+            self._update_state(playing=(paused is False))
+        except Exception:
+            pass
 
     def next(self):
         """下一首"""
@@ -199,6 +230,12 @@ class MusicController:
             return
 
         self.mpv.loadfile(filepath)
+        # 确保新歌曲开始播放（不继承之前的暂停状态）
+        self.mpv.set_property("pause", False)
+        try:
+            self.mpv._properties["pause"] = False
+        except Exception:
+            pass
         self._current_song = song
 
         # 增加播放计数

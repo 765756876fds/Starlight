@@ -61,9 +61,7 @@ class VoiceRuntime:
         print("[Voice] 正在加载 ASR 模型...")
         self.asr.initialize()
 
-        # 初始化 Intent
-        print("[Voice] 正在加载 Intent 模型...")
-        self.intent_router.initialize()
+        # Intent 为纯规则实现，无状态，无需 initialize
 
         # 启动麦克风监听
         self._start_microphone()
@@ -76,7 +74,6 @@ class VoiceRuntime:
         self._running = False
         self._listening = False
         self.asr.unload_all()
-        self.intent_router.unload()
         print("[Voice] 运行时已停止")
 
     def _start_microphone(self):

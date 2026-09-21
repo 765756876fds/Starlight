@@ -1,4 +1,4 @@
-"""A5 EconomyAdvisor - 把确定性经济状态边沿事件送入现有 SpeechQueue。
+﻿"""A5 EconomyAdvisor - 把确定性经济状态边沿事件送入现有 SpeechQueue。
 
 不新建 polling/scheduler/TTS。复用 game.time_update 驱动。
 仅当状态真正跨边界时 enqueue 一句短文本；priority=B（不抢占 R/Objective 高优提醒）。

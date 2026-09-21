@@ -103,6 +103,12 @@ class EventType:
     PLAYER_HISTORY_LOADED = "player.history_loaded"
     PLAYER_PROFILE_UPDATED = "player.profile_updated"
 
+    # ===== Cooldown 事件 =====
+    COOLDOWN_STARTED = "cooldown.started"
+    COOLDOWN_REMIND = "cooldown.remind"
+    COOLDOWN_CANCELLED = "cooldown.cancelled"
+    COOLDOWN_ADJUSTMENT = "cooldown.adjustment"  # 动态修正事件
+
     # ===== 系统事件 =====
     SYSTEM_STARTUP = "system.startup"
     SYSTEM_SHUTDOWN = "system.shutdown"

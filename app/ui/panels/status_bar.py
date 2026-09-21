@@ -14,8 +14,7 @@ class StatusBar(QStatusBar):
         self._svc = services or {}
         self.lbl_lcu = QLabel()
         self.lbl_asr = QLabel()
-        self.lbl_llm = QLabel()
-        for lbl in (self.lbl_lcu, self.lbl_asr, self.lbl_llm):
+        for lbl in (self.lbl_lcu, self.lbl_asr):
             lbl.setTextFormat(Qt.RichText)
             lbl.setStyleSheet("padding: 0 8px;")
             self.addWidget(lbl)
@@ -42,19 +41,3 @@ class StatusBar(QStatusBar):
                 names = [getattr(e, "name", type(e).__name__) for e in engines]
                 asr_label = "/".join(names) if names else "READY"
         self.lbl_asr.setText(f"{_dot(asr_ok)} ASR {asr_label}")
-
-        intent = self._svc.get("intent")
-        llm_ok = False
-        llm_label = "未就绪"
-        if intent is not None:
-            llm = getattr(intent, "llm_intent", None)
-            api = getattr(intent, "api_intent", None)
-            if llm is not None and getattr(llm, "is_available", lambda: False)():
-                llm_ok = True
-                model = getattr(llm, "model", "") or "llama.cpp"
-                llm_label = model
-            elif api is not None and getattr(api, "is_available", lambda: False)():
-                llm_ok = True
-                model = getattr(api, "model", "") or "LM Studio"
-                llm_label = model
-        self.lbl_llm.setText(f"{_dot(llm_ok)} LLM {llm_label}")

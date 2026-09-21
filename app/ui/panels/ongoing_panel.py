@@ -366,6 +366,31 @@ def _match_row(m, svc=None) -> QPushButton:
     return btn
 
 
+_TIER_MAP = {
+    "IRON": "黑铁", "BRONZE": "青铜", "SILVER": "白银",
+    "GOLD": "黄金", "PLATINUM": "铂金", "EMERALD": "翡翠",
+    "DIAMOND": "钻石", "MASTER": "大师", "GRANDMASTER": "宗师",
+    "CHALLENGER": "王者",
+}
+
+_DIVISION_MAP = {"I": "I", "II": "II", "III": "III", "IV": "IV"}
+
+_POSITION_MAP = {
+    "TOP": "上单", "JUNGLE": "打野", "MID": "中路",
+    "ADC": "下路", "BOT": "下路", "SUPPORT": "辅助",
+    "UTILITY": "辅助", "INVALID": "未定",
+}
+
+def _zh_tier(tier: str) -> str:
+    return _TIER_MAP.get(tier.upper(), tier)
+
+def _zh_division(div: str) -> str:
+    return _DIVISION_MAP.get(div.upper(), div)
+
+def _zh_position(pos: str) -> str:
+    return _POSITION_MAP.get(pos.upper(), pos)
+
+
 def _card(snap, is_enemy: bool) -> QFrame:
     card = QFrame()
     card.setFrameShape(QFrame.StyledPanel)
@@ -375,9 +400,9 @@ def _card(snap, is_enemy: bool) -> QFrame:
 
     lay.addWidget(QLabel(f"<b>{snap.display_name}</b>  Lv.{snap.summoner_level}"))
     if snap.ranked_tier:
-        tier = snap.ranked_tier
+        tier = _zh_tier(snap.ranked_tier)
         if snap.ranked_division:
-            tier = f"{tier} {snap.ranked_division} {snap.ranked_lp}LP"
+            tier = f"{tier} {_zh_division(snap.ranked_division)} {snap.ranked_lp}胜点"
         lay.addWidget(QLabel(f"段位: {tier}"))
     else:
         lay.addWidget(QLabel("段位: 未定级/不可用"))
@@ -393,7 +418,7 @@ def _card(snap, is_enemy: bool) -> QFrame:
         lay.addWidget(QLabel(f"近{total}场: {wins}胜 / {total-wins}负  KDA={kda}"))
         extras = []
         if getattr(snap, "main_position", None):
-            extras.append(f"位置:{snap.main_position}")
+            extras.append(f"位置:{_zh_position(snap.main_position)}")
         if getattr(snap, "top_champions", None):
             extras.append("英雄:" + "/".join(snap.top_champions[:3]))
         st = getattr(snap, "win_streak", 0) or 0
@@ -406,7 +431,7 @@ def _card(snap, is_enemy: bool) -> QFrame:
         row = QLabel()
         colors = ["#2e7d32" if m.win else "#c62828" for m in snap.recent_matches[:5]]
         row.setText("".join(
-            f'<span style="background:{c}; color:white; padding:2px 6px;">{"W" if snap.recent_matches[i].win else "L"}</span> '
+            f'<span style="background:{c}; color:white; padding:2px 6px;">{"胜" if snap.recent_matches[i].win else "负"}</span> '
             for i, c in enumerate(colors)
         ))
         lay.addWidget(row)

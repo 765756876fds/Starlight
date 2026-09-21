@@ -5,7 +5,7 @@
 ## 核心原则
 
 1. **不为了 AI 而 AI** — 能用确定性代码解决的，优先用代码
-2. **AI 只解决"人话 → 意图"** — LLM 不直接控制电脑
+2. **意图识别纯规则** — RuleBasedIntent 确定性匹配，无 LLM fallback，不直接控制电脑
 3. **信息可以丰富，语音必须克制** — 监控详细，播报稀疏
 
 ## 功能模块
@@ -24,7 +24,7 @@
 | ⏱️ 手动技能冷却提醒 | IMPLEMENTED | CooldownManager + 英雄/技能数据 + TTS（语音入口待接） |
 | 👥 玩家/队友/对手信息 | IMPLEMENTED | 对局内分析 + 语音历史查询 + ChampSelect 10 人快照 |
 | 🎙️ 语音识别 ASR | IMPLEMENTED | Qwen3-ASR（llama-server 主，llama.cpp 备） |
-| 🧠 意图理解 Intent | IMPLEMENTED | 规则匹配优先 + Qwen3 Function Calling + OpenAI API |
+| 🧠 意图理解 Intent | INTEGRATED | 纯规则匹配（RuleBasedIntent），无 LLM fallback，写操作要求明确动词 |
 | 🔊 TTS 语音输出 | INTEGRATED | Edge TTS → mpv |
 | 🎯 Speech Judge | INTEGRATED | S/A/B/C/DROP 等级 + 频控 + 优先级播报队列 |
 | 🖥️ UI 控制台 / Overlay | IMPLEMENTED（未目视真测） | PySide6 主窗口 + 面板 + 托盘 + 对局内 Overlay |
@@ -38,7 +38,7 @@
 - **音频引擎**: mpv (JSON IPC / Named Pipe)
 - **数据库**: SQLite + FTS5
 - **ASR**: Qwen3-ASR（llama-server HTTP 为主，llama.cpp 本地为备）
-- **Intent**: Qwen3-4B (llama.cpp Function Calling)
+- **Intent**: 纯规则（RuleBasedIntent，无 LLM）
 - **TTS**: Edge TTS
 - **游戏数据**: Riot Live Client Data API (2999) + LCU
 - **架构**: EventBus + CommandBus + StateStore + Scheduler
@@ -104,7 +104,7 @@ lol-music-agent/
 - Windows 10/11
 - Python 3.11+
 - mpv 播放器
-- 本地 GGUF 模型（Qwen3-ASR + Qwen3-4B）
+- 本地 GGUF 模型（Qwen3-ASR，用于语音识别）
 
 ### 2. 安装依赖
 
@@ -152,10 +152,10 @@ python main.py
 ## 数据流
 
 ```
-麦克风 → VAD → ASR → 文本 → 规则匹配? → 是 → 直接执行
-                                      ↓ 否
-                                    Qwen Intent → 结构化命令
-                                                         ↓
+麦克风 → VAD → ASR → 文本 → RuleBasedIntent → 命中 → CommandBus → 确定性执行
+                                    ↓ 未命中
+                                  system.unknown（不执行）
+
                     2999 API → GameSnapshot → StateDiff → GameEvent → EventBus
                                                                           ↓
     mpv ← MusicController ← CommandBus ← Intent                GameAlarm

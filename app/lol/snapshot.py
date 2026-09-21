@@ -1,4 +1,4 @@
-"""
+﻿"""
 游戏快照 - 统一当前游戏状态
 
 从 2999 API 读取原始数据，整理成统一的 GameSnapshot 结构。
@@ -228,6 +228,7 @@ class SnapshotBuilder:
         player.riot_tag_line = p_data.get("riotIdTagLine", "")
         player.champion_name = p_data.get("championName", "")
         player.champion_id = int(p_data.get("championId", 0))
+        player.raw_champion_name = p_data.get("rawChampionName", "")
         player.team = p_data.get("team", "UNKNOWN")
         player.is_current_player = player.summoner_name == active_player_name
         player.level = int(p_data.get("level", 0))

@@ -1,4 +1,4 @@
-"""LoL Music Agent main entry."""
+﻿"""LoL Music Agent main entry."""
 
 import os
 import sys
@@ -39,11 +39,6 @@ from app.voice.runtime import VoiceRuntime
 from app.speech.tts import TTSController
 from app.speech.speech_judge import SpeechJudge
 from app.speech.speech_queue import SpeechQueue
-from app.player.history_repository import HistoryRepository
-from app.player.profile_service import PlayerProfileService
-from app.player.game_analysis import GameAnalysisService
-from app.player.event_log_reader import EventLogReader
-from app.player.query_service import PlayerQueryService
 from app.player.query_handler import make_player_query_handler
 from app.lol.automation.service import LoLAutomationService
 from app.lol.automation.models import AutomationConfig
@@ -86,6 +81,81 @@ class Application:
         self._shutdown_event = threading.Event()
 
     _initialized = False
+    def _ensure_asr_running(self):
+        """自动拉起 ASR llama-server（如果端口 8080 未运行）"""
+        import socket
+        import subprocess
+        import time
+
+        asr_config = self.config_data.get("asr", {})
+        server_config = asr_config.get("server", {})
+        base_url = server_config.get("base_url", "http://127.0.0.1:8080/v1")
+        port = 8080
+        host = "127.0.0.1"
+
+        # 检查端口是否可用
+        def _port_in_use():
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1)
+                result = s.connect_ex((host, port))
+                s.close()
+                return result == 0
+            except Exception:
+                return False
+
+        if _port_in_use():
+            print(f"[ASR] 端口 {port} 已在运行，直接连接")
+            return
+
+        # 需要启动 ASR
+        model_path = asr_config.get("qwen3_asr_model", "")
+        mmproj_path = asr_config.get("qwen3_asr_mmproj", "")
+
+        # llama-server 路径
+        llama_server = r"C:\Users\1\.lmstudio\extensions\backends\llama.cpp-win-x86_64-vulkan-avx2-2.41.0\llama-server.exe"
+        if not os.path.exists(llama_server):
+            print(f"[ASR] WARNING: llama-server 不存在: {llama_server}")
+            print("[ASR] 请手动启动 ASR，或检查 llama-server 路径")
+            return
+
+        print(f"[ASR] 端口 {port} 未运行，正在自动拉起 llama-server...")
+        print(f"[ASR] model: {model_path}")
+        print(f"[ASR] mmproj: {mmproj_path}")
+
+        args = [
+            llama_server,
+            "--model", model_path,
+            "--mmproj", mmproj_path,
+            "--port", str(port),
+            "--host", host,
+            "-t", "4",
+            "--no-warmup",
+        ]
+
+        try:
+            subprocess.Popen(
+                args,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=open("asr_server_out.txt", "w"),
+                stderr=open("asr_server_err.txt", "w"),
+            )
+            print("[ASR] llama-server 已启动，等待就绪...")
+        except Exception as e:
+            print(f"[ASR] 启动 llama-server 失败: {e}")
+            return
+
+        # 等待 ASR 就绪（最多 60 秒）
+        for i in range(60):
+            time.sleep(1)
+            if _port_in_use():
+                print(f"[ASR] 就绪（等待 {i+1} 秒）")
+                return
+            if i % 10 == 0:
+                print(f"[ASR] 等待中... ({i}s)")
+
+        print("[ASR] WARNING: 等待 ASR 超时（60s），VoiceRuntime 将尝试连接")
+
     def initialize(self):
         if Application._initialized:
             print("[Startup] already initialized, skip")
@@ -153,6 +223,7 @@ class Application:
 
         # 5. 璇煶杈撳叆
         print("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
+        self._ensure_asr_running()
         self.voice = VoiceRuntime(self.config_data)
 
         # 娉ㄥ唽 GameAlarm 鍛戒护澶勭悊锛堥€氳繃浜嬩欢锛?
@@ -195,6 +266,11 @@ class Application:
         # 鍚姩 LoL 妯″潡
         self.lol.start()
 
+
+        # 启动 OngoingGameService（ChampSelect 加载 10 玩家）
+        if hasattr(self, 'ongoing_service') and self.ongoing_service:
+            self.ongoing_service.start()
+            print("[Ongoing] 加载服务已启动")
         # 鍚姩 TTS
         self.tts.start()
 
@@ -395,18 +471,13 @@ class Application:
             events_dir = self.config.get(
                 "events.log_dir", "./data/events"
             )
-            history = HistoryRepository(db_path)
-            self.history_repo = history
-            profile = PlayerProfileService(history)
-            analysis = GameAnalysisService(history, EventLogReader(events_dir))
-            svc = PlayerQueryService(history, profile, analysis)
             def _snapshot_provider():
                 try:
                     return self.lol.current_snapshot if self.lol else None
                 except Exception:
                     return None
             handler = make_player_query_handler(
-                svc,
+                None,
                 speech_queue=self.speech_queue,
                 state_store=self.state_store,
                 snapshot_provider=_snapshot_provider,
@@ -468,21 +539,23 @@ class Application:
                 print(f"[Cooldown] {code}: {data.get('text') or data}")
 
             def _haste_provider(champion, side="enemy"):
-                # 从当前 2999 snapshot 读敌方装备 -> Ability Haste；读不到则 0
+                # 返回 (ability_haste, summoner_spell_haste)
                 try:
                     rt = getattr(self, "lol", None)
                     snap = rt.current_snapshot() if rt else None
                     if not snap or not champion:
-                        return 0.0
+                        return (0.0, 0.0)
                     from app.lol.enemy.roster import EnemyRoster
                     from app.lol.data.item_haste import sum_ability_haste
+                    from app.lol.cooldown.ssh_provider import summoner_spell_haste
                     prof = EnemyRoster().find(snap, champion)
                     if not prof:
-                        return 0.0
+                        return (0.0, 0.0)
                     ah, _src = sum_ability_haste(prof.items)
-                    return ah
+                    ssh, _sources, _status = summoner_spell_haste(prof.items, getattr(prof, 'runes', []))
+                    return (ah, ssh)
                 except Exception:
-                    return 0.0
+                    return (0.0, 0.0)
 
             self.cooldown_manager = _CM(
                 on_event=_on_event,
@@ -504,6 +577,48 @@ class Application:
                                      self.cooldown_manager.on_game_time_update)
             self.event_bus.subscribe("game.ended",
                                      lambda e: self.cooldown_manager.reset_clock())
+            # GAME_ENDED 时清空所有 reminder（Phase 3-K.6）
+            self.event_bus.subscribe("game.ended",
+                                     lambda e: self.cooldown_manager.clear())
+            
+            # Phase 3-K.7.2: Cooldown 动态修正事件接入
+            def _on_cooldown_adjustment(event):
+                """处理 cooldown.adjustment 事件。
+                
+                data 字段:
+                    reminder_id: str
+                    adjustment_seconds: float
+                    event_id: str
+                """
+                try:
+                    reminder_id = event.get("reminder_id", "")
+                    adjustment = float(event.get("adjustment_seconds", 0))
+                    event_id = event.get("event_id", "")
+                    if reminder_id and adjustment > 0 and event_id:
+                        self.cooldown_manager.apply_adjustment(
+                            reminder_id, adjustment, event_id
+                        )
+                except Exception as e:
+                    print(f"[Cooldown] adjustment event error: {e}")
+            
+            self.event_bus.subscribe("cooldown.adjustment", _on_cooldown_adjustment)
+            print("[Cooldown] adjustment event handler registered")
+            
+            # Phase 3-K.7.4.4: AxiomArcEvaluator 生产接入
+            try:
+                from app.lol.cooldown.axiom_arc import AxiomArcEvaluator
+                def _axiom_snap_provider():
+                    return self.lol.current_snapshot if self.lol else None
+                self.axiom_evaluator = AxiomArcEvaluator(
+                    cooldown_manager=self.cooldown_manager,
+                    event_bus=self.event_bus,
+                    get_snapshot=_axiom_snap_provider,
+                    champion_catalog=getattr(self.cooldown_manager, '_champions', None),
+                )
+                self.axiom_evaluator.start()
+                print("[AxiomArc] evaluator registered")
+            except Exception as _e:
+                print(f"[AxiomArc] evaluator 注册失败: {_e}")
             print("...")
             # A5 经济状态边沿提醒（仅跨边界时一句短话，低噪音）
             try:
@@ -655,7 +770,7 @@ class Application:
                     return getattr(sn, "phase", "None") if sn else "None"
                 except Exception:
                     return "None"
-            m = OverlayModel(cooldown_manager=cm, phase_provider=phase)
+            m = OverlayModel(cooldown_manager_provider=lambda: cm, phase_provider=phase)
             self._overlay_window = OverlayWindow(m)
             print("[Run] overlay started")
         except Exception:
@@ -670,8 +785,8 @@ class Application:
             music=getattr(self, "music", None),
             ongoing_service=getattr(self, "ongoing_service", None),
             snapshot_provider=lambda: (self.lol.current_snapshot if getattr(self, "lol", None) else None),
-            history_repo=getattr(self, "history_repo", None),
-        )
+            services_dict={"lcu": getattr(self.lol, "lcu", None) if getattr(self, "lol", None) else None},
+                    )
         print("[Run] MainTabs built, switching")
         # 统一运行时状态：MainWindow 底部唯一 StatusBar 读取这套真实服务
         try:

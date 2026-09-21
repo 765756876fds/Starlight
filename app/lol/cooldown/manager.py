@@ -12,7 +12,9 @@ from ..data.champion_catalog import ChampionCatalog
 from ..data.summoner_spell_catalog import SummonerSpellCatalog
 from .calculator import CooldownCalculator
 from .events import COOLDOWN_CANCELLED, COOLDOWN_REMIND, COOLDOWN_STARTED, COOLDOWN_READY
-from .models import CooldownReminder, ReminderStatus
+from .models import CooldownReminder, CooldownCastSnapshot, ReminderStatus
+from types import MappingProxyType
+import copy
 from .policy import ReminderPolicy
 
 _SLOT_ZH = {"Q": "Q", "W": "W", "E": "E", "R": "大招"}
@@ -76,6 +78,7 @@ class CooldownManager:
         ability_haste: float = 0.0,
         ultimate_haste: float = 0.0,
         summoner_spell_haste: float = 0.0,
+        champion_level: Optional[int] = None,
     ) -> Optional[CooldownReminder]:
         if not skill:
             return None
@@ -88,7 +91,45 @@ class CooldownManager:
         if slot in ("Q", "W", "E", "R"):
             if cid is None:
                 return None
-            rank = ability_rank or 1
+            
+            # 技能等级推断规则：
+            # Q/W/E：始终默认 rank = 1（来源：assumed_level_1）
+            # R：根据英雄等级推断（来源：inferred_from_champion_level）
+            skill_level_source = ""
+            if slot == "R":
+                # R 根据英雄等级推断
+                if champion_level is None:
+                    # 没有英雄等级，默认按 1 级处理（但标记为推断）
+                    rank = 1
+                    skill_level_source = "inferred_from_champion_level"
+                elif champion_level < 6:
+                    # R 未解锁，不启动 R 冷却计算
+                    self._on_event("cooldown.r_not_unlocked", {
+                        "champion": champion_name, "skill": skill,
+                        "champion_level": champion_level,
+                    })
+                    if self._speech_enqueue:
+                        try:
+                            self._speech_enqueue(
+                                "大招还没解锁呢",
+                                "cooldown.r_not_unlocked")
+                        except Exception:
+                            pass
+                    return None
+                elif champion_level <= 10:
+                    rank = 1
+                    skill_level_source = "inferred_from_champion_level"
+                elif champion_level <= 15:
+                    rank = 2
+                    skill_level_source = "inferred_from_champion_level"
+                else:  # >= 16
+                    rank = 3
+                    skill_level_source = "inferred_from_champion_level"
+            else:
+                # Q/W/E：始终默认 rank = 1
+                rank = ability_rank or 1
+                skill_level_source = "assumed_level_1"
+            
             cd = self._abilities.get_cooldown_by_level(cid, slot, rank)
             if cd is None:
                 self._on_event("cooldown.invalid_skill", {
@@ -134,6 +175,25 @@ class CooldownManager:
 
         rid = uuid.uuid4().hex[:8]
         now = self._game_time  # 唯一基准：游戏内 gameTime
+        
+        # 创建 Cast Snapshot（记录时的状态快照，真正不可变）
+        # runes: 深拷贝 + MappingProxyType，确保原始 dict 后续修改不影响 snapshot
+        immutable_runes = tuple(
+            MappingProxyType(copy.deepcopy(r)) 
+            for r in ()  # TODO: 从 EnemyProfile 读取 runes 后填入
+        )
+        cast_snapshot = CooldownCastSnapshot(
+            champion_name=cname or "",
+            spell=display,
+            cast_game_time=now,
+            champion_level=0,  # TODO: 从 EnemyProfile 读取
+            items=(),
+            runes=immutable_runes,
+            ability_haste=ability_haste,
+            summoner_spell_haste=summoner_spell_haste,
+            ultimate_haste=ultimate_haste,
+        )
+        
         r = CooldownReminder(
             id=rid,
             champion_id=cid,
@@ -146,6 +206,8 @@ class CooldownManager:
             remind_before=remind_before,
             side=side,
             game_clock=True,
+            skill_level_source=skill_level_source if stype == "ability" else "",
+            cast_snapshot=cast_snapshot,
         )
         with self._lock:
             self._reminders[rid] = r
@@ -167,6 +229,51 @@ class CooldownManager:
         self._on_event(COOLDOWN_CANCELLED, {"id": reminder_id})
         return True
 
+    def clear(self) -> int:
+        """清空所有 reminder（GAME_ENDED 时调用）。"""
+        with self._lock:
+            reminders = list(self._reminders.values())
+            task_ids = list(self._task_ids.values())
+            self._reminders.clear()
+            self._task_ids.clear()
+        
+        cancelled = 0
+        for tids in task_ids:
+            for tid in tids:
+                try:
+                    self._scheduler.cancel_once(tid)
+                    cancelled += 1
+                except Exception:
+                    pass
+        
+        for r in reminders:
+            r.status = ReminderStatus.EXPIRED.value
+        
+        self._on_event("cooldown.cleared", {"count": len(reminders)})
+        print(f"[Cooldown] cleared {len(reminders)} reminders, cancelled {cancelled} tasks")
+        return len(reminders)
+    
+    def get_active_reminders(self) -> list:
+        """只读访问活跃 reminder（供 Overlay 使用）。"""
+        with self._lock:
+            return [
+                {
+                    "id": r.id,
+                    "champion_name": r.champion_name,
+                    "skill": r.skill,
+                    "skill_type": r.skill_type,
+                    "estimated_cooldown": r.estimated_cooldown,
+                    "used_at": r.used_at,
+                    "ready_at": r.ready_at,
+                    "remind_at": r.remind_at,
+                    "remaining": max(0, r.ready_at - self._game_time),
+                    "side": r.side,
+                    "status": r.status,
+                }
+                for r in self._reminders.values()
+                if r.status == ReminderStatus.ACTIVE.value
+            ]
+
     def cancel_all(self) -> int:
         with self._lock:
             ids = list(self._reminders.keys())
@@ -175,6 +282,50 @@ class CooldownManager:
             if self.cancel(rid):
                 n += 1
         return n
+
+    def apply_adjustment(self, reminder_id: str, adjustment_seconds: float, event_id: str) -> bool:
+        """对指定 reminder 应用动态修正（如 R refund）。
+        
+        幂等：同一 (reminder_id, event_id) 只处理一次。
+        只作用于 ACTIVE 状态的 reminder。
+        adjustment_seconds > 0 → ready_at 提前。
+        """
+        if not reminder_id or not event_id or adjustment_seconds <= 0:
+            return False
+        
+        with self._lock:
+            r = self._reminders.get(reminder_id)
+            if r is None:
+                return False
+            
+            # 生命周期：只处理 ACTIVE
+            if r.status != ReminderStatus.ACTIVE.value:
+                return False
+            
+            # 幂等检查
+            if event_id in r.applied_event_ids:
+                return False
+            
+            # 应用修正
+            r.dynamic_adjustment += adjustment_seconds
+            r.applied_event_ids.add(event_id)
+            
+            # 边界情况：修正后 ready_at 不早于当前游戏时间
+            if r.ready_at < self._game_time:
+                r.dynamic_adjustment = r.estimated_cooldown  # 安全兜底
+                print("[Cooldown] adjustment capped: ready_at would be <= game_time")
+        
+        # 触发一次 tick，检查是否已经到 remind_at/ready_at
+        self._tick_game_clock()
+        
+        self._on_event("cooldown.adjusted", {
+            "id": reminder_id,
+            "event_id": event_id,
+            "adjustment": adjustment_seconds,
+            "new_ready_at": r.ready_at,
+        })
+        print(f"[Cooldown] adjusted {reminder_id} by {adjustment_seconds}s (event={event_id})")
+        return True
 
     def list_active(self) -> List[CooldownReminder]:
         with self._lock:
@@ -213,16 +364,23 @@ class CooldownManager:
     def handle_start(self, command) -> Optional[CooldownReminder]:
         p = getattr(command, "params", command) or {}
         ah = 0.0
+        ssh = 0.0
         if self._haste_provider is not None:
             try:
-                ah = float(self._haste_provider(p.get("champion"), p.get("side", "enemy")) or 0.0)
+                result = self._haste_provider(p.get("champion"), p.get("side", "enemy"))
+                if isinstance(result, tuple):
+                    ah, ssh = float(result[0] or 0.0), float(result[1] or 0.0)
+                else:
+                    ah = float(result or 0.0)
             except Exception:
                 ah = 0.0
+                ssh = 0.0
         return self.start_reminder(
             champion_name=p.get("champion"),
             skill=p.get("skill") or p.get("spell"),
             side=p.get("side", "enemy"),
             ability_haste=ah,
+            summoner_spell_haste=ssh,
         )
 
     # ----- 静态 CD 查询（cooldown.query）-----
@@ -361,8 +519,18 @@ class CooldownManager:
     @staticmethod
     def _remind_text(r: CooldownReminder) -> str:
         side_zh = _SIDE_ZH.get(r.side, "")
-        secs = int(round(r.remind_before))
+        # remind_before = 距离冷却结束还有多少秒
         if r.side == "self":
-            return f"你的{r.skill}大约{secs}秒好"
-        name = r.champion_name or ""
-        return f"{side_zh}{name}{r.skill}大约{secs}秒好"
+            name = ""
+        else:
+            name = r.champion_name or ""
+        
+        # 召唤师技能：提前 30 秒 → "应该快好了"；接近结束 → "大概好了"
+        if r.skill_type == "summoner_spell":
+            if r.remind_before >= 20:  # 约 30 秒提醒点
+                return f"{side_zh}{name}{r.skill}应该快好了"
+            else:  # <10 秒
+                return f"{side_zh}{name}{r.skill}大概好了"
+        else:
+            # 普通技能："大概好了"
+            return f"{side_zh}{name}{r.skill}大概好了"

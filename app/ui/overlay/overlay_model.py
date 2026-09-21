@@ -1,28 +1,30 @@
-"""OverlayModel：把敌方召唤师技能 cooldown 聚合成浮窗行（按敌人分组）。"""
+﻿"""OverlayModel：敌方 5 人召唤师技能倒计时浮窗模型（最小适配 LeagueAkari CD Timer）。
+
+数据直接来自 2999 GameSnapshot.enemy_team（不依赖 PUUID、不复制 LCU player selection）：
+每人 champion + position + 两个召唤师技能槽（summonerSpellOne / summonerSpellTwo）。
+计时锚定游戏内 game_time（游戏暂停时不前进），UI 仅做 100ms presentation 刷新。
+
+计时来源：
+- 语音「对面X闪现了」：main.py 在 GameAlarmEngine.create_flash_alarm 成功后调用
+  record_spell_cast(...)，与语音提醒解耦。
+- 同一 (champion_id, slot) 重复记录 = 更新/覆盖，不叠加（去重）。
+
+本模型不新建任何 TimerEngine；计时器只是 {key: state} 字典，剩余时间按 game_time 现算。
+"""
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-
-@dataclass
-class OverlaySkill:
-    skill: str
-    seconds_remaining: float
-    source: str = "USER_MEMORY"
+from ...lol.data.summoner_spell_catalog import SummonerSpellCatalog
 
 
-@dataclass
-class OverlayEntry:
-    champion_name: str
-    skills: List[OverlaySkill] = field(default_factory=list)
-
-
+# LeagueAkari：TOP JUNGLE MIDDLE BOTTOM UTILITY
 _POSITION_ORDER = {"TOP": 0, "JUNGLE": 1, "MIDDLE": 2, "BOTTOM": 3, "UTILITY": 4}
 
 
 def _norm_position(p: str) -> str:
+    """MID→MIDDLE, BOT/ADC→BOTTOM, SUP/SUPPORT→UTILITY（与 LeagueAkari 一致）。"""
     p = (p or "").upper()
     if p == "MID":
         return "MIDDLE"
@@ -33,92 +35,180 @@ def _norm_position(p: str) -> str:
     return p
 
 
+def fmt_remaining(remaining: float) -> str:
+    """LeagueAkari TimerItem.vue 的显示规则。"""
+    if remaining < 0:
+        return "OK"
+    if remaining > 999:
+        return "999"
+    if remaining < 10:
+        return f"{remaining:.1f}"
+    return str(int(remaining))
+
+
+@dataclass
+class OverlaySpell:
+    slot: int                      # 1 = D, 2 = F（对应 summonerSpellOne / Two）
+    spell_id: int
+    spell_name: str
+    base_cooldown: float
+    remaining: float = 0.0         # ready_at - game_time；<0 表示已转好
+    active: bool = False           # 是否有正在跑的计时器
+
+
+@dataclass
+class OverlaySkill:
+    """英雄技能（Q/W/E/R）"""
+    skill: str                      # Q / W / E / R
+    remaining: float = 0.0         # ready_at - game_time；<0 表示已转好
+    active: bool = False           # 是否有正在跑的计时器
+
+
+@dataclass
+class OverlayEnemyRow:
+    champion_id: int
+    champion_name: str
+    position: str                  # 归一化后
+    order: int
+    spell1: OverlaySpell
+    spell2: OverlaySpell
+    skill_q: OverlaySkill = None
+    skill_w: OverlaySkill = None
+    skill_e: OverlaySkill = None
+    skill_r: OverlaySkill = None
+
+
 class OverlayModel:
-    """只读 CooldownManager，不创建任何计时器。"""
+    """只读 GameSnapshot.enemy_team；计时状态自持，不创建任何引擎。"""
 
-    def __init__(self, cooldown_manager=None, objective_timer=None,
-                 phase_provider: Optional[Callable[[], str]] = None,
-                 position_provider: Optional[Callable[[str], str]] = None,
-                 max_items: int = 8):
-        self._cd = cooldown_manager
-        self._obj = objective_timer
+    def __init__(
+        self,
+        snapshot_provider: Optional[Callable[[], object]] = None,
+        phase_provider: Optional[Callable[[], str]] = None,
+        catalog: Optional[SummonerSpellCatalog] = None,
+        cooldown_manager_provider: Optional[Callable[[], object]] = None,
+    ):
+        self._snapshot_provider = snapshot_provider or (lambda: None)
         self._phase_provider = phase_provider or (lambda: "None")
-        self._position_provider = position_provider
-        self._max = max_items
+        self._spells = catalog or SummonerSpellCatalog()
         self._enabled = True
+        self._cooldown_manager_provider = cooldown_manager_provider or (lambda: None)
+        # (champion_id, slot) -> timer state
+        self._timers: Dict[tuple, dict] = {}
 
+    # ----- 开关（供 MainWindow 复选框）-----
     def set_enabled(self, on: bool) -> None:
         self._enabled = bool(on)
 
     def is_enabled(self) -> bool:
         return self._enabled
 
-    def get_entries(self) -> List[OverlayEntry]:
-        """按敌方英雄分组的召唤师技能；游戏外/无数据返回空。"""
+    # ----- 计时写入（语音记闪现走这里）-----
+    def record_spell_cast(
+        self,
+        champion_id: int,
+        champion_name: str,
+        slot: int,
+        spell_id: int,
+        spell_name: str,
+        cooldown: float,
+        game_time: float,
+    ) -> None:
+        """记录一次敌方召唤师技能使用。同 (champion_id, slot) 重复调用=覆盖更新。"""
+        key = (int(champion_id or 0), int(slot))
+        start = float(game_time or 0.0)
+        cd = float(cooldown or 0.0)
+        self._timers[key] = {
+            "start": start,
+            "cooldown": cd,
+            "ready_at": start + cd,
+            "spell_id": int(spell_id or 0),
+            "spell_name": spell_name or "",
+            "champion_name": champion_name or "",
+        }
+
+    def clear(self) -> None:
+        """game end / 离开 InProgress：清空计时，新局不继承。"""
+        self._timers.clear()
+
+    def timer_count(self) -> int:
+        return len(self._timers)
+
+    # ----- 渲染数据 -----
+    def get_rows(self) -> List[OverlayEnemyRow]:
+        """按敌方 5 人、position 排序返回；非 InProgress / 无数据返回 []。"""
         if not self._enabled:
             return []
         try:
             phase = self._phase_provider() or "None"
         except Exception:
             phase = "None"
-        if phase not in ("InProgress",):
+        if phase != "InProgress":
             return []
-
-        now = 0.0
         try:
-            now = self._cd.current_game_time() if self._cd else 0.0
+            snap = self._snapshot_provider()
         except Exception:
-            now = 0.0
+            snap = None
+        if snap is None:
+            return []
+        gt = float(getattr(snap, "game_time", 0.0) or 0.0)
 
-        grouped: Dict[str, OverlayEntry] = {}
-        order: List[str] = []
+        # 从 CooldownManager 读取活跃技能冷却
+        active_skills: Dict[str, Dict[str, OverlaySkill]] = {}
         try:
-            reminders = self._cd.list_active() if self._cd else []
+            cm = self._cooldown_manager_provider()
+            if cm is not None:
+                reminders = cm.get_active_reminders()
+                for r in reminders:
+                    cname = r.get("champion_name", "")
+                    skill = r.get("skill", "")
+                    if not cname or not skill:
+                        continue
+                    if cname not in active_skills:
+                        active_skills[cname] = {}
+                    remaining = r.get("remaining", 0.0)
+                    active_skills[cname][skill] = OverlaySkill(
+                        skill=skill,
+                        remaining=max(0, remaining),
+                        active=True,
+                    )
         except Exception:
-            reminders = []
-        for r in reminders:
-            if getattr(r, "side", None) != "enemy":
+            pass
+
+        rows: List[OverlayEnemyRow] = []
+        for p in (getattr(snap, "enemy_team", None) or []):
+            cname = getattr(p, "champion_name", "") or ""
+            if not cname:
                 continue
-            if getattr(r, "skill_type", "") != "summoner_spell":
-                continue  # 第一版只显示召唤师技能，QWER BLOCKED
-            remaining = (r.used_at + r.estimated_cooldown) - now
-            if remaining <= 0:
-                continue
-            name = r.champion_name or "?"
-            if name not in grouped:
-                grouped[name] = OverlayEntry(champion_name=name)
-                order.append(name)
-            grouped[name].skills.append(OverlaySkill(
-                skill=r.skill,
-                seconds_remaining=remaining,
-                source=getattr(r, "source", "USER_REPORTED"),
-            ))
+            cid = int(getattr(p, "champion_id", 0) or 0)
+            pos = _norm_position(getattr(p, "position", ""))
+            order = _POSITION_ORDER.get(pos, 99)
+            spells = getattr(p, "summoner_spells", None) or []
+            s1 = self._build_spell(cid, 1, spells[0] if len(spells) > 0 else {}, gt)
+            s2 = self._build_spell(cid, 2, spells[1] if len(spells) > 1 else {}, gt)
 
-        # 排序：有 position 则按 Akari 顺序，否则原序
-        def pos_key(name: str):
-            if self._position_provider:
-                try:
-                    return _POSITION_ORDER.get(_norm_position(self._position_provider(name)), 99)
-                except Exception:
-                    return 99
-            return 99
+            # 获取该英雄的 Q/W/E/R 技能冷却
+            skills_for_champ = active_skills.get(cname, {})
+            sq = skills_for_champ.get("Q", OverlaySkill("Q", 0, False))
+            sw = skills_for_champ.get("W", OverlaySkill("W", 0, False))
+            se = skills_for_champ.get("E", OverlaySkill("E", 0, False))
+            sr = skills_for_champ.get("R", OverlaySkill("R", 0, False))  # R 默认未就绪
 
-        entries = [grouped[n] for n in order]
-        entries.sort(key=lambda e: (pos_key(e.champion_name),))
-        for e in entries:
-            e.skills.sort(key=lambda s: s.seconds_remaining)
-        return entries[: self._max]
+            rows.append(OverlayEnemyRow(cid, cname, pos, order, s1, s2, sq, sw, se, sr))
+        rows.sort(key=lambda r: (r.order,))
+        return rows
 
-    # 兼容旧测试/调用：返回扁平文字项
-    def get_items(self):
-        from .overlay_window import _fmt
-        items = []
-        for e in self.get_entries():
-            for s in e.skills:
-                items.append(type("I", (), {
-                    "text": f"敌方 {e.champion_name} {s.skill}",
-                    "seconds_remaining": s.seconds_remaining,
-                    "urgent": s.seconds_remaining < 30,
-                })())
-        items.sort(key=lambda x: x.seconds_remaining)
-        return items[: self._max]
+    def _build_spell(self, cid: int, slot: int, spell_dict: object, gt: float) -> OverlaySpell:
+        if not isinstance(spell_dict, dict):
+            spell_dict = {}
+        try:
+            sid = int(spell_dict.get("id", 0) or 0)
+        except Exception:
+            sid = 0
+        entry = self._spells.get_by_id(sid) if sid else None
+        name = entry.name_zh if entry else (spell_dict.get("displayName") or "")
+        base = float(entry.cooldown) if entry else 0.0
+        t = self._timers.get((cid, slot))
+        active = t is not None
+        remaining = (t["ready_at"] - gt) if active else 0.0
+        return OverlaySpell(slot, sid, name, base, remaining, active)
