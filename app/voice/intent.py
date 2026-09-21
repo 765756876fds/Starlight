@@ -1,4 +1,4 @@
-"""
+﻿"""
 Intent / 人话理解
 
 将用户自然语言转换为结构化意图。
@@ -307,15 +307,7 @@ class RuleBasedIntent:
 
         # ===== Player Query 规则（仅当前局实时查询，历史战绩已下线）=====
         # 用子串包含匹配，容忍 ASR 句尾语气词（啊/呢/呀）和问号。
-        if any(k in text for k in ("双方经济", "经济差", "经济领先", "经济怎么样", "现在经济")):
-            return Intent("player.query", confidence=0.95,
-                          params={"query_type": "economy_diff"})
-        if any(k in text for k in ("对面谁最肥", "对面最肥", "对面谁最有钱", "对面谁发育")):
-            return Intent("player.query", confidence=0.95,
-                          params={"query_type": "current_richest", "side": "enemy"})
-        if any(k in text for k in ("我们谁最肥", "我们最肥", "我们谁最有钱", "我们谁发育")):
-            return Intent("player.query", confidence=0.95,
-                          params={"query_type": "current_richest", "side": "self"})
+        # 已移除：经济差/谁最肥（2999 无敌方金币，数据不可用）
         if any(k in text for k in ("几杀几死", "我现在战绩", "现在杀了多少", "我现在几杀")):
             return Intent("player.query", confidence=0.95,
                           params={"query_type": "current_self_kda"})
@@ -377,3 +369,4 @@ class IntentRouter:
             return intent
 
         return Intent("system.unknown", confidence=0.0)
+
