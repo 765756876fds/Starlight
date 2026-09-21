@@ -63,12 +63,17 @@ ALIASES = {
 
 
 def normalize_champion_name(name: str) -> str | None:
-    """口语名 → 2999 canonical。未知返回 None。"""
+    """口语名 → 2999 canonical。未知返回清洗后的原始名（调用方可做精确匹配）。"""
     if not name:
         return None
     s = name.strip()
     if not s:
         return None
+    # 清洗首尾中英文标点（只清洗首尾，不删除中间字符）
+    punctuation = '，。！？、；：""''「」『』（）【】《》,.-;:"\'()[]{}<>!?'
+    s = s.strip(punctuation)
+    if not s:
+        return None
     if s in ALIASES:
         return ALIASES[s]
-    return None  # 未知称呼不猜；调用方可回退用原始名做 canonical 精确匹配
+    return s  # 未知称呼返回清洗后的原始名，调用方可做精确匹配
