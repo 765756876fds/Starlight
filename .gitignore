@@ -98,3 +98,16 @@ app/music/online/js_bridge/package-lock.json
 
 
 runtime/
+
+# Temporary test scripts (underscore prefix)
+_test_*.py
+_audit_*.py
+_expand_*.py
+
+# Runtime server logs
+*_server_*.txt
+main_*.txt
+smoke_*.txt
+
+# TTS test audio
+data/tts_test/
