@@ -39,11 +39,25 @@ def _score(p: PlayerInfo) -> tuple:
 
 
 def richest(snapshot: GameSnapshot, side: str = "enemy") -> Optional[Dict[str, Any]]:
-    """返回该方最肥玩家（gold/level/cs 排序第一）。无数据返回 None。"""
+    """返回该方最肥玩家（gold/level/cs 排序第一）。无数据返回 None。
+
+    richness_basis:
+      - "gold": 敌方 gold 数据可用，按经济排序
+      - "development_proxy": 敌方 gold 不可用，按等级/补刀近似
+      - "unavailable": 完全无数据
+    """
     players = _players_in_side(snapshot, side)
     if not players:
         return None
     top = max(players, key=_score)
+
+    # 判断 gold 是否可用
+    has_gold = any(int(p.gold) > 0 for p in players)
+    if has_gold:
+        basis = "gold"
+    else:
+        basis = "development_proxy"
+
     return {
         "champion": top.champion_name,
         "summoner_name": top.summoner_name,
@@ -51,6 +65,7 @@ def richest(snapshot: GameSnapshot, side: str = "enemy") -> Optional[Dict[str, A
         "level": top.level,
         "cs": top.cs,
         "team": top.team,
+        "richness_basis": basis,
     }
 
 
@@ -120,3 +135,92 @@ def team_rankings(snapshot: GameSnapshot, side: str = "self") -> List[Dict[str, 
          "level": p.level, "cs": p.cs, "team": p.team}
         for p in ordered
     ]
+
+
+def enemy_roster(snapshot: GameSnapshot) -> List[Dict[str, Any]]:
+    """返回敌方玩家列表（英雄 + 等级）。"""
+    players = _players_in_side(snapshot, "enemy")
+    return [
+        {"champion": p.champion_name, "level": p.level, "summoner_name": p.summoner_name}
+        for p in players
+    ]
+
+
+def most_deaths(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
+    """返回全场死亡最多的玩家。并列时返回所有。"""
+    players = [p for p in (snapshot.players or []) if p.champion_name]
+    if not players:
+        return None
+    max_deaths = max(int(p.deaths) for p in players)
+    if max_deaths == 0:
+        return None
+    tied = [p for p in players if int(p.deaths) == max_deaths]
+    return {
+        "players": [
+            {"champion": p.champion_name, "deaths": int(p.deaths), "team": p.team}
+            for p in tied
+        ],
+        "count": len(tied),
+        "max_deaths": max_deaths,
+    }
+
+
+def find_player_by_champion_name(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> Optional[PlayerInfo]:
+    """通过 champion_name / rawChampionName 查找玩家（使用 ChampionCatalog 解析）。"""
+    if champion_catalog is None:
+        from ..lol.data.champion_catalog import ChampionCatalog
+        champion_catalog = ChampionCatalog()
+
+    # 解析用户查询的英雄到 canonical cid
+    query_champ = champion_catalog.get_by_name(champion_name)
+    if query_champ is None:
+        return None
+    query_cid = query_champ.cid
+
+    # 遍历所有玩家，解析每个玩家的英雄到 canonical cid
+    for p in (snapshot.players or []):
+        # 优先用 rawChampionName（英文名）
+        player_champ = champion_catalog.resolve_player_champion(
+            p.champion_name,
+            getattr(p, 'raw_champion_name', '')
+        )
+        if player_champ and player_champ.cid == query_cid:
+            return p
+    return None
+
+
+def champion_level(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> Optional[Dict[str, Any]]:
+    """查询某英雄等级。"""
+    p = find_player_by_champion_name(snapshot, champion_name, champion_catalog)
+    if p is None:
+        return None
+    return {
+        "champion": p.champion_name,
+        "level": p.level,
+        "team": p.team,
+    }
+
+
+def champion_kda(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> Optional[Dict[str, Any]]:
+    """查询某英雄战绩。"""
+    p = find_player_by_champion_name(snapshot, champion_name, champion_catalog)
+    if p is None:
+        return None
+    return {
+        "champion": p.champion_name,
+        "kills": p.kills,
+        "deaths": p.deaths,
+        "assists": p.assists,
+        "level": p.level,
+    }
+
+
+def self_level(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
+    """查询自己当前等级。"""
+    cp = snapshot.current_player
+    if cp is None:
+        return None
+    return {
+        "champion": cp.champion_name,
+        "level": cp.level,
+    }
