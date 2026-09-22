@@ -70,7 +70,7 @@ class ClickableSpellIcon(QFrame):
         super().paintEvent(event)
         if self._pixmap and not self._pixmap.isNull():
             painter = QPainter(self)
-            painter.setOpacity(0.85)  # 图标半透明
+            painter.setOpacity(0.5)  # 图标 50% 透明
             painter.drawPixmap(self.rect(), self._pixmap)
             
             # 如果在 CD 中，绘制剩余时间（白色大字体，覆盖整个图标）
@@ -106,6 +106,11 @@ class ChampionAvatar(QLabel):
         
         # 加载头像
         self._pixmap = get_champion_portrait(name_en)
+        # 头像 50% 透明
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        self._opacity_effect = QGraphicsOpacityEffect()
+        self._opacity_effect.setOpacity(0.5)
+        self.setGraphicsEffect(self._opacity_effect)
         self._update_display()
 
     def set_dead(self, is_dead: bool, respawn_timer: float = 0.0):
