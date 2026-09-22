@@ -57,12 +57,11 @@ class ClickableSpellIcon(QFrame):
                 }
             """)
         else:
-            # Ready：正常状态
+            # Ready：正常状态 - 无背景无边框，直接显示图标
             self.setStyleSheet("""
                 QFrame {
-                    border: 1px solid rgba(255,255,255,0.3);
-                    border-radius: 4px;
-                    background: rgba(0,0,0,0.2);
+                    border: none;
+                    background: transparent;
                 }
             """)
 
