@@ -791,13 +791,20 @@ class Application:
             # H.4.4: 连接 Overlay 点击信号 → EventBus → alarm.create_flash
             def on_spell_clicked(champion_name: str, spell_name: str):
                 print(f"[Overlay] spell clicked: champion={champion_name}, spell={spell_name}")
+                # 规范化 spell 名称：把 2999 的变体名称转换成 canonical name
+                # 例如："治疗术" → "治疗"，"解封的传送" → "传送"，"引燃" → "点燃"
+                from app.ui.overlay.overlay_model import _normalize_spell_name
+                from app.lol.data.summoner_spell_catalog import SummonerSpellCatalog
+                _spell_catalog = SummonerSpellCatalog()
+                canonical_spell = _normalize_spell_name(spell_name, _spell_catalog)
+                print(f"[Overlay] normalized spell: {spell_name} → {canonical_spell}")
                 # H.4.4: 通过 CommandBus → CooldownManager（统一语音和 Overlay 入口）
                 from app.core.command_bus import Command, CommandType
                 self.command_bus.execute(Command(
                     command_type=CommandType.COOLDOWN_START,
                     params={
                         "champion": champion_name,
-                        "skill": spell_name,
+                        "skill": canonical_spell,
                         "side": "enemy",
                     },
                     source="overlay_click",
@@ -806,7 +813,7 @@ class Application:
                 from app.core.event_bus import EventType
                 self.event_bus.publish(Event(
                     event_type=EventType.SPEECH_SAY,
-                    data={"text": f"记好了，{champion_name}{spell_name}", "priority": "high"},
+                    data={"text": f"记好了，{champion_name}{canonical_spell}", "priority": "high"},
                     source="overlay_click",
                 ))
             
