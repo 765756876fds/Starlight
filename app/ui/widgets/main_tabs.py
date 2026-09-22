@@ -43,7 +43,12 @@ class MainTabs(QWidget):
                 traceback.print_exc()
                 tabs.addTab(QLabel(f"{title} 加载失败: {e}"), title)
 
-        _add(lambda: CurrentGamePanel(snapshot_provider), "当前对局")
+        def _make_current_game():
+            lcu = (services_dict or {}).get("lcu")
+            lcu_get = lcu.get if lcu and hasattr(lcu, "get") else None
+            lcu_post = lcu.post if lcu and hasattr(lcu, "post") else None
+            return CurrentGamePanel(snapshot_provider, lcu_get=lcu_get, lcu_post=lcu_post)
+        _add(_make_current_game, "当前对局")
         _add(lambda: AutomationPanel(automation_service, lcu=(services_dict or {}).get("lcu")), "自动化")
         _add(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息")
         _add(lambda: CooldownPanel(cooldown_manager), "计时器")

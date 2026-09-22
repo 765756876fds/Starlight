@@ -15,6 +15,7 @@ class PlayerInfo:
     riot_id: str = ""  # full Riot ID "name#tag"
     riot_game_name: str = ""
     riot_tag_line: str = ""
+    puuid: str = ""  # PUUID（用于查询 Mastery / 历史战绩）
     champion_name: str = ""
     champion_id: int = 0
     team: str = ""  # "ORDER" / "CHAOS" / "UNKNOWN"
@@ -226,6 +227,7 @@ class SnapshotBuilder:
         player.riot_id = p_data.get("riotId", "")
         player.riot_game_name = p_data.get("riotIdGameName", "")
         player.riot_tag_line = p_data.get("riotIdTagLine", "")
+        player.puuid = p_data.get("puuid", "")
         player.champion_name = p_data.get("championName", "")
         player.champion_id = int(p_data.get("championId", 0))
         player.raw_champion_name = p_data.get("rawChampionName", "")
