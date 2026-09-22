@@ -80,6 +80,11 @@ class LoLRuntime:
         self._game_end_retry_count: int = 0
         self._max_game_end_retries: int = 2
         self._game_end_retry_delay: float = 0.5
+        
+        # game_time 停滞检测（兜底：2999 仍可访问但数据不更新时）
+        self._last_game_time: float = -1.0
+        self._game_time_stagnant_count: int = 0
+        self._max_stagnant_count: int = 10  # 连续 10 次轮询（约 10 秒）game_time 无变化则判定游戏结束
 
     def start(self):
         """启动 LoL 运行时"""
@@ -152,6 +157,18 @@ class LoLRuntime:
             # 构建快照
             snapshot = SnapshotBuilder.from_api_data(all_data)
             self._current_snapshot = snapshot
+            
+            # game_time 停滞检测：连续 N 次无变化则判定游戏结束
+            current_gt = float(getattr(snapshot, 'game_time', 0.0) or 0.0)
+            if current_gt == self._last_game_time:
+                self._game_time_stagnant_count += 1
+                if self._game_time_stagnant_count >= self._max_stagnant_count:
+                    print(f"[Runtime] GAME_ENDED: game_time stagnant for {self._game_time_stagnant_count} polls")
+                    self._handle_game_end_detection()
+                    return
+            else:
+                self._game_time_stagnant_count = 0
+            self._last_game_time = current_gt
 
             # Player Analysis (read-only, no speech)
             try:
