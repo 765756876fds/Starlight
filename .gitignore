@@ -111,3 +111,6 @@ smoke_*.txt
 
 # TTS test audio
 data/tts_test/
+
+# Game asset caches (champion portraits, summoner spell icons, downloaded from Data Dragon)
+data/assets/

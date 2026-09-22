@@ -1,4 +1,4 @@
-﻿"""CooldownManager锛氱鐞嗗涓墜鍔?reminder锛岀敤 Scheduler 鍋氫竴娆℃€ц鏃躲€?""
+"""CooldownManager：管理多个手动 reminder，用 Scheduler 做一次性计时。"""
 from __future__ import annotations
 
 import threading
@@ -17,14 +17,14 @@ from types import MappingProxyType
 import copy
 from .policy import ReminderPolicy
 
-_SLOT_ZH = {"Q": "Q", "W": "W", "E": "E", "R": "澶ф嫑"}
-_SIDE_ZH = {"enemy": "鏁屾柟", "ally": "鎴戞柟", "self": "浣犵殑"}
-# 璇煶鍒悕 鈫?鏍囧噯妲戒綅
-_SLOT_ALIAS = {"澶ф嫑": "R", "澶?: "R", "ULT": "R", "U": "R", "r": "R"}
+_SLOT_ZH = {"Q": "Q", "W": "W", "E": "E", "R": "大招"}
+_SIDE_ZH = {"enemy": "敌方", "ally": "我方", "self": "你的"}
+# 语音别名 → 标准槽位
+_SLOT_ALIAS = {"大招": "R", "大": "R", "ULT": "R", "U": "R", "r": "R"}
 
 
 def _normalize_slot(skill: str) -> str:
-    """鎶婅闊?UI 浼犳潵鐨勬妧鑳藉悕褰掍竴鍖栦负 Q/W/E/R銆?""
+    """把语音/UI 传来的技能名归一化为 Q/W/E/R。"""
     s = (skill or "").strip()
     if s in _SLOT_ALIAS:
         return _SLOT_ALIAS[s]
@@ -51,18 +51,21 @@ class CooldownManager:
         self._abilities = abilities or AbilityCatalog()
         self._spells = spells or SummonerSpellCatalog()
         self._on_event = on_event or (lambda code, data: None)
-        # speech_enqueue(text, event_id) 鈥?鐢?main.py 娉ㄥ叆 SpeechQueue 閫傞厤
+        # speech_enqueue(text, event_id) — 由 main.py 注入 SpeechQueue 适配
         self._speech_enqueue = speech_enqueue
         self._remind_before = remind_before
         self._policy = policy or ReminderPolicy()
         self._scheduler = scheduler or get_scheduler()
-        # callable(champion_name, side) -> float ability_haste锛涘彲閫夛紝缂虹渷 0
+        # callable(champion_name, side) -> float ability_haste；可选，缺省 0
         self._haste_provider = haste_provider
 
         self._reminders: Dict[str, CooldownReminder] = {}
         self._task_ids: Dict[str, List[str]] = {}
         self._lock = threading.Lock()
-        # 鍞竴鏃堕棿鍩哄噯锛?999 娓告垙鍐?gameTime銆?        # _clock_synced=True 琛ㄧず宸叉敹鍒版湁鏁?game.time_update锛?        # 鏈悓姝ユ椂绂佹鍒涘缓浠讳綍璁℃椂锛岀粷涓嶅洖閫€鐜板疄鏃堕棿銆?        self._game_time: float = 0.0
+        # 唯一时间基准：2999 游戏内 gameTime。
+        # _clock_synced=True 表示已收到有效 game.time_update；
+        # 未同步时禁止创建任何计时，绝不回退现实时间。
+        self._game_time: float = 0.0
         self._clock_synced: bool = False
 
     # ----- public API -----
@@ -82,22 +85,25 @@ class CooldownManager:
 
         champ = self._champions.get_by_name(champion_name) if champion_name else None
         cid = champ.cid if champ else None
-        cname = champ.name_zh if champ else (champion_name or "鏈煡鑻遍泟")
+        cname = champ.name_zh if champ else (champion_name or "未知英雄")
 
         slot = _normalize_slot(skill)
         if slot in ("Q", "W", "E", "R"):
             if cid is None:
                 return None
             
-            # 鎶€鑳界瓑绾ф帹鏂鍒欙細
-            # Q/W/E锛氬缁堥粯璁?rank = 1锛堟潵婧愶細assumed_level_1锛?            # R锛氭牴鎹嫳闆勭瓑绾ф帹鏂紙鏉ユ簮锛歩nferred_from_champion_level锛?            skill_level_source = ""
+            # 技能等级推断规则：
+            # Q/W/E：始终默认 rank = 1（来源：assumed_level_1）
+            # R：根据英雄等级推断（来源：inferred_from_champion_level）
+            skill_level_source = ""
             if slot == "R":
-                # R 鏍规嵁鑻遍泟绛夌骇鎺ㄦ柇
+                # R 根据英雄等级推断
                 if champion_level is None:
-                    # 娌℃湁鑻遍泟绛夌骇锛岄粯璁ゆ寜 1 绾у鐞嗭紙浣嗘爣璁颁负鎺ㄦ柇锛?                    rank = 1
+                    # 没有英雄等级，默认按 1 级处理（但标记为推断）
+                    rank = 1
                     skill_level_source = "inferred_from_champion_level"
                 elif champion_level < 6:
-                    # R 鏈В閿侊紝涓嶅惎鍔?R 鍐峰嵈璁＄畻
+                    # R 未解锁，不启动 R 冷却计算
                     self._on_event("cooldown.r_not_unlocked", {
                         "champion": champion_name, "skill": skill,
                         "champion_level": champion_level,
@@ -105,7 +111,7 @@ class CooldownManager:
                     if self._speech_enqueue:
                         try:
                             self._speech_enqueue(
-                                "澶ф嫑杩樻病瑙ｉ攣鍛?,
+                                "大招还没解锁呢",
                                 "cooldown.r_not_unlocked")
                         except Exception:
                             pass
@@ -120,7 +126,7 @@ class CooldownManager:
                     rank = 3
                     skill_level_source = "inferred_from_champion_level"
             else:
-                # Q/W/E锛氬缁堥粯璁?rank = 1
+                # Q/W/E：始终默认 rank = 1
                 rank = ability_rank or 1
                 skill_level_source = "assumed_level_1"
             
@@ -133,7 +139,7 @@ class CooldownManager:
                 if self._speech_enqueue:
                     try:
                         self._speech_enqueue(
-                            "璇ユ妧鑳芥病鏈夊浐瀹氬喎鍗存椂闂达紝鏃犳硶鍒涘缓璁℃椂鍣?,
+                            "该技能没有固定冷却时间，无法创建计时器",
                             "cooldown.invalid_skill")
                     except Exception:
                         pass
@@ -157,28 +163,30 @@ class CooldownManager:
         est_cd = estimated if estimated is not None else float(cd)
         remind_before = self._policy.for_skill(stype, slot, est_cd)
         if not self._clock_synced:
-            # 鏈悓姝ユ父鎴忔椂閽燂細涓嶅缓璁℃椂锛屼篃涓嶅洖閫€鐜板疄鏃堕棿銆?            self._on_event("cooldown.not_synced", {"champion": champion_name, "skill": skill})
+            # 未同步游戏时钟：不建计时，也不回退现实时间。
+            self._on_event("cooldown.not_synced", {"champion": champion_name, "skill": skill})
             if self._speech_enqueue:
                 try:
-                    self._speech_enqueue("娓告垙鏃堕棿灏氭湭鍚屾锛屾殏鏃舵棤娉曡鏃躲€?,
+                    self._speech_enqueue("游戏时间尚未同步，暂时无法计时。",
                                          f"cooldown.not_synced.{uuid.uuid4().hex[:8]}")
                 except Exception:
                     pass
             return None
 
         rid = uuid.uuid4().hex[:8]
-        now = self._game_time  # 鍞竴鍩哄噯锛氭父鎴忓唴 gameTime
+        now = self._game_time  # 唯一基准：游戏内 gameTime
         
-        # 鍒涘缓 Cast Snapshot锛堣褰曟椂鐨勭姸鎬佸揩鐓э紝鐪熸涓嶅彲鍙橈級
-        # runes: 娣辨嫹璐?+ MappingProxyType锛岀‘淇濆師濮?dict 鍚庣画淇敼涓嶅奖鍝?snapshot
+        # 创建 Cast Snapshot（记录时的状态快照，真正不可变）
+        # runes: 深拷贝 + MappingProxyType，确保原始 dict 后续修改不影响 snapshot
         immutable_runes = tuple(
             MappingProxyType(copy.deepcopy(r)) 
-            for r in ()  # TODO: 浠?EnemyProfile 璇诲彇 runes 鍚庡～鍏?        )
+            for r in ()  # TODO: 从 EnemyProfile 读取 runes 后填入
+        )
         cast_snapshot = CooldownCastSnapshot(
             champion_name=cname or "",
             spell=display,
             cast_game_time=now,
-            champion_level=0,  # TODO: 浠?EnemyProfile 璇诲彇
+            champion_level=0,  # TODO: 从 EnemyProfile 读取
             items=(),
             runes=immutable_runes,
             ability_haste=ability_haste,
@@ -203,7 +211,7 @@ class CooldownManager:
         )
         with self._lock:
             self._reminders[rid] = r
-        self._schedule(r)  # 鍦ㄩ攣澶栬皟搴︼紝閬垮厤 _tick_game_clock 閲嶅叆闈為噸鍏ラ攣姝婚攣
+        self._schedule(r)  # 在锁外调度，避免 _tick_game_clock 重入非重入锁死锁
         self._on_event(COOLDOWN_STARTED, {"id": rid, **self._payload(r)})
         return r
 
@@ -222,7 +230,7 @@ class CooldownManager:
         return True
 
     def clear(self) -> int:
-        """娓呯┖鎵€鏈?reminder锛圙AME_ENDED 鏃惰皟鐢級銆?""
+        """清空所有 reminder（GAME_ENDED 时调用）。"""
         with self._lock:
             reminders = list(self._reminders.values())
             task_ids = list(self._task_ids.values())
@@ -246,8 +254,11 @@ class CooldownManager:
         return len(reminders)
     
     def get_active_reminders(self) -> list:
-        """鍙璁块棶娲昏穬 reminder锛堜緵 Overlay 浣跨敤锛夈€?        
-        杩斿洖鎵€鏈?remaining > 0 鐨?reminder锛屽寘鎷?ACTIVE 鍜?REMINDED 鐘舵€併€?        杩欐牱 Overlay 鍙互缁х画鏄剧ず鍊掕鏃讹紝鐩村埌 cooldown 鐪熸缁撴潫銆?        """
+        """只读访问活跃 reminder（供 Overlay 使用）。
+        
+        返回所有 remaining > 0 的 reminder，包括 ACTIVE 和 REMINDED 状态。
+        这样 Overlay 可以继续显示倒计时，直到 cooldown 真正结束。
+        """
         with self._lock:
             return [
                 {
@@ -277,8 +288,12 @@ class CooldownManager:
         return n
 
     def apply_adjustment(self, reminder_id: str, adjustment_seconds: float, event_id: str) -> bool:
-        """瀵规寚瀹?reminder 搴旂敤鍔ㄦ€佷慨姝ｏ紙濡?R refund锛夈€?        
-        骞傜瓑锛氬悓涓€ (reminder_id, event_id) 鍙鐞嗕竴娆°€?        鍙綔鐢ㄤ簬 ACTIVE 鐘舵€佺殑 reminder銆?        adjustment_seconds > 0 鈫?ready_at 鎻愬墠銆?        """
+        """对指定 reminder 应用动态修正（如 R refund）。
+        
+        幂等：同一 (reminder_id, event_id) 只处理一次。
+        只作用于 ACTIVE 状态的 reminder。
+        adjustment_seconds > 0 → ready_at 提前。
+        """
         if not reminder_id or not event_id or adjustment_seconds <= 0:
             return False
         
@@ -287,22 +302,24 @@ class CooldownManager:
             if r is None:
                 return False
             
-            # 鐢熷懡鍛ㄦ湡锛氬彧澶勭悊 ACTIVE
+            # 生命周期：只处理 ACTIVE
             if r.status != ReminderStatus.ACTIVE.value:
                 return False
             
-            # 骞傜瓑妫€鏌?            if event_id in r.applied_event_ids:
+            # 幂等检查
+            if event_id in r.applied_event_ids:
                 return False
             
-            # 搴旂敤淇
+            # 应用修正
             r.dynamic_adjustment += adjustment_seconds
             r.applied_event_ids.add(event_id)
             
-            # 杈圭晫鎯呭喌锛氫慨姝ｅ悗 ready_at 涓嶆棭浜庡綋鍓嶆父鎴忔椂闂?            if r.ready_at < self._game_time:
-                r.dynamic_adjustment = r.estimated_cooldown  # 瀹夊叏鍏滃簳
+            # 边界情况：修正后 ready_at 不早于当前游戏时间
+            if r.ready_at < self._game_time:
+                r.dynamic_adjustment = r.estimated_cooldown  # 安全兜底
                 print("[Cooldown] adjustment capped: ready_at would be <= game_time")
         
-        # 瑙﹀彂涓€娆?tick锛屾鏌ユ槸鍚﹀凡缁忓埌 remind_at/ready_at
+        # 触发一次 tick，检查是否已经到 remind_at/ready_at
         self._tick_game_clock()
         
         self._on_event("cooldown.adjusted", {
@@ -326,9 +343,9 @@ class CooldownManager:
         with self._lock:
             return self._reminders.get(reminder_id)
 
-    # ----- 娓告垙鍐呮椂閽熸帴鍏?-----
+    # ----- 游戏内时钟接入 -----
     def on_game_time_update(self, event) -> None:
-        """EventBus: game.time_update銆傚喎鍗磋鏃堕敋瀹氭父鎴忓唴鏃堕挓銆?""
+        """EventBus: game.time_update。冷却计时锚定游戏内时钟。"""
         t = event.get("game_time", 0.0) if hasattr(event, "get") else 0.0
         try:
             self.set_game_time(float(t or 0.0))
@@ -336,13 +353,13 @@ class CooldownManager:
             pass
 
     def set_game_time(self, t: float) -> None:
-        """鏀跺埌鏈夋晥 game.time_update锛氭爣璁板悓姝ュ苟鎺ㄨ繘璁℃椂銆?""
+        """收到有效 game.time_update：标记同步并推进计时。"""
         self._game_time = float(t)
         self._clock_synced = True
         self._tick_game_clock()
 
     def reset_clock(self) -> None:
-        """GAME_ENDED锛氭竻绌哄叏閮ㄨ鏃跺苟鍥炲埌鏈悓姝ョ姸鎬併€?""
+        """GAME_ENDED：清空全部计时并回到未同步状态。"""
         self.cancel_all()
         self._game_time = 0.0
         self._clock_synced = False
@@ -359,10 +376,9 @@ class CooldownManager:
                     ah, ssh = float(result[0] or 0.0), float(result[1] or 0.0)
                 else:
                     ah = float(result or 0.0)
-            except Exception as e:
+            except Exception:
                 ah = 0.0
                 ssh = 0.0
-        print(f"[CD-Diag] handle_start: champion={p.get('champion')}, skill={p.get('skill') or p.get('spell')}, side={p.get('side', 'enemy')}, AH={ah}, SSH={ssh}")
         return self.start_reminder(
             champion_name=p.get("champion"),
             skill=p.get("skill") or p.get("spell"),
@@ -371,10 +387,10 @@ class CooldownManager:
             summoner_spell_haste=ssh,
         )
 
-    # ----- 闈欐€?CD 鏌ヨ锛坈ooldown.query锛?----
+    # ----- 静态 CD 查询（cooldown.query）-----
     def query_cooldown(self, champion_name: Optional[str],
                        skill: str) -> dict:
-        """鏌ヨ闈欐€佸熀纭€ CD锛岃繑鍥炵粨鏋勫寲缁撴灉锛堜笉鍒涘缓璁℃椂鍣級銆?""
+        """查询静态基础 CD，返回结构化结果（不创建计时器）。"""
         slot = _normalize_slot(skill)
         sp = self._spells.get_by_name(skill)
         if sp is not None and slot not in ("Q", "W", "E", "R"):
@@ -383,16 +399,16 @@ class CooldownManager:
                 "champion": None,
                 "skill": sp.name_zh,
                 "base_cooldown": sp.cooldown,
-                "text": f"{sp.name_zh}鍩虹鍐峰嵈绾int(sp.cooldown)}绉掋€?,
+                "text": f"{sp.name_zh}基础冷却约{int(sp.cooldown)}秒。",
             }
 
         champ = self._champions.get_by_name(champion_name) if champion_name else None
-        cname = champ.name_zh if champ else (champion_name or "璇ヨ嫳闆?)
+        cname = champ.name_zh if champ else (champion_name or "该英雄")
         if champ is None or slot not in ("Q", "W", "E", "R"):
             return {
                 "kind": "unknown", "champion": champion_name, "skill": skill,
                 "base_cooldown": None,
-                "text": "娌℃湁鎵惧埌瀵瑰簲鐨勬妧鑳藉喎鍗存暟鎹€?,
+                "text": "没有找到对应的技能冷却数据。",
             }
         cd1 = self._abilities.get_cooldown_by_level(champ.cid, slot, 1)
         cd5 = self._abilities.get_cooldown_by_level(champ.cid, slot, 5)
@@ -400,14 +416,14 @@ class CooldownManager:
             return {
                 "kind": "no_fixed", "champion": cname, "skill": slot,
                 "base_cooldown": None,
-                "text": f"{cname}鐨剓_SLOT_ZH.get(slot, slot)}娌℃湁鍥哄畾鍐峰嵈鏃堕棿銆?,
+                "text": f"{cname}的{_SLOT_ZH.get(slot, slot)}没有固定冷却时间。",
             }
         base = int(round(cd1))
         if cd5 is not None and abs(cd5 - cd1) > 0.5:
-            text = (f"{cname}{_SLOT_ZH.get(slot, slot)}鍩虹鍐峰嵈绾base}绉掞紝"
-                    f"闅忔妧鑳界瓑绾ч檷浣庯紝婊＄骇绾int(round(cd5))}绉掋€?)
+            text = (f"{cname}{_SLOT_ZH.get(slot, slot)}基础冷却约{base}秒，"
+                    f"随技能等级降低，满级约{int(round(cd5))}秒。")
         else:
-            text = f"{cname}{_SLOT_ZH.get(slot, slot)}鍩虹鍐峰嵈绾base}绉掋€?
+            text = f"{cname}{_SLOT_ZH.get(slot, slot)}基础冷却约{base}秒。"
         return {
             "kind": "ability", "champion": cname, "skill": slot,
             "base_cooldown": cd1, "max_level_cooldown": cd5, "text": text,
@@ -429,7 +445,8 @@ class CooldownManager:
 
     def handle_cancel(self, command) -> bool:
         p = getattr(command, "params", command) or {}
-        # 鎸?champion 鍚嶅彇娑?        champ_name = p.get("champion")
+        # 按 champion 名取消
+        champ_name = p.get("champion")
         with self._lock:
             candidates = [r.id for r in self._reminders.values()
                           if (not champ_name) or (r.champion_name == champ_name)]
@@ -468,7 +485,7 @@ class CooldownManager:
         self._on_event(COOLDOWN_READY, self._payload(rem))
 
     def _tick_game_clock(self) -> None:
-        """娓告垙鍐呮椂閽熸帹杩涳細鎵弿 game_clock 璁℃椂锛屽埌杈?remind/ready 鐐瑰嵆瑙﹀彂銆?""
+        """游戏内时钟推进：扫描 game_clock 计时，到达 remind/ready 点即触发。"""
         now = self._game_time
         if now < 0:
             return
@@ -487,7 +504,9 @@ class CooldownManager:
             self._pop_ready(rid)
 
     def _schedule(self, r: CooldownReminder) -> None:
-        # 鍞竴璁℃椂鍩哄噯锛氭父鎴忓唴 gameTime銆備笉鎸備换浣曠幇瀹炲畾鏃跺櫒锛?        # 瀹屽叏鐢?set_game_time() 鎺ㄨ繘锛涚珛鍗虫壂涓€娆″鐞嗏€滃凡鍒扮偣鈥濊竟鐣屻€?        self._tick_game_clock()
+        # 唯一计时基准：游戏内 gameTime。不挂任何现实定时器，
+        # 完全由 set_game_time() 推进；立即扫一次处理“已到点”边界。
+        self._tick_game_clock()
 
     def _payload(self, r: CooldownReminder) -> dict:
         return {
@@ -504,17 +523,18 @@ class CooldownManager:
     @staticmethod
     def _remind_text(r: CooldownReminder) -> str:
         side_zh = _SIDE_ZH.get(r.side, "")
-        # remind_before = 璺濈鍐峰嵈缁撴潫杩樻湁澶氬皯绉?        if r.side == "self":
+        # remind_before = 距离冷却结束还有多少秒
+        if r.side == "self":
             name = ""
         else:
             name = r.champion_name or ""
         
-        # 鍙敜甯堟妧鑳斤細鎻愬墠 30 绉?鈫?"搴旇蹇ソ浜?锛涙帴杩戠粨鏉?鈫?"澶ф濂戒簡"
+        # 召唤师技能：提前 30 秒 → "应该快好了"；接近结束 → "大概好了"
         if r.skill_type == "summoner_spell":
-            if r.remind_before >= 20:  # 绾?30 绉掓彁閱掔偣
-                return f"{side_zh}{name}{r.skill}搴旇蹇ソ浜?
-            else:  # <10 绉?                return f"{side_zh}{name}{r.skill}澶ф濂戒簡"
+            if r.remind_before >= 20:  # 约 30 秒提醒点
+                return f"{side_zh}{name}{r.skill}应该快好了"
+            else:  # <10 秒
+                return f"{side_zh}{name}{r.skill}大概好了"
         else:
-            # 鏅€氭妧鑳斤細"澶ф濂戒簡"
-            return f"{side_zh}{name}{r.skill}澶ф濂戒簡"
-
+            # 普通技能："大概好了"
+            return f"{side_zh}{name}{r.skill}大概好了"
