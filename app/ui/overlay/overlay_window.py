@@ -96,38 +96,67 @@ class ClickableSpellIcon(QFrame):
 
 
 class ChampionAvatar(QLabel):
-    """英雄头像（Data Dragon 真实头像）。"""
+    """英雄头像（Data Dragon 真实头像），支持死亡状态显示。"""
     def __init__(self, name_en: str, parent=None):
         super().__init__(parent)
         self.setFixedSize(48, 48)
         self.setAlignment(Qt.AlignCenter)
+        self._name_en = name_en
+        self._is_dead = False
+        self._respawn_timer = 0.0
         
         # 加载头像
-        pixmap = get_champion_portrait(name_en)
-        if pixmap and not pixmap.isNull():
-            # 裁剪成圆形
-            self.setPixmap(pixmap.scaled(48, 48, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
-            # 设置圆形遮罩
+        self._pixmap = get_champion_portrait(name_en)
+        self._update_display()
+
+    def set_dead(self, is_dead: bool, respawn_timer: float = 0.0):
+        """设置死亡状态。"""
+        self._is_dead = is_dead
+        self._respawn_timer = respawn_timer
+        self._update_display()
+
+    def _update_display(self):
+        """更新显示。"""
+        if self._is_dead and self._respawn_timer > 0:
+            # 死亡状态：半透明头像 + 中央大号白色倒计时
+            if self._pixmap and not self._pixmap.isNull():
+                self.setPixmap(self._pixmap.scaled(48, 48, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
             self.setStyleSheet("""
                 QLabel {
                     border-radius: 24px;
                     border: 2px solid rgba(255,255,255,0.3);
-                }
-            """)
-        else:
-            # 占位：首字母
-            self.setText(name_en[0] if name_en else "?")
-            self.setStyleSheet("""
-                QLabel {
-                    background-color: #3F51B5;
+                    background-color: rgba(0, 0, 0, 0.5);
                     color: white;
-                    border-radius: 24px;
                     font-weight: bold;
-                    font-size: 18px;
-                    border: 2px solid rgba(255,255,255,0.3);
+                    font-size: 14px;
                 }
             """)
-            self.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+            self.setText(str(int(self._respawn_timer)))
+        else:
+            # 正常状态
+            if self._pixmap and not self._pixmap.isNull():
+                self.setPixmap(self._pixmap.scaled(48, 48, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+                self.setText("")
+                self.setStyleSheet("""
+                    QLabel {
+                        border-radius: 24px;
+                        border: 2px solid rgba(255,255,255,0.3);
+                    }
+                """)
+            else:
+                # 占位：首字母
+                self.setText(self._name_en[0] if self._name_en else "?")
+                self.setStyleSheet("""
+                    QLabel {
+                        background-color: #3F51B5;
+                        color: white;
+                        border-radius: 24px;
+                        font-weight: bold;
+                        font-size: 18px;
+                        border: 2px solid rgba(255,255,255,0.3);
+                    }
+                """)
+                self.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
 
 
 class OverlayWindow(QWidget):
