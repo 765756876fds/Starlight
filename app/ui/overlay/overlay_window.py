@@ -298,8 +298,6 @@ class OverlayWindow(QWidget):
         spell2_icon.clicked.connect(self.spell_clicked.emit)
         layout.addWidget(spell2_icon)
         
-        layout.addStretch()
-        
         # 最右边：英雄头像（支持死亡状态）
         champ = _champion_catalog.get_by_id(row.champion_id) or _champion_catalog.get_by_name(row.champion_name)
         name_en = champ.name_en if champ else row.champion_name
