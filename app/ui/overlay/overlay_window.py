@@ -98,7 +98,7 @@ class ChampionAvatar(QLabel):
     """英雄头像（Data Dragon 真实头像），支持死亡状态显示。"""
     def __init__(self, name_en: str, parent=None):
         super().__init__(parent)
-        self.setFixedSize(48, 48)
+        self.setFixedSize(62, 62)  # 130% 放大：48 → 62
         self.setAlignment(Qt.AlignCenter)
         self._name_en = name_en
         self._is_dead = False
@@ -124,7 +124,7 @@ class ChampionAvatar(QLabel):
         if self._is_dead and self._respawn_timer > 0:
             # 死亡状态：半透明头像 + 中央大号白色倒计时
             if self._pixmap and not self._pixmap.isNull():
-                self.setPixmap(self._pixmap.scaled(48, 48, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+                self.setPixmap(self._pixmap.scaled(62, 62, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
             self.setStyleSheet("""
                 QLabel {
                     border-radius: 24px;
@@ -139,7 +139,7 @@ class ChampionAvatar(QLabel):
         else:
             # 正常状态
             if self._pixmap and not self._pixmap.isNull():
-                self.setPixmap(self._pixmap.scaled(48, 48, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+                self.setPixmap(self._pixmap.scaled(62, 62, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
                 self.setText("")
                 self.setStyleSheet("""
                     QLabel {
@@ -215,12 +215,12 @@ class OverlayWindow(QWidget):
         # 窗口尺寸：宽度 380，高度自适应
         w = 380
         h = 300
-        # 右侧留 10px margin，顶部留 80px margin（更靠近右边缘）
-        x = screen.width() - w - 10
+        # 右侧留 2px margin，顶部留 80px margin（贴近右屏幕边缘）
+        x = screen.width() - w - 2
         y = 80
         # 确保不超出屏幕
         if x + w > screen.width():
-            x = screen.width() - w - 5
+            x = screen.width() - w - 2
         if y + h > screen.height():
             y = screen.height() - h - 10
         self.setGeometry(x, y, w, h)
