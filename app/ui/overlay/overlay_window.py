@@ -1,4 +1,4 @@
-﻿"""OverlayWindow：Qt 透明无边框置顶浮窗（敌方五人 CD + 可点击召唤师技能）。
+"""OverlayWindow：Qt 透明无边框置顶浮窗（敌方五人 CD + 可点击召唤师技能）。
 
 H.4.4-R2 修正：
 - 真实英雄头像（Data Dragon）
@@ -244,7 +244,11 @@ class OverlayWindow(QWidget):
         return w
 
     def _build_enemy_card(self, row) -> QWidget:
-        """构建单个敌方英雄卡片。"""
+        """构建单个敌方英雄卡片。
+        
+        布局：召唤师技能 → 头像（头像在最右）
+        H.4.4-R13: 删除 Q/W/E/R，添加死亡状态显示
+        """
         card = QFrame()
         card.setStyleSheet("""
             QFrame {
@@ -253,43 +257,26 @@ class OverlayWindow(QWidget):
             }
         """)
         
-        layout = QVBoxLayout(card)
+        layout = QHBoxLayout(card)
         layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(4)
-        
-        # 布局：从左到右 Q/W/E/R → 召唤师技能 → 头像（头像在最右）
-        top_row = QHBoxLayout()
-        top_row.setSpacing(6)
-        
-        # 最左边：英雄名称
-        name_lbl = QLabel(row.champion_name)
-        name_lbl.setStyleSheet("color: rgba(255,255,255,220); background: transparent; border: none;")
-        name_lbl.setFont(QFont("Microsoft YaHei", 8, QFont.Bold))
-        top_row.addWidget(name_lbl)
-        
-        # Q/W/E/R 技能图标
-        top_row.addWidget(self._skill_dot(row.skill_q))
-        top_row.addWidget(self._skill_dot(row.skill_w))
-        top_row.addWidget(self._skill_dot(row.skill_e))
-        top_row.addWidget(self._skill_dot(row.skill_r))
+        layout.setSpacing(6)
         
         # 召唤师技能图标
         spell1_icon = ClickableSpellIcon(row.champion_name, row.spell1)
         spell1_icon.clicked.connect(self.spell_clicked.emit)
-        top_row.addWidget(spell1_icon)
+        layout.addWidget(spell1_icon)
         spell2_icon = ClickableSpellIcon(row.champion_name, row.spell2)
         spell2_icon.clicked.connect(self.spell_clicked.emit)
-        top_row.addWidget(spell2_icon)
+        layout.addWidget(spell2_icon)
         
-        top_row.addStretch()
+        layout.addStretch()
         
-        # 最右边：英雄头像
+        # 最右边：英雄头像（支持死亡状态）
         champ = _champion_catalog.get_by_id(row.champion_id) or _champion_catalog.get_by_name(row.champion_name)
         name_en = champ.name_en if champ else row.champion_name
         avatar = ChampionAvatar(name_en)
-        top_row.addWidget(avatar)
-        
-        layout.addLayout(top_row)
+        avatar.set_dead(row.is_dead, row.respawn_timer)
+        layout.addWidget(avatar)
         
         return card
 

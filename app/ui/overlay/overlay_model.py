@@ -111,10 +111,8 @@ class OverlayEnemyRow:
     order: int
     spell1: OverlaySpell
     spell2: OverlaySpell
-    skill_q: OverlaySkill = None
-    skill_w: OverlaySkill = None
-    skill_e: OverlaySkill = None
-    skill_r: OverlaySkill = None
+    is_dead: bool = False          # 是否死亡
+    respawn_timer: float = 0.0     # 剩余复活时间（秒）
 
 
 class OverlayModel:
@@ -239,12 +237,12 @@ class OverlayModel:
             s1 = self._build_spell(cid, 1, spells[0] if len(spells) > 0 else {}, gt, skills_for_champ)
             s2 = self._build_spell(cid, 2, spells[1] if len(spells) > 1 else {}, gt, skills_for_champ)
 
-            sq = skills_for_champ.get("Q", OverlaySkill("Q", 0, False))
-            sw = skills_for_champ.get("W", OverlaySkill("W", 0, False))
-            se = skills_for_champ.get("E", OverlaySkill("E", 0, False))
-            sr = skills_for_champ.get("R", OverlaySkill("R", 0, False))  # R 默认未就绪
+            # Q/W/E/R 已从 UI 删除（H.4.4-R13）
+            sq = sw = se = sr = None
 
-            rows.append(OverlayEnemyRow(cid, cname, pos, order, s1, s2, sq, sw, se, sr))
+            is_dead = getattr(p, "is_dead", False) or getattr(p, "respawn_timer", 0) > 0
+            respawn_timer = float(getattr(p, "respawn_timer", 0) or 0)
+            rows.append(OverlayEnemyRow(cid, cname, pos, order, s1, s2, is_dead, respawn_timer))
         rows.sort(key=lambda r: (r.order,))
         return rows
 
