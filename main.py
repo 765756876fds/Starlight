@@ -358,8 +358,10 @@ class Application:
                 pass
 
         def on_create_flash(event):
+            print(f"[P0CD DEBUG] on_create_flash called: event_type={event.event_type}, data={event.data}")
             champion = event.get("champion", "")
             if not (champion and self.lol):
+                print(f"[P0CD DEBUG] early return: champion={champion}, lol={self.lol}")
                 _say("没确认到目标")
                 return
             # T0：报告瞬间读当前 2999 快照，算 base + SSH，冻结 effective CD。
@@ -744,6 +746,8 @@ class Application:
                 try:
                     self._switch_to_tabs(window)
                     print("[Run] switched")
+                    # H.4.4: 启动 Overlay（在主线程中）
+                    self._start_overlay()
                 except Exception:
                     import traceback
                     traceback.print_exc()
@@ -766,12 +770,47 @@ class Application:
             cm = getattr(self, "cooldown_manager", None)
             def phase():
                 try:
-                    sn = getattr(getattr(self, "lol", None), "current_snapshot", None)
-                    return getattr(sn, "phase", "None") if sn else "None"
+                    lol = getattr(self, "lol", None)
+                    if lol and lol.is_game_active:
+                        return "InProgress"
+                    return "None"
                 except Exception:
                     return "None"
-            m = OverlayModel(cooldown_manager_provider=lambda: cm, phase_provider=phase)
+            def snapshot():
+                try:
+                    return getattr(getattr(self, "lol", None), "current_snapshot", None)
+                except Exception:
+                    return None
+            m = OverlayModel(
+                snapshot_provider=snapshot,
+                phase_provider=phase,
+                cooldown_manager_provider=lambda: cm,
+            )
             self._overlay_window = OverlayWindow(m)
+            
+            # H.4.4: 连接 Overlay 点击信号 → EventBus → alarm.create_flash
+            def on_spell_clicked(champion_name: str, spell_name: str):
+                print(f"[Overlay] spell clicked: champion={champion_name}, spell={spell_name}")
+                # H.4.4: 通过 CommandBus → CooldownManager（统一语音和 Overlay 入口）
+                from app.core.command_bus import Command, CommandType
+                self.command_bus.execute(Command(
+                    command_type=CommandType.COOLDOWN_START,
+                    params={
+                        "champion": champion_name,
+                        "skill": spell_name,
+                        "side": "enemy",
+                    },
+                    source="overlay_click",
+                ))
+                # 语音提示：确认记录成功
+                from app.core.event_bus import EventType
+                self.event_bus.publish(Event(
+                    event_type=EventType.SPEECH_SAY,
+                    data={"text": f"记好了，{champion_name}{spell_name}", "priority": "high"},
+                    source="overlay_click",
+                ))
+            
+            self._overlay_window.spell_clicked.connect(on_spell_clicked)
             print("[Run] overlay started")
         except Exception:
             import traceback; traceback.print_exc()
@@ -835,4 +874,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 

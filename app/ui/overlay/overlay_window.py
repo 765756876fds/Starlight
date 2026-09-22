@@ -1,30 +1,148 @@
-"""OverlayWindow：Qt 透明无边框置顶（鼠标穿透）浮窗（敌方召唤师技能 CD）。
+﻿"""OverlayWindow：Qt 透明无边框置顶浮窗（敌方五人 CD + 可点击召唤师技能）。
 
-窗口属性沿用现有实现（frameless / always-on-top / transparent / click-through），
-只按 OverlayModel.get_rows() 渲染：每行 = Champion + 两个召唤师技能槽。
-UI 100ms presentation 刷新，不轮询 2999。
+H.4.4-R2 修正：
+- 真实英雄头像（Data Dragon）
+- 真实召唤师技能图标（Data Dragon）
+- 分层半透明 HUD 风格
+- 窗口位置自动适配屏幕
+- 召唤师技能可点击，触发 CommandBus → CooldownManager
 """
 from __future__ import annotations
 
 import sys
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QTimer, Signal, QSize
+from PySide6.QtGui import QFont, QPixmap, QPainter, QPainterPath, QColor
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget, QFrame,
 )
 
-from .overlay_model import OverlayModel, OverlaySpell, fmt_remaining
+from .overlay_model import OverlayModel, OverlaySpell, OverlaySkill, fmt_remaining
+from .overlay_assets import get_champion_portrait, get_summoner_spell_icon_by_sid, get_summoner_spell_icon_by_zh
+from ...lol.data.champion_catalog import ChampionCatalog
+
+# 全局 ChampionCatalog 实例
+_champion_catalog = ChampionCatalog()
+
+
+class ClickableSpellIcon(QFrame):
+    """可点击的召唤师技能图标。"""
+    clicked = Signal(str, str)  # (champion_name, spell_name)
+
+    def __init__(self, champion_name: str, spell: OverlaySpell, parent=None):
+        super().__init__(parent)
+        self._champion_name = champion_name
+        self._spell = spell
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(32, 32)
+        
+        # 加载图标（优先用 sid，其次用中文名）
+        print(f"[Spell Icon] champion={champion_name}, spell_id={spell.spell_id}, spell_name={spell.spell_name}")
+        if spell.spell_id > 0:
+            self._pixmap = get_summoner_spell_icon_by_sid(spell.spell_id)
+        else:
+            self._pixmap = get_summoner_spell_icon_by_zh(spell.spell_name)
+        if self._pixmap is None:
+            print(f"[Spell Icon] 加载失败: spell_id={spell.spell_id}, spell_name={spell.spell_name}")
+        self._update_style()
+
+    def _update_style(self):
+        """根据技能状态更新样式。"""
+        if self._spell.active:
+            # CD 中：红色边框
+            self.setStyleSheet("""
+                QFrame {
+                    border: 2px solid #ff5252;
+                    border-radius: 4px;
+                    background: transparent;
+                }
+            """)
+        else:
+            # Ready：正常状态
+            self.setStyleSheet("""
+                QFrame {
+                    border: 1px solid rgba(255,255,255,0.3);
+                    border-radius: 4px;
+                    background: rgba(0,0,0,0.2);
+                }
+            """)
+
+    def paintEvent(self, event):
+        """绘制图标。"""
+        super().paintEvent(event)
+        if self._pixmap and not self._pixmap.isNull():
+            painter = QPainter(self)
+            painter.setOpacity(0.85)  # 图标半透明
+            painter.drawPixmap(self.rect(), self._pixmap)
+            
+            # 如果在 CD 中，绘制剩余时间（白色大字体，覆盖整个图标）
+            if self._spell.active:
+                # 半透明黑色背景覆盖整个图标
+                painter.setOpacity(0.5)
+                painter.fillRect(self.rect(), QColor(0, 0, 0))
+                # 白色大数字居中
+                painter.setOpacity(1.0)
+                painter.setPen(QColor(255, 255, 255))
+                painter.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+                txt = fmt_remaining(self._spell.remaining)
+                painter.drawText(self.rect(), Qt.AlignCenter, txt)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            spell_name = self._spell.spell_name
+            if spell_name and spell_name != "—":
+                self.clicked.emit(self._champion_name, spell_name)
+                print(f"[Overlay Click] champion={self._champion_name}, spell={spell_name}")
+        super().mousePressEvent(event)
+
+
+class ChampionAvatar(QLabel):
+    """英雄头像（Data Dragon 真实头像）。"""
+    def __init__(self, name_en: str, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(48, 48)
+        self.setAlignment(Qt.AlignCenter)
+        
+        # 加载头像
+        pixmap = get_champion_portrait(name_en)
+        if pixmap and not pixmap.isNull():
+            # 裁剪成圆形
+            self.setPixmap(pixmap.scaled(48, 48, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+            # 设置圆形遮罩
+            self.setStyleSheet("""
+                QLabel {
+                    border-radius: 24px;
+                    border: 2px solid rgba(255,255,255,0.3);
+                }
+            """)
+        else:
+            # 占位：首字母
+            self.setText(name_en[0] if name_en else "?")
+            self.setStyleSheet("""
+                QLabel {
+                    background-color: #3F51B5;
+                    color: white;
+                    border-radius: 24px;
+                    font-weight: bold;
+                    font-size: 18px;
+                    border: 2px solid rgba(255,255,255,0.3);
+                }
+            """)
+            self.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
 
 
 class OverlayWindow(QWidget):
+    # 点击信号：(champion_name, spell_name)
+    spell_clicked = Signal(str, str)
+
     def __init__(self, model: OverlayModel, parent=None):
         super().__init__(parent)
         self._model = model
+        
+        # 窗口属性
         self.setWindowFlags(
             Qt.FramelessWindowHint
             | Qt.WindowStaysOnTopHint
             | Qt.Tool
-            | Qt.WindowTransparentForInput
             | Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -32,17 +150,19 @@ class OverlayWindow(QWidget):
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(8, 8, 8, 8)
-        self._root.setSpacing(4)
+        self._root.setSpacing(6)
 
+        # 100ms 刷新定时器
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
-        self._timer.start(100)  # UI 100ms 刷新，不触发 2999 轮询
+        self._timer.start(100)
 
         self._place_default()
-        self._apply_ws_ex_transparent()
+        self._apply_ws_ex_layered()
         self.hide()
 
-    def _apply_ws_ex_transparent(self) -> None:
+    def _apply_ws_ex_layered(self) -> None:
+        """保留 WS_EX_LAYERED（透明背景需要）。"""
         if sys.platform != "win32":
             return
         try:
@@ -50,16 +170,28 @@ class OverlayWindow(QWidget):
             hwnd = int(self.winId())
             GWL_EXSTYLE = -20
             WS_EX_LAYERED = 0x00080000
-            WS_EX_TRANSPARENT = 0x00000020
             user32 = ctypes.windll.user32
             cur = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, cur | WS_EX_LAYERED | WS_EX_TRANSPARENT)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, cur | WS_EX_LAYERED)
         except Exception as e:
-            print(f"[overlay] WS_EX_TRANSPARENT 失败: {e}")
+            print(f"[overlay] WS_EX_LAYERED 设置失败: {e}")
 
     def _place_default(self) -> None:
+        """自动计算窗口位置，确保完整落在屏幕内。"""
         screen = QApplication.primaryScreen().availableGeometry()
-        self.setGeometry(screen.width() - 280, 80, 260, 420)
+        # 窗口尺寸：宽度 380，高度自适应
+        w = 380
+        h = 300
+        # 右侧留 10px margin，顶部留 80px margin（更靠近右边缘）
+        x = screen.width() - w - 10
+        y = 80
+        # 确保不超出屏幕
+        if x + w > screen.width():
+            x = screen.width() - w - 5
+        if y + h > screen.height():
+            y = screen.height() - h - 10
+        self.setGeometry(x, y, w, h)
+        print(f"[overlay] 窗口位置: x={x}, y={y}, w={w}, h={h}, screen={screen.width()}x{screen.height()}")
 
     def _clear(self):
         while self._root.count():
@@ -68,76 +200,117 @@ class OverlayWindow(QWidget):
             if w:
                 w.deleteLater()
 
-    def _spell_cell(self, sp: OverlaySpell) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
-        if sp.active:
-            txt = fmt_remaining(sp.remaining)
-            urgent = 0 <= sp.remaining < 10
-            color = "#ff5252" if urgent else "#ffffff"
+    def _skill_dot(self, sk: OverlaySkill) -> QWidget:
+        """Q/W/E/R 技能图标（用字母代替真实图标）。"""
+        w = QFrame()
+        w.setFixedSize(32, 32)
+        w.setFrameShape(QFrame.StyledPanel)
+        
+        letter = sk.skill.upper() if sk.skill else "?"
+        
+        if sk.active:
+            color = "#ff9800" if sk.remaining < 10 else "#ffcc80"
+            txt = fmt_remaining(sk.remaining)
+            w.setStyleSheet(f"""
+                QFrame {{
+                    background-color: rgba({int(int(color[1:3],16))},{int(int(color[3:5],16))},{int(int(color[5:7],16))},200);
+                    border: 1px solid rgba(255,255,255,0.3);
+                    border-radius: 4px;
+                }}
+            """)
+            layout = QVBoxLayout(w)
+            layout.setContentsMargins(0, 0, 0, 0)
             lbl = QLabel(txt)
-            lbl.setStyleSheet(
-                f"color:{color}; background:rgba(60,30,60,210); padding:2px 6px; border-radius:3px;")
-            lbl.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet("color: black; background: transparent; border: none; font-weight: bold;")
+            lbl.setFont(QFont("Microsoft YaHei", 7, QFont.Bold))
+            layout.addWidget(lbl)
         else:
-            lbl = QLabel(sp.spell_name or "—")
-            lbl.setStyleSheet("color:#8a8a8a; padding:2px 6px;")
-            lbl.setFont(QFont("Microsoft YaHei", 8))
-        v.addWidget(lbl)
+            w.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(76, 175, 80, 150);
+                    border: 1px solid rgba(255,255,255,0.2);
+                    border-radius: 4px;
+                }
+            """)
+            layout = QVBoxLayout(w)
+            layout.setContentsMargins(0, 0, 0, 0)
+            lbl = QLabel(letter)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet("color: white; background: transparent; border: none; font-weight: bold;")
+            lbl.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+            layout.addWidget(lbl)
+        
         return w
 
-    def _skill_cell(self, sk) -> QWidget:
-        """显示 Q/W/E/R 技能冷却。"""
-        from .overlay_model import OverlaySkill
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
-        if sk.active:
-            txt = fmt_remaining(sk.remaining)
-            urgent = 0 <= sk.remaining < 10
-            color = "#ff9800" if urgent else "#ffcc80"  # 橙色系区分召唤师技能
-            lbl = QLabel(txt)
-            lbl.setStyleSheet(
-                f"color:{color}; background:rgba(60,40,20,210); padding:2px 6px; border-radius:3px;")
-            lbl.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
-        else:
-            lbl = QLabel("Ready")
-            lbl.setStyleSheet("color:#4caf50; padding:2px 6px;")
-            lbl.setFont(QFont("Microsoft YaHei", 8))
-        v.addWidget(lbl)
-        return w
+    def _build_enemy_card(self, row) -> QWidget:
+        """构建单个敌方英雄卡片。"""
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background-color: transparent;
+                border: none;
+            }
+        """)
+        
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(4)
+        
+        # 布局：从左到右 Q/W/E/R → 召唤师技能 → 头像（头像在最右）
+        top_row = QHBoxLayout()
+        top_row.setSpacing(6)
+        
+        # 最左边：英雄名称
+        name_lbl = QLabel(row.champion_name)
+        name_lbl.setStyleSheet("color: rgba(255,255,255,220); background: transparent; border: none;")
+        name_lbl.setFont(QFont("Microsoft YaHei", 8, QFont.Bold))
+        top_row.addWidget(name_lbl)
+        
+        # Q/W/E/R 技能图标
+        top_row.addWidget(self._skill_dot(row.skill_q))
+        top_row.addWidget(self._skill_dot(row.skill_w))
+        top_row.addWidget(self._skill_dot(row.skill_e))
+        top_row.addWidget(self._skill_dot(row.skill_r))
+        
+        # 召唤师技能图标
+        spell1_icon = ClickableSpellIcon(row.champion_name, row.spell1)
+        spell1_icon.clicked.connect(self.spell_clicked.emit)
+        top_row.addWidget(spell1_icon)
+        spell2_icon = ClickableSpellIcon(row.champion_name, row.spell2)
+        spell2_icon.clicked.connect(self.spell_clicked.emit)
+        top_row.addWidget(spell2_icon)
+        
+        top_row.addStretch()
+        
+        # 最右边：英雄头像
+        champ = _champion_catalog.get_by_id(row.champion_id) or _champion_catalog.get_by_name(row.champion_name)
+        name_en = champ.name_en if champ else row.champion_name
+        avatar = ChampionAvatar(name_en)
+        top_row.addWidget(avatar)
+        
+        layout.addLayout(top_row)
+        
+        return card
 
     def _refresh(self) -> None:
         try:
             rows = self._model.get_rows()
         except Exception:
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             rows = []
+        
         self._clear()
+        
         if not rows:
             if self.isVisible():
                 self.hide()
             return
+        
         for row in rows:
-            rw = QWidget()
-            h = QHBoxLayout(rw)
-            h.setContentsMargins(0, 0, 0, 0)
-            h.setSpacing(4)
-            champ = QLabel(row.champion_name)
-            champ.setStyleSheet("color:#fff; background:rgba(20,20,20,180); padding:2px 6px; border-radius:3px;")
-            champ.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
-            h.addWidget(champ)
-            # Q/W/E/R
-            h.addWidget(self._skill_cell(row.skill_q))
-            h.addWidget(self._skill_cell(row.skill_w))
-            h.addWidget(self._skill_cell(row.skill_e))
-            h.addWidget(self._skill_cell(row.skill_r))
-            # 召唤师技能
-            h.addWidget(self._spell_cell(row.spell1))
-            h.addWidget(self._spell_cell(row.spell2))
-            self._root.addWidget(rw)
+            card = self._build_enemy_card(row)
+            self._root.addWidget(card)
+        
         if not self.isVisible():
             self.show()

@@ -91,6 +91,8 @@ class OverlayModel:
         self._snapshot_provider = snapshot_provider or (lambda: None)
         self._phase_provider = phase_provider or (lambda: "None")
         self._spells = catalog or SummonerSpellCatalog()
+        from app.lol.data.champion_catalog import ChampionCatalog
+        self._champions = ChampionCatalog()
         self._enabled = True
         self._cooldown_manager_provider = cooldown_manager_provider or (lambda: None)
         # (champion_id, slot) -> timer state
@@ -164,10 +166,14 @@ class OverlayModel:
                     skill = r.get("skill", "")
                     if not cname or not skill:
                         continue
-                    if cname not in active_skills:
-                        active_skills[cname] = {}
+                    # 用 champion_id 作为 key，避免不同中文名不匹配
+                    from app.lol.data.champion_catalog import ChampionCatalog
+                    champ = self._champions.get_by_name(cname)
+                    cid_key = champ.cid if champ else 0
+                    if cid_key not in active_skills:
+                        active_skills[cid_key] = {}
                     remaining = r.get("remaining", 0.0)
-                    active_skills[cname][skill] = OverlaySkill(
+                    active_skills[cid_key][skill] = OverlaySkill(
                         skill=skill,
                         remaining=max(0, remaining),
                         active=True,
@@ -180,15 +186,20 @@ class OverlayModel:
             cname = getattr(p, "champion_name", "") or ""
             if not cname:
                 continue
-            cid = int(getattr(p, "champion_id", 0) or 0)
+            # 用 championName → ChampionCatalog → canonical champion_id
+            # 不要直接读 2999 的 champion_id（2999 不返回 championId）
+            champ = self._champions.get_by_name(cname)
+            cid = champ.cid if champ else 0
+            canonical_cname = champ.name_zh if champ else cname
             pos = _norm_position(getattr(p, "position", ""))
             order = _POSITION_ORDER.get(pos, 99)
             spells = getattr(p, "summoner_spells", None) or []
-            s1 = self._build_spell(cid, 1, spells[0] if len(spells) > 0 else {}, gt)
-            s2 = self._build_spell(cid, 2, spells[1] if len(spells) > 1 else {}, gt)
+            # 用 champion_id 匹配 active_skills
+            skills_for_champ = active_skills.get(cid, {})
+            print(f"[Overlay] champion={cname} canonical_cid={cid} active_skill_keys={list(skills_for_champ.keys())}")
+            s1 = self._build_spell(cid, 1, spells[0] if len(spells) > 0 else {}, gt, skills_for_champ)
+            s2 = self._build_spell(cid, 2, spells[1] if len(spells) > 1 else {}, gt, skills_for_champ)
 
-            # 获取该英雄的 Q/W/E/R 技能冷却
-            skills_for_champ = active_skills.get(cname, {})
             sq = skills_for_champ.get("Q", OverlaySkill("Q", 0, False))
             sw = skills_for_champ.get("W", OverlaySkill("W", 0, False))
             se = skills_for_champ.get("E", OverlaySkill("E", 0, False))
@@ -198,7 +209,7 @@ class OverlayModel:
         rows.sort(key=lambda r: (r.order,))
         return rows
 
-    def _build_spell(self, cid: int, slot: int, spell_dict: object, gt: float) -> OverlaySpell:
+    def _build_spell(self, cid: int, slot: int, spell_dict: object, gt: float, skills_for_champ: dict = None) -> OverlaySpell:
         if not isinstance(spell_dict, dict):
             spell_dict = {}
         try:
@@ -208,7 +219,14 @@ class OverlayModel:
         entry = self._spells.get_by_id(sid) if sid else None
         name = entry.name_zh if entry else (spell_dict.get("displayName") or "")
         base = float(entry.cooldown) if entry else 0.0
-        t = self._timers.get((cid, slot))
+        # 规范化 spell 名称：把 2999 displayName 转换成 canonical name_zh
+        # 例如："引燃" → "点燃"，这样才能匹配 active_skills 的 key
+        canonical_entry = self._spells.get_by_name(name)
+        canonical_name = canonical_entry.name_zh if canonical_entry else name
+        # 从 CooldownManager 的 active_skills 读取 CD（用 canonical_name 匹配）
+        t = None
+        if skills_for_champ and canonical_name in skills_for_champ:
+            t = {"ready_at": gt + skills_for_champ[canonical_name].remaining}
         active = t is not None
         remaining = (t["ready_at"] - gt) if active else 0.0
         return OverlaySpell(slot, sid, name, base, remaining, active)

@@ -21,6 +21,13 @@ _ITEM_ID_SSH = {
     3158: 12.0,
 }
 
+# 装备名称 → SSH（用于 2999 不返回 itemID 时的 fallback）
+_ITEM_NAME_SSH = {
+    "明朗之靴": 12.0,
+    "iorian boots of lucidity": 12.0,
+    "猩红明朗": 12.0,  # 猩红明朗之靴，也是 SSH 装备
+}
+
 # 启迪系 rune tree ID
 _INSPIRATION_TREE_IDS = {8400}
 
@@ -77,16 +84,29 @@ def summoner_spell_haste(items: List[Any], runes: List[Any]) -> Tuple[float, Lis
     # 3. 装备：明朗之靴
     for it in items or []:
         iid = None
+        item_name = ""
         if isinstance(it, dict):
-            iid = it.get("itemID")
+            iid = it.get("itemID") or it.get("id")
+            item_name = str(it.get("displayName") or it.get("name") or "")
         elif isinstance(it, (int, float)):
             iid = it
         try:
             iid = int(iid or 0)
         except (TypeError, ValueError):
             iid = 0
+        
+        # 优先用 itemID 匹配
         if iid in _ITEM_ID_SSH:
             total += _ITEM_ID_SSH[iid]
             sources.append(f"item:{iid}")
-
+            continue
+        
+        # fallback：用装备名称匹配（2999 不返回 itemID 时）
+        if item_name:
+            for name_key, val in _ITEM_NAME_SSH.items():
+                if name_key.lower() in item_name.lower():
+                    total += val
+                    sources.append(f"item:{name_key}")
+                    break
+    
     return float(total), sources, ("ok" if sources else "unavailable")

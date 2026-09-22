@@ -56,10 +56,10 @@ def _load_spells() -> tuple[List[SummonerSpell], str, str]:
 _ZH_ALIAS: Dict[str, str] = {
     "闪现": "Flash", "闪": "Flash",
     "传送": "Teleport", "tp": "Teleport", "TP": "Teleport",
-    "点燃": "Ignite", "点火": "Ignite",
+    "点燃": "Ignite", "点火": "Ignite", "引燃": "Ignite",
     "屏障": "Barrier", "护盾": "Barrier",
     "净化": "Cleanse", "虚弱": "Exhaust",
-    "疾跑": "Ghost", "治疗": "Heal", "奶": "Heal",
+    "疾跑": "Ghost", "幽灵疾步": "Ghost", "治疗": "Heal", "奶": "Heal",
     "惩戒": "Smite", "打野刀": "Smite",
 }
 

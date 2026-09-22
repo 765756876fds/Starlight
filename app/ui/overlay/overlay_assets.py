@@ -1,0 +1,149 @@
+"""Overlay 资源管理器：下载和缓存英雄头像、召唤师技能图标。
+
+资源来源：
+- 英雄头像：Data Dragon Champion Portrait
+- 召唤师技能图标：Data Dragon Summoner Spell Icon
+
+缓存位置：
+- data/assets/champions/{patch}/{name_en}.png
+- data/assets/summoner_spells/{patch}/{name_en}.png
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+from PySide6.QtGui import QPixmap, QIcon
+
+# Data Dragon 版本
+_DDRAGON_VERSION = "14.1.1"
+_DDRAGON_BASE = f"https://ddragon.leagueoflegends.com/cdn/{_DDRAGON_VERSION}/img"
+
+# 缓存目录
+_CACHE_DIR = Path("data/assets")
+_CHAMPIONS_DIR = _CACHE_DIR / "champions" / _DDRAGON_VERSION
+_SUMMONER_SPELLS_DIR = _CACHE_DIR / "summoner_spells" / _DDRAGON_VERSION
+
+# 确保目录存在
+_CHAMPIONS_DIR.mkdir(parents=True, exist_ok=True)
+_SUMMONER_SPELLS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _download_file(url: str, cache_path: Path) -> bool:
+    """下载文件到缓存路径。"""
+    if cache_path.exists():
+        return True
+    
+    try:
+        import urllib.request
+        print(f"[Overlay Asset] 下载: {url}")
+        urllib.request.urlretrieve(url, cache_path)
+        return cache_path.exists()
+    except Exception as e:
+        print(f"[Overlay Asset] 下载失败: {e}")
+        return False
+
+
+def get_champion_portrait(name_en: str) -> Optional[QPixmap]:
+    """获取英雄头像（自动下载并缓存）。"""
+    if not name_en:
+        return None
+    
+    # Data Dragon 英雄头像 URL
+    url = f"{_DDRAGON_BASE}/champion/{name_en}.png"
+    cache_file = _CHAMPIONS_DIR / f"{name_en}.png"
+    
+    if not cache_file.exists():
+        if not _download_file(url, cache_file):
+            return None
+    
+    pixmap = QPixmap(str(cache_file))
+    if pixmap.isNull():
+        return None
+    
+    # 裁剪成圆形头像（简单实现：裁剪成正方形）
+    w = pixmap.width()
+    h = pixmap.height()
+    size = min(w, h)
+    x = (w - size) // 2
+    y = (h - size) // 2
+    return pixmap.copy(x, y, size, size)
+
+
+def get_summoner_spell_icon(name_en: str) -> Optional[QPixmap]:
+    """获取召唤师技能图标（自动下载并缓存）。"""
+    if not name_en:
+        return None
+    
+    # 如果是惩戒，尝试多个变体
+    name_variants = [name_en]
+    if name_en.lower() == "smite":
+        name_variants = _SMITE_VARIANTS
+    
+    for name in name_variants:
+        # Data Dragon 召唤师技能 URL
+        url = f"{_DDRAGON_BASE}/spell/Summoner{name}.png"
+        cache_file = _SUMMONER_SPELLS_DIR / f"{name}.png"
+        
+        if not cache_file.exists():
+            if not _download_file(url, cache_file):
+                continue
+        
+        pixmap = QPixmap(str(cache_file))
+        if not pixmap.isNull():
+            return pixmap
+    
+    return None
+
+
+# 召唤师技能中文名 → 英文名映射（Data Dragon 内部名称）
+_SPELL_ZH_TO_EN = {
+    "闪现": "Flash",
+    "引燃": "Dot",
+    "点燃": "Dot",
+    "传送": "Teleport",
+    "疾跑": "Haste",
+    "幽灵疾步": "Haste",
+    "治疗": "Heal",
+    "治疗术": "Heal",
+    "屏障": "Barrier",
+    "虚弱": "Exhaust",
+    "惩戒": "Smite",
+    "原初惩戒": "Smite",
+    "惩戒（深寒）": "Smite",
+    "惩戒（灰烬）": "Smite",
+    "净化": "Boost",
+}
+
+# 惩戒的变体（不同版本惩戒名称不同）
+_SMITE_VARIANTS = ["Smite", "S11_Smite", "s11_smite", "5smite", "6smite", "7smite"]
+
+
+# 召唤师技能 sid → 英文名映射（Data Dragon 内部名称）
+_SPELL_SID_TO_EN = {
+    4: "Flash",
+    12: "Teleport",
+    14: "Dot",      # 引燃
+    21: "Barrier",
+    1: "Boost",     # 净化
+    3: "Exhaust",
+    6: "Haste",     # 疾跑
+    7: "Heal",
+    11: "Smite",    # 惩戒
+}
+
+
+def get_summoner_spell_icon_by_sid(sid: int) -> Optional[QPixmap]:
+    """根据 sid 获取召唤师技能图标。"""
+    name_en = _SPELL_SID_TO_EN.get(sid)
+    if not name_en:
+        return None
+    return get_summoner_spell_icon(name_en)
+
+
+def get_summoner_spell_icon_by_zh(name_zh: str) -> Optional[QPixmap]:
+    """根据中文名获取召唤师技能图标。"""
+    name_en = _SPELL_ZH_TO_EN.get(name_zh)
+    if not name_en:
+        return None
+    return get_summoner_spell_icon(name_en)
