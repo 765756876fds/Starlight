@@ -288,7 +288,7 @@ class OverlayWindow(QWidget):
         
         layout = QHBoxLayout(card)
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
+        layout.setSpacing(1)
         
         # 召唤师技能图标
         spell1_icon = ClickableSpellIcon(row.champion_name, row.spell1)
