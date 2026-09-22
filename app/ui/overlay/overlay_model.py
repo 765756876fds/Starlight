@@ -1,4 +1,4 @@
-﻿"""OverlayModel：敌方 5 人召唤师技能倒计时浮窗模型（最小适配 LeagueAkari CD Timer）。
+"""OverlayModel：敌方 5 人召唤师技能倒计时浮窗模型（最小适配 LeagueAkari CD Timer）。
 
 数据直接来自 2999 GameSnapshot.enemy_team（不依赖 PUUID、不复制 LCU player selection）：
 每人 champion + position + 两个召唤师技能槽（summonerSpellOne / summonerSpellTwo）。
@@ -21,6 +21,45 @@ from ...lol.data.summoner_spell_catalog import SummonerSpellCatalog
 
 # LeagueAkari：TOP JUNGLE MIDDLE BOTTOM UTILITY
 _POSITION_ORDER = {"TOP": 0, "JUNGLE": 1, "MIDDLE": 2, "BOTTOM": 3, "UTILITY": 4}
+
+
+# 召唤师技能变体关键词 → canonical name_zh
+# 用于把 2999 的各种变体名称规范化成 Catalog 中的 canonical name
+_SPELL_VARIANT_KEYWORDS = [
+    ("闪现", "闪现"),
+    ("引燃", "点燃"),
+    ("点燃", "点燃"),
+    ("传送", "传送"),
+    ("疾跑", "疾跑"),
+    ("幽灵疾步", "疾跑"),
+    ("治疗", "治疗"),
+    ("屏障", "屏障"),
+    ("虚弱", "虚弱"),
+    ("净化", "净化"),
+    ("惩戒", "惩戒"),
+]
+
+
+def _normalize_spell_name(name: str, catalog) -> str:
+    """把 2999 的各种变体名称规范化成 Catalog 中的 canonical name_zh。"""
+    if not name:
+        return ""
+    
+    # 先尝试直接匹配
+    entry = catalog.get_by_name(name)
+    if entry:
+        return entry.name_zh
+    
+    # 尝试关键词匹配
+    n_lower = name.lower()
+    for keyword, canonical in _SPELL_VARIANT_KEYWORDS:
+        if keyword in name or keyword.lower() in n_lower:
+            entry = catalog.get_by_name(canonical)
+            if entry:
+                return entry.name_zh
+    
+    # 如果都匹配不上，返回原始名称
+    return name
 
 
 def _norm_position(p: str) -> str:
@@ -220,9 +259,8 @@ class OverlayModel:
         name = entry.name_zh if entry else (spell_dict.get("displayName") or "")
         base = float(entry.cooldown) if entry else 0.0
         # 规范化 spell 名称：把 2999 displayName 转换成 canonical name_zh
-        # 例如："引燃" → "点燃"，这样才能匹配 active_skills 的 key
-        canonical_entry = self._spells.get_by_name(name)
-        canonical_name = canonical_entry.name_zh if canonical_entry else name
+        # 例如："引燃" → "点燃"，"解封的传送" → "传送"，这样才能匹配 active_skills 的 key
+        canonical_name = _normalize_spell_name(name, self._spells)
         # 从 CooldownManager 的 active_skills 读取 CD（用 canonical_name 匹配）
         t = None
         if skills_for_champ and canonical_name in skills_for_champ:

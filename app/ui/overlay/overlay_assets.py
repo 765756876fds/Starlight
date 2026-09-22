@@ -98,21 +98,53 @@ def get_summoner_spell_icon(name_en: str) -> Optional[QPixmap]:
 
 # 召唤师技能中文名 → 英文名映射（Data Dragon 内部名称）
 _SPELL_ZH_TO_EN = {
+    # 闪现
     "闪现": "Flash",
+    "闪": "Flash",
+    
+    # 引燃 / 点燃
     "引燃": "Dot",
     "点燃": "Dot",
+    "点火": "Dot",
+    
+    # 传送（普通 + 升级变体）
     "传送": "Teleport",
+    "tp": "Teleport",
+    "TP": "Teleport",
+    "解封的传送": "Teleport",  # 升级后仍使用普通传送图标
+    
+    # 疾跑 / 幽灵疾步
     "疾跑": "Haste",
     "幽灵疾步": "Haste",
+    
+    # 治疗
     "治疗": "Heal",
     "治疗术": "Heal",
+    "奶": "Heal",
+    
+    # 屏障
     "屏障": "Barrier",
+    "护盾": "Barrier",
+    
+    # 虚弱
     "虚弱": "Exhaust",
+    
+    # 净化
+    "净化": "Boost",
+    
+    # 惩戒（所有升级形态都映射到 Smite 图标）
     "惩戒": "Smite",
+    "打野刀": "Smite",
     "原初惩戒": "Smite",
     "惩戒（深寒）": "Smite",
     "惩戒（灰烬）": "Smite",
-    "净化": "Boost",
+    "解封的惩戒": "Smite",
+    "深寒惩戒": "Smite",
+    "灰烬惩戒": "Smite",
+    "踏苔蜥幼苗": "Smite",  # 惩戒升级形态
+    "蜂窝果实": "Smite",
+    "海浪之爪": "Smite",
+    "暗影印记": "Smite",
 }
 
 # 惩戒的变体（不同版本惩戒名称不同）
