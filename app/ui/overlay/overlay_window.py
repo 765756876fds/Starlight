@@ -33,7 +33,7 @@ class ClickableSpellIcon(QFrame):
         self._champion_name = champion_name
         self._spell = spell
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(32, 32)
+        self.setFixedSize(56, 56)
         
         # 加载图标（优先用 sid，其次用中文名）
         print(f"[Spell Icon] champion={champion_name}, spell_id={spell.spell_id}, spell_name={spell.spell_name}")
@@ -82,7 +82,7 @@ class ClickableSpellIcon(QFrame):
                 # 白色大数字居中
                 painter.setOpacity(1.0)
                 painter.setPen(QColor(255, 255, 255))
-                painter.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+                painter.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
                 txt = fmt_remaining(self._spell.remaining)
                 painter.drawText(self.rect(), Qt.AlignCenter, txt)
 
@@ -99,7 +99,7 @@ class ChampionAvatar(QLabel):
     """英雄头像（Data Dragon 真实头像），支持死亡状态显示。"""
     def __init__(self, name_en: str, parent=None):
         super().__init__(parent)
-        self.setFixedSize(48, 48)
+        self.setFixedSize(56, 56)
         self.setAlignment(Qt.AlignCenter)
         self._name_en = name_en
         self._is_dead = False
@@ -128,7 +128,7 @@ class ChampionAvatar(QLabel):
                     background-color: rgba(0, 0, 0, 0.5);
                     color: white;
                     font-weight: bold;
-                    font-size: 14px;
+                    font-size: 16px;
                 }
             """)
             self.setText(str(int(self._respawn_timer)))
@@ -287,8 +287,8 @@ class OverlayWindow(QWidget):
         """)
         
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(6)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
         
         # 召唤师技能图标
         spell1_icon = ClickableSpellIcon(row.champion_name, row.spell1)
