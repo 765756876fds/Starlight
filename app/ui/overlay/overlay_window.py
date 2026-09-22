@@ -33,7 +33,7 @@ class ClickableSpellIcon(QFrame):
         self._champion_name = champion_name
         self._spell = spell
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(56, 56)
+        self.setFixedSize(48, 48)
         
         # 加载图标（优先用 sid，其次用中文名）
         print(f"[Spell Icon] champion={champion_name}, spell_id={spell.spell_id}, spell_name={spell.spell_name}")
@@ -99,7 +99,7 @@ class ChampionAvatar(QLabel):
     """英雄头像（Data Dragon 真实头像），支持死亡状态显示。"""
     def __init__(self, name_en: str, parent=None):
         super().__init__(parent)
-        self.setFixedSize(56, 56)
+        self.setFixedSize(48, 48)
         self.setAlignment(Qt.AlignCenter)
         self._name_en = name_en
         self._is_dead = False
