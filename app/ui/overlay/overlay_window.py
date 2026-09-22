@@ -292,7 +292,7 @@ class OverlayWindow(QWidget):
         
         layout = QHBoxLayout(card)
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(0)
+        layout.setSpacing(14)  # 视觉间隔 14px ≈ 图标尺寸的 30%
         
         # 召唤师技能图标
         spell1_icon = ClickableSpellIcon(row.champion_name, row.spell1)
@@ -308,6 +308,9 @@ class OverlayWindow(QWidget):
         avatar = ChampionAvatar(name_en)
         avatar.set_dead(row.is_dead, row.respawn_timer)
         layout.addWidget(avatar)
+        
+        # 把剩余空间挤到右边，避免 layout 平均分配间隔
+        layout.addStretch()
         
         return card
 
