@@ -1,4 +1,4 @@
-﻿"""LoL Music Agent main entry."""
+"""LoL Music Agent main entry."""
 
 import os
 import sys
@@ -544,7 +544,7 @@ class Application:
                 # 返回 (ability_haste, summoner_spell_haste)
                 try:
                     rt = getattr(self, "lol", None)
-                    snap = rt.current_snapshot() if rt else None
+                    snap = rt.current_snapshot if rt else None
                     if not snap or not champion:
                         return (0.0, 0.0)
                     from app.lol.enemy.roster import EnemyRoster
