@@ -291,7 +291,7 @@ class OverlayWindow(QWidget):
         """)
         
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setContentsMargins(142, 2, 2, 2)  # 左边距 142px，整体右移 140px
         layout.setSpacing(14)  # 视觉间隔 14px ≈ 图标尺寸的 30%
         
         # 召唤师技能图标
