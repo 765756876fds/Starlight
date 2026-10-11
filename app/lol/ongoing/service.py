@@ -320,6 +320,10 @@ class OngoingGameService:
         if not t1 and not t2:
             return None
         one_puuids = {(m.get("puuid") or "") for m in t1 if m.get("puuid")}
+        two_puuids = {(m.get("puuid") or "") for m in t2 if m.get("puuid")}
+        # 脱敏诊断：只打数量，不打 puuid（实证真人局/人机局 teamTwo 是否有数据）
+        print(f"[Ongoing] gameflow session: gameMode={gd.get('gameMode')} "
+              f"teamOne={len(t1)}(puuid{len(one_puuids)}) teamTwo={len(t2)}(puuid{len(two_puuids)})")
         my_is_one = (me_puuid in one_puuids) if me_puuid else True
         my_src, their_src = (t1, t2) if my_is_one else (t2, t1)
         my_team = [self._gf_cell(m) for m in my_src if (m.get("puuid") or "")]

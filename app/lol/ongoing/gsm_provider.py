@@ -44,7 +44,12 @@ def _default_https(url: str, headers: dict) -> dict:
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+    # 腾讯 GSM 为国内域名，必须直连，不能走系统代理（否则被导到国外节点）
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=ctx),
+    )
+    with opener.open(req, timeout=15) as r:
         return json.load(r)
 
 
