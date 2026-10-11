@@ -25,6 +25,11 @@ from .lcu import LCUConnection
 from ..player import PlayerRepository, PlayerAnalysisService
 
 
+# LCU phase 仍处于"加载/对局中"的集合：2999 暂时不可用 / game_time 停滞均不算游戏结束。
+# Unknown（LCU 返回未识别 phase）也按"仍在游戏中"处理——宁可延迟判结束，不可误杀清 snapshot
+_IN_GAME_PHASES = frozenset({"GameStart", "InProgress", "Reconnecting", "Unknown"})
+
+
 class LoLRuntime:
     """
     LoL 游戏运行时
@@ -65,6 +70,9 @@ class LoLRuntime:
 
         # LCU GameFlow 状态
         self._last_lcu_phase: Optional[str] = None
+        # 最近一次有效的 LCU phase（断连时 _last_lcu_phase 会被清 None，本字段保留旧值，
+        # 供游戏结束守卫判断"是否仍在加载/对局中"，避免 2999 暂不可用被误判成游戏结束）
+        self._last_known_phase: Optional[str] = None
         self._lcu_was_connected = False
 
         # LCU Summoner 状态
@@ -84,6 +92,7 @@ class LoLRuntime:
         # game_time 停滞检测（兜底：2999 仍可访问但数据不更新时）
         self._last_game_time: float = -1.0
         self._game_time_stagnant_count: int = 0
+        self._game_time_stagnant_fired: bool = False  # 停滞打印只打一次（防刷屏），game_time 恢复后复位
         self._max_stagnant_count: int = 10  # 连续 10 次轮询（约 10 秒）game_time 无变化则判定游戏结束
 
     def start(self):
@@ -135,8 +144,11 @@ class LoLRuntime:
         # 检查 API 是否可用
         if not self.live_api.is_available():
             if self._game_active:
-                # 游戏可能结束，进入 grace window 确认阶段
-                self._handle_game_end_detection()
+                # 游戏可能结束，进入 grace window 确认阶段；
+                # 但仅当 LCU phase 明确离开游戏时才判结束——
+                # 加载界面/对局中 2999 暂时不可用是正常的，不算结束。
+                if getattr(self, "_last_known_phase", None) not in _IN_GAME_PHASES:
+                    self._handle_game_end_detection()
             return
 
         # 游戏正在运行
@@ -160,15 +172,27 @@ class LoLRuntime:
             
             # game_time 停滞检测：连续 N 次无变化则判定游戏结束
             current_gt = float(getattr(snapshot, 'game_time', 0.0) or 0.0)
-            if current_gt == self._last_game_time:
-                self._game_time_stagnant_count += 1
-                if self._game_time_stagnant_count >= self._max_stagnant_count:
-                    print(f"[Runtime] GAME_ENDED: game_time stagnant for {self._game_time_stagnant_count} polls")
-                    self._handle_game_end_detection()
-                    return
-            else:
+            # gameTime <= 0 = 游戏未正式开始（加载界面），不算停滞
+            if current_gt <= 0.0:
                 self._game_time_stagnant_count = 0
-            self._last_game_time = current_gt
+                self._game_time_stagnant_fired = False
+                self._last_game_time = current_gt
+                # 不进入停滞检测，继续正常流程
+            else:
+                if current_gt == self._last_game_time:
+                    self._game_time_stagnant_count += 1
+                    if self._game_time_stagnant_count >= self._max_stagnant_count:
+                        # 打印只打一次（fired 标志防刷屏）；_handle_game_end_detection 每轮照常调用，
+                        # 保证 grace window 重试计数正常推进（真结束仍能按时发布 GAME_ENDED）
+                        if not self._game_time_stagnant_fired:
+                            self._game_time_stagnant_fired = True
+                            print(f"[Runtime] GAME_ENDED: game_time stagnant for {self._game_time_stagnant_count} polls")
+                        self._handle_game_end_detection()
+                        return
+                else:
+                    self._game_time_stagnant_count = 0
+                    self._game_time_stagnant_fired = False
+                self._last_game_time = current_gt
 
             # Player Analysis (read-only, no speech)
             try:
@@ -307,6 +331,8 @@ class LoLRuntime:
             "PreEndOfGame", "EndOfGame", "Tournament"
         }
         normalized_phase = phase if phase in known_phases else "Unknown"
+        # 记录最近一次有效 phase（断连不清；供游戏结束守卫使用）
+        self._last_known_phase = normalized_phase
 
         # 更新状态存储
         self.state_store.set(StateNamespace.LCU, "gameflow_phase", normalized_phase)

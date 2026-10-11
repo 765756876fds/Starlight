@@ -134,6 +134,12 @@ class AccountMatchHistoryService:
                     return self._finalize(r)
 
         # fallback: LCU v1（国服通常不可用，仅兜底）
+        if not base:
+            print(f"[History] SGP base 解析失败 (state={state})，尝试 LCU fallback")
+        elif not token:
+            print("[History] SGP entitlements token 获取失败，尝试 LCU fallback")
+        else:
+            print(f"[History] SGP 请求失败 (state={r.state}, message={r.message})，尝试 LCU fallback")
         return self._lcu_fallback(puuid)
 
     def _lcu_fallback(self, puuid: str) -> MatchHistoryResult:

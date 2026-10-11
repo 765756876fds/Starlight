@@ -98,7 +98,12 @@ class SgpMatchHistoryProvider:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+        # 腾讯 SGP 为国内域名，必须直连，不能走系统代理（否则被导到国外节点）
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=ctx),
+        )
+        with opener.open(req, timeout=15) as r:
             return json.load(r)
 
     def recent(self, puuid: str, start_index: int = 0, count: int = 20) -> MatchHistoryResult:
@@ -118,6 +123,7 @@ class SgpMatchHistoryProvider:
         try:
             payload = self._https(url, headers)
         except Exception as e:
+            print(f"[History] SGP 失败: {type(e).__name__}: {e}")
             return MatchHistoryResult(state=SGP_UNAVAILABLE, message=f"request_failed: {e}")
         return parse_sgp_summary(payload, puuid)
 
