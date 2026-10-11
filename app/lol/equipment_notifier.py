@@ -1,149 +1,229 @@
 """
-敌方成装更新语音提醒
-基于现有 GameSnapshot 玩家 items 字段做 StateDiff
-只播报新增的 Legendary/Mythic 成装，不播报组件
+敌方成装更新语音提醒（v2）
+
+需求（用户已确认）：
+1. 每个敌人独立计算"第一件成装"（price > 2000 且非消耗品）→ 播报一次"对面XX出了YY"
+2. 特殊四件（itemID 精确匹配）→ 每人每件额外播报一次
+   探索者的护臂 2420 / 梅贾的窃魂卷 3041 / 中娅沙漏 3157 / 守护天使 3026
+3. 若第一件就是特殊四件之一 → 合并成 1 条（不重复播报）
+4. 每人每件只播一次（装备刷新不重复播）
+5. 首帧静默：进游戏第一帧只记录不播报，杜绝轰炸
+6. 只播敌方玩家
+
+接线：main.py 订阅 game.time_update（每帧 ~1Hz）调 update(snapshot.players)；
+game.ended 调 clear()。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from app.speech.speech_queue import SpeechQueue, SpeechItem, PRIORITY_B
 
-# 成装 ID 集合（常见的传说/神话装备，26.18）
-# 这里用简单的名称匹配，后续可以从 item JSON 加载
-_COMPLETED_ITEM_KEYWORDS = {
-    "日炎", "兰顿", "反甲", "无尽", "饮血", "三相", "无尽之刃",
-    "斯塔缇克", "电刀", "无尽", "法爆", "帽子", "大帽", "灭世者",
-    "虚空之杖", "法穿棒", "沙漏", "中娅", "女妖", "复活甲",
-    "水银鞋", "明朗", "CD鞋", "法穿鞋", "护甲鞋", "魔抗鞋",
-    "黑色切割", "黑切", "幕刃", "幽梦", "迅刃", "收集者",
-    "贪欲", "破败", "纳什", "巫妖", "影焰", "暗影",
-}
+# 特殊四件 itemID（16.18.1 DataDragon zh_CN 实证）
+# 2420 探索者的护臂 / 3041 梅贾的窃魂卷 / 3157 中娅沙漏 / 3026 守护天使
+SPECIAL_IDS = {2420, 3041, 3157, 3026}
 
-# 组件关键词（这些不播报）
-_COMPONENT_KEYWORDS = {
-    "长剑", "十字镐", "红水晶", "布甲", "抗魔斗篷", "草鞋",
-    "匕首", "短剑", "蓝水晶", "增幅", "仙女护符", "治疗宝珠",
-}
+# 第一件成装的价格阈值
+FIRST_ITEM_PRICE_THRESHOLD = 2000
+
+# 敌方兜底 team（找不到我方队伍时沿用 live_equip_watcher 约定）
+FALLBACK_ENEMY_TEAM = "CHAOS"
 
 
-def _is_completed_item(item: Dict[str, Any]) -> bool:
-    """判断是否是完成的成装（不是组件/鞋子）"""
-    name = str(item.get("displayName") or item.get("name") or "")
-    if not name:
-        return False
-    # 排除组件
-    for comp in _COMPONENT_KEYWORDS:
-        if comp in name:
-            return False
-    # 匹配成装关键词
-    for kw in _COMPLETED_ITEM_KEYWORDS:
-        if kw in name:
-            return True
-    # 如果价格足够高，也算成装（兜底）
-    price = item.get("price") or item.get("totalPrice") or 0
+def _price_of(item: Dict[str, Any]) -> float:
+    """安全取 item price；非数字/缺失返回 0"""
     try:
-        if int(price) >= 1300:
-            return True
+        v = item.get("price")
+        if v is None:
+            return 0.0
+        return float(v)
     except (TypeError, ValueError):
-        pass
-    return False
+        return 0.0
 
 
-def _get_completed_items(items: List[Dict[str, Any]]) -> Set[str]:
-    """从 items 列表提取成装名称集合"""
-    result = set()
-    for item in items or []:
-        if not isinstance(item, dict):
-            continue
-        if _is_completed_item(item):
-            name = str(item.get("displayName") or item.get("name") or "")
-            if name:
-                result.add(name)
-    return result
+def _item_id_of(item: Dict[str, Any]) -> int:
+    """安全取 itemID；缺失/非数字返回 0"""
+    try:
+        v = item.get("itemID")
+        if v is None:
+            return 0
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _item_name_of(item: Dict[str, Any]) -> str:
+    """取装备显示名"""
+    name = str(item.get("displayName") or item.get("name") or "")
+    return name or "未知装备"
 
 
 @dataclass
 class PlayerEquipmentHistory:
-    """单个玩家的装备历史"""
-    puuid: str
-    last_completed: Set[str] = None  # 上次已知的成装集合
-    initialized: bool = False        # 是否第一次初始化完成
-
-    def __post_init__(self):
-        if self.last_completed is None:
-            self.last_completed = set()
+    """单个玩家的装备播报状态"""
+    first_announced: bool = False       # 是否已播"第一件成装"
+    special_announced: Set[int] = field(default_factory=set)  # 已播过的特殊四件 itemID
+    initialized: bool = False           # 是否已完成首帧静默记录
 
 
 class EquipmentUpdateNotifier:
     """
-    敌方成装更新语音提醒器
+    敌方成装更新语音提醒器（v2）
+
     工作流程：
-    1. 每次 snapshot 更新时调用 update(players)
-    2. 对比每个玩家的当前成装和历史成装
-    3. 有新增成装则生成语音文本
-    4. 推送到 SpeechQueue
+    1. 每帧调用 update(players)（players 为 PlayerInfo 列表）
+    2. 首帧静默：只记录每个玩家的初始状态
+    3. 之后逐玩家检测：第一件 >2000 成装、特殊四件
+    4. 有新增则合并推送到 SpeechQueue
     """
 
     def __init__(self, speech_queue: SpeechQueue):
         self.speech = speech_queue
-        self._history: Dict[str, PlayerEquipmentHistory] = {}  # puuid -> history
+        self._history: Dict[str, PlayerEquipmentHistory] = {}
+        self._game_initialized: bool = False
 
-    def update(self, players: List[Dict[str, Any]]):
+    # ---------- 对外接口 ----------
+
+    def update(self, players: List[Any]):
         """
-        用最新的玩家列表更新装备状态，检测新增成装。
+        用最新玩家列表更新装备状态。
 
         Args:
-            players: 2999 playerlist 或 allPlayers 列表，每个元素必须有：
-                - puuid 或 summonerName 作为身份键
-                - items: 装备列表
+            players: PlayerInfo 列表（也兼容 2999 dict 列表，字段用 getattr 归一化）
         """
-        new_completions: List[str] = []  # 要播报的文本列表
+        if not players:
+            return
+
+        # 首帧静默：只记录，不播报
+        if not self._game_initialized:
+            for p in players:
+                key = self._player_key(p)
+                if not key:
+                    continue
+                hist = self._history.setdefault(key, PlayerEquipmentHistory())
+                # 记录首帧已有装备：
+                #  - 已有特殊四件 → 标记"已见"，后续不重播旧装备
+                #  - 已有 >2000 成装 → 标记 first_announced（第一件已"过"，不补播）
+                # （防止对局中途启动软件时，把"早就出的装备"当新出的播报）
+                items = getattr(p, "items", None) or []
+                if isinstance(items, list):
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        iid = _item_id_of(it)
+                        if iid in SPECIAL_IDS:
+                            hist.special_announced.add(iid)
+                    if any(
+                        isinstance(it, dict)
+                        and it.get("consumable", False) is False
+                        and _price_of(it) > FIRST_ITEM_PRICE_THRESHOLD
+                        for it in items
+                    ):
+                        hist.first_announced = True
+            self._game_initialized = True
+            return
+
+        enemy_team = self._resolve_enemy_team(players)
+        announcements: List[str] = []
 
         for p in players:
-            # 用 puuid 作为身份键，没有就用 summonerName
-            identity = str(p.get("puuid") or p.get("summonerName") or "")
-            if not identity:
+            team = getattr(p, "team", "") or ""
+            if team != enemy_team:
                 continue
 
-            current_items = p.get("items") or []
-            current_completed = _get_completed_items(current_items)
+            key = self._player_key(p)
+            if not key:
+                continue
 
-            # 获取历史记录
-            if identity not in self._history:
-                self._history[identity] = PlayerEquipmentHistory(puuid=identity)
-            history = self._history[identity]
+            hist = self._history.setdefault(key, PlayerEquipmentHistory())
+            hist.initialized = True
 
-            # 计算新增的成装（不管是不是第一次，只要是新的就播报）
-            new_items = current_completed - history.last_completed
-            if new_items:
-                # 获取英雄名
-                champ = p.get("championName") or p.get("summonerName") or "敌人"
-                for item_name in sorted(new_items):
-                    new_completions.append(f"{champ}更新了{item_name}")
+            items = getattr(p, "items", None) or []
+            if not isinstance(items, list):
+                continue
 
-            # 更新历史
-            history.last_completed = current_completed
-            history.initialized = True
-
-        # 推送到 SpeechQueue
-        if new_completions:
-            # 合并成一条语音，避免轰炸
-            if len(new_completions) == 1:
-                text = new_completions[0] + "。"
-            else:
-                text = "，".join(new_completions[:2]) + "。"  # 最多播报2个
-
-            item = SpeechItem(
-                text=text,
-                priority=PRIORITY_B,  # 低优先级
-                expire_at=__import__('time').time() + 10.0,  # 10秒TTL
-                category="equipment",
-                event_id=f"equip_{hash(text)}_{__import__('time').time()}",
+            champ = (
+                getattr(p, "champion_name", None)
+                or getattr(p, "summoner_name", None)
+                or "敌人"
             )
-            self.speech.enqueue(item)
+
+            # ---- 规则 1：第一件成装（price > 2000 且非消耗品）----
+            if not hist.first_announced:
+                candidates = [
+                    it for it in items
+                    if isinstance(it, dict)
+                    and it.get("consumable", False) is False
+                    and _price_of(it) > FIRST_ITEM_PRICE_THRESHOLD
+                ]
+                if candidates:
+                    # 近似"先买的"：取当前价格最低的成装
+                    first = min(candidates, key=_price_of)
+                    announcements.append(f"对面{champ}出了{_item_name_of(first)}")
+                    hist.first_announced = True
+                    iid = _item_id_of(first)
+                    if iid in SPECIAL_IDS:
+                        # 第一件就是特殊四件 → 合并，不额外播
+                        hist.special_announced.add(iid)
+
+            # ---- 规则 2：特殊四件（逐个检查，未播的额外播）----
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                iid = _item_id_of(it)
+                if iid in SPECIAL_IDS and iid not in hist.special_announced:
+                    announcements.append(f"对面{champ}出了{_item_name_of(it)}")
+                    hist.special_announced.add(iid)
+
+        # 合并推送
+        if announcements:
+            self._push(announcements)
 
     def clear(self):
-        """游戏结束时清空所有历史"""
+        """游戏结束时清空所有状态"""
         self._history.clear()
+        self._game_initialized = False
+
+    # ---------- 内部辅助 ----------
+
+    @staticmethod
+    def _player_key(p: Any) -> str:
+        """玩家标识：优先 puuid（稳定），没有则用 champion_name"""
+        puuid = str(getattr(p, "puuid", "") or "")
+        if puuid:
+            return f"puuid:{puuid}"
+        champ = str(getattr(p, "champion_name", "") or "")
+        if champ:
+            return f"champ:{champ}"
+        return ""
+
+    @staticmethod
+    def _resolve_enemy_team(players: List[Any]) -> str:
+        """确定敌方队伍：找当前玩家（is_current_player）的 team，取反；找不到兜底 CHAOS"""
+        for p in players:
+            if getattr(p, "is_current_player", False):
+                my_team = str(getattr(p, "team", "") or "")
+                if my_team == "ORDER":
+                    return "CHAOS"
+                if my_team == "CHAOS":
+                    return "ORDER"
+                break
+        return FALLBACK_ENEMY_TEAM
+
+    def _push(self, announcements: List[str]):
+        """合并成一条语音推送到 SpeechQueue（全部播，不丢数据）"""
+        if len(announcements) == 1:
+            text = announcements[0] + "。"
+        else:
+            text = "、".join(announcements) + "。"  # 全部播（一局最多几条，不怕多）
+
+        item = SpeechItem(
+            text=text,
+            priority=PRIORITY_B,  # 低优先级
+            expire_at=time.time() + 10.0,  # 10秒 TTL
+            category="equipment",
+            event_id=f"equip_{hash(text)}_{time.time()}",
+        )
+        self.speech.enqueue(item)

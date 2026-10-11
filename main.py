@@ -234,6 +234,14 @@ class Application:
             queue=self.speech_queue,
         )
 
+        # 敌方成装语音提醒（equipment_notifier，初始化失败不阻塞主流程）
+        try:
+            from app.lol.equipment_notifier import EquipmentUpdateNotifier
+            self.equip_notifier = EquipmentUpdateNotifier(self.speech_queue)
+        except Exception as _e:
+            print(f"[Equipment] notifier 初始化失败: {_e}")
+            self.equip_notifier = None
+
         # 5. 璇煶杈撳叆
         print("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
         self._ensure_asr_running()
@@ -671,6 +679,34 @@ class Application:
                 print("[A5] economy advisor registered")
             except Exception as _e:
                 print(f"[A5] economy advisor 注册失败: {_e}")
+
+            # A6 敌方成装语音提醒（equipment_notifier，game.time_update 每帧 ~1Hz）
+            try:
+                if getattr(self, "equip_notifier", None):
+                    def _equip_snap_provider():
+                        rt = getattr(self, "lol", None)
+                        snap = rt.current_snapshot if rt else None
+                        return snap
+
+                    def _on_equip_tick(event):
+                        try:
+                            snap = _equip_snap_provider()
+                            if snap and getattr(snap, "players", None):
+                                self.equip_notifier.update(snap.players)
+                        except Exception as _e:
+                            print(f"[Equipment] 更新异常: {_e}")
+
+                    def _on_equip_game_end(event):
+                        try:
+                            self.equip_notifier.clear()
+                        except Exception as _e:
+                            print(f"[Equipment] 清理异常: {_e}")
+
+                    self.event_bus.subscribe("game.time_update", _on_equip_tick)
+                    self.event_bus.subscribe("game.ended", _on_equip_game_end)
+                    print("[Equipment] notifier registered")
+            except Exception as _e:
+                print(f"[Equipment] notifier 注册失败: {_e}")
         except Exception as e:
             print(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")
 
