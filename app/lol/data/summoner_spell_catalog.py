@@ -22,9 +22,10 @@ class SummonerSpell:
 
 
 # 内置 fallback（与 JSON 保持一致；JSON 不可读时使用）
+# 版本：26.18
 _BUILTIN: List[SummonerSpell] = [
     SummonerSpell(4, "Flash", "闪现", 300.0),
-    SummonerSpell(12, "Teleport", "传送", 360.0),
+    SummonerSpell(12, "Teleport", "传送", 300.0),  # 旧版360s，当前版本改为300s
     SummonerSpell(14, "Ignite", "点燃", 180.0),
     SummonerSpell(21, "Barrier", "屏障", 180.0),
     SummonerSpell(1, "Cleanse", "净化", 210.0),
@@ -32,6 +33,8 @@ _BUILTIN: List[SummonerSpell] = [
     SummonerSpell(6, "Ghost", "疾跑", 210.0),
     SummonerSpell(7, "Heal", "治疗", 240.0),
     SummonerSpell(11, "Smite", "惩戒", 15.0),
+    SummonerSpell(13, "Clarity", "清晰术", 240.0),
+    SummonerSpell(32, "Mark", "雪球", 80.0),
 ]
 
 

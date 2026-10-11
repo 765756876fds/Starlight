@@ -1,8 +1,8 @@
-"""音乐面板（本地 + 在线）。"""
+﻿"""音乐面板（本地 + 在线）。"""
 from PySide6.QtCore import QThread, Qt, QTimer, QObject, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget,
 )
 
 
@@ -46,9 +46,12 @@ class MusicPanel(QWidget):
         self.btn_local_search = QPushButton("搜索")
         self.btn_local_search.setProperty("class", "primary")
         self.btn_local_clear = QPushButton("清空")
+        self.btn_source_mgr = QPushButton("音源管理")
+        self.btn_source_mgr.clicked.connect(self._open_source_manager)
         local_search_row.addWidget(self.edit_local)
         local_search_row.addWidget(self.btn_local_search)
         local_search_row.addWidget(self.btn_local_clear)
+        local_search_row.addWidget(self.btn_source_mgr)
         ll.addLayout(local_search_row)
 
         # 本地列表
@@ -74,7 +77,15 @@ class MusicPanel(QWidget):
         self.btn_prev = QPushButton("⏮")
         self.btn_toggle = QPushButton("⏯")
         self.btn_next = QPushButton("⏭")
-        for b in (self.btn_prev, self.btn_toggle, self.btn_next):
+        self.btn_mode = QPushButton("🔁 顺序")
+        self._modes = [
+            ("sequential", "🔁 顺序"),
+            ("shuffle", "🔀 随机"),
+            ("repeat_all", "🔁 列表循环"),
+            ("repeat_one", "🔂 单曲循环"),
+        ]
+        self._mode_idx = 0
+        for b in (self.btn_prev, self.btn_toggle, self.btn_next, self.btn_mode):
             row.addWidget(b)
         row.addStretch()
         row.addWidget(QLabel("音量"))
@@ -83,15 +94,13 @@ class MusicPanel(QWidget):
         row.addWidget(self.slider_vol, 1)
         ll.addLayout(row)
 
-        # 高潮模式
+        # 高潮模式开关
         hrow = QHBoxLayout()
         self.btn_highlight = QPushButton("🎵 高潮模式：关")
         self.btn_highlight.setCheckable(True)
         self.btn_highlight.toggled.connect(self._on_highlight)
-        self.btn_mark = QPushButton("📍 标记高潮起点")
-        self.btn_mark.clicked.connect(self._on_mark_highlight)
         hrow.addWidget(self.btn_highlight)
-        hrow.addWidget(self.btn_mark)
+        hrow.addStretch()
         ll.addLayout(hrow)
 
         tabs.addTab(local, "本地")
@@ -121,6 +130,7 @@ class MusicPanel(QWidget):
             self.btn_prev.clicked.connect(self._on_prev)
             self.btn_toggle.clicked.connect(self._on_toggle)
             self.btn_next.clicked.connect(self._on_next)
+            self.btn_mode.clicked.connect(self._on_toggle_mode)
             self.slider_vol.valueChanged.connect(self._on_volume)
             self.slider_pos.sliderReleased.connect(self._on_seek)
             self.btn_search.clicked.connect(self._do_search)
@@ -182,17 +192,6 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[UI] local play error: {e}")
 
-    def _on_mark_highlight(self):
-        if self._music is None:
-            return
-        ok = False
-        try:
-            ok = self._music.mark_highlight_start()
-        except Exception as e:
-            print(f"[Music] mark error: {e}")
-        if ok:
-            self.lbl_track.setText("已标记当前歌曲高潮段")
-
     def _on_highlight(self, on: bool):
         self.btn_highlight.setText(f"🎵 高潮模式：{'开' if on else '关'}")
         if self._music is not None:
@@ -210,6 +209,13 @@ class MusicPanel(QWidget):
     def _on_toggle(self):
         try: self._music.toggle()
         except Exception: pass
+
+    def _on_toggle_mode(self):
+        self._mode_idx = (self._mode_idx + 1) % len(self._modes)
+        mode, label = self._modes[self._mode_idx]
+        self.btn_mode.setText(label)
+        if self._music:
+            self._music.set_play_mode(mode)
 
     def _on_next(self):
         try: self._music.next()
@@ -300,5 +306,59 @@ class MusicPanel(QWidget):
                 prefix = "[在线] " if song.get("online") else ""
                 text = f"{prefix}{title} - {artist}" if artist else f"{prefix}{title}"
                 self.lbl_track.setText(text)
+                # 自动定位到本地列表中正在播放的歌曲
+                if not song.get("online"):
+                    song_id = song.get("id")
+                    if song_id:
+                        for i in range(self.list_local.count()):
+                            item = self.list_local.item(i)
+                            s = item.data(Qt.UserRole)
+                            if s and s.get("id") == song_id:
+                                self.list_local.setCurrentRow(i)
+                                self.list_local.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+                                break
+        except Exception as e:
+            print(f"[UI] music refresh error: {e!r}")
+        # 同步播放模式/高潮模式按钮：独立 try，不被上面的进度/歌曲异常拖累
+        try:
+            self._sync_state_buttons()
+        except Exception as e:
+            print(f"[UI] sync buttons error: {e!r}")
+
+    def _sync_state_buttons(self):
+        """从 controller 实时状态同步按钮显示：
+        语音「随机播放/顺序播放/高潮模式开/关」等命令改变 controller 状态后，
+        面板按钮必须跟随（不能只依赖用户点击更新）。"""
+        if self._music is None:
+            return
+        try:
+            mode = self._music.get_play_mode()
         except Exception:
-            pass
+            mode = None
+        if mode:
+            for i, (m, label) in enumerate(self._modes):
+                if m == mode:
+                    if self._mode_idx != i:
+                        self._mode_idx = i
+                    if self.btn_mode.text() != label:
+                        self.btn_mode.setText(label)
+                        print(f"[UI] 播放模式按钮同步: {label}")
+                    break
+        try:
+            hl = bool(self._music.is_highlight_mode())
+        except Exception:
+            hl = None
+        if hl is not None:
+            label = "🎵 高潮模式：开" if hl else "🎵 高潮模式：关"
+            if self.btn_highlight.isChecked() != hl:
+                self.btn_highlight.setChecked(hl)
+            if self.btn_highlight.text() != label:
+                self.btn_highlight.setText(label)
+                print(f"[UI] 高潮模式按钮同步: {label}")
+
+    def _open_source_manager(self):
+        """打开音源管理对话框"""
+        from app.ui.dialogs.source_manage_dialog import SourceManageDialog
+        # 对话框内导入/删除/启停后，把变更同步进在线播放链
+        dlg = SourceManageDialog(self, on_sources_changed=self._music.sync_custom_sources)
+        dlg.exec()

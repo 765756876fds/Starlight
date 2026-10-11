@@ -1,4 +1,4 @@
-"""
+﻿"""
 音乐控制器 - 高层封装，整合 mpv + 队列 + 数据库 + 搜索
 
 对外提供统一的音乐操作接口。
@@ -19,6 +19,7 @@ from .scanner import MusicScanner
 from .mpv import MpvController
 from .queue import PlayQueue, PlayMode
 from .search import MusicSearch
+from .lx_client import LxMusicClient
 
 
 class MusicController:
@@ -44,6 +45,14 @@ class MusicController:
         self.queue = PlayQueue()
         self.mpv = MpvController(self.mpv_path, self.mpv_ipc_pipe)
 
+        # 落雪音乐客户端
+        self.lx_client = LxMusicClient()
+        self.lx_connected = self.lx_client.is_connected()
+        if self.lx_connected:
+            print('[音乐] 落雪音乐已连接，语音控制将优先控制落雪')
+        else:
+            print('[音乐] 落雪音乐未连接，使用本地mpv播放')
+
         # Online sources（延迟构造，可选）
         self.online_manager = None
 
@@ -64,6 +73,9 @@ class MusicController:
         self._highlight_song_id: Optional[int] = None
         self._highlight_stop: threading.Event = threading.Event()
         self._highlight_poller: Optional[threading.Thread] = None
+        self._skip_pending: bool = False  # 坏文件自动跳过防重入
+        # UI「音源管理」导入的自定义 HTTP 源，sync_custom_sources() 维护的注册名单
+        self._custom_http_sources: set = set()
 
         # 注册命令处理器
         self._register_commands()
@@ -84,6 +96,36 @@ class MusicController:
         # 注册事件
         self._running = True
 
+        # 启动后台轮询：每0.8秒实时查mpv idle状态，播完自动切下一首。
+        # 说明：mpv IPC 事件消息在 _send_command 响应循环中被跳过，事件回调
+        # （on_property_change → _on_idle_change/_on_eof）实际不可达；自动切歌
+        # 必须用独立轮询实现（历史既定方案，实时查询不读属性缓存）。
+        # 初始化 idle 基线：mpv 刚冷启动通常处于空闲（idle-active=True）。
+        # 必须用启动时的真实值初始化 _last_idle，否则首次轮询会把"启动空闲"
+        # 误判为"从播放变为空闲"的上升沿，导致启动即自动播放。
+        # 读取失败时保守取 True（宁可少一次自动切歌，也不在启动时自动播放）。
+        try:
+            self._last_idle = bool(self.mpv.get_property("idle-active", timeout=1.0))
+        except Exception:
+            self._last_idle = True
+
+        def _poll_idle():
+            import time as _time
+            while self._running:
+                try:
+                    now_idle = bool(self.mpv.get_property("idle-active", timeout=0.5))
+                    # 刚从播放变成 idle，说明播完了
+                    if now_idle and not self._last_idle:
+                        _time.sleep(0.5)  # 等 mpv 稳定
+                        print("[Music] 检测到播放结束，自动切下一首")
+                        self._auto_next()
+                    self._last_idle = now_idle
+                except Exception as e:
+                    print(f"[Music] idle poll error: {e!r}")
+                _time.sleep(0.8)
+
+        threading.Thread(target=_poll_idle, daemon=True, name="music-idle-poll").start()
+
         # 更新状态
         self.state_store.set(StateNamespace.MUSIC, "volume", self.default_volume)
         self.state_store.set(StateNamespace.MUSIC, "playing", False)
@@ -95,6 +137,11 @@ class MusicController:
         """停止音乐模块"""
         self._running = False
         self._invalidate_highlight()
+        if getattr(self, "online_manager", None) is not None:
+            try:
+                self.online_manager.close()
+            except Exception:
+                pass
         self.mpv.stop_process()
         print("[Music] 模块已停止")
 
@@ -115,11 +162,20 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT_MODE, self._cmd_highlight_mode)
         self.command_bus.register(CommandType.MUSIC_SET_PLAY_MODE, self._cmd_set_play_mode)
         self.command_bus.register(CommandType.MUSIC_RESCAN, lambda c: self.rescan())
+        self.command_bus.register(CommandType.MUSIC_CLEANUP, lambda c: self.cleanup_missing())
 
     # ===== 播放控制 =====
 
     def play(self):
         """播放"""
+        # 优先控制落雪
+        if self.lx_connected:
+            try:
+                if self.lx_client.play():
+                    return
+            except:
+                self.lx_connected = False
+        
         if self.queue.is_empty():
             # 队列空，随机播放
             songs = self.db.get_random_songs(20)
@@ -150,6 +206,14 @@ class MusicController:
 
     def pause(self):
         """暂停"""
+        # 优先控制落雪
+        if self.lx_connected:
+            try:
+                if self.lx_client.pause():
+                    return
+            except:
+                self.lx_connected = False
+        
         self.mpv.pause()
         # 实时同步状态
         try:
@@ -170,6 +234,14 @@ class MusicController:
 
     def toggle(self):
         """切换播放/暂停（直接让 mpv 处理，不依赖缓存状态）"""
+        # 优先控制落雪
+        if self.lx_connected:
+            try:
+                if self.lx_client.toggle_play():
+                    return
+            except:
+                self.lx_connected = False
+        
         self.mpv.toggle_pause()
         # 同步更新状态
         try:
@@ -180,22 +252,48 @@ class MusicController:
 
     def next(self):
         """下一首"""
+        # 优先控制落雪
+        if self.lx_connected:
+            try:
+                if self.lx_client.next():
+                    return
+            except:
+                self.lx_connected = False
+        
         with self._lock:
             self._invalidate_highlight()
             song = self.queue.next()
             if song:
                 self._play_song(song)
             else:
-                # 队列结束，随机补充
-                songs = self.db.get_random_songs(10)
-                if songs:
-                    self.queue.add_all(songs)
-                    song = self.queue.next()
-                    if song:
-                        self._play_song(song)
+                # 队列空了，自动加载整个本地库再切
+                try:
+                    all_songs = self.db.get_all_songs(limit=1000)
+                    if all_songs:
+                        self.queue.add_all(all_songs)
+                        song = self.queue.next()
+                except Exception as e:
+                    print(f"加载本地队列失败: {e}")
+                if not song:
+                    songs = self.db.get_random_songs(10)
+                    if songs:
+                        self.queue.add_all(songs)
+                        song = self.queue.next()
+                # 统一出口：无论 song 来自重载全库还是随机兜底，都必须播放
+                # （旧代码只在 random 分支内调 _play_song，全库重载路径 song 非空时漏播）
+                if song:
+                    self._play_song(song)
 
     def prev(self):
         """上一首"""
+        # 优先控制落雪
+        if self.lx_connected:
+            try:
+                if self.lx_client.prev():
+                    return
+            except:
+                self.lx_connected = False
+        
         with self._lock:
             self._invalidate_highlight()
             song = self.queue.prev()
@@ -206,23 +304,129 @@ class MusicController:
         """播放指定歌曲"""
         with self._lock:
             self._invalidate_highlight()
+            # 如果队列是空的（语音首次播放本地歌曲），自动把整个本地库加进队列
+            if self.queue.size() == 0 and not song.get("online"):
+                try:
+                    all_songs = self.db.get_all_songs(limit=1000)
+                    if all_songs:
+                        self.queue.add_all(all_songs)
+                except Exception as e:
+                    print(f"加载本地队列失败: {e}")
             # 添加到队列并播放
             self.queue.add(song)
             self.queue.play_at(self.queue.size() - 1)
             self._play_song(song)
 
     def play_search_result(self, query: str, index: int = 0):
-        """搜索并播放第 N 个结果"""
+        """搜索并播放第 N 个结果，本地找不到自动走在线fallback"""
         results = self.search.search(query, limit=10)
         if results and 0 <= index < len(results):
             self.play_song(results[index])
             return results[index]
+
+        # 本地搜索失败，尝试在线fallback
+        if self.online_manager is not None:
+            _t_online_start = time.time()
+            try:
+                print(f"[Music] 本地未找到'{query}'，尝试在线搜索...")
+                online_dict = self.online_manager.search_all(query, limit_per_source=5)
+                _t_search_ms = int((time.time() - _t_online_start) * 1000)
+                # 该行耗时/源列表不再打印到控制台（用户要求保持控制台简洁）
+                # search_all返回{音源名: track列表}，展开成所有track
+                all_tracks = []
+                for src_name, tracks in online_dict.items():
+                    all_tracks.extend(tracks)
+                if all_tracks:
+                    # 优先选酷我(kw)音源，已验证可匿名播放
+                    chosen = None
+                    for r in all_tracks:
+                        src_n = r.source_name.lower()
+                        if "kw" in src_n or "酷我" in src_n:
+                            chosen = r
+                            break
+                    if not chosen:
+                        chosen = all_tracks[0]
+
+                    print(f"[Music] 在线找到: {chosen.title} - {chosen.artist} (音源: {chosen.source_name})")
+                    # 定向取 URL：只调 chosen 对应的音源（manager 按 track.source_name 路由）。
+                    # 旧逻辑遍历所有源串行调 get_play_url，demo/archive 对陌生 track 各自
+                    # 发起 HTTP（超时 8s/个），导致在线播放最高 ~16s 延迟。
+                    _t_url_start = time.time()
+                    play_url = self.online_manager.get_play_url(chosen)
+                    _t_url_ms = int((time.time() - _t_url_start) * 1000)
+                    print(f"[Music] 获取播放URL，耗时 {_t_url_ms}ms")
+                    if play_url:
+                        print(f"[Music] 获取播放URL成功，开始在线播放...")
+                        # 在线URL需要HTTP头。mpv 的 http-header-fields 是持久属性，
+                        # 酷我 Referer 一旦设置会跨源残留：切到其他音源后仍带着酷我
+                        # Referer。因此只对酷我系源设置 Referer，其他源重置为纯 UA。
+                        need_kw_header = ("kw" in chosen.source_name.lower()
+                                          or "酷我" in chosen.source_name)
+                        try:
+                            if need_kw_header:
+                                self.mpv.set_property(
+                                    "http-header-fields",
+                                    "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
+                            else:
+                                self.mpv.set_property(
+                                    "http-header-fields",
+                                    "User-Agent: Mozilla/5.0")
+                        except Exception:
+                            pass
+                        self.mpv.loadfile(play_url)
+                        self.mpv.set_property("pause", False)
+                        try:
+                            self.mpv._properties["pause"] = False
+                        except Exception:
+                            pass
+                        online_song = {
+                            "id": -1,
+                            "title": chosen.title,
+                            "artist": chosen.artist,
+                            "album": chosen.album,
+                            "duration": getattr(chosen, 'duration_seconds', 0) or 0,
+                            "path": play_url,
+                            "source": "online",
+                        }
+                        self._current_song = online_song
+                        self._update_state(
+                            playing=True,
+                            current_song={
+                                "id": -1,
+                                "title": chosen.title,
+                                "artist": chosen.artist,
+                                "album": chosen.album,
+                                "duration": getattr(chosen, 'duration_seconds', 0) or 0,
+                                "path": play_url,
+                            }
+                        )
+                        self.event_bus.publish(Event(
+                            event_type=EventType.MUSIC_TRACK_CHANGED,
+                            data={"song": online_song},
+                            source="music"
+                        ))
+                        _t_total_ms = int((time.time() - _t_online_start) * 1000)
+                        print(f"[Music] 在线播放就绪，总耗时 {_t_total_ms}ms（搜索{_t_search_ms}ms + URL{_t_url_ms}ms）")
+                        return online_song
+                    else:
+                        # 定向/兜底取 URL 均失败：明确提示，避免静默不播放
+                        print(f"[Music] 获取播放URL失败（音源: {chosen.source_name}），无法在线播放")
+            except Exception as e:
+                print(f"[Music] 在线搜索失败: {e}")
+
         return None
 
     def _play_song(self, song: Dict[str, Any]):
         """实际播放歌曲"""
         if not song:
             return
+
+        # 每次“尝试播放”都重置 idle 轮询状态，让轮询重新感知新歌：
+        # - 正常：mpv 进入 playing，轮询读到 idle-active=False，与 _last_idle=False 一致；
+        # - 文件损坏/不存在：mpv 仍（或又）处于 idle → 产生新的 False→True 上升沿 →
+        #   自动切歌被再次触发，从而跳过坏文件继续播（否则 _last_idle 停留在 True，
+        #   坏文件 loadfile 后永远没有上升沿，切歌卡死）。
+        self._last_idle = False
 
         filepath = song.get("path")
         if not filepath or not os.path.exists(filepath):
@@ -237,6 +441,17 @@ class MusicController:
         except Exception:
             pass
         self._current_song = song
+
+        # 异步播放确认：坏文件（MPEG header junk 等）loadfile 返回 success 但
+        # 解码失败——mpv 会立刻回到 idle，或卡在“播放中”却拿不到任何播放时间
+        # （playback-time/duration 均为 None）。此时 idle 轮询无法形成上升沿，
+        # 播放器会永久卡住。确认线程发现播放未真正开始 → 自动跳过切下一首。
+        threading.Thread(
+            target=self._confirm_playback,
+            args=(song, filepath),
+            daemon=True,
+            name="music-playback-confirm"
+        ).start()
 
         # 增加播放计数
         self.db.increment_play_count(song["id"])
@@ -265,10 +480,94 @@ class MusicController:
         if self._highlight_mode:
             self._start_highlight_segment(song)
 
+    # ===== 坏文件自动跳过 =====
+
+    def _confirm_playback(self, song: Dict[str, Any], filepath: str):
+        """loadfile 后异步确认播放是否真正开始。
+        判定失败（mpv 仍 idle / 拿不到播放时间）→ 自动切下一首跳过坏文件。"""
+        import time as _t
+        _t.sleep(0.8)
+        try:
+            idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
+            pt = self.mpv.get_property("playback-time", timeout=0.5)
+            dur = self.mpv.get_property("duration", timeout=0.5)
+        except Exception:
+            idle_now, pt, dur = True, None, None
+        # 期间用户已切走/正常播完 → 不干预
+        if self._current_song is not song:
+            return
+        bad = idle_now or (pt is None and dur is None)
+        if bad:
+            # 坏文件自动跳过静默执行（不再打印到控制台）
+            self._schedule_skip_bad(song)
+
+    def _schedule_skip_bad(self, song: Dict[str, Any]):
+        """延后执行 next() 跳过坏文件（防重入 + 防覆盖用户操作）"""
+        if self._current_song is not song or self._skip_pending:
+            return
+        self._skip_pending = True
+        threading.Timer(0.2, lambda: self._do_skip_bad(song)).start()
+
+    def _do_skip_bad(self, song: Dict[str, Any]):
+        self._skip_pending = False
+        if self._current_song is not song:
+            return
+        try:
+            self.next()
+        except Exception as e:
+            print(f"[Music] 跳过坏文件时 next() 异常: {e!r}")
+
     # ===== 音量控制 =====
 
     def set_online_manager(self, manager) -> None:
         self.online_manager = manager
+
+    def sync_custom_sources(self) -> int:
+        """把 config/music_sources.json 中启用的自定义音源同步注册进 online_manager。
+
+        幂等：先注销上次同步注册的 HTTP 源，再按当前启用列表重建。
+        - 跳过 api_url 为空的源（如仅存元信息的 JS 导入）
+        - 不覆盖 js_bridge / demo / archive / Python 插件等内置源（重名保护）
+        返回本次注册成功的源数量。任何源失效只影响自身，不影响其他源。"""
+        if self.online_manager is None:
+            return 0
+        from app.music.source_manager import MusicSourceManager
+        from app.music.online.sources.http_source import HttpJsonSource
+
+        # 1) 注销上次同步的自定义 HTTP 源
+        for name in list(self._custom_http_sources):
+            self.online_manager.unregister(name)
+        self._custom_http_sources = set()
+
+        # 2) 按当前配置重建
+        cfg_mgr = MusicSourceManager()
+        registered = 0
+        for s in cfg_mgr.get_all_sources():
+            if not s.enabled or not s.api_url:
+                continue
+            # source_type=js 的源可能是 UI 导入 .js 时提取的元信息（洛雪插件），
+            # 但只要用户填写了 api_url 且已启用，仍按现有 HTTP JSON 协议尝试注册，
+            # 保留旧配置兼容（如 ikun 音源）。若协议不符，搜索失败会记入 _errors
+            # 且不影响其他音源。api_url 为空的源在上一行已被跳过。
+            if s.source_type == "js":
+                print(f"[Music] 自定义源 '{s.name}' 为 js 元信息，尝试按 HTTP JSON 协议注册"
+                      f"（若失效请在 UI 中改用 JSON 导入）")
+            # 重名保护：name 已被内置/插件源占用时跳过，避免覆盖 js_bridge 等
+            if s.name in self.online_manager._sources:
+                print(f"[Music] 自定义源 '{s.name}' 与已注册音源重名，跳过")
+                continue
+            src = HttpJsonSource(
+                name=s.name,
+                api_url=s.api_url,
+                search_path=s.search_path,
+                song_url_path=s.song_url_path,
+            )
+            self.online_manager.register(src)
+            self._custom_http_sources.add(s.name)
+            registered += 1
+        if registered:
+            print(f"[Music] 自定义音源已同步: {sorted(self._custom_http_sources)}")
+        return registered
 
     def search_online(self, keyword: str) -> dict:
         if self.online_manager is None:
@@ -313,6 +612,22 @@ class MusicController:
             return False
         print(f"[Music] play online: {track.title} -> {url[:80]}")
         try:
+            # mpv 的 http-header-fields 是持久属性：按实际播放音源设置/重置，
+            # 避免酷我 Referer 跨源残留（与 search_play 路径一致）。
+            # 设置失败仅跳过 header，不影响播放流程。
+            need_kw_header = ("kw" in (track.source_name or "").lower()
+                              or "酷我" in (track.source_name or ""))
+            try:
+                if need_kw_header:
+                    self.mpv.set_property(
+                        "http-header-fields",
+                        "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
+                else:
+                    self.mpv.set_property(
+                        "http-header-fields",
+                        "User-Agent: Mozilla/5.0")
+            except Exception:
+                pass
             self.mpv.loadfile(url)
             print("[Music] mpv loadfile ok")
         except Exception as e:
@@ -371,20 +686,37 @@ class MusicController:
         if not self._current_song:
             return
 
+        try:
+            # mpv 异常/未连接时可能返回 None 或非数字，统一收敛为 0（视为时长未知）
+            raw_duration = self.mpv.get_duration()
+            duration = float(raw_duration) if isinstance(raw_duration, (int, float)) else 0.0
+        except Exception:
+            duration = 0.0
+
         song_id = self._current_song.get("id")
         highlight = self.db.get_highlight(song_id)
         if highlight:
-            self.mpv.seek(highlight["start_time"], "absolute")
+            target = float(highlight.get("start_time") or 0)
+            # 边界保护：不超歌曲时长、不为负（highlight 数据可能来自过期文件）
+            if duration > 0:
+                target = min(max(0.0, target), max(0.0, duration - 1.0))
+            try:
+                self.mpv.seek(target, "absolute")
+            except Exception as e:
+                print(f"[Music] highlight seek 失败: {e}")
+                return
             self.event_bus.publish(Event(
                 event_type=EventType.MUSIC_HIGHLIGHT,
-                data={"song_id": song_id, "position": highlight["start_time"]},
+                data={"song_id": song_id, "position": target},
                 source="music"
             ))
         else:
             # 没有高潮数据，跳到 60% 位置作为兜底
-            duration = self.mpv.get_duration()
             if duration > 0:
-                self.mpv.seek(duration * 0.6, "absolute")
+                try:
+                    self.mpv.seek(duration * 0.6, "absolute")
+                except Exception as e:
+                    print(f"[Music] highlight fallback seek 失败: {e}")
 
     # ===== Highlight Mode =====
 
@@ -515,6 +847,15 @@ class MusicController:
         result = self.scanner.scan(full_rescan=full)
         print(f"[Music] 扫描完成: {result}")
         self.state_store.set(StateNamespace.MUSIC, "song_count", self.db.get_song_count())
+        # 扫描完成后后台计算highlight，不阻塞
+        self.scanner.start_highlight_background()
+        return result
+
+    def cleanup_missing(self) -> Dict[str, int]:
+        """清理文件已不存在的歌曲记录（含其 highlight）"""
+        result = self.db.delete_missing_songs()
+        print(f"[Music] 清理失效歌曲: {result}")
+        self.state_store.set(StateNamespace.MUSIC, "song_count", self.db.get_song_count())
         return result
 
     def get_song_count(self) -> int:
@@ -591,8 +932,26 @@ class MusicController:
 
     def _auto_next(self):
         """自动播放下一首"""
-        if self._running and self.mpv.is_idle():
+        if not self._running:
+            return
+        # 守卫必须与 _poll_idle 同源（实时 get_property）。
+        # 不能用 self.mpv.is_idle()：它读的是启动时初始化的属性缓存，
+        # mpv 事件回调在 _send_command 中被丢弃，idle-active 缓存从不更新，
+        # 初始读失败时默认 False → 会拦截已被实时确认的切歌（next() 永不执行）。
+        try:
+            idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
+        except Exception as e:
+            print(f"[Music] auto_next idle check error: {e!r}")
+            return
+        if not idle_now:
+            print("[Music] auto_next: idle-active 实时为 False，跳过切歌")
+            return
+        print("[Music] auto_next: 已确认 idle，执行 next()")
+        try:
             self.next()
+            print("[Music] auto_next: next() 完成")
+        except Exception as e:
+            print(f"[Music] auto_next: next() 异常: {e!r}")
 
     def _update_state(self, **kwargs):
         """更新状态存储"""
@@ -602,3 +961,11 @@ class MusicController:
     def is_playing(self) -> bool:
         """是否正在播放"""
         return not self.mpv.is_paused() and not self.mpv.is_idle()
+
+
+
+
+
+
+
+

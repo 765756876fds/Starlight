@@ -1,4 +1,4 @@
-"""OverlayWindow：Qt 透明无边框置顶浮窗（敌方五人 CD + 可点击召唤师技能）。
+﻿"""OverlayWindow：Qt 透明无边框置顶浮窗（敌方五人 CD + 可点击召唤师技能）。
 
 H.4.4-R2 修正：
 - 真实英雄头像（Data Dragon）
@@ -36,7 +36,7 @@ class ClickableSpellIcon(QFrame):
         self.setFixedSize(48, 48)
         
         # 加载图标（优先用 sid，其次用中文名）
-        print(f"[Spell Icon] champion={champion_name}, spell_id={spell.spell_id}, spell_name={spell.spell_name}")
+        # print(f"[Spell Icon] champion={champion_name}, spell_id={spell.spell_id}, spell_name={spell.spell_name}")
         if spell.spell_id > 0:
             self._pixmap = get_summoner_spell_icon_by_sid(spell.spell_id)
         else:
@@ -90,7 +90,7 @@ class ClickableSpellIcon(QFrame):
             spell_name = self._spell.spell_name
             if spell_name and spell_name != "—":
                 self.clicked.emit(self._champion_name, spell_name)
-                print(f"[Overlay Click] champion={self._champion_name}, spell={spell_name}")
+                # print(f"[Overlay Click] champion={self._champion_name}, spell={spell_name}")
         super().mousePressEvent(event)
 
 
@@ -335,3 +335,5 @@ class OverlayWindow(QWidget):
         
         if not self.isVisible():
             self.show()
+
+

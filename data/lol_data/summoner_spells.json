@@ -5,7 +5,7 @@
   "updated_at": "2026-09-19",
   "spells": [
     {"sid": 4, "name_en": "Flash", "name_zh": "闪现", "cooldown": 300.0},
-    {"sid": 12, "name_en": "Teleport", "name_zh": "传送", "cooldown": 360.0},
+    {"sid": 12, "name_en": "Teleport", "name_zh": "传送", "cooldown": 300.0},
     {"sid": 14, "name_en": "Ignite", "name_zh": "点燃", "cooldown": 180.0},
     {"sid": 21, "name_en": "Barrier", "name_zh": "屏障", "cooldown": 180.0},
     {"sid": 1, "name_en": "Cleanse", "name_zh": "净化", "cooldown": 210.0},

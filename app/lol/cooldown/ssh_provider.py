@@ -4,28 +4,32 @@
 Summoner Spell Haste。**不使用 Ability Haste 代替 SSH**。
 条件型 / 不可观测来源一律不计入（安全回退到 0）。
 
-数据版本：League 26.18（数值需随版本复核；见 KNOWN 常量注释）。
+数据版本：League 26.18（经 Flash 实测锚点验证）。
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-# 已知提供 Summoner Spell Haste 的来源（26.18，待真人环境复核）。
-# 符文：星界洞悉 Cosmic Insight（通常 +18）
+# 已知提供 Summoner Spell Haste 的来源（26.18，经 Flash 实测锚点验证）。
+# 符文：星界洞悉 Cosmic Insight（+18 SSH）
 _RUNE_SSH = {
     "cosmic insight": 18.0,
     "星界洞悉": 18.0,
 }
-# 装备：明朗之靴 Ionian Boots of Lucidity（itemID 3158，通常 +12）
+
+# 装备：明朗之靴 Ionian Boots of Lucidity（itemID 3158，+10 SSH）
+# 实测锚点验证：Flash base=300 → 有鞋时 300*100/(100+10) ≈ 272.73s ✅
 _ITEM_ID_SSH = {
-    3158: 12.0,
+    3158: 10.0,  # 明朗之靴
+    3164: 10.0,  # 猩红明朗之靴
 }
 
 # 装备名称 → SSH（用于 2999 不返回 itemID 时的 fallback）
 _ITEM_NAME_SSH = {
-    "明朗之靴": 12.0,
-    "iorian boots of lucidity": 12.0,
-    "猩红明朗": 12.0,  # 猩红明朗之靴，也是 SSH 装备
+    "明朗之靴": 10.0,
+    "iorian boots of lucidity": 10.0,
+    "猩红明朗": 10.0,
+    "明朗": 10.0,
 }
 
 # 启迪系 rune tree ID

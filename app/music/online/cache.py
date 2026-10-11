@@ -33,3 +33,10 @@ class OnlineCache:
     def clear(self) -> None:
         with self._lock:
             self._data.clear()
+
+    def delete(self, source: str) -> None:
+        """删除指定音源的全部缓存条目（音源注销/替换时调用）。"""
+        with self._lock:
+            stale = [k for k in self._data if k[0] == source]
+            for k in stale:
+                del self._data[k]

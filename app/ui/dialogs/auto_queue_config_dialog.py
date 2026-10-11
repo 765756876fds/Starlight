@@ -9,6 +9,7 @@ class AutoQueueConfigDialog(QDialog):
     MODES = [
         ("人机", "bot"),
         ("匹配", "normal"),
+        ("极地大乱斗", "aram"),
         ("灵活排位", "flex"),
         ("单双排位", "solo_duo"),
     ]

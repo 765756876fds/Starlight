@@ -1,4 +1,4 @@
-﻿"""主界面 Tab 容器：4 个 Tab + 底部状态栏。"""
+"""主界面 Tab 容器：4 个 Tab + 底部状态栏。"""
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QLabel
 
 from app.ui.panels.automation_panel import AutomationPanel
@@ -26,7 +26,8 @@ def _build_acct(ongoing_service, services_dict):
 class MainTabs(QWidget):
     def __init__(self, automation_service, cooldown_manager, music,
                  ongoing_service=None, services_dict=None,
-                 snapshot_provider=None, history_repo=None, parent=None):
+                 snapshot_provider=None, history_repo=None,
+                 combo_manager=None, parent=None):
         super().__init__(parent)
         print("[UI] MainTabs 创建中")
         layout = QVBoxLayout(self)
@@ -47,11 +48,11 @@ class MainTabs(QWidget):
             lcu = (services_dict or {}).get("lcu")
             lcu_get = lcu.get if lcu and hasattr(lcu, "get") else None
             lcu_post = lcu.post if lcu and hasattr(lcu, "post") else None
-            return CurrentGamePanel(snapshot_provider, lcu_get=lcu_get, lcu_post=lcu_post)
+            return CurrentGamePanel(snapshot_provider, lcu_get=lcu_get, lcu_post=lcu_post, ongoing_service=ongoing_service)
         _add(_make_current_game, "当前对局")
-        _add(lambda: AutomationPanel(automation_service, lcu=(services_dict or {}).get("lcu")), "自动化")
+        _add(lambda: AutomationPanel(automation_service, lcu=(services_dict or {}).get("lcu"), combo_manager=combo_manager), "自动化")
         _add(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息")
-        _add(lambda: CooldownPanel(cooldown_manager), "计时器")
+        # _add(lambda: CooldownPanel(cooldown_manager), "计时器")  # 隐藏计时器tab
         _add(lambda: MusicPanel(music), "音乐")
         layout.addWidget(tabs)
 

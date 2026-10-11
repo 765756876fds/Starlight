@@ -1,4 +1,4 @@
-"""主窗口。"""
+﻿"""主窗口。"""
 from PySide6.QtWidgets import (
     QCheckBox, QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget,
     QWidget, QVBoxLayout,
@@ -17,8 +17,18 @@ class MainWindow(QMainWindow):
                  music=None, ongoing_service=None, services=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("LoL Music Agent")
-        self.resize(560, 720)
+        self.resize(500, 680)
         self._services = services or {}
+
+        # 自动恢复上次窗口大小和位置
+        from PySide6.QtCore import QSettings
+        self._settings = QSettings("LoLMusicAgent", "MainWindow")
+        geom = self._settings.value("geometry")
+        if geom:
+            self.restoreGeometry(geom)
+        size = self._settings.value("size")
+        if size:
+            self.resize(size)
 
         self._stack = QStackedWidget()
         self.setCentralWidget(self._stack)
@@ -55,7 +65,7 @@ class MainWindow(QMainWindow):
             tabs_w = QTabWidget()
             tabs_w.addTab(AutomationPanel(self._automation_service), "自动化")
             tabs_w.addTab(OngoingPanel(self._ongoing_service, account_history_service=self._build_account_history()), "对局信息")
-            tabs_w.addTab(CooldownPanel(self._cooldown_manager), "计时器")
+            # tabs_w.addTab(CooldownPanel(self._cooldown_manager), "计时器")  # 隐藏计时器tab
             tabs_w.addTab(MusicPanel(self._music), "音乐")
             root.addWidget(tabs_w)
             self._tabs = central
@@ -105,3 +115,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         event.ignore()
         self.hide()
+
+
+
+
+

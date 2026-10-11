@@ -1,0 +1,61 @@
+# 此文件由 UI 保存时会重写，注释会丢失
+version: 1
+defaults:
+  delay_skill_ms: 50
+  delay_item_ms: 80
+  delay_summoner_ms: 50
+champions:
+  盲僧:
+    champion_id: 64
+    aliases:
+    - lee sin
+    - leesin
+    - 李青
+    - 盲僧
+    - 瞎子
+    combos:
+    - trigger: '3'
+      note: 摸眼位移
+      sequence:
+      - key: '3'
+        delay_after_ms: 50
+      - key: w
+        delay_after_ms: 0
+      - key: w
+        delay_after_ms: 50
+    - trigger: '4'
+      note: R闪（眼版）
+      sequence:
+      - key: '4'
+        delay_after_ms: 50
+      - key: w
+        delay_after_ms: 0
+      - key: w
+        delay_after_ms: 50
+    - trigger: a
+      note: 4wd（插眼-摸眼-闪现补距离）
+      sequence:
+      - key: '4'
+        delay_after_ms: 50
+      - key: d
+        delay_after_ms: 50
+      - key: w
+        delay_after_ms: 0
+      - key: w
+        delay_after_ms: 50
+  锤石:
+    champion_id: 412
+    aliases:
+    - thresh
+    - 魂锁典狱长
+    - 锤石
+    combos:
+    - trigger: a
+      note: 超远丢灯笼
+      sequence:
+      - key: d
+        delay_after_ms: 50
+      - key: w
+        delay_after_ms: 50
+      - key: q
+        delay_after_ms: 50

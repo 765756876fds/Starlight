@@ -9,6 +9,72 @@ from typing import Any, Callable, List, Optional
 from .loader import OngoingGameLoader
 from .diagnostic import ChampSelectDiagnostic
 from .models import PlayerSnapshot
+from .session import CurrentGamePlayer, CurrentGameSession
+from .gsm_provider import merge_gsm_players
+
+
+# liveclientdata 玩家对象没有 championId 字段（只有 championName / rawChampionName），
+# 需要用名称反查 cid 才能与 gameflow 身份 cell 的 championId 对齐匹配。
+_CATALOG = None
+_CATALOG_LOCK = threading.Lock()
+
+
+def _resolve_live_champion_id(p) -> int:
+    """从 live 玩家对象解析 championId：优先已有字段，缺失时用名称反查 ChampionCatalog。"""
+    cid = getattr(p, "champion_id", 0) or 0
+    if cid:
+        return int(cid)
+    global _CATALOG
+    if _CATALOG is None:
+        with _CATALOG_LOCK:
+            if _CATALOG is None:
+                try:
+                    from app.lol.data.champion_catalog import ChampionCatalog
+                    _CATALOG = ChampionCatalog()
+                except Exception:
+                    _CATALOG = False
+    if not _CATALOG:
+        return 0
+    raw = (getattr(p, "raw_champion_name", "") or "").strip()
+    zh = (getattr(p, "champion_name", "") or "").strip()
+    en = raw.split("_")[-1] if raw else ""  # "game_character_displayname_MissFortune" → "MissFortune"
+    c = _CATALOG.get_by_name(en) if en else None
+    if c is None and zh:
+        c = _CATALOG.get_by_name(zh)
+    return c.cid if c else 0
+
+
+def _build_direct_getter(lcu):
+    """优先独立 requests.Session 直连 LCU，绕开共享 LCUConnection 断连窗口；退化共享 lcu.get。
+
+    主进程任一请求异常会触发共享连接 _disconnect()，重连窗口内 lcu.get 全部返回 None，
+    导致 loader 的 summoner/ranked 查询偶发失败（队友 ID=#、段位= -、等级错位）。
+    惰性直连：dget 每次实时取 lcu 当前 base_url/_auth_token，
+    避免构造时序早于 lcu discovery（_port/_auth_token 未就绪）导致直连永久失效。
+    """
+    if lcu is not None:
+        try:
+            import requests
+
+            def dget(ep):
+                base = getattr(lcu, "base_url", "") or ""
+                token = getattr(lcu, "_auth_token", "") or ""
+                if not (base and token):
+                    # discovery 未完成：实时退化共享 lcu.get
+                    return lcu.get(ep)
+                try:
+                    sess = requests.Session()
+                    sess.auth = ("riot", token)
+                    sess.verify = False
+                    r = sess.get(f"{base}{ep}", timeout=5)
+                    return r.json() if r.status_code in (200, 201, 204) else None
+                except Exception:
+                    return None
+
+            return dget
+        except Exception:
+            pass
+    return (lcu.get if lcu is not None else (lambda ep: None))
 
 
 class OngoingGameService:
@@ -21,21 +87,38 @@ class OngoingGameService:
         rps: float = 20.0,
         recent_n: int = 20, account_history_service=None,
         poll_interval: float = 1.0,
+        snapshot_provider=None,
+        gsm_provider=None,
     ):
         self._lcu = lcu
+        self._gsm = gsm_provider  # 可选 GSM 补充身份源（None=不启用，纯 Gameflow 行为）
+        self._snapshot_provider = snapshot_provider
         self._on_event = on_event or (lambda c, d: None)
-        getter = (lcu.get if lcu is not None else (lambda ep: None))
+        # loader 的 summoner/ranked/history 查询全部走独立直连 getter，
+        # 绕开共享 LCUConnection 的游戏内断连窗口（否则队友 ID/段位/等级查询偶发失败）
+        getter = _build_direct_getter(lcu)
         self._loader = OngoingGameLoader(
             lcu_get=getter,
             on_event=self._on_event,
             max_workers=max_workers,
             rps=rps,
-            recent_matches_count=recent_n, account_history_service=account_history_service,
+            recent_matches_count=recent_n, fetch_count=50, account_history_service=account_history_service,
         )
         self._snapshots: List[PlayerSnapshot] = []
+        # 当前对局 session（game_id 为生命周期锚点；players 由 gameflow teamOne/teamTwo 构建）
+        self._session: Optional[CurrentGameSession] = None
         self._current_session_key: Optional[str] = None
+        self._last_loaded_key: Optional[str] = None
         self._loading_in_progress = False
         self._poll_interval = poll_interval
+        # 历史战绩缺失自动重试状态
+        self._retry_count = 0
+        self._last_retry_ts = 0.0
+        # force 重载：retry 触发时置 True，下一次加载绕过 ERROR cache 真正重新请求
+        self._force_reload = False
+        # ChampSelect 完整 session 缓存：人机/匹配选人阶段 10 人含 puuid，
+        # InProgress 阶段 liveclientdata 无 puuid，必须复用该缓存才能查到队友历史战绩
+        self._champ_select_session: Optional[dict] = None
 
         self._diag = ChampSelectDiagnostic(lcu.request_raw, on_event=self._on_event) if lcu is not None else None
         self._stop_event = threading.Event()
@@ -70,29 +153,296 @@ class OngoingGameService:
         if self._lcu is None:
             return
         phase = self._lcu.get("/lol-gameflow/v1/gameflow-phase")
-        if phase != "ChampSelect":
+        # 选人/加载/对局中加载玩家数据；其他阶段清空
+        # GameStart/Reconnect 也纳入：gameflow teamOne/teamTwo 在加载界面即就绪（实测明文 puuid），
+        # 进入对局即可显示全部玩家，无需等待 liveclientdata
+        if phase not in ("ChampSelect", "GameStart", "InProgress", "Reconnect"):
             with self._lock:
-                if self._current_session_key is not None or self._snapshots:
+                if (self._current_session_key is not None or self._snapshots
+                        or self._session is not None):
                     self._current_session_key = None
                     self._snapshots = []
+                    self._session = None
                     self._loading_in_progress = False
+                    # 跨局隔离：离开对局阶段即重置 last_loaded_key。
+                    # 腾讯服实测 gameId 在相邻对局间会复用（两局同为 9009578125），
+                    # 若保留旧 last_loaded_key，新局 key==旧 key 会误判"同一局"而跳过
+                    # 强制重载，导致跨局复用上一局 PlayerSnapshot（history.cache_hit）。
+                    self._last_loaded_key = None
             return
 
-        # phase == ChampSelect
-        session = self._lcu.get("/lol-champ-select/v1/session")
+        # 选人阶段缓存 champ-select session（仅作 gameflow 偶发为空的合理回退，非玩家集合来源）
+        if phase == "ChampSelect":
+            session = self._lcu.get("/lol-champ-select/v1/session")
+            if isinstance(session, dict):
+                # 缓存完整选人 session：10 人含 puuid，供 InProgress 阶段 gameflow 空时补自己
+                self._champ_select_session = session
+
+        me_puuid = None
+        try:
+            me = self._lcu.get("/lol-summoner/v1/current-summoner")
+            me_puuid = me.get("puuid") if isinstance(me, dict) else None
+        except Exception:
+            me_puuid = None
+
+        # 身份主源 = gameflow session.gameData.teamOne/teamTwo
+        # （LCU 官方明文 puuid + summonerId + championId；
+        #   实测：匹配局 10/10 明文 puuid，人机局己方 5/5，bot 不在 session）
+        # ChampSelect 阶段 gameflow 未就绪时不构建玩家集合（players 主源=gameflow，
+        # 禁止以 2999/champ-select 充当玩家集合来源），等 GameStart 后 gameflow 就绪再构建。
+        session = self._build_gameflow_session(me_puuid)
+        if session is not None:
+            # GSM 补充身份源（仅 GameStart/InProgress/Reconnect 启用；ChampSelect 不请求）：
+            # Gameflow 仍是主源，GSM 只按 puuid 追加 Gameflow 完全没有的玩家（不覆盖）。
+            session = self._supplement_gsm(session, phase, me_puuid)
+            # liveclientdata 无 puuid：身份归属由 gameflow 决定，
+            # 实时 KDA/位置/等级按 (team, championId) 可关联字段合并进对应 cell
+            self._merge_live_fields(session)
+        elif phase != "ChampSelect":
+            # 回退：同局 ChampSelect 缓存（队友 HIDDEN 混淆时无 puuid，仅能补自己）
+            cs = self._champ_select_session
+            if cs and me_puuid:
+                cs_puuids = set(
+                    (cell.get("puuid") or "")
+                    for cell in (cs.get("myTeam") or []) + (cs.get("theirTeam") or [])
+                )
+                if me_puuid in cs_puuids and len(cs_puuids) >= 5:
+                    session = cs  # 同一局的选人缓存
+                    self._on_event("ongoing.session_source", {"source": "champ_select_cache", "players": len(cs_puuids)})
         if not isinstance(session, dict):
             return
         key = self._session_key(session)
         with self._lock:
             if key == self._current_session_key:
+                # 同一局：更新 phase/updated_at；身份升级——gameflow 比现有 session 更完整时
+                # 重建 players，并保留已加载 history / realtime（覆盖"gameflow 偶发为空回退 cs 后恢复"场景）
+                if self._session is not None:
+                    self._session.phase = phase
+                    self._session.updated_at = time.time()
+                    rebuilt = self._to_current_session(session, phase, me_puuid)
+                    if len(rebuilt.players) > len(self._session.players) or (
+                            rebuilt.game_id and not self._session.game_id):
+                        old_by_puuid = {p.puuid: p for p in self._session.players if p.puuid}
+                        for np_ in rebuilt.players:
+                            op = old_by_puuid.get(np_.puuid)
+                            if op is not None:
+                                np_.history = op.history
+                                if not np_.realtime_available:
+                                    np_.live_kills = op.live_kills
+                                    np_.live_deaths = op.live_deaths
+                                    np_.live_assists = op.live_assists
+                                    np_.live_position = op.live_position
+                                    np_.live_level = op.live_level
+                                    np_.realtime_available = op.realtime_available
+                        self._session = rebuilt
+                # 同一局：若历史战绩缺失，周期性自动重试（最多10次，间隔60秒，覆盖进游戏初期SGP暂不可用）
+                if phase == "InProgress" and not self._loading_in_progress:
+                    now = time.monotonic()
+                    if (self._retry_count < 10 and now - self._last_retry_ts > 60.0
+                            and self._loader.missing_history_count() > 0):
+                        self._last_retry_ts = now
+                        self._retry_count += 1
+                        self._force_reload = True  # retry：绕过 ERROR cache，真正重新请求 SGP
+                        self._current_session_key = None  # 触发重新加载
+                        return
                 return  # 同一局，已加载/加载中
             if self._loading_in_progress:
                 return
             self._current_session_key = key
             self._loading_in_progress = True
             self._snapshots = []
+            # 新 session：game_id 为生命周期锚点；旧 session（含 players）立即失效
+            self._session = self._to_current_session(session, phase, me_puuid)
+            self._retry_count = 0  # 新对局重置重试计数
+            self._last_retry_ts = 0.0
+            if key != self._last_loaded_key:
+                # 真正的新对局：不信任旧局 history cache（TTL 不承担 session 隔离），
+                # 强制重新请求全部玩家，禁止跨局复用上一局 PlayerSnapshot
+                self._force_reload = True
+            self._last_loaded_key = key
+            self._on_event("ongoing.session_created", {
+                "game_id": self._session.game_id,
+                "players": len(self._session.players),
+                "puuid": sum(1 for p in self._session.players if p.puuid),
+                "my_team": len(self._session.my_team),
+                "their_team": len(self._session.their_team),
+            })
         t = threading.Thread(target=self._load_in_thread, args=(session,), daemon=True)
         t.start()
+
+    def _build_gameflow_session(self, me_puuid: Optional[str]):
+        """身份主源：gameflow session.gameData.teamOne/teamTwo → myTeam/theirTeam。
+
+        gameflow 的 teamOne/teamTwo 不携带 team 字段，用当前召唤师 puuid 判定我方；
+        判定失败时默认 teamOne=我方（与原 liveclient ORDER=己方语义一致）。
+        实测：匹配局 teamOne=5 + teamTwo=5 / puuid=10；人机局 teamOne=5（bot 不在 session，
+        不会把 bot 当真人身份加载）。返回 champ-select 兼容格式或 None。
+        """
+        try:
+            gf = self._lcu.get("/lol-gameflow/v1/session")
+        except Exception:
+            return None
+        if not isinstance(gf, dict):
+            return None
+        gd = gf.get("gameData") or {}
+        t1, t2 = gd.get("teamOne") or [], gd.get("teamTwo") or []
+        if not t1 and not t2:
+            return None
+        one_puuids = {(m.get("puuid") or "") for m in t1 if m.get("puuid")}
+        my_is_one = (me_puuid in one_puuids) if me_puuid else True
+        my_src, their_src = (t1, t2) if my_is_one else (t2, t1)
+        my_team = [self._gf_cell(m) for m in my_src if (m.get("puuid") or "")]
+        their_team = [self._gf_cell(m) for m in their_src if (m.get("puuid") or "")]
+        if not my_team and not their_team:
+            return None
+        game_id = gf.get("gameId") or gd.get("gameId") or 0
+        self._on_event("ongoing.session_source",
+                       {"source": "gameflow", "players": len(my_team) + len(their_team)})
+        return {"myTeam": my_team, "theirTeam": their_team, "gameId": game_id}
+
+    def _supplement_gsm(self, session: dict, phase: str,
+                        me_puuid: Optional[str]) -> dict:
+        """GSM 补充身份源：仅 GameStart/InProgress/Reconnect 启用；ChampSelect 不请求。
+
+        Gameflow 永远是主源：GSM 只在同局校验通过后追加 Gameflow 完全没有的 puuid；
+        任何失败（token/resolver/404/5xx/超时/JSON/结构异常/gameId 不一致/self 不在
+        GSM 两队）都原样返回 session，无损降级——GSM 异常不会导致 session 消失/变空。
+        """
+        if self._gsm is None:
+            return session
+        if phase not in ("GameStart", "InProgress", "Reconnect"):
+            return session
+        if not me_puuid:
+            return session
+        try:
+            status, gsm_game = self._gsm.get_current_game(me_puuid)
+        except Exception:
+            status, gsm_game = "request_failed", None
+        if status != "ok" or not isinstance(gsm_game, dict):
+            self._on_event("ongoing.gsm_supplement",
+                           {"added": 0, "game_id_matched": False, "result": status})
+            return session
+        try:
+            merged, added, matched = merge_gsm_players(session, gsm_game, me_puuid)
+        except Exception:
+            self._on_event("ongoing.gsm_supplement",
+                           {"added": 0, "game_id_matched": False, "result": "merge_error"})
+            return session
+        if not matched:
+            self._on_event("ongoing.gsm_supplement",
+                           {"added": 0, "game_id_matched": False, "result": "game_id_mismatch"})
+            return session
+        self._on_event("ongoing.gsm_supplement",
+                       {"added": added, "game_id_matched": True, "result": "merged"})
+        return merged
+
+    @staticmethod
+    def _gf_cell(m: dict) -> dict:
+        """gameflow 成员 → champ-select 兼容 cell（含实时字段占位，供 _merge_live_fields 合并）。"""
+        return {
+            "puuid": m.get("puuid") or "",
+            "summonerId": m.get("summonerId") or 0,
+            "cellId": m.get("cellId") or 0,
+            "riotIdGameName": m.get("riotIdGameName") or "",
+            "riotId": m.get("riotId") or "",
+            "championId": m.get("championId") or 0,
+            "assignedPosition": m.get("assignedPosition") or "",
+        }
+
+    def _merge_live_fields(self, session: dict) -> None:
+        """liveclientdata 无 puuid：按 (我方/敌方, championId) 关联合并实时 KDA/位置到 gameflow 身份 cell。
+
+        身份归属由 gameflow 决定；liveclientdata 只补充实时字段。
+        优先用 snapshot 的 ally_team/enemy_team 分组（内部已按"我所在队"判定，与 gameflow 的
+        myTeam/theirTeam 判定天然对齐，不依赖 ORDER/CHAOS 固定映射）；
+        匹配不到的玩家（如人机 bot）直接跳过，不会被当成真人身份。不改变 session 成员集合。
+        """
+        try:
+            snap = self._snapshot_provider() if self._snapshot_provider else None
+        except Exception:
+            snap = None
+        if snap is None:
+            return
+        live_by_key = {}
+        for p in (getattr(snap, "ally_team", None) or []):
+            cid = _resolve_live_champion_id(p)
+            if cid:
+                live_by_key[("myTeam", cid)] = p
+        for p in (getattr(snap, "enemy_team", None) or []):
+            cid = _resolve_live_champion_id(p)
+            if cid:
+                live_by_key[("theirTeam", cid)] = p
+        # 兜底：snapshot 无 ally/enemy 分组时，用 players + ORDER/CHAOS 映射
+        if not live_by_key:
+            players = getattr(snap, "players", None) or []
+            team_map = {"ORDER": "myTeam", "CHAOS": "theirTeam"}
+            for p in players:
+                team = team_map.get((getattr(p, "team", "") or "").upper())
+                cid = _resolve_live_champion_id(p)
+                if team and cid:
+                    live_by_key[(team, cid)] = p
+        merged = 0
+        for team_key in ("myTeam", "theirTeam"):
+            for cell in (session.get(team_key) or []):
+                p = live_by_key.get((team_key, cell.get("championId") or 0))
+                if p is None:
+                    continue
+                cell["live_kills"] = getattr(p, "kills", 0) or 0
+                cell["live_deaths"] = getattr(p, "deaths", 0) or 0
+                cell["live_assists"] = getattr(p, "assists", 0) or 0
+                cell["live_position"] = getattr(p, "position", "") or ""
+                cell["live_level"] = getattr(p, "level", 0) or 0
+                cell["live_merged"] = True
+                merged += 1
+        if merged:
+            self._on_event("ongoing.live_merged", {"players": merged})
+
+    def _build_session_from_snapshot(self):
+        """[已移除] 从 live client snapshot 构建 session。
+
+        阶段1 起 2999 不再决定"当前有哪些玩家"：玩家集合唯一主源 = Gameflow。
+        此函数（2999 → 玩家集合）违反该约束，已从 _tick 调用链中删除。
+        """
+        raise NotImplementedError("2999 不再作为玩家集合来源（阶段1 已移除）")
+
+    @staticmethod
+    def _to_player(cell: dict, team: str, me_puuid: Optional[str]) -> CurrentGamePlayer:
+        """gameflow/champ-select cell → CurrentGamePlayer（identity + realtime 两区）。
+
+        identity 唯一来源：gameflow teamOne/teamTwo（或同局 champ-select 缓存回退）；
+        realtime 唯一来源：_merge_live_fields 合并后的 2999 字段（cell.live_*）。
+        history 区由 _load_in_thread 加载完成后挂载。
+        """
+        puuid = cell.get("puuid") or ""
+        return CurrentGamePlayer(
+            puuid=puuid,
+            summoner_id=cell.get("summonerId") or 0,
+            display_name=(cell.get("riotIdGameName") or cell.get("riotId")
+                          or cell.get("name") or cell.get("summonerName") or ""),
+            cell_id=cell.get("cellId") or 0,
+            team=team,
+            assigned_position=(cell.get("assignedPosition") or "") or None,
+            champion_id=cell.get("championId") or 0,
+            is_self=(puuid == me_puuid),
+            live_kills=cell.get("live_kills") or 0,
+            live_deaths=cell.get("live_deaths") or 0,
+            live_assists=cell.get("live_assists") or 0,
+            live_position=(cell.get("live_position") or "") or None,
+            live_level=cell.get("live_level") or 0,
+            realtime_available=bool(cell.get("live_merged")),
+        )
+
+    def _to_current_session(self, session: dict, phase: str,
+                            me_puuid: Optional[str]) -> CurrentGameSession:
+        now = time.time()
+        return CurrentGameSession(
+            game_id=session.get("gameId") or 0,
+            phase=phase,
+            my_team=[self._to_player(c, "myTeam", me_puuid) for c in (session.get("myTeam") or [])],
+            their_team=[self._to_player(c, "theirTeam", me_puuid) for c in (session.get("theirTeam") or [])],
+            started_at=now,
+            updated_at=now,
+        )
 
     @staticmethod
     def _session_key(session: dict) -> str:
@@ -110,16 +460,46 @@ class OngoingGameService:
 
     def _load_in_thread(self, session: dict) -> None:
         try:
-            snaps = self._loader.load_for_champ_select(session)
+            snaps = self._loader.load_for_champ_select(session, force=self._force_reload)
             with self._lock:
                 self._snapshots = snaps
+                # 把 loader 产出的历史快照挂到当前 session 对应玩家的 history 区
+                # （CurrentGamePlayer.history = loader -> acct -> SGP/LCU 单链产物）
+                if self._session is not None:
+                    snap_by_puuid = {s.puuid: s for s in snaps}
+                    for p in self._session.players:
+                        s = snap_by_puuid.get(p.puuid)
+                        if s is not None:
+                            p.history = s
+                            # 玩家名回填：腾讯服 gameflow cell 不含/缺 riotIdGameName 时，
+                            # 用 loader→SGP 链路查到的真名（PlayerSnapshot.display_name）补 identity，
+                            # UI 保持纯渲染（display_name 始终在 identity 区，history 只作后备来源）
+                            if not p.display_name and getattr(s, "display_name", ""):
+                                p.display_name = s.display_name
+                    self._session.updated_at = time.time()
+                    states = {}
+                    for s in snaps:
+                        st = getattr(s, "data_state", "ERROR")
+                        states[st] = states.get(st, 0) + 1
+                    self._on_event("ongoing.history_summary", {
+                        "loaded": len(snaps),
+                        "available": states.get("AVAILABLE", 0),
+                        "no_data": states.get("NO_DATA", 0),
+                        "error": states.get("ERROR", 0),
+                    })
         except Exception as e:
             self._on_event("ongoing.error", {"err": str(e)})
         finally:
             with self._lock:
                 self._loading_in_progress = False
+                self._force_reload = False
 
     # ----- UI -----
+    def get_session(self) -> Optional[CurrentGameSession]:
+        """当前对局 session（UI 玩家集合唯一来源；2999 不参与玩家存在性）。"""
+        with self._lock:
+            return self._session
+
     def get_snapshots(self) -> List[PlayerSnapshot]:
         with self._lock:
             return list(self._snapshots)

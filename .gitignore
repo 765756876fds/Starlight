@@ -114,3 +114,31 @@ data/tts_test/
 
 # Game asset caches (champion portraits, summoner spell icons, downloaded from Data Dragon)
 data/assets/
+# 根目录一次性脚本（保留 tests/ 目录内的测试）
+/temp_*.py
+/probe_*.py
+/test_*.py
+/diagnose*.py
+/add_*.py
+/remove_*.py
+/revert_*.py
+/mark_source.py
+/filter_hexflash.py
+/find_dups.py
+/do_delete.py
+/use_lx_play.py
+/list_mics.py
+/download_icons*.py
+/disable_auto_asr.py
+/bg_asr.py
+# 根目录日志/输出
+/*.txt
+/*.log
+/*.png
+/run_*.log
+/asr_server_*.txt
+/main_*.txt
+# 0 字节残留
+/cd
+/python
+/_portaudio.pyd

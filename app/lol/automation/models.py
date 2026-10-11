@@ -65,6 +65,9 @@ class AutomationConfig:
     auto_queue_mode: str = "bot"
     auto_queue_primary_role: Optional[str] = None
     auto_queue_secondary_role: Optional[str] = None
+    # 顶层默认优先级（UI配置直接写这里，优先于presets）
+    pick_priority: List[int] = field(default_factory=list)
+    ban_priority: List[int] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "AutomationConfig":
@@ -92,10 +95,15 @@ class AutomationConfig:
             auto_queue_mode=str(data.get("auto_queue_mode", "bot")),
             auto_queue_primary_role=data.get("auto_queue_primary_role"),
             auto_queue_secondary_role=data.get("auto_queue_secondary_role"),
+            pick_priority=list(data.get("pick_priority") or []),
+            ban_priority=list(data.get("ban_priority") or []),
         )
 
     def pick_priority_for(self, role: Optional[str]) -> List[int]:
-        # 取最近的 preset：优先 primary_role，再 secondary_role，最后任意一个非空
+        # 优先读顶层默认pick_priority（UI配置直接写这里）
+        if self.pick_priority:
+            return list(self.pick_priority)
+        # 其次按位置从presets取
         candidates = [role] if role else []
         candidates += [p.primary_role for p in self.presets.values() if p.primary_role]
         seen = set()
@@ -112,6 +120,10 @@ class AutomationConfig:
         return []
 
     def ban_priority_for(self, role: Optional[str]) -> List[int]:
+        # 优先读顶层默认ban_priority
+        if self.ban_priority:
+            return list(self.ban_priority)
+        # 其次按位置从presets取
         candidates = [role] if role else []
         candidates += [p.primary_role for p in self.presets.values() if p.primary_role]
         seen = set()

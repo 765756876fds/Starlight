@@ -1,4 +1,4 @@
-"""Overlay 资源管理器：下载和缓存英雄头像、召唤师技能图标。
+﻿"""Overlay 资源管理器：下载和缓存英雄头像、召唤师技能图标。
 
 资源来源：
 - 英雄头像：Data Dragon Champion Portrait
@@ -16,7 +16,7 @@ from typing import Optional
 from PySide6.QtGui import QPixmap, QIcon
 
 # Data Dragon 版本
-_DDRAGON_VERSION = "14.1.1"
+_DDRAGON_VERSION = "16.18.1"
 _DDRAGON_BASE = f"https://ddragon.leagueoflegends.com/cdn/{_DDRAGON_VERSION}/img"
 
 # 缓存目录
@@ -179,3 +179,4 @@ def get_summoner_spell_icon_by_zh(name_zh: str) -> Optional[QPixmap]:
     if not name_en:
         return None
     return get_summoner_spell_icon(name_en)
+

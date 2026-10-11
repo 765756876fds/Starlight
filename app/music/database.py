@@ -8,6 +8,7 @@
 """
 import os
 import sqlite3
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,6 +20,9 @@ class MusicDatabase:
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._conn: Optional[sqlite3.Connection] = None
+        # 连接级互斥：scanner 后台 highlight 线程与 playback/UI 线程共享同一连接
+        # （check_same_thread=False + WAL 只保证读写不互斥，写写并发仍需应用层锁）
+        self._lock = threading.Lock()
         self._connect()
         self._init_tables()
 
@@ -118,62 +122,64 @@ class MusicDatabase:
 
     def insert_song(self, song_data: Dict[str, Any]) -> int:
         """插入一首歌曲，返回 ID"""
-        cursor = self._conn.cursor()
-        now = time.time()
+        with self._lock:
+            cursor = self._conn.cursor()
+            now = time.time()
 
-        # 如果已存在则更新
-        existing = self.get_song_by_path(song_data["path"])
-        if existing:
-            self.update_song(existing["id"], song_data)
-            return existing["id"]
+            # 如果已存在则更新
+            existing = self.get_song_by_path(song_data["path"])
+            if existing:
+                self.update_song(existing["id"], song_data)
+                return existing["id"]
 
-        cursor.execute("""
-            INSERT INTO music (
-                path, filename, title, artist, album, album_artist,
-                track_number, year, genre, duration, bitrate, sample_rate,
-                channels, filesize, format, tags, last_modified, added_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            song_data.get("path"),
-            song_data.get("filename"),
-            song_data.get("title"),
-            song_data.get("artist"),
-            song_data.get("album"),
-            song_data.get("album_artist"),
-            song_data.get("track_number"),
-            song_data.get("year"),
-            song_data.get("genre"),
-            song_data.get("duration"),
-            song_data.get("bitrate"),
-            song_data.get("sample_rate"),
-            song_data.get("channels"),
-            song_data.get("filesize"),
-            song_data.get("format"),
-            song_data.get("tags"),
-            song_data.get("last_modified"),
-            now,
-        ))
-        self._conn.commit()
-        return cursor.lastrowid
+            cursor.execute("""
+                INSERT INTO music (
+                    path, filename, title, artist, album, album_artist,
+                    track_number, year, genre, duration, bitrate, sample_rate,
+                    channels, filesize, format, tags, last_modified, added_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                song_data.get("path"),
+                song_data.get("filename"),
+                song_data.get("title"),
+                song_data.get("artist"),
+                song_data.get("album"),
+                song_data.get("album_artist"),
+                song_data.get("track_number"),
+                song_data.get("year"),
+                song_data.get("genre"),
+                song_data.get("duration"),
+                song_data.get("bitrate"),
+                song_data.get("sample_rate"),
+                song_data.get("channels"),
+                song_data.get("filesize"),
+                song_data.get("format"),
+                song_data.get("tags"),
+                song_data.get("last_modified"),
+                now,
+            ))
+            self._conn.commit()
+            return cursor.lastrowid
 
     def update_song(self, song_id: int, song_data: Dict[str, Any]):
         """更新歌曲信息"""
-        fields = []
-        values = []
-        for key in ["title", "artist", "album", "album_artist", "track_number",
-                     "year", "genre", "duration", "bitrate", "sample_rate",
-                     "channels", "filesize", "format", "tags", "last_modified"]:
-            if key in song_data:
-                fields.append(f"{key} = ?")
-                values.append(song_data[key])
+        with self._lock:
+            fields = []
+            values = []
+            for key in ["title", "artist", "album", "album_artist", "track_number",
+                        "year", "genre", "duration", "bitrate", "sample_rate",
+                        "channels", "filesize", "format", "tags", "last_modified"]:
+                if key in song_data:
+                    fields.append(f"{key} = ?")
+                    values.append(song_data[key])
 
-        if fields:
-            values.append(song_id)
-            self._conn.execute(
-                f"UPDATE music SET {', '.join(fields)} WHERE id = ?",
-                values
-            )
-            self._conn.commit()
+            if fields:
+                values.append(song_id)
+                self._conn.execute(
+                    f"UPDATE music SET {', '.join(fields)} WHERE id = ?",
+                    values
+                )
+                self._conn.commit()
 
     def get_song_by_path(self, path: str) -> Optional[Dict[str, Any]]:
         """按路径获取歌曲"""
@@ -298,16 +304,35 @@ class MusicDatabase:
 
     def increment_play_count(self, song_id: int):
         """增加播放计数"""
-        self._conn.execute("""
-            UPDATE music SET play_count = play_count + 1, last_played = ?
-            WHERE id = ?
-        """, (time.time(), song_id))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("""
+                UPDATE music SET play_count = play_count + 1, last_played = ?
+                WHERE id = ?
+            """, (time.time(), song_id))
+            self._conn.commit()
 
     def delete_song(self, song_id: int):
         """删除歌曲"""
-        self._conn.execute("DELETE FROM music WHERE id = ?", (song_id,))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("DELETE FROM music WHERE id = ?", (song_id,))
+            self._conn.commit()
+
+    def delete_missing_songs(self) -> Dict[str, int]:
+        """删除文件已不存在的歌曲记录（连同其 highlight），返回删除数量。
+        扫描器只增不删，文件被移动/删除后旧记录会一直残留并导致播放跳过。"""
+        with self._lock:
+            cursor = self._conn.execute("SELECT id, path FROM music")
+            rows = cursor.fetchall()
+            missing_ids = [r["id"] for r in rows
+                           if not r["path"] or not os.path.exists(r["path"])]
+            if missing_ids:
+                self._conn.executemany(
+                    "DELETE FROM music_highlight WHERE song_id = ?",
+                    [(i,) for i in missing_ids])
+                self._conn.executemany(
+                    "DELETE FROM music WHERE id = ?", [(i,) for i in missing_ids])
+                self._conn.commit()
+            return {"deleted": len(missing_ids)}
 
     def get_song_count(self) -> int:
         """获取歌曲总数"""
@@ -316,27 +341,37 @@ class MusicDatabase:
 
     def get_highlight(self, song_id: int) -> Optional[Dict[str, Any]]:
         """获取歌曲高潮位置"""
-        cursor = self._conn.execute(
-            "SELECT * FROM music_highlight WHERE song_id = ? ORDER BY confidence DESC LIMIT 1",
-            (song_id,)
-        )
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT * FROM music_highlight WHERE song_id = ? ORDER BY confidence DESC LIMIT 1",
+                (song_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def save_highlight(self, song_id: int, start_time: float,
                         end_time: Optional[float] = None,
                         confidence: float = 1.0, source: str = "manual"):
         """保存歌曲高潮位置"""
-        self._conn.execute("""
-            INSERT INTO music_highlight (song_id, start_time, end_time, confidence, source, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (song_id, float(start_time),
-              float(end_time) if end_time is not None else None,
-              float(confidence), source, time.time()))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("""
+                INSERT INTO music_highlight (song_id, start_time, end_time, confidence, source, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (song_id, float(start_time),
+                  float(end_time) if end_time is not None else None,
+                  float(confidence), source, time.time()))
+            self._conn.commit()
+
+    def delete_highlights(self, song_id: int):
+        """删除某首歌的全部高潮记录（重扫/换源前清理，避免新旧版本混存）"""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM music_highlight WHERE song_id = ?", (song_id,))
+            self._conn.commit()
 
     def close(self):
         """关闭数据库连接"""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None

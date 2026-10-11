@@ -10,10 +10,11 @@ from ..dialogs.ban_pick_config_dialog import BanPickConfigDialog
 
 
 class AutomationPanel(QWidget):
-    def __init__(self, service=None, lcu=None, parent=None):
+    def __init__(self, service=None, lcu=None, combo_manager=None, parent=None):
         super().__init__(parent)
         self._svc = service
         self._lcu = lcu
+        self._combo_manager = combo_manager
         layout = QVBoxLayout(self)
 
         box = QGroupBox("LoL 自动化")
@@ -49,6 +50,12 @@ class AutomationPanel(QWidget):
         form.addLayout(_row(self.btn_pick, self._open_pick_config))
 
         layout.addWidget(box)
+
+        # 一键连招子面板（一期只读展示；combo_manager 由 main 注入）
+        if self._combo_manager is not None:
+            from .combo_panel import ComboPanel
+            layout.addWidget(ComboPanel(self._combo_manager))
+
         layout.addStretch()
 
         # 绑定回调
@@ -112,8 +119,17 @@ class AutomationPanel(QWidget):
         if dlg.exec():
             try:
                 setattr(cfg, field, dlg.values())
-            except Exception:
-                pass
+                # 同时保存到yaml配置
+                import yaml
+                path = "config/settings.yaml"
+                with open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                data.setdefault("automation", {})[field] = dlg.values()
+                with open(path, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+                print(f"[UI] {field} saved: {dlg.values()}")
+            except Exception as e:
+                print(f"[UI] save {field} failed: {e}")
 
     def refresh(self):
         try:

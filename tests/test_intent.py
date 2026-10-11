@@ -14,6 +14,26 @@ class TestRuleBasedIntent:
         assert intent is not None
         assert intent.intent_type == "music.next"
 
+    def test_punctuation_ignored_everywhere(self):
+        """ASR 自带标点：指令中任意位置的标点都不影响识别。"""
+        cases = [
+            ("高潮模式，开。", "music.highlight_mode", True),
+            ("高潮模式开，", "music.highlight_mode", True),
+            ("随机播放。", "music.set_play_mode", "shuffle"),
+            ("下一首！", "music.next", None),
+            ("暂停，一下。", "music.pause", None),
+            ("顺序模式？", "music.set_play_mode", "sequential"),
+        ]
+        for text, expected_type, expected_param in cases:
+            intent = RuleBasedIntent.match(text)
+            assert intent is not None, f"{text!r} 应被识别"
+            assert intent.intent_type == expected_type, f"{text!r} -> {intent.intent_type}"
+            if expected_param is not None:
+                if isinstance(expected_param, bool):
+                    assert intent.params.get("enabled") is expected_param, text
+                else:
+                    assert intent.params.get("mode") == expected_param, text
+
     def test_next_song_alternate(self):
         intent = RuleBasedIntent.match("换一首")
         assert intent is not None
@@ -85,31 +105,37 @@ class TestRuleBasedIntent:
 
 class TestAlarmSafetyBoundary:
     """
-    Alarm 写操作安全边界（从旧 test_fallback_safety_gate.py 迁移）。
+    Alarm/Cooldown 写操作安全边界（从旧 test_fallback_safety_gate.py 迁移 + 演进）。
 
     纯规则系统下，Rule 本身就是安全边界：
     - 裸陈述（无明确动作动词）→ 不产生 alarm 副作用
     - 明确动作（"记一下"/"用了"/"插了"/"提醒我"）→ 才产生写操作
+    - 交闪报告（"对面XX闪现了"）已演进为 cooldown.start（敌方召唤师技能 CD 计时），
+      由 COOLDOWN_RULES 优先拦截；alarm.flash 保留但只在回忆/非交闪场景可达。
     不再有 LLM fallback 来"补全"意图。
     """
 
-    def test_bare_flash_statement_is_unknown(self):
-        """裸陈述"对面莎弥拉闪现了" → 不创建 alarm.flash"""
+    def test_bare_flash_report_starts_cooldown(self):
+        """裸交闪报告"对面莎弥拉闪现了" → cooldown.start（敌方交闪 CD 计时，非 alarm）"""
         intent = RuleBasedIntent.match("对面莎弥拉闪现了")
-        assert intent is None or intent.intent_type == "system.unknown"
+        assert intent is not None
+        assert intent.intent_type == "cooldown.start"
+        assert intent.params.get("champion") == "莎弥拉"
+        assert intent.params.get("skill") == "闪现"
+        assert intent.params.get("side") == "enemy"
 
-    def test_bare_flash_statement_via_router(self):
-        """通过 IntentRouter 走完整 parse 链路：裸陈述 → system.unknown"""
+    def test_bare_flash_report_via_router(self):
+        """通过 IntentRouter 走完整 parse 链路：交闪报告 → cooldown.start"""
         router = IntentRouter({})
         result = router.parse("对面莎弥拉闪现了")
-        assert result.intent_type == "system.unknown"
-        assert result.confidence == 0.0
+        assert result.intent_type == "cooldown.start"
+        assert result.params.get("side") == "enemy"
 
-    def test_explicit_record_flash_creates_alarm(self):
-        """明确"帮我记一下" → alarm.flash"""
+    def test_explicit_record_flash_starts_cooldown(self):
+        """明确"帮我记一下对面莎弥拉闪现了" → cooldown.start（记录交闪=启动计时）"""
         intent = RuleBasedIntent.match("帮我记一下对面莎弥拉闪现了")
         assert intent is not None
-        assert intent.intent_type == "alarm.flash"
+        assert intent.intent_type == "cooldown.start"
         assert "莎弥拉" in intent.params.get("champion", "")
 
     def test_bare_spell_statement_no_alarm(self):

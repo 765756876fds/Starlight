@@ -1,6 +1,6 @@
 """状态栏：实时读服务状态。"""
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QLabel, QStatusBar
+from PySide6.QtWidgets import QLabel, QPushButton, QStatusBar
 
 
 def _dot(ok: bool) -> str:
@@ -14,10 +14,15 @@ class StatusBar(QStatusBar):
         self._svc = services or {}
         self.lbl_lcu = QLabel()
         self.lbl_asr = QLabel()
+        self.btn_mic = QPushButton("🎤 关")
+        self.btn_mic.setCheckable(True)
+        self.btn_mic.setStyleSheet("padding: 2px 8px;")
+        self.btn_mic.clicked.connect(self._toggle_mic)
         for lbl in (self.lbl_lcu, self.lbl_asr):
             lbl.setTextFormat(Qt.RichText)
             lbl.setStyleSheet("padding: 0 8px;")
             self.addWidget(lbl)
+        self.addWidget(self.btn_mic)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
@@ -41,3 +46,12 @@ class StatusBar(QStatusBar):
                 names = [getattr(e, "name", type(e).__name__) for e in engines]
                 asr_label = "/".join(names) if names else "READY"
         self.lbl_asr.setText(f"{_dot(asr_ok)} ASR {asr_label}")
+
+    def _toggle_mic(self):
+        try:
+            voice = self._svc.get("voice")
+            if voice:
+                on = voice.toggle_mic()
+                self.btn_mic.setText("🎤 开" if on else "🎤 关")
+        except Exception as e:
+            print(f"麦克风开关错误: {e}")

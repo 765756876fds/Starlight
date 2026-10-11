@@ -44,13 +44,15 @@ def test_intent_current_kda():
     print("OK: intent current_kda")
 
 
-def test_intent_richest():
+def test_intent_richest_removed():
+    """'对面谁最肥' 已随 2999 无敌方金币数据下线（intent.py 注释明确），当前为 unknown"""
     intent = RuleBasedIntent.match("对面谁最肥")
-    assert intent.params["query_type"] == "current_richest"
-    print("OK: intent current_richest")
+    assert intent is None or intent.intent_type == "system.unknown"
+    print("OK: intent richest removed (unknown)")
 
 
-def test_intent_economy():
+def test_intent_economy_removed():
+    """'经济差' 已随 2999 无敌方金币数据下线，当前为 unknown"""
     intent = RuleBasedIntent.match("经济差")
-    assert intent.params["query_type"] == "economy_diff"
-    print("OK: intent economy_diff")
+    assert intent is None or intent.intent_type == "system.unknown"
+    print("OK: intent economy removed (unknown)")

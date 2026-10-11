@@ -1,4 +1,4 @@
-"""LoL Music Agent main entry."""
+﻿"""LoL Music Agent main entry."""
 
 import os
 import sys
@@ -181,8 +181,16 @@ class Application:
             from app.music.online.sources.demo_source import DemoSource
             from app.music.online.sources.archive_source import ArchiveSource
             self.online_music_manager = OnlineSourceManager()
-            self.online_music_manager.register(DemoSource())
-            self.online_music_manager.register(ArchiveSource())
+            # demo/archive 为演示/归档源：默认禁用（网络慢且不稳定，会拖慢每次在线搜索与
+            # 取 URL）。保留注册能力，需要时在 config.json 的 online_music 段设置
+            # demo_source=true / archive_source=true 重新启用。
+            _om_cfg = (self.config_data.get("online_music") or {})
+            if _om_cfg.get("demo_source", False):
+                self.online_music_manager.register(DemoSource())
+                print("[Music] demo 音源已启用（online_music.demo_source=true）")
+            if _om_cfg.get("archive_source", False):
+                self.online_music_manager.register(ArchiveSource())
+                print("[Music] archive 音源已启用（online_music.archive_source=true）")
             import os
             custom_dir = os.path.join(".", "data", "music_sources")
             try:
@@ -199,6 +207,11 @@ class Application:
             except Exception as e:
                 print(f"[Music] JS bridge 鍒濆鍖栧け璐? {e}")
             self.music.set_online_manager(self.online_music_manager)
+            # 同步「音源管理」UI 导入的自定义音源（config/music_sources.json）
+            try:
+                self.music.sync_custom_sources()
+            except Exception as e:
+                print(f"[Music] 自定义音源同步失败: {e}")
             print(f"[Music] online source 宸叉敞鍐? {self.online_music_manager.list_sources()}")
         except Exception as e:
             print(f"[Music] online source 鍒濆鍖栧け璐? {e}")
@@ -239,7 +252,6 @@ class Application:
         self._register_cooldown()
 
         # 娉ㄥ唽 OngoingGameService锛圕hampSelect 鍔犺浇 10 鐜╁锛?
-        self._register_ongoing()
 
         print("\n鍒濆鍖栧畬鎴愶紒")
 
@@ -266,11 +278,19 @@ class Application:
         # 鍚姩 LoL 妯″潡
         self.lol.start()
 
+        # OngoingGameService 构造必须在 lcu discovery 之后：
+        # 否则 _build_direct_getter / acct._direct 独立直连失效，退化为共享 lcu.get，
+        # 游戏内共享连接断连窗口会导致 summoner/ranked/history 全部失败。
+        self._register_ongoing()
+
 
         # 启动 OngoingGameService（ChampSelect 加载 10 玩家）
         if hasattr(self, 'ongoing_service') and self.ongoing_service:
             self.ongoing_service.start()
             print("[Ongoing] 加载服务已启动")
+
+        # 注册一键连招 ComboManager（依赖 ongoing_service 识别当前英雄）
+        self._register_combo()
         # 鍚姩 TTS
         self.tts.start()
 
@@ -324,6 +344,9 @@ class Application:
             self.lol.stop()
         if self.music:
             self.music.stop()
+
+        if getattr(self, "combo_manager", None):
+            self.combo_manager.stop()
 
         self.scheduler.stop()
         self.state_store.set(StateNamespace.SYSTEM, "running", False)
@@ -514,6 +537,21 @@ class Application:
         except Exception as e:
             print(f"[Automation] 娉ㄥ唽澶辫触: {e}")
 
+    def _register_combo(self):
+        """注册一键连招 ComboManager（一期：配置加载+键盘监听+执行引擎+只读UI）。
+
+        默认关闭，须在自动化面板手动开启。依赖 ongoing_service 识别我方英雄。
+        """
+        try:
+            from app.combo.manager import ComboManager
+            self.combo_manager = ComboManager(
+                ongoing_service=getattr(self, "ongoing_service", None),
+            )
+            self.combo_manager.start()
+            print("[Combo] ComboManager 已启动（默认关闭，需在自动化面板开启）")
+        except Exception as e:
+            print(f"[Combo] 注册失败: {e}")
+
     def _register_cooldown(self):
         """doc"""
         try:
@@ -640,13 +678,35 @@ class Application:
         try:
             from app.lol.ongoing.service import OngoingGameService
             from app.lol.ongoing.account_history import AccountMatchHistoryService
+            from app.lol.ongoing.gsm_provider import SgpGsmProvider
             lcu_get = self.lol.lcu.get if self.lol and self.lol.lcu else None
-            acct = AccountMatchHistoryService(lcu_get) if lcu_get else None
+            acct = AccountMatchHistoryService(lcu_get, lcu_conn=(self.lol.lcu if self.lol else None)) if lcu_get else None
+            gsm = SgpGsmProvider(lcu_get, lcu_conn=(self.lol.lcu if self.lol else None)) if lcu_get else None
+            def _snap_for_ongoing():
+                try:
+                    lol = getattr(self, "lol", None)
+                    return getattr(lol, "current_snapshot", None)
+                except Exception:
+                    return None
+            _ONGOING_DEDUP_CODES = ("ongoing.session_source", "ongoing.gsm_supplement", "ongoing.live_merged")
+            _ongoing_last: dict = {}
+
+            def _ongoing_on_event(code: str, data: dict):
+                if code in _ONGOING_DEDUP_CODES:
+                    cur = str(data)
+                    if _ongoing_last.get(code) == cur:
+                        return  # 与上次相同，跳过（高频日志去重）
+                    _ongoing_last[code] = cur
+                print(f"[Ongoing] {code}: {data}")
+
+            print("[Ongoing] 高频日志去重已启用（session_source/gsm_supplement/live_merged 相同内容不重复打印）")
             self.ongoing_service = OngoingGameService(
                 lcu=self.lol.lcu if self.lol else None,
-                on_event=lambda code, data: print(f"[Ongoing] {code}: {data}"),
+                on_event=_ongoing_on_event,
                 account_history_service=acct,
                 recent_n=20,
+                snapshot_provider=_snap_for_ongoing,
+                gsm_provider=gsm,
             )
         except Exception as e:
             print(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
@@ -770,9 +830,12 @@ class Application:
             cm = getattr(self, "cooldown_manager", None)
             def phase():
                 try:
+                    # 真实读取LCU游戏阶段，不是靠is_game_active硬判断
                     lol = getattr(self, "lol", None)
-                    if lol and lol.is_game_active:
-                        return "InProgress"
+                    if lol and hasattr(lol, "lcu") and lol.lcu:
+                        p = lol.lcu.get("/lol-gameflow/v1/gameflow-phase")
+                        if p == "InProgress":
+                            return "InProgress"
                     return "None"
                 except Exception:
                     return "None"
@@ -831,6 +894,7 @@ class Application:
             music=getattr(self, "music", None),
             ongoing_service=getattr(self, "ongoing_service", None),
             snapshot_provider=lambda: (self.lol.current_snapshot if getattr(self, "lol", None) else None),
+            combo_manager=getattr(self, "combo_manager", None),
             services_dict={"lcu": getattr(self.lol, "lcu", None) if getattr(self, "lol", None) else None},
                     )
         print("[Run] MainTabs built, switching")
@@ -840,6 +904,7 @@ class Application:
                 "lcu": getattr(getattr(self, "automation", None), "_lcu", None),
                 "asr": getattr(getattr(self, "voice", None), "asr", None),
                 "intent": getattr(getattr(self, "voice", None), "intent_router", None),
+                "voice": getattr(self, "voice", None),
             }
         except Exception as e:
             print(f"[UI] services wiring failed: {e}")
@@ -881,6 +946,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

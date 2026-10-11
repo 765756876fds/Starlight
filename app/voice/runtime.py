@@ -1,4 +1,4 @@
-"""
+﻿"""
 语音运行时 - 整合 ASR + Intent + 命令执行
 
 负责：
@@ -63,11 +63,11 @@ class VoiceRuntime:
 
         # Intent 为纯规则实现，无状态，无需 initialize
 
-        # 启动麦克风监听
-        self._start_microphone()
+        # 麦克风默认不启动，需要手动点击UI开关开启
+        self._mic_on = False
 
         self.state_store.set(StateNamespace.VOICE, "enabled", True)
-        print("[Voice] 运行时已启动")
+        print("[Voice] 运行时已启动（麦克风默认关闭）")
 
     def stop(self):
         """停止语音运行时"""
@@ -82,6 +82,10 @@ class VoiceRuntime:
             target=self._mic_loop, daemon=True, name="voice-mic"
         )
         self._mic_thread.start()
+
+    def _stop_microphone(self):
+        """停止麦克风采集"""
+        self._listening = False
 
     def _mic_loop(self):
         """麦克风采集循环"""
@@ -216,6 +220,7 @@ class VoiceRuntime:
                            CommandType.MUSIC_PAUSE, CommandType.MUSIC_RESUME,
                            CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
                            CommandType.MUSIC_RESCAN,
+                           CommandType.MUSIC_CLEANUP,
                            CommandType.MUSIC_HIGHLIGHT_MODE,
                            CommandType.MUSIC_SET_PLAY_MODE):
             self.command_bus.execute(Command(
@@ -329,3 +334,19 @@ class VoiceRuntime:
 
     def is_listening(self) -> bool:
         return self._listening
+
+    def toggle_mic(self) -> bool:
+        """开关麦克风，返回当前状态"""
+        if self._mic_on:
+            self._stop_microphone()
+            self._mic_on = False
+            print("[Voice] 麦克风已关闭")
+        else:
+            self._start_microphone()
+            self._mic_on = True
+            print("[Voice] 麦克风已开启")
+        return self._mic_on
+
+    def is_mic_on(self) -> bool:
+        return getattr(self, "_mic_on", False)
+

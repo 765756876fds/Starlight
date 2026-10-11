@@ -1,4 +1,4 @@
-"""OverlayModel：敌方 5 人召唤师技能倒计时浮窗模型（最小适配 LeagueAkari CD Timer）。
+﻿"""OverlayModel：敌方 5 人召唤师技能倒计时浮窗模型（最小适配 LeagueAkari CD Timer）。
 
 数据直接来自 2999 GameSnapshot.enemy_team（不依赖 PUUID、不复制 LCU player selection）：
 每人 champion + position + 两个召唤师技能槽（summonerSpellOne / summonerSpellTwo）。
@@ -233,7 +233,7 @@ class OverlayModel:
             spells = getattr(p, "summoner_spells", None) or []
             # 用 champion_id 匹配 active_skills
             skills_for_champ = active_skills.get(cid, {})
-            print(f"[Overlay] champion={cname} canonical_cid={cid} active_skill_keys={list(skills_for_champ.keys())}")
+            # print(f"[Overlay] champion={cname} canonical_cid={cid} active_skill_keys={list(skills_for_champ.keys())}")
             s1 = self._build_spell(cid, 1, spells[0] if len(spells) > 0 else {}, gt, skills_for_champ)
             s2 = self._build_spell(cid, 2, spells[1] if len(spells) > 1 else {}, gt, skills_for_champ)
 
@@ -253,6 +253,10 @@ class OverlayModel:
             sid = int(spell_dict.get("id", 0) or 0)
         except Exception:
             sid = 0
+        # 过滤海克斯闪现（spell_id=32），不显示在悬浮窗
+        if sid == 32:
+            sid = 0
+            spell_dict = {}
         entry = self._spells.get_by_id(sid) if sid else None
         name = entry.name_zh if entry else (spell_dict.get("displayName") or "")
         base = float(entry.cooldown) if entry else 0.0
@@ -266,3 +270,4 @@ class OverlayModel:
         active = t is not None
         remaining = (t["ready_at"] - gt) if active else 0.0
         return OverlaySpell(slot, sid, name, base, remaining, active)
+

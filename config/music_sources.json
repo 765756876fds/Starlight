@@ -1,0 +1,22 @@
+{
+  "sources": [
+    {
+      "name": "ikun音源",
+      "api_url": "https://api.ikunshare.com",
+      "search_path": "/search",
+      "song_url_path": "/song/url",
+      "enabled": true,
+      "source_type": "js",
+      "added_time": 0.0
+    },
+    {
+      "name": "lx-玉宁熙",
+      "api_url": "",
+      "search_path": "/search",
+      "song_url_path": "/song/url",
+      "enabled": true,
+      "source_type": "js",
+      "added_time": 0.0
+    }
+  ]
+}

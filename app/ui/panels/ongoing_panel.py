@@ -1,4 +1,4 @@
-"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
+﻿"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
@@ -420,7 +420,11 @@ def _card(snap, is_enemy: bool) -> QFrame:
         if getattr(snap, "main_position", None):
             extras.append(f"位置:{_zh_position(snap.main_position)}")
         if getattr(snap, "top_champions", None):
-            extras.append("英雄:" + "/".join(snap.top_champions[:3]))
+            top_champs_zh = []
+            for c in snap.top_champions[:3]:
+                c_zh = _ZH.get(c, c)
+                top_champs_zh.append(c_zh)
+            extras.append("英雄:" + "/".join(top_champs_zh))
         st = getattr(snap, "win_streak", 0) or 0
         if st > 0:
             extras.append(f"{st}连胜")
@@ -437,7 +441,6 @@ def _card(snap, is_enemy: bool) -> QFrame:
         lay.addWidget(row)
     return card
 
-
 class OngoingPanel(QWidget):
     def __init__(self, ongoing_service=None, account_history_service=None, parent=None):
         super().__init__(parent)
@@ -446,9 +449,10 @@ class OngoingPanel(QWidget):
         self._acct_next = 0.0
         root = QHBoxLayout(self)
 
-        # 左侧导航
+        # 左侧导航已隐藏，直接显示我的战绩
         self.nav = QListWidget()
-        self.nav.setFixedWidth(110)
+        self.nav.setFixedWidth(0)
+        self.nav.hide()
         self.nav.addItem("我的战绩")
         self.nav.addItem("当前对局")
         root.addWidget(self.nav)
@@ -620,3 +624,14 @@ class OngoingPanel(QWidget):
             self._acct_status.setText("暂无近期战绩")
         else:
             self._acct_status.setText("近期战绩暂时不可用")
+
+
+
+
+
+
+
+
+
+
+

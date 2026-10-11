@@ -35,6 +35,19 @@ class FakeLcu:
         return None
 
 
+class FakeAcct:
+    """返回 AVAILABLE 1 条战绩的假战绩服务（匹配新缓存语义）。"""
+    def __init__(self):
+        self.calls = 0
+    def recent(self, puuid, count=None):
+        self.calls += 1
+        from app.lol.ongoing.match_model import MatchHistoryResult, MatchRecord, AVAILABLE
+        return MatchHistoryResult(state=AVAILABLE, records=[
+            MatchRecord(game_id=1, game_creation=1, queue_id=420, champion_name="Yasuo",
+                        win=True, kills=5, deaths=2, assists=8)
+        ])
+
+
 def test_extract_ten_players():
     l = OngoingGameLoader(lcu_get=lambda ep: None)
     players = l._extract_players(_make_session())
@@ -45,7 +58,8 @@ def test_extract_ten_players():
 
 def test_load_returns_snapshots():
     fake = FakeLcu()
-    l = OngoingGameLoader(lcu_get=fake.get, max_workers=2, rps=100)
+    l = OngoingGameLoader(lcu_get=fake.get, account_history_service=FakeAcct(),
+                          max_workers=2, rps=100)
     snaps = l.load_for_champ_select(_make_session())
     assert len(snaps) == 10
     s = snaps[0]
@@ -56,13 +70,18 @@ def test_load_returns_snapshots():
 
 def test_cache_hit_no_request():
     fake = FakeLcu()
+    acct = FakeAcct()
     cache = SnapshotCache(ttl_seconds=300)
-    l = OngoingGameLoader(lcu_get=fake.get, cache=cache, max_workers=2, rps=100)
+    l = OngoingGameLoader(lcu_get=fake.get, cache=cache, account_history_service=acct,
+                          max_workers=2, rps=100)
     s1 = l.load_for_champ_select(_make_session())
+    assert all(getattr(s, "data_state", "ERROR") == "AVAILABLE" for s in s1)
     n_calls_first = len(fake.calls)
+    n_acct_first = acct.calls
     s2 = l.load_for_champ_select(_make_session())
-    # 第二次全部命中缓存，不应再请求
+    # 第二次全部命中 AVAILABLE 缓存，不应再请求（新语义：仅成功数据复用）
     assert len(fake.calls) == n_calls_first
+    assert acct.calls == n_acct_first
     assert len(s2) == 10
 
 
@@ -142,11 +161,27 @@ def test_service_independent_polling():
     """OngoingGameService 自己轮询 gameflow-phase，不依赖 automation 事件。"""
     from app.lol.ongoing.service import OngoingGameService
     phase_holder = {"phase": "Lobby"}
+
+    def _gameflow_session():
+        return {
+            "gameId": 42,
+            "gameData": {
+                "teamOne": [{"puuid": f"puuid-m-{i}", "summonerId": 1000 + i, "cellId": i,
+                             "championId": 1 + i, "riotIdGameName": f"M{i}"} for i in range(5)],
+                "teamTwo": [{"puuid": f"puuid-e-{i}", "summonerId": 2000 + i, "cellId": i,
+                             "championId": 20 + i, "riotIdGameName": f"E{i}"} for i in range(5)],
+            },
+        }
+
     def get(ep):
         if ep == "/lol-gameflow/v1/gameflow-phase":
             return phase_holder["phase"]
+        if ep == "/lol-gameflow/v1/session":
+            return _gameflow_session()
         if ep == "/lol-champ-select/v1/session":
             return _make_session()
+        if ep == "/lol-summoner/v1/current-summoner":
+            return {"puuid": "puuid-m-0"}
         if "by-puuid" in ep:
             return {"displayName": "P", "summonerLevel": 30, "summonerId": 1}
         if "ranked-stats" in ep:
@@ -154,13 +189,18 @@ def test_service_independent_polling():
         if "match-history" in ep:
             return {"games": {"games": []}}
         return None
-    svc = OngoingGameService(lcu=type("L", (), {"get": staticmethod(get)})(),
+    def request_raw(method, path, body=None, timeout=3.0):
+        return None
+
+    svc = OngoingGameService(lcu=type("L", (), {"get": staticmethod(get),
+                                                "request_raw": staticmethod(request_raw)})(),
                               poll_interval=0.05, rps=100, max_workers=1)
     svc.start()
     import time
     time.sleep(0.3)
     assert svc.get_snapshots() == []
-    phase_holder["phase"] = "ChampSelect"
+    # 对局阶段（ChampSelect/GameStart）gameflow 就绪即构建 10 人；此处用 GameStart 验证轮询链路
+    phase_holder["phase"] = "GameStart"
     time.sleep(0.5)
     snaps = svc.get_snapshots()
     assert len(snaps) == 10

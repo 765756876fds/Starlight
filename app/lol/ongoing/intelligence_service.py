@@ -1,4 +1,4 @@
-"""P.4.5/P.4.6 当前对局玩家情报聚合器。
+﻿"""P.4.5/P.4.6 当前对局玩家情报聚合器。
 
 负责：
 - 为当前对局中的每个玩家查询 Champion Mastery
@@ -35,7 +35,7 @@ class PlayerIntelligenceCacheEntry:
     # Mastery
     mastery_status: str = ""
     mastery_top3: List[ChampionMasteryRecord] = None
-    current_champion_is_top3: Optional[bool] = None
+    current_champion_is_mastery_top3: Optional[bool] = None
 
     # 最近20场
     recent_status: str = ""  # AVAILABLE / EMPTY / UNAVAILABLE / NO_PUUID
@@ -67,8 +67,19 @@ class OngoingIntelligenceService:
     ):
         self._mastery = mastery_provider
         self._sgp = sgp_provider
+        self._sgp_factory = None  # 动态创建 SGP provider 的回调
         self._intelligence = intelligence_service or PlayerIntelligenceService()
         self._cache: Dict[str, PlayerIntelligenceCacheEntry] = {}
+
+    def set_sgp_factory(self, factory):
+        """注入动态创建 SGP provider 的回调（解决 LCU 后连问题）。"""
+        self._sgp_factory = factory
+
+    def _ensure_sgp(self):
+        """确保 SGP provider 可用，如果初始失败则动态重试。"""
+        if self._sgp is None and self._sgp_factory:
+            self._sgp = self._sgp_factory()
+        return self._sgp
 
     def get_player_intelligence(
         self,
@@ -87,7 +98,7 @@ class OngoingIntelligenceService:
             entry = self._cache[puuid]
             # 更新当前英雄判断（如果当前英雄变了）
             if entry.queried_mastery and entry.mastery_status == AVAILABLE and current_champion_id > 0:
-                entry.current_champion_is_top3 = any(
+                entry.current_champion_is_mastery_top3 = any(
                     m.champion_id == current_champion_id
                     for m in (entry.mastery_top3 or [])
                 )
@@ -96,22 +107,28 @@ class OngoingIntelligenceService:
         # 创建新条目
         entry = PlayerIntelligenceCacheEntry(puuid=puuid)
 
-        # 1. 查询 Mastery
-        status, top3 = self._mastery.get_top3(puuid)
-        entry.mastery_status = status
-        entry.mastery_top3 = top3
-        entry.queried_mastery = True
+        # 1. 查询 Mastery（独立 try except，失败不影响 SGP）
+        try:
+            status, top3 = self._mastery.get_top3(puuid)
+            entry.mastery_status = status
+            entry.mastery_top3 = top3
+            entry.queried_mastery = True
 
-        if status == AVAILABLE and top3 and current_champion_id > 0:
-            entry.current_champion_is_top3 = any(
-                m.champion_id == current_champion_id
-                for m in top3
-            )
+            if status == AVAILABLE and top3 and current_champion_id > 0:
+                entry.current_champion_is_mastery_top3 = any(
+                    m.champion_id == current_champion_id
+                    for m in top3
+                )
+        except Exception as e:
+            entry.mastery_status = "UNAVAILABLE"
+            entry.mastery_top3 = []
+            entry.queried_mastery = True
 
         # 2. 查询最近20场
-        if self._sgp:
+        sgp = self._ensure_sgp()
+        if sgp:
             try:
-                res = self._sgp.recent(puuid, start_index=0, count=20)
+                res = sgp.recent(puuid, start_index=0, count=20)
                 if res.state == "AVAILABLE" and res.records:
                     # 用 PlayerIntelligenceService 分析
                     intel_result = self._intelligence.analyze(
@@ -144,3 +161,8 @@ class OngoingIntelligenceService:
 
     def __len__(self):
         return len(self._cache)
+
+
+
+
+

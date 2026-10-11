@@ -16,6 +16,7 @@ class PlayerInfo:
     riot_game_name: str = ""
     riot_tag_line: str = ""
     puuid: str = ""  # PUUID（用于查询 Mastery / 历史战绩）
+    summoner_id: int = 0  # summonerId（2999 部分模式返回；InProgress retry 兜底用）
     champion_name: str = ""
     champion_id: int = 0
     team: str = ""  # "ORDER" / "CHAOS" / "UNKNOWN"
@@ -179,6 +180,15 @@ class SnapshotBuilder:
             all_players = all_data.get("allPlayers", [])
             active_player_name = all_data.get("activePlayer", {}).get("summonerName", "")
 
+            # 先确定当前玩家所在队伍，另一个队伍就是敌方
+            my_team = None
+            for p_data in all_players:
+                if p_data.get("summonerName", "") == active_player_name:
+                    my_team = p_data.get("team", "ORDER")
+                    break
+            if my_team is None:
+                my_team = "ORDER"  # 默认
+
             for p_data in all_players:
                 player = SnapshotBuilder._parse_player(p_data, active_player_name)
                 snapshot.players.append(player)
@@ -186,7 +196,7 @@ class SnapshotBuilder:
                 if player.is_current_player:
                     snapshot.current_player = player
 
-                if player.team == "ORDER":
+                if player.team == my_team:
                     snapshot.ally_team.append(player)
                     snapshot.ally_champions.append(player.champion_name)
                 else:
@@ -227,9 +237,12 @@ class SnapshotBuilder:
         player.riot_id = p_data.get("riotId", "")
         player.riot_game_name = p_data.get("riotIdGameName", "")
         player.riot_tag_line = p_data.get("riotIdTagLine", "")
-        player.puuid = p_data.get("puuid", "")
+        # 多试几个 PUUID 字段名
+        player.puuid = (p_data.get("puuid") or p_data.get("PUUID") or 
+                        p_data.get("summonerId") or p_data.get("userId") or "")
         player.champion_name = p_data.get("championName", "")
         player.champion_id = int(p_data.get("championId", 0))
+        player.summoner_id = int(p_data.get("summonerId") or 0)
         player.raw_champion_name = p_data.get("rawChampionName", "")
         player.team = p_data.get("team", "UNKNOWN")
         player.is_current_player = player.summoner_name == active_player_name
@@ -286,3 +299,4 @@ class SnapshotBuilder:
         player.abilities = abilities
 
         return player
+

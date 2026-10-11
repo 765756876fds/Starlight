@@ -1,4 +1,4 @@
-"""
+﻿"""
 音乐搜索 - 模糊搜索 + 相似度排序
 
 第一版：SQLite FTS5 + BM25 + 字符串相似度
@@ -13,6 +13,28 @@ from .database import MusicDatabase
 
 class MusicSearch:
     """音乐模糊搜索"""
+
+    # 歌名里要忽略的常见后缀
+    _IGNORE_SUFFIX = [
+        "dj版", "dj", "加速版", "减速版", "remix", "live", "现场版",
+        "伴奏", "acoustic", "钢琴版", "纯音乐", "cover", "翻唱",
+        "国语版", "粤语版", "原版", "高清", "hq", "sq", "无损",
+        "slowed", "reverb", "sped up", "nightcore"
+    ]
+
+    def _clean_title(self, s: str) -> str:
+        """清洗歌名：去掉括号内容、特殊后缀，用于模糊匹配"""
+        if not s:
+            return ""
+        s = s.lower().strip()
+        # 去掉所有括号及其内容（中英文括号）
+        s = re.sub(r"[\(（\[【].*?[\)）\]】]", "", s)
+        # 去掉常见后缀
+        for suf in self._IGNORE_SUFFIX:
+            s = s.replace(suf, "")
+        # 去掉标点空格、书名号、引号
+        s = re.sub(r"[\s\-_—,，.。!！?？~`@#$%^&*《》<>“”‘\"']", "", s)
+        return s
 
     def __init__(self, db: MusicDatabase):
         self.db = db
@@ -29,6 +51,10 @@ class MusicSearch:
             return []
 
         query = query.strip()
+        # 先清洗query：去掉书名号、括号、标点，避免语音识别带符号搜不到
+        clean_query = self._clean_title(query)
+        if clean_query:
+            query = clean_query
 
         # 1. FTS 搜索
         fts_results = self.db.search(query, limit=limit * 2)
@@ -145,8 +171,18 @@ class MusicSearch:
         album = (song.get("album") or "").lower()
         query_lower = query.lower()
 
-        # 标题完全匹配
-        if query_lower == title:
+        # 清洗后的标题和query，忽略括号、DJ/Live后缀
+        clean_title = self._clean_title(song.get("title", ""))
+        clean_query = self._clean_title(query)
+
+        # 清洗后完全匹配，最高分
+        if clean_query and clean_title and clean_query == clean_title:
+            scores.append(1.0)
+        # 清洗后标题完全包含查询
+        elif clean_query and clean_title and clean_query in clean_title:
+            scores.append(0.95)
+        # 原始标题完全匹配
+        elif query_lower == title:
             scores.append(1.0)
         # 标题包含查询
         elif query_lower in title:
@@ -225,3 +261,4 @@ class MusicSearch:
                 return result
 
         return result
+

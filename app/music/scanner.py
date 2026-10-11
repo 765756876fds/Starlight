@@ -1,4 +1,4 @@
-"""
+﻿"""
 音乐文件扫描器 - 扫描本地音乐文件并提取元数据
 
 使用 mutagen 读取 ID3/FLAC/MP4 等标签。
@@ -6,7 +6,11 @@
 """
 import os
 import time
+import threading
+import logging
 from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 try:
     from mutagen import File as MutagenFile
@@ -19,6 +23,7 @@ except ImportError:
     MUTAGEN_AVAILABLE = False
 
 from .database import MusicDatabase
+from .highlight_detector import detect_highlight, get_source_tag, ALGORITHM_VERSION
 
 
 class MusicScanner:
@@ -36,6 +41,7 @@ class MusicScanner:
         self._updated_count = 0
         self._skipped_count = 0
         self._error_count = 0
+        self._highlight_running = False  # 防止重复启动worker
 
     def scan(self, full_rescan: bool = False) -> Dict[str, int]:
         """
@@ -52,6 +58,7 @@ class MusicScanner:
         self._updated_count = 0
         self._skipped_count = 0
         self._error_count = 0
+        self._highlight_running = False  # 防止重复启动worker
 
         all_files = self._collect_files()
 
@@ -267,3 +274,66 @@ class MusicScanner:
             parts = name.split(" - ", 1)
             return parts[1].strip()
         return name.strip()
+
+    def start_highlight_background(self):
+        """扫描完成后启动后台线程计算所有未处理歌曲的highlight"""
+        if self._highlight_running:
+            logger.debug("Highlight worker已在运行，跳过重复启动")
+            return
+        self._highlight_running = True
+        thread = threading.Thread(
+            target=self._highlight_worker,
+            name="HighlightWorker",
+            daemon=True,
+        )
+        thread.start()
+        logger.info("后台Highlight计算线程已启动")
+
+    def _highlight_worker(self):
+        """后台逐首计算highlight，单线程低优先级"""
+        try:
+            # 找所有没有highlight的歌曲
+            all_songs = self.db.get_all_songs(limit=10000)
+            pending = []
+            for song in all_songs:
+                existing = self.db.get_highlight(song["id"])
+                # 已有同版本算法的就跳过
+                if existing and existing.get("source") == get_source_tag():
+                    continue
+                pending.append(song)
+            
+            if not pending:
+                logger.info("Highlight: 所有歌曲都已计算，跳过")
+                return
+            
+            logger.info(f"Highlight: 开始后台计算 {len(pending)} 首歌曲")
+            success = 0
+            failed = 0
+            
+            for song in pending:
+                try:
+                    result = detect_highlight(song["path"])
+                    if result:
+                        start, end, score = result
+                        # 先删旧记录再存新（防止新旧版本/来源混存）；走 db 公开方法保证写并发安全
+                        self.db.delete_highlights(song["id"])
+                        self.db.save_highlight(
+                            song_id=song["id"],
+                            start_time=start,
+                            end_time=end,
+                            confidence=score,
+                            source=get_source_tag(),
+                        )
+                        success += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    logger.warning(f"Highlight计算失败 {song.get('title', '')}: {e}")
+                    failed += 1
+            
+            logger.info(f"Highlight后台计算完成: 成功{success}, 失败{failed}, 跳过{len(all_songs)-len(pending)}")
+        except Exception as e:
+            logger.error(f"Highlight后台线程异常: {e}")
+        finally:
+            self._highlight_running = False
+
