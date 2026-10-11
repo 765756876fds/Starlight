@@ -97,6 +97,7 @@ class OngoingGameService:
         # loader 的 summoner/ranked/history 查询全部走独立直连 getter，
         # 绕开共享 LCUConnection 的游戏内断连窗口（否则队友 ID/段位/等级查询偶发失败）
         getter = _build_direct_getter(lcu)
+        self._dget = getter  # _tick 的 phase 读取复用同一独立直连（P0a）
         self._loader = OngoingGameLoader(
             lcu_get=getter,
             on_event=self._on_event,
@@ -111,9 +112,10 @@ class OngoingGameService:
         self._last_loaded_key: Optional[str] = None
         self._loading_in_progress = False
         self._poll_interval = poll_interval
-        # 历史战绩缺失自动重试状态
-        self._retry_count = 0
-        self._last_retry_ts = 0.0
+        # 历史战绩缺失自动重试状态（按 game_id 持久；离开对局清空，防腾讯服 gameId 复用串局）
+        self._retry_state: dict = {}
+        # session_created 防抖：已宣布过的 session 标识（离开对局清空，防 gameId 复用误判同局）
+        self._announced_session_id = None
         # force 重载：retry 触发时置 True，下一次加载绕过 ERROR cache 真正重新请求
         self._force_reload = False
         # ChampSelect 完整 session 缓存：人机/匹配选人阶段 10 人含 puuid，
@@ -152,7 +154,19 @@ class OngoingGameService:
     def _tick(self) -> None:
         if self._lcu is None:
             return
-        phase = self._lcu.get("/lol-gameflow/v1/gameflow-phase")
+        lcu = self._lcu
+        # P0a 断连熔断：连接不可用（_connected=False 或 _session 为空）→ 跳过本轮，
+        # 不重建/不清空 session，等连接恢复后自然继续（防止"连接断"被误判成"对局结束"）。
+        if not (getattr(lcu, "_connected", False) and getattr(lcu, "_session", None)):
+            self._on_event("ongoing.conn_skip", {"connected": False})
+            return
+        # phase 优先独立直连（绕共享断连窗口）；_dget 未初始化成功则回退共享 lcu.get
+        dget = getattr(self, "_dget", None) or lcu.get
+        phase = dget("/lol-gameflow/v1/gameflow-phase")
+        # 直连失败时复查共享连接：连接刚断 → 跳过本轮；连接正常 → 接口真返回 None（对局结束）
+        if phase is None and not getattr(lcu, "_connected", False):
+            self._on_event("ongoing.conn_skip", {"connected": False, "phase_none": True})
+            return
         # 选人/加载/对局中加载玩家数据；其他阶段清空
         # GameStart/Reconnect 也纳入：gameflow teamOne/teamTwo 在加载界面即就绪（实测明文 puuid），
         # 进入对局即可显示全部玩家，无需等待 liveclientdata
@@ -169,6 +183,11 @@ class OngoingGameService:
                     # 若保留旧 last_loaded_key，新局 key==旧 key 会误判"同一局"而跳过
                     # 强制重载，导致跨局复用上一局 PlayerSnapshot（history.cache_hit）。
                     self._last_loaded_key = None
+                    # 离开对局：重置 session_created 防抖 + retry 计数。
+                    # 腾讯服复用 gameId 的新局必须在此清空，否则被误判为同局
+                    # （漏发 session_created / retry 计数不重置）。
+                    self._announced_session_id = None
+                    self._retry_state = {}
             return
 
         # 选人阶段缓存 champ-select session（仅作 gameflow 偶发为空的合理回退，非玩家集合来源）
@@ -235,15 +254,22 @@ class OngoingGameService:
                                     np_.live_level = op.live_level
                                     np_.realtime_available = op.realtime_available
                         self._session = rebuilt
-                # 同一局：若历史战绩缺失，周期性自动重试（最多10次，间隔60秒，覆盖进游戏初期SGP暂不可用）
+                # 同一局：若历史战绩缺失，周期性自动重试（每 game_id 最多10次，间隔60秒，
+                # 覆盖进游戏初期 SGP 暂不可用）。直接 force 重载当前 session——
+                # 不重建 session、不重发 session_created（原实现清 _current_session_key
+                # 触发重建，是 session_created 反复刷屏的主因之一）。
                 if phase == "InProgress" and not self._loading_in_progress:
                     now = time.monotonic()
-                    if (self._retry_count < 10 and now - self._last_retry_ts > 60.0
+                    rk = f"gid:{session.get('gameId')}" if session.get("gameId") else key
+                    count, last_ts = self._retry_state.get(rk, [0, 0.0])
+                    if (count < 10 and now - last_ts > 60.0
                             and self._loader.missing_history_count() > 0):
-                        self._last_retry_ts = now
-                        self._retry_count += 1
+                        self._retry_state[rk] = [count + 1, now]
                         self._force_reload = True  # retry：绕过 ERROR cache，真正重新请求 SGP
-                        self._current_session_key = None  # 触发重新加载
+                        self._loading_in_progress = True  # 防重入（_load_in_thread finally 复位）
+                        t = threading.Thread(
+                            target=self._load_in_thread, args=(session,), daemon=True)
+                        t.start()
                         return
                 return  # 同一局，已加载/加载中
             if self._loading_in_progress:
@@ -253,20 +279,25 @@ class OngoingGameService:
             self._snapshots = []
             # 新 session：game_id 为生命周期锚点；旧 session（含 players）立即失效
             self._session = self._to_current_session(session, phase, me_puuid)
-            self._retry_count = 0  # 新对局重置重试计数
-            self._last_retry_ts = 0.0
+            # 新对局 retry 计数从 0 开始（_retry_state 按 game_id 持久，新 game_id 自动归零；
+            # 复用 gameId 的新局已在离开对局分支清空 _retry_state）
             if key != self._last_loaded_key:
                 # 真正的新对局：不信任旧局 history cache（TTL 不承担 session 隔离），
                 # 强制重新请求全部玩家，禁止跨局复用上一局 PlayerSnapshot
                 self._force_reload = True
             self._last_loaded_key = key
-            self._on_event("ongoing.session_created", {
-                "game_id": self._session.game_id,
-                "players": len(self._session.players),
-                "puuid": sum(1 for p in self._session.players if p.puuid),
-                "my_team": len(self._session.my_team),
-                "their_team": len(self._session.their_team),
-            })
+            # session_created 防抖：同一 session（game_id）只宣布一次。
+            # 离开对局已清空 _announced_session_id，故腾讯服复用 gameId 的新局会重新宣布。
+            sid = f"gid:{self._session.game_id}" if self._session.game_id else key
+            if sid != self._announced_session_id:
+                self._announced_session_id = sid
+                self._on_event("ongoing.session_created", {
+                    "game_id": self._session.game_id,
+                    "players": len(self._session.players),
+                    "puuid": sum(1 for p in self._session.players if p.puuid),
+                    "my_team": len(self._session.my_team),
+                    "their_team": len(self._session.their_team),
+                })
         t = threading.Thread(target=self._load_in_thread, args=(session,), daemon=True)
         t.start()
 

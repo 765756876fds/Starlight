@@ -724,7 +724,10 @@ class Application:
                     return getattr(lol, "current_snapshot", None)
                 except Exception:
                     return None
-            _ONGOING_DEDUP_CODES = ("ongoing.session_source", "ongoing.gsm_supplement", "ongoing.live_merged")
+            _ONGOING_DEDUP_CODES = (
+                "ongoing.session_source", "ongoing.gsm_supplement", "ongoing.live_merged",
+                "ongoing.session_created", "history.error", "room.player", "history_summary",
+            )
             _ongoing_last: dict = {}
 
             def _ongoing_on_event(code: str, data: dict):

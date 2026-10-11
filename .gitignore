@@ -67,6 +67,9 @@ desktop.ini
 .pytest_cache/
 .mypy_cache/
 
+# 运行时数据（常用英雄使用频率，每用一次就变，不跟踪）
+data/combo_usage.json
+
 # Test outputs
 test_output/
 *.test.mp3
