@@ -19,16 +19,18 @@ _RUNE_SSH = {
 
 # 装备：明朗之靴 Ionian Boots of Lucidity（itemID 3158，+10 SSH）
 # 实测锚点验证：Flash base=300 → 有鞋时 300*100/(100+10) ≈ 272.73s ✅
+# 猩红明朗之靴 Crimson Lucidity（itemID 3164）：中路任务完成后 3158 升级版，+20 SSH（实机验证）
 _ITEM_ID_SSH = {
-    3158: 10.0,  # 明朗之靴
-    3164: 10.0,  # 猩红明朗之靴
+    3158: 10.0,  # 明朗之靴（基础版）
+    3164: 20.0,  # 猩红明朗之靴（升级版，实机验证 +20）
 }
 
 # 装备名称 → SSH（用于 2999 不返回 itemID 时的 fallback）
 _ITEM_NAME_SSH = {
     "明朗之靴": 10.0,
-    "iorian boots of lucidity": 10.0,
-    "猩红明朗": 10.0,
+    "ionian boots of lucidity": 10.0,
+    "猩红明朗": 20.0,
+    "crimson lucidity": 20.0,
     "明朗": 10.0,
 }
 
@@ -106,8 +108,14 @@ def summoner_spell_haste(items: List[Any], runes: List[Any]) -> Tuple[float, Lis
             continue
         
         # fallback：用装备名称匹配（2999 不返回 itemID 时）
+        # 注意：长 key 优先——"猩红明朗之靴"同时包含"明朗之靴"/"明朗"，
+        # 若按 dict 顺序会先命中 3158（+10）错算；按 (长度, 值) 降序保证
+        # 更具体的名称（"猩红明朗" 4 字符 +20 > "明朗之靴" 4 字符 +10）先匹配。
         if item_name:
-            for name_key, val in _ITEM_NAME_SSH.items():
+            for name_key, val in sorted(
+                    _ITEM_NAME_SSH.items(),
+                    key=lambda kv: (len(kv[0]), kv[1]),
+                    reverse=True):
                 if name_key.lower() in item_name.lower():
                     total += val
                     sources.append(f"item:{name_key}")
