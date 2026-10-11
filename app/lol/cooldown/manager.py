@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ...core.scheduler import get_scheduler
 from ..data.ability_catalog import AbilityCatalog
@@ -79,6 +79,7 @@ class CooldownManager:
         ultimate_haste: float = 0.0,
         summoner_spell_haste: float = 0.0,
         champion_level: Optional[int] = None,
+        runes: Optional[Tuple] = None,
     ) -> Optional[CooldownReminder]:
         if not skill:
             return None
@@ -177,16 +178,18 @@ class CooldownManager:
         now = self._game_time  # 唯一基准：游戏内 gameTime
         
         # 创建 Cast Snapshot（记录时的状态快照，真正不可变）
-        # runes: 深拷贝 + MappingProxyType，确保原始 dict 后续修改不影响 snapshot
+        # 注：符文精确计算 CD 无法实现（2999 不暴露小符文，无法判断星界洞悉等）。
+        #     runes 仅作数据保留；CD 计算采用"手动记录 + 固定值倒计时"方案。
+        #     数据链路已接：level/runes 来自 main.py haste_provider → EnemyProfile。
         immutable_runes = tuple(
-            MappingProxyType(copy.deepcopy(r)) 
-            for r in ()  # TODO: 从 EnemyProfile 读取 runes 后填入
+            MappingProxyType(copy.deepcopy(r))
+            for r in (tuple(runes or ()))
         )
         cast_snapshot = CooldownCastSnapshot(
             champion_name=cname or "",
             spell=display,
             cast_game_time=now,
-            champion_level=0,  # TODO: 从 EnemyProfile 读取
+            champion_level=int(champion_level or 0),
             items=(),
             runes=immutable_runes,
             ability_haste=ability_haste,
@@ -369,22 +372,31 @@ class CooldownManager:
         p = getattr(command, "params", command) or {}
         ah = 0.0
         ssh = 0.0
+        level = 0
+        runes: Tuple = ()
         if self._haste_provider is not None:
             try:
                 result = self._haste_provider(p.get("champion"), p.get("side", "enemy"))
                 if isinstance(result, tuple):
                     ah, ssh = float(result[0] or 0.0), float(result[1] or 0.0)
+                    if len(result) >= 3:
+                        level = int(result[2] or 0)
+                        runes = tuple(result[3] or ())
                 else:
                     ah = float(result or 0.0)
             except Exception:
                 ah = 0.0
                 ssh = 0.0
+                level = 0
+                runes = ()
         return self.start_reminder(
             champion_name=p.get("champion"),
             skill=p.get("skill") or p.get("spell"),
             side=p.get("side", "enemy"),
             ability_haste=ah,
             summoner_spell_haste=ssh,
+            champion_level=level,
+            runes=runes,
         )
 
     # ----- 静态 CD 查询（cooldown.query）-----

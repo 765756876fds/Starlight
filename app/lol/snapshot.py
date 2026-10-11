@@ -262,8 +262,22 @@ class SnapshotBuilder:
         # 物品
         player.items = p_data.get("items", []) or []
 
-        # 符文（playerlist 若提供 runes 则原样保留；缺失时保持空）
-        player.runes = p_data.get("runes", []) or []
+        # 符文（2999 runes 为 dict：keystone/primaryRuneTree/secondaryRuneTree）
+        # 提取为结构化 list：[{"type": ..., "id": ..., "displayName": ...}, ...]
+        # 空值防御：runes 为空/非 dict 时返回 []；子 dict 缺 id 或 displayName 时跳过该项。
+        _raw_runes = p_data.get("runes") or {}
+        if isinstance(_raw_runes, dict):
+            player.runes = [
+                {"type": t, "id": d.get("id"), "displayName": d.get("displayName")}
+                for t, d in (
+                    ("keystone", _raw_runes.get("keystone") or {}),
+                    ("primary", _raw_runes.get("primaryRuneTree") or {}),
+                    ("secondary", _raw_runes.get("secondaryRuneTree") or {}),
+                )
+                if isinstance(d, dict) and d.get("id") is not None and d.get("displayName")
+            ]
+        else:
+            player.runes = _raw_runes or []
 
         # 召唤师技能
         spells = p_data.get("summonerSpells") or {}

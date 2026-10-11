@@ -32,8 +32,8 @@ _ITEM_NAME_SSH = {
     "明朗": 10.0,
 }
 
-# 启迪系 rune tree ID
-_INSPIRATION_TREE_IDS = {8400}
+# 启迪系 rune tree ID（8300=启迪 Inspiration；8400=坚决 Resolve，勿混）
+_INSPIRATION_TREE_IDS = {8300}
 
 
 def _has_inspiration_runes(runes: List[Any]) -> bool:
