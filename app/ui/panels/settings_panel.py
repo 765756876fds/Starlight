@@ -9,13 +9,14 @@
 from __future__ import annotations
 
 import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Callable, Optional
 from app.ui.theme.colors import Colors
 
 
-from PySide6.QtCore import Qt, QThread, QObject, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
     QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
@@ -60,10 +61,14 @@ def _probe_url(url: str, headers, timeout: float = 5.0) -> str:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             code = resp.getcode()
-            return "✓" if code in (200, 206) else f"✗({code})"
+            out = "✓" if code in (200, 206) else f"✗({code})"
+            print(f"[probe] {url[:60]} -> {out} ({code})", flush=True)
+            return out
     except urllib.error.HTTPError as e:
+        print(f"[probe] {url[:60]} -> HTTPError {e.code}", flush=True)
         return f"✗({e.code})"
     except Exception as e:
+        print(f"[probe] {url[:60]} -> {type(e).__name__}", flush=True)
         return f"✗({type(e).__name__})"
 
 
@@ -123,6 +128,11 @@ class _DirEditDialog(QDialog):
 
 
 class SettingsPanel(QWidget):
+    # 后台线程 → 主线程回传（worker 线程没有 Qt 事件循环，不能用 QTimer.singleShot 从
+    # 后台线程调度 UI 更新——跨线程必须走 Signal，AutoConnection 自动转 QueuedConnection）
+    _test_done = Signal(str, str)       # (插件名, 结果文本)
+    _refresh_done = Signal(bool, int)   # (ok, 插件数)
+
     def __init__(self, music=None, tts=None, combo_manager=None,
                  equip_toggle: Optional[Callable[[bool], None]] = None,
                  on_refresh_changed: Optional[Callable[[int], None]] = None,
@@ -141,6 +151,9 @@ class SettingsPanel(QWidget):
         self._js_source = None
         self._reloading = False
         self._plugin_rows: dict = {}
+        self._test_btns: dict = {}
+        self._test_done.connect(self._on_test_done)
+        self._refresh_done.connect(self._on_refresh_done)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -293,6 +306,7 @@ class SettingsPanel(QWidget):
             btn.clicked.connect(lambda _=False, n=name: self._on_test_plugin(n))
             h.addWidget(btn)
             self._plugin_rows[name] = lbl
+            self._test_btns[name] = btn
         h.addStretch()   # 行尾 stretch：标签占满、按钮靠右，行宽 = 面板宽
         return row
 
@@ -300,24 +314,29 @@ class SettingsPanel(QWidget):
         if self._js_source is None:
             return
         lbl = self._plugin_rows.get(name)
-        btn = self.sender()
-        if lbl is None or not isinstance(btn, QPushButton):
+        btn = self._test_btns.get(name)
+        if lbl is None or btn is None:
             return
+        print(f"[Test] 开始测试 {name}")
         lbl.setText(f"[测试中…] {name}")
         btn.setEnabled(False)
 
         def worker():
+            t0 = time.monotonic()
             try:
                 tracks = self._js_source.search_plugin(name, "晴天", 3)
                 n = len(tracks)
+                print(f"[Test] {name} search 完成 {n} 条 耗时{time.monotonic()-t0:.2f}s", flush=True)
                 if n == 0:
                     res = f"[MusicFree] {name} | 搜索 ✗(0条)"
                 else:
                     url_res = "—"
                     try:
                         r = self._js_source.get_play_url(tracks[0])
+                        print(f"[Test] {name} getUrl 完成 耗时{time.monotonic()-t0:.2f}s", flush=True)
                         if r and r.get("url"):
                             url_res = _probe_url(r["url"], r.get("headers"))
+                            print(f"[Test] {name} probe 完成 耗时{time.monotonic()-t0:.2f}s", flush=True)
                         else:
                             url_res = "✗(null)"
                     except Exception as e:
@@ -325,14 +344,18 @@ class SettingsPanel(QWidget):
                     res = f"[MusicFree] {name} | 搜索 ✓({n}条) | URL {url_res}"
             except Exception as e:
                 res = f"[MusicFree] {name} | 测试失败 ({type(e).__name__})"
-            QTimer.singleShot(0, lambda r=res: self._finish_test(name, r, btn))
+                print(f"[Test] {name} worker 异常 {type(e).__name__}: {e} 耗时{time.monotonic()-t0:.2f}s", flush=True)
+            print(f"[Test] 结果: {name} -> {res}", flush=True)
+            self._test_done.emit(name, res)   # Signal 回主线程（worker 线程无 Qt 事件循环）
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_test(self, name: str, res: str, btn: QPushButton) -> None:
+    def _on_test_done(self, name: str, res: str) -> None:
+        print(f"[Test] 更新UI: {name} -> {res}")
         lbl = self._plugin_rows.get(name)
         if lbl is not None:
             lbl.setText(res)
+        btn = self._test_btns.get(name)
         if btn is not None:
             btn.setEnabled(True)
 
@@ -354,11 +377,11 @@ class SettingsPanel(QWidget):
                 n = len(self._js_source.list_plugins() or [])
             except Exception:
                 n = 0
-            QTimer.singleShot(0, lambda: self._finish_refresh(ok, n))
+            self._refresh_done.emit(ok, n)   # Signal 回主线程
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_refresh(self, ok: bool, n: int) -> None:
+    def _on_refresh_done(self, ok: bool, n: int) -> None:
         self._reloading = False
         self.btn_refresh_plugins.setEnabled(True)
         self.btn_refresh_plugins.setText("刷新插件")

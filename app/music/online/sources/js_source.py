@@ -147,11 +147,13 @@ class JSMusicSource(MusicSource):
         except Exception:
             return None
         if not box["event"].wait(timeout):
+            print(f"[JSBridge] TIMEOUT {method} {params.get('source')} 等了{timeout}s", flush=True)
             with self._lock:
                 self._pending.pop(rid, None)
             return None
         msg = box["result"]
         if not msg or not msg.get("ok"):
+            print(f"[JSBridge] FAIL {method} {params.get('source')} resp={msg}", flush=True)
             return None
         return msg.get("result")
 
@@ -167,10 +169,14 @@ class JSMusicSource(MusicSource):
         """只搜指定插件（测试按钮用，不经 manager 遍历回退）。"""
         if not keyword or not source:
             return []
+        print(f"[search_plugin] -> {source} kw={keyword} limit={limit}", flush=True)
         result = self._call("search", {"source": source, "keyword": keyword, "limit": limit})
+        print(f"[search_plugin] <- {source} raw={None if result is None else len(result)}", flush=True)
         if not result:
             return []
-        return self._parse_tracks(result)
+        out = self._parse_tracks(result)
+        print(f"[search_plugin] parsed {len(out)} 条", flush=True)
+        return out
 
     def _parse_tracks(self, result: list) -> List[OnlineTrack]:
         out: List[OnlineTrack] = []
@@ -233,12 +239,14 @@ class JSMusicSource(MusicSource):
         return self._parse_tracks(result)
 
     def get_play_url(self, track: OnlineTrack) -> Optional[dict]:
+        print(f"[getUrl] -> {track.source_name} track_id={track.track_id}", flush=True)
         r = self._call("getUrl", {
             "source": track.source_name,
             "track_id": track.track_id,
             "quality": "320k",
             "raw_item": track.extra.get("_raw"),
         })
+        print(f"[getUrl] <- {track.source_name} raw={None if r is None else 'dict'}", flush=True)
         if not r:
             return None
         # 返回 dict（url + 插件透传的 headers），供播放链按需设置 http-header-fields
