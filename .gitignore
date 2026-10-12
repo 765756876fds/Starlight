@@ -146,3 +146,6 @@ data/assets/
 /python
 /_portaudio.pyd
 _trash/
+
+# 运行时界面偏好（每台电脑不同，不跟踪）
+config/ui_prefs.json

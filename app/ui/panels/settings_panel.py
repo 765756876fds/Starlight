@@ -443,31 +443,13 @@ class SettingsPanel(QWidget):
         lay.addLayout(irow)
         lay.addWidget(QLabel("影响主界面各面板的定时刷新频率（当前值仅存 ui_prefs.json）。"))
 
-        srow = QHBoxLayout()
-        srow.addWidget(QLabel("悬浮窗大小："))
-        self.cmb_overlay_scale = QComboBox()
-        self.cmb_overlay_scale.addItem("紧凑", 0.8)
-        self.cmb_overlay_scale.addItem("标准", 1.0)
-        self.cmb_overlay_scale.addItem("大", 1.2)
-        cur_scale = float(load_ui_prefs().get("overlay_scale", 1.0))
-        idx = self.cmb_overlay_scale.findData(cur_scale)
-        self.cmb_overlay_scale.setCurrentIndex(idx if idx >= 0 else 1)
-        srow.addWidget(self.cmb_overlay_scale)
-        srow.addStretch()
-        lay.addLayout(srow)
-        lay.addWidget(QLabel("影响游戏内敌方 CD 悬浮窗的图标与文字大小。"))
         root.addWidget(box)
 
         self.spin_refresh.valueChanged.connect(self._on_refresh_changed)
-        self.cmb_overlay_scale.currentIndexChanged.connect(self._on_overlay_scale)
 
     def _on_overlay_toggle(self, on: bool) -> None:
         if self._overlay_toggle is not None:
             self._overlay_toggle(on)
-
-    def _on_overlay_scale(self, *_args) -> None:
-        s = float(self.cmb_overlay_scale.currentData() or 1.0)
-        save_ui_prefs({"overlay_scale": s})
 
     def _build_reset_row(self, root: QVBoxLayout) -> None:
         """设置页底部：恢复默认设置（只重置设置页管理的配置）。"""
@@ -506,8 +488,6 @@ class SettingsPanel(QWidget):
             self._overlay_toggle(True)  # 先同步后端（set_enabled(True)）
         self.btn_overlay.set_state(True)  # 再同步 UI（blockSignals，不重复触发回调）
         self.spin_refresh.setValue(int(prefs.get("ui_refresh_interval", 500)))
-        idx = self.cmb_overlay_scale.findData(1.0)
-        self.cmb_overlay_scale.setCurrentIndex(idx if idx >= 0 else 1)
         if self._on_refresh_changed is not None:
             self._on_refresh_changed(int(prefs.get("ui_refresh_interval", 500)))
         if self._tts is not None:

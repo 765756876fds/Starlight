@@ -184,6 +184,7 @@ class OverlayWindow(QWidget):
         super().__init__(parent)
         self._model = model
         self._drag_offset = None
+        # 固定尺寸：只读一次，之后不再变化（悬浮窗大小调整功能已移除）
         try:
             self._scale = float(load_ui_prefs().get("overlay_scale", 1.0))
         except Exception:
@@ -215,11 +216,6 @@ class OverlayWindow(QWidget):
         self._timer.timeout.connect(self._refresh)
         self._timer.start(100)
 
-        # 2s 低频检查 ui_prefs 的缩放变化（设置页改动后自动生效，不依赖 main 接线）
-        self._scale_check = QTimer(self)
-        self._scale_check.timeout.connect(self._check_scale)
-        self._scale_check.start(2000)
-
         self._place_default()
         self._apply_ws_ex_layered()
         self.hide()
@@ -227,13 +223,11 @@ class OverlayWindow(QWidget):
     def hideEvent(self, event):
         """隐藏时停定时器（不做无用功）；show 时重启。"""
         self._timer.stop()
-        self._scale_check.stop()
         super().hideEvent(event)
 
     def showEvent(self, event):
-        """显示时重启刷新与缩放检查定时器。"""
+        """显示时重启刷新定时器。"""
         self._timer.start(100)
-        self._scale_check.start(2000)
         super().showEvent(event)
 
     def _apply_ws_ex_layered(self) -> None:
@@ -278,7 +272,7 @@ class OverlayWindow(QWidget):
         self.setGeometry(x, y, w, h)
 
     def set_scale(self, scale: float) -> None:
-        """设置缩放系数（紧凑 0.8 / 标准 1.0 / 大 1.2），立即重定位。"""
+        """设置缩放系数（保留内部方法，仅用于固定尺寸初始化；外部不再调用）。"""
         scale = float(scale)
         if scale <= 0 or scale > 3:
             scale = 1.0
@@ -286,18 +280,6 @@ class OverlayWindow(QWidget):
             return
         self._scale = scale
         self._place_default()
-
-    def _check_scale(self) -> None:
-        """低频检查 ui_prefs 缩放设置变化（设置页改后自动生效）。"""
-        try:
-            s = float(load_ui_prefs().get("overlay_scale", 1.0))
-        except Exception:
-            return
-        if s <= 0 or s > 3:
-            s = 1.0
-        if abs(s - self._scale) > 1e-6:
-            self._scale = s
-            self._place_default()
 
     # ---- 拖动：按下空白/头像区域拖动窗口；技能图标点击仍由子控件消费 ----
     def mousePressEvent(self, event):

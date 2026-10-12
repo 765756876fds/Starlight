@@ -9,7 +9,7 @@ import json
 import os
 import threading
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()  # 可重入：save_ui_prefs 内部调 load_ui_prefs（同锁），Lock 会死锁
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MUSIC_DIRS_PATH = os.path.join(_ROOT, "config", "music_dirs.json")
 UI_PREFS_PATH = os.path.join(_ROOT, "config", "ui_prefs.json")
@@ -21,7 +21,6 @@ DEFAULT_PREFS = {
     "combo_window_gate": True,   # 仅 LoL 前台时触发（持久化）
     "equip_notify": True,        # 敌方装备语音提醒（持久化）
     "ui_refresh_interval": 500,  # 界面刷新间隔 ms
-    "overlay_scale": 1.0,        # 悬浮窗缩放系数（0.8 紧凑 / 1.0 标准 / 1.2 大）
 }
 
 

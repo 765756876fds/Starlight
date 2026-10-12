@@ -67,7 +67,6 @@ def win(qapp):
     w = OverlayWindow(m)
     yield w, m
     w._timer.stop()
-    w._scale_check.stop()
     w.deleteLater()
 
 
