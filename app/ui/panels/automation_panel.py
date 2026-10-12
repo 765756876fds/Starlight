@@ -1,8 +1,8 @@
 """自动化面板：4 个开关 + 状态显示。"""
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QPushButton, QGroupBox, QLabel, QSizePolicy, QVBoxLayout,
-    QWidget,
+    QHBoxLayout, QPushButton, QGroupBox, QLabel, QSizePolicy, QSpacerItem,
+    QVBoxLayout, QWidget,
 )
 
 from ..widgets.toggle_button import ToggleButton
@@ -49,10 +49,9 @@ class AutomationPanel(QWidget):
                 g.clicked.connect(gear)
                 r.addWidget(g)
             else:
-                # 无 ⚙ 的行：36px 空占位，保证与其他行右侧空间一致 → 4 按钮等宽
-                _spacer = QWidget()
-                _spacer.setFixedWidth(36)
-                r.addWidget(_spacer)
+                # 无 ⚙ 的行：36px 纯空间占位（QSpacerItem 无外观，不会被 QSS 渲染）
+                r.addSpacerItem(QSpacerItem(36, 0, QSizePolicy.Fixed,
+                                            QSizePolicy.Minimum))
             return r
 
         form.addLayout(_row(self.btn_queue, self._open_queue_config))
