@@ -420,6 +420,7 @@ class SettingsPanel(QWidget):
         save_ui_prefs({"equip_notify": on})
         if self._equip_toggle is not None:
             self._equip_toggle(on)
+        print(f"[Equipment] 装备提醒: {'开' if on else '关'}")  # 对齐 [Combo] 格式
 
     # ---------- 🖥️ 界面 ----------
 
