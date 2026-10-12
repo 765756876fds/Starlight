@@ -1,8 +1,8 @@
 """自动化面板：4 个开关 + 状态显示。"""
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QPushButton, QGroupBox, QLabel, QSizePolicy, QSpacerItem,
-    QVBoxLayout, QWidget,
+    QHBoxLayout, QPushButton, QGroupBox, QLabel, QSizePolicy, QVBoxLayout,
+    QWidget,
 )
 
 from ..widgets.toggle_button import ToggleButton
@@ -48,14 +48,10 @@ class AutomationPanel(QWidget):
                 g.setFixedWidth(36)
                 g.clicked.connect(gear)
                 r.addWidget(g)
-            else:
-                # 无 ⚙ 的行：36px 纯空间占位（QSpacerItem 无外观，不会被 QSS 渲染）
-                r.addSpacerItem(QSpacerItem(36, 0, QSizePolicy.Fixed,
-                                            QSizePolicy.Minimum))
             return r
 
         form.addLayout(_row(self.btn_queue, self._open_queue_config))
-        form.addLayout(_row(self.btn_accept))
+        form.addLayout(_row(self.btn_accept, self._open_accept_config))
         form.addLayout(_row(self.btn_ban, self._open_ban_config))
         form.addLayout(_row(self.btn_pick, self._open_pick_config))
 
@@ -128,6 +124,32 @@ class AutomationPanel(QWidget):
                     yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
             except Exception as e:
                 print(f"[UI] save yaml failed: {e}")
+
+    def _open_accept_config(self):
+        """延迟接受配置：写入 automation.accept_delay（ready_check_controller 已消费）。"""
+        if self._svc is None:
+            return
+        cfg = getattr(self._svc, "config", None)
+        cur = float(getattr(cfg, "accept_delay", 0.0) or 0.0)
+        from PySide6.QtWidgets import QInputDialog
+        val, ok = QInputDialog.getDouble(self, "延迟接受配置",
+                                         "延迟接受（秒，0=立即接受）：",
+                                         cur, 0.0, 30.0, 1)
+        if not ok:
+            return
+        try:
+            setattr(cfg, "accept_delay", val)
+            # 同时保存到yaml配置（沿用现有模式）
+            import yaml
+            path = "config/settings.yaml"
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            data.setdefault("automation", {})["accept_delay"] = val
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+            print(f"[UI] accept_delay saved: {val}")
+        except Exception as e:
+            print(f"[UI] save accept_delay failed: {e}")
 
     def _open_ban_config(self):
         self._open_banpick("自动禁用配置", "ban_priority")
