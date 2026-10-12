@@ -210,6 +210,12 @@ class RuleBasedIntent:
         text = re.sub(r'([QqWwEeRr])\s*大招', r'\1', text)
         # 2) 英雄名与技能字母之间的中文标点 -> 去掉（"石头人，R" -> "石头人R"）
         text = re.sub(r'([一-鿿])\s*[，,、]\s*([QqWwEeRr])', r'\1\2', text)
+        # 句尾语气词清理：ASR 常带"下一首啊"/"暂停呗"等句尾语气词，strip 后不影响匹配
+        # 只清句尾（"啊"若出现在句中不碰）；清完变空则保留原文（避免"啊"单独输入被清成空）
+        _tail = text
+        text = re.sub(r"[啊呢呀哦吧哈嘛噢呗啦哟诶]+$", "", text)
+        if not text:
+            text = _tail
 
         # 音乐控制
         for pattern, command, base_params in cls.MUSIC_RULES:

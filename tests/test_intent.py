@@ -59,6 +59,30 @@ class TestRuleBasedIntent:
         assert intent is not None
         assert intent.intent_type == "music.resume"
 
+    def test_tail_particle_cleaned(self):
+        """句尾语气词清理：下一首啊/暂停呗/上一首呢 → 命中"""
+        cases = [
+            ("下一首啊", "music.next"),
+            ("暂停呗", "music.pause"),
+            ("上一首呢", "music.previous"),
+        ]
+        for text, expected in cases:
+            intent = RuleBasedIntent.match(text)
+            assert intent is not None, f"{text} 应命中"
+            assert intent.intent_type == expected, f"{text} → {intent.intent_type}"
+
+    def test_particle_in_word_not_cleaned(self):
+        """句中字不清：阿卡丽 不应被误清成可识别指令"""
+        intent = RuleBasedIntent.match("阿卡丽")
+        assert intent is None
+
+    def test_search_play_query_intact(self):
+        """强反例：播放阿卡丽 → 命中 search_play，查询词完整（清尾规则不动句中字）"""
+        intent = RuleBasedIntent.match("播放阿卡丽")
+        assert intent is not None
+        assert intent.intent_type == "music.search_play"
+        assert intent.params.get("query") == "阿卡丽"
+
     def test_volume_up(self):
         intent = RuleBasedIntent.match("音量大一点")
         assert intent is not None

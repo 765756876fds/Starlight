@@ -41,9 +41,11 @@ class StateStore:
             return ns_data.get(key, default)
 
     def get_namespace(self, namespace: str) -> Dict[str, Any]:
-        """获取整个命名空间的状态"""
+        """获取整个命名空间的状态（过滤内部 {key}__updated_at，与 snapshot() 一致）"""
         with self._lock:
-            return self._data.get(namespace, {}).copy()
+            ns_data = self._data.get(namespace, {})
+            return {k: v for k, v in ns_data.items()
+                    if not k.endswith("__updated_at")}
 
     def has(self, namespace: str, key: str) -> bool:
         """检查键是否存在"""
