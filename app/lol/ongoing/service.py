@@ -116,6 +116,8 @@ class OngoingGameService:
         self._retry_state: dict = {}
         # session_created 防抖：已宣布过的 session 标识（离开对局清空，防 gameId 复用误判同局）
         self._announced_session_id = None
+        # gameflow dump 日志去重：记录上次打印的 (gameMode/人数/puuid数)，相同内容不重复打印
+        self._last_gf_dump = None
         # force 重载：retry 触发时置 True，下一次加载绕过 ERROR cache 真正重新请求
         self._force_reload = False
         # ChampSelect 完整 session 缓存：人机/匹配选人阶段 10 人含 puuid，
@@ -321,9 +323,12 @@ class OngoingGameService:
             return None
         one_puuids = {(m.get("puuid") or "") for m in t1 if m.get("puuid")}
         two_puuids = {(m.get("puuid") or "") for m in t2 if m.get("puuid")}
-        # 脱敏诊断：只打数量，不打 puuid（实证真人局/人机局 teamTwo 是否有数据）
-        print(f"[Ongoing] gameflow session: gameMode={gd.get('gameMode')} "
-              f"teamOne={len(t1)}(puuid{len(one_puuids)}) teamTwo={len(t2)}(puuid{len(two_puuids)})")
+        # 脱敏诊断：只打数量，不打 puuid；仅在 (gameMode/人数/puuid数) 变化时打一次
+        dump_key = (gd.get("gameMode"), len(t1), len(t2), len(one_puuids), len(two_puuids))
+        if self._last_gf_dump != dump_key:
+            self._last_gf_dump = dump_key
+            print(f"[Ongoing] gameflow session: gameMode={gd.get('gameMode')} "
+                  f"teamOne={len(t1)}(puuid{len(one_puuids)}) teamTwo={len(t2)}(puuid{len(two_puuids)})")
         my_is_one = (me_puuid in one_puuids) if me_puuid else True
         my_src, their_src = (t1, t2) if my_is_one else (t2, t1)
         my_team = [self._gf_cell(m) for m in my_src if (m.get("puuid") or "")]

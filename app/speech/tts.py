@@ -266,7 +266,7 @@ class TTSController:
         try:
             import edge_tts
 
-            # 生成唯一文件名
+            # 生成唯一文件名（重试复用同一路径覆盖写，避免失败一次残留一个文件）
             filename = f"tts_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}.mp3"
             output_file = os.path.join(self.output_dir, filename)
 
@@ -280,20 +280,39 @@ class TTSController:
                 )
                 await communicate.save(output_file)
 
-            # 在我们的事件循环中运行
-            if self._event_loop:
-                future = asyncio.run_coroutine_threadsafe(_gen(), self._event_loop)
-                future.result(timeout=10)  # 10 秒超时
-            else:
-                # 兜底：直接在当前线程运行
-                asyncio.run(_gen())
+            # Edge TTS 403（微软端点限流/风控）：等 1s→3s 重试 2 次，最多多等 4 秒；
+            # 非 403 异常直接放弃（保持现有降级），不阻塞太久
+            for attempt, wait in ((1, 0), (2, 1), (3, 3)):
+                try:
+                    # 在我们的事件循环中运行
+                    if self._event_loop:
+                        future = asyncio.run_coroutine_threadsafe(_gen(), self._event_loop)
+                        future.result(timeout=10)  # 10 秒超时
+                    else:
+                        # 兜底：直接在当前线程运行
+                        asyncio.run(_gen())
 
-            # 检查文件
-            if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
-                return output_file
-            else:
-                print("[TTS] 生成的音频文件无效")
-                return None
+                    # 检查文件
+                    if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
+                        return output_file
+                    else:
+                        print("[TTS] 生成的音频文件无效")
+                        return None
+                except Exception as e:
+                    if ("403" in str(e) or "Invalid response status" in str(e)) and attempt < 3:
+                        print(f"[TTS] Edge TTS 生成失败（HTTP 403，第 {attempt} 次），等待 {wait} 秒重试")
+                        time.sleep(wait)
+                        continue
+                    print(f"[TTS] Edge TTS 生成失败: {e}")
+                    # 3 次全失败：清理残留文件（避免失败一次留一个垃圾）
+                    try:
+                        if os.path.exists(output_file):
+                            os.remove(output_file)
+                    except Exception:
+                        pass
+                    return None
+            print("[TTS] Edge TTS 生成失败（3 次重试后放弃）")
+            return None
 
         except Exception as e:
             print(f"[TTS] Edge TTS 生成失败: {e}")

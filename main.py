@@ -145,16 +145,22 @@ class Application:
             print(f"[ASR] 启动 llama-server 失败: {e}")
             return
 
-        # 等待 ASR 就绪（最多 60 秒）
+        # 等待 ASR 就绪（最多 60 秒）：轮询 /models 返回 200 才算就绪。
+        # 端口占用 ≠ 就绪——llama-server 先监听端口再加载模型（模型未就绪时 /models 返回 503）
+        import requests as _rq
         for i in range(60):
             time.sleep(1)
-            if _port_in_use():
-                print(f"[ASR] 就绪（等待 {i+1} 秒）")
-                return
+            try:
+                resp = _rq.get(f"http://{host}:{port}/v1/models", timeout=1)
+                if resp.status_code == 200:
+                    print(f"[ASR] 就绪（等待 {i+1} 秒）")
+                    return
+            except Exception:
+                pass
             if i % 10 == 0:
                 print(f"[ASR] 等待中... ({i}s)")
 
-        print("[ASR] WARNING: 等待 ASR 超时（60s），VoiceRuntime 将尝试连接")
+        print("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
 
     def initialize(self):
         if Application._initialized:

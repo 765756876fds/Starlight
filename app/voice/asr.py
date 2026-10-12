@@ -157,18 +157,28 @@ class Qwen3ServerASR(ASREngine):
         self._client = None
         self._loaded = False
 
-    def load(self):
-        """测试连接"""
-        try:
-            import requests
-            resp = requests.get(f"{self.base_url}/models", timeout=0.5)
-            if resp.status_code == 200:
-                self._loaded = True
-                print(f"[ASR] llama-server 已连接: {self.base_url}")
-            else:
+    def load(self, retry_seconds: float = 0.0):
+        """测试连接。retry_seconds>0 时：503/异常等 2 秒重试，总时长 ≤ retry_seconds。
+
+        默认 0 = 单次探测（转写路径用，不阻塞调用线程）；
+        首次加载（ASRManager.initialize / main 拉起）用 retry_seconds>0 等到模型真正就绪。
+        """
+        deadline = time.monotonic() + retry_seconds
+        while True:
+            try:
+                import requests
+                resp = requests.get(f"{self.base_url}/models", timeout=0.5)
+                if resp.status_code == 200:
+                    self._loaded = True
+                    print(f"[ASR] llama-server 已连接: {self.base_url}")
+                    return
                 print(f"[ASR] llama-server 连接失败: HTTP {resp.status_code}")
-        except Exception as e:
-            print(f"[ASR] llama-server 连接失败: {e}")
+            except Exception as e:
+                print(f"[ASR] llama-server 连接失败: {e}")
+            if retry_seconds <= 0 or time.monotonic() >= deadline:
+                self._loaded = False
+                return
+            time.sleep(2)
 
     def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
         """转录音频"""
@@ -263,14 +273,18 @@ class ASRManager:
             except ImportError:
                 print("[ASR] llama-cpp-python 未安装，跳过 Qwen3-ASR")
 
-        # 加载第一个可用引擎
-        self._load_next_engine()
+        # 加载第一个可用引擎（首次加载：允许长等待模型就绪）
+        self._load_next_engine(initial=True)
 
-    def _load_next_engine(self) -> bool:
-        """加载下一个可用引擎"""
+    def _load_next_engine(self, initial: bool = False) -> bool:
+        """加载下一个可用引擎。
+
+        initial=True（仅 initialize 首次加载）：允许长等待（最多 30 秒等模型就绪）；
+        initial=False（转写/切换路径）：单次探测，不阻塞调用线程。
+        """
         for engine in self.engines:
             if not engine.is_available():
-                engine.load()
+                engine.load(retry_seconds=30.0 if initial else 0.0)
                 if engine.is_available():
                     self._active_engine = engine
                     return True

@@ -175,3 +175,32 @@ def test_game_id_reused_after_leave_reannounced():
     time.sleep(0.3)
 
     assert sum(1 for c, _ in events if c == "ongoing.session_created") == 2
+
+
+def test_gameflow_dump_only_on_change():
+    """dump 日志只在 (gameMode/人数/puuid数) 变化时打：同局稳定不刷屏，变化时再打"""
+    import builtins
+    from unittest import mock
+
+    lcu = FakeLCU(connected=True)
+    lcu.set_phase("InProgress")
+    lcu.set_gameflow(123)
+    events = []
+    svc = _make_svc(lcu, events)
+
+    with mock.patch("builtins.print") as m:
+        svc._tick()
+        time.sleep(0.3)
+        svc._tick()                              # 同局相同数据 → 不打
+        time.sleep(0.3)
+    dump_calls = [c for c in m.call_args_list if "gameflow session" in str(c)]
+    assert len(dump_calls) == 1                  # 两次 tick 只打一次
+
+    # 数据变化（teamTwo 人数变）→ 再打一次
+    gf = lcu._responses["/lol-gameflow/v1/session"]
+    gf["gameData"]["teamTwo"] = [_gf_cell("t2-x")]
+    with mock.patch("builtins.print") as m2:
+        svc._tick()
+        time.sleep(0.3)
+    dump_calls2 = [c for c in m2.call_args_list if "gameflow session" in str(c)]
+    assert len(dump_calls2) == 1                  # 变化后打一次
