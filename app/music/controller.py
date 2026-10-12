@@ -89,11 +89,13 @@ def _kw_bonus(name: str) -> int:
     return 0 if ("kw" in n or "酷我" in n) else 1
 
 
-def _pick_best(all_tracks, manager):
-    """同组（同一首歌）内选音质最优 + 最快；组间取"首个 source 第一条"所在组
-    （保留原"搜到啥播啥"的相关性语义，不全局抢音质）。"""
+def _pick_candidates(all_tracks, manager):
+    """首选组（同一首歌）内按 (音质降序, 耗时升序, 酷我优先, 原顺序) 排序的
+    候选列表——调用方逐个试 get_play_url，直到拿到 URL（failover）。
+    组间取"首个 source 第一条"所在组（保留原"搜到啥播啥"的相关性语义，
+    不全局抢音质）。"""
     if not all_tracks:
-        return None
+        return []
     groups = {}
     for idx, r in enumerate(all_tracks):
         key = _normalize(r.title) + "|" + _normalize(r.artist)
@@ -101,7 +103,7 @@ def _pick_best(all_tracks, manager):
     # 首选组 = 首个 source 第一条所在组（原行为 all_tracks[0] 的歌，相关性最高）
     first_key = _normalize(all_tracks[0].title) + "|" + _normalize(all_tracks[0].artist)
     group = groups[first_key]
-    # 组内：音质降序 → 耗时升序 → 酷我优先 → 原顺序
+
     def _lat(name):
         v = manager.get_latency(name) if hasattr(manager, "get_latency") else None
         return v if isinstance(v, (int, float)) else 99.0
@@ -109,7 +111,13 @@ def _pick_best(all_tracks, manager):
                               _lat(t[1].source_name),
                               _kw_bonus(t[1].source_name),
                               t[0]))
-    return group[0][1]
+    return [t[1] for t in group]
+
+
+def _pick_best(all_tracks, manager):
+    """首选（兼容旧接口）：候选列表第一个，无候选返回 None。"""
+    cands = _pick_candidates(all_tracks, manager)
+    return cands[0] if cands else None
 
 
 class MusicController:
@@ -428,15 +436,26 @@ class MusicController:
                     all_tracks.extend(tracks)
                 if all_tracks:
                     # 选源：同一首歌多源时，音质最优 → 同音质选最快（替代旧的"酷我优先"；
-                    # 同音质同耗时时酷我系仍优先兜底，验证过能播）
-                    chosen = _pick_best(all_tracks, self.online_manager)
+                    # 同音质同耗时时酷我系仍优先兜底，验证过能播）。
+                    # failover：候选列表逐个试 get_play_url，第一个拿到 URL 的胜出
+                    # （某源该歌 VIP/档位限制拿不到 URL 时，自动试下一个源）。
+                    candidates = _pick_candidates(all_tracks, self.online_manager)
+                    _t_url_start = time.time()
+                    chosen, play_result = None, None
+                    for cand in candidates:
+                        play_result = self.online_manager.get_play_url(cand)
+                        if play_result and play_result.get("url"):
+                            chosen = cand
+                            break
+
+                    if chosen is None:
+                        print(f"[Music] 获取播放URL失败（{len(candidates)} 个候选均无 URL），无法在线播放")
+                        return None
 
                     print(f"[Music] 在线找到: {chosen.title} - {chosen.artist} (音源: {chosen.source_name})")
                     # 定向取 URL：只调 chosen 对应的音源（manager 按 track.source_name 路由）。
                     # 旧逻辑遍历所有源串行调 get_play_url，demo/archive 对陌生 track 各自
                     # 发起 HTTP（超时 8s/个），导致在线播放最高 ~16s 延迟。
-                    _t_url_start = time.time()
-                    play_result = self.online_manager.get_play_url(chosen)
                     _t_url_ms = int((time.time() - _t_url_start) * 1000)
                     print(f"[Music] 获取播放URL，耗时 {_t_url_ms}ms")
                     if play_result:

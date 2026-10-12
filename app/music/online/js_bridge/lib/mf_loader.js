@@ -79,16 +79,29 @@ async function callSearch(plugin, keyword, limit) {
 async function callGetUrl(plugin, rawItem, quality) {
   if (typeof plugin.getMediaSource !== 'function') return null;
   const item = rawItem || { id: '' };
-  const result = await plugin.getMediaSource(item, quality || '320k');
-  if (!result) return null;
-  if (typeof result === 'string') return { url: result, quality };
-  const out = { url: result.url, quality: result.quality || quality };
-  // 透传插件返回的 headers（如开心汽水给 douyin Referer），供播放链设置
-  if (result.headers && typeof result.headers === 'object'
-      && Object.keys(result.headers).length) {
-    out.headers = result.headers;
+  const want = quality || 'high';
+  // 逐级回退：high → standard → low。MusicFree 插件标准音质键是
+  // low/standard/high/super（'320k' 不是标准键，kg/wy 会 qualities['320k']
+  // 查不到直接 return null）；部分歌曲只有低档/VIP 限制，回退保证能播。
+  for (const q of [...new Set([want, 'standard', 'low'])]) {
+    try {
+      const result = await plugin.getMediaSource(item, q);
+      if (!result) continue;
+      if (typeof result === 'string') return { url: result, quality: q };
+      if (result.url) {
+        const out = { url: result.url, quality: result.quality || q };
+        // 透传插件返回的 headers（如开心汽水给 douyin Referer），供播放链设置
+        if (result.headers && typeof result.headers === 'object'
+            && Object.keys(result.headers).length) {
+          out.headers = result.headers;
+        }
+        return out;
+      }
+    } catch (e) {
+      continue; // 该档失败 → 试下一档
+    }
   }
-  return out;
+  return null;
 }
 
 async function callGetLyric(plugin, rawItem) {

@@ -1,6 +1,6 @@
 """在线选源：音质提取 / 归一化 / 首选选择 单测。"""
 from app.music.controller import (
-    _kw_bonus, _normalize, _pick_best, _quality_score,
+    _kw_bonus, _normalize, _pick_best, _pick_candidates, _quality_score,
 )
 from app.music.online.models import OnlineTrack
 
@@ -110,6 +110,37 @@ def test_pick_best_does_not_steal_from_other_song():
 def test_pick_best_single_track():
     t = _trk("kw", "晴天", "周杰伦", None)
     assert _pick_best([t], FakeMgr()) is t
+
+
+# ---------- _pick_candidates（failover 候选列表）----------
+
+def test_pick_candidates_returns_sorted_list():
+    tracks = [
+        _trk("kw", "晴天", "周杰伦", {"qualities": {"low": {}, "standard": {}}}),   # 2 慢
+        _trk("kg", "晴天", "周杰伦", {"qualities": {"low": {}, "high": {}}}),       # 3 快
+    ]
+    mgr = FakeMgr({"kw": 0.9, "kg": 0.1})
+    cands = _pick_candidates(tracks, mgr)
+    assert [c.source_name for c in cands] == ["kg", "kw"]   # 音质优先
+
+
+def test_pick_candidates_excludes_other_song():
+    # 别的歌手的 flac 不进候选（首选组 = 首条所在组）
+    tracks = [
+        _trk("kw", "晴天", "周杰伦", {"qualities": {"low": {}, "standard": {}}}),
+        _trk("kg", "晴天", "晚风纯音", {"qualities": {"low": {}, "high": {}}}),
+    ]
+    cands = _pick_candidates(tracks, FakeMgr())
+    assert [c.artist for c in cands] == ["周杰伦"]
+
+
+def test_pick_candidates_empty():
+    assert _pick_candidates([], FakeMgr()) == []
+
+
+def test_pick_candidates_single():
+    t = _trk("kw", "晴天", "周杰伦", None)
+    assert _pick_candidates([t], FakeMgr()) == [t]
 
 
 # ---------- _kw_bonus ----------

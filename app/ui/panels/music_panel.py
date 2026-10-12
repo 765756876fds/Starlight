@@ -324,7 +324,9 @@ class MusicPanel(QWidget):
             if source_filter and src != source_filter:
                 continue
             for t in tracks:
-                item = QListWidgetItem(f"[{src}] {t.title} - {t.artist}")
+                # 显示具体插件源名（t.source_name = 插件 platform，如"酷我音乐"），
+                # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
+                item = QListWidgetItem(f"[{t.source_name}] {t.title} - {t.artist}")
                 self.list_results.addItem(item)
                 self._tracks_by_row.append(t)
                 n += 1

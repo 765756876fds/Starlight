@@ -243,7 +243,7 @@ class JSMusicSource(MusicSource):
         r = self._call("getUrl", {
             "source": track.source_name,
             "track_id": track.track_id,
-            "quality": "320k",
+            "quality": "high",   # MusicFree 标准音质键（'320k' 非标准，kg/wy 会直接失败）
             "raw_item": track.extra.get("_raw"),
         })
         print(f"[getUrl] <- {track.source_name} raw={None if r is None else 'dict'}", flush=True)
