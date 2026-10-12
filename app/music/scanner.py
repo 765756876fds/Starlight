@@ -70,6 +70,12 @@ class MusicScanner:
                 self._error_count += 1
                 print(f"[Scanner] 处理文件失败 {filepath}: {e}")
 
+        # 扫描完成：WAL checkpoint，防 -wal 无限膨胀（写放大集中在扫描）
+        try:
+            self.db.checkpoint()
+        except Exception as e:
+            print(f"[Scanner] WAL checkpoint 失败: {e}")
+
         return {
             "scanned": self._scanned_count,
             "added": self._added_count,

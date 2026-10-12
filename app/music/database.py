@@ -22,7 +22,9 @@ class MusicDatabase:
         self._conn: Optional[sqlite3.Connection] = None
         # 连接级互斥：scanner 后台 highlight 线程与 playback/UI 线程共享同一连接
         # （check_same_thread=False + WAL 只保证读写不互斥，写写并发仍需应用层锁）
-        self._lock = threading.Lock()
+        # RLock：close() 先调 checkpoint()（内部拿锁），再 with self._lock——
+        # 顺序获取本不死锁，但用可重入锁防御未来"锁内再拿锁"的嵌套调用
+        self._lock = threading.RLock()
         self._connect()
         self._init_tables()
 
@@ -369,8 +371,24 @@ class MusicDatabase:
                 "DELETE FROM music_highlight WHERE song_id = ?", (song_id,))
             self._conn.commit()
 
+    def checkpoint(self):
+        """WAL checkpoint：把 WAL 内容合并回主库并截断（防 -wal 无限膨胀）。
+
+        扫描是主要写入源（全量 upsert + FTS 同步 + highlight），扫描完成后调用
+        一次即收干净；进程退出（close）前再兜底一次。
+        """
+        with self._lock:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception as e:
+                print(f"[DB] WAL checkpoint 失败: {e}")
+
     def close(self):
-        """关闭数据库连接"""
+        """关闭数据库连接（先 checkpoint 落盘）"""
+        try:
+            self.checkpoint()
+        except Exception:
+            pass
         with self._lock:
             if self._conn:
                 self._conn.close()

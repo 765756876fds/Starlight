@@ -16,7 +16,7 @@ import json
 import uuid
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from .event_bus import Event, EventBus, get_event_bus
@@ -74,10 +74,73 @@ class EventLog:
         if self._running:
             return
 
+        self._prune_old_logs()
         self._running = True
         event_bus = get_event_bus()
         event_bus.subscribe_all(self._on_event)
         print(f"[EventLog] 已启动，日志目录: {self.log_dir}")
+
+    def _prune_old_logs(self, max_total_mb: float = 200.0, keep_days: int = 7):
+        """启动时清理旧日志：保留最近 keep_days 天；总量超上限从最旧删到 < 上限。
+
+        只删 data/events/ 下的 .jsonl；今日文件（可能正被写入）不删。
+        """
+        try:
+            if not os.path.isdir(self.log_dir):
+                return
+            files = [f for f in os.listdir(self.log_dir) if f.endswith(".jsonl")]
+            if not files:
+                return
+
+            today = datetime.now()
+            deleted, freed = 0, 0
+            remaining = []
+            for f in files:
+                path = os.path.join(self.log_dir, f)
+                is_old = False
+                try:
+                    d = datetime.strptime(f[:10], "%Y-%m-%d")
+                    is_old = d < today - timedelta(days=keep_days)
+                except ValueError:
+                    is_old = False  # 文件名无法解析日期的保留
+                if is_old:
+                    try:
+                        sz = os.path.getsize(path)
+                        os.remove(path)
+                        deleted += 1
+                        freed += sz
+                    except OSError:
+                        pass
+                else:
+                    remaining.append(path)
+
+            # 总量兜底：> max_total_mb 时从最旧删（文件名=日期，旧在前）
+            if remaining:
+                total = sum(os.path.getsize(p) for p in remaining)
+                limit = int(max_total_mb * 1024 * 1024)
+                if total > limit:
+                    today_prefix = today.strftime("%Y-%m-%d")
+                    for p in sorted(remaining):
+                        if total <= limit:
+                            break
+                        if os.path.basename(p).startswith(today_prefix):
+                            continue  # 今日文件不动
+                        try:
+                            sz = os.path.getsize(p)
+                            os.remove(p)
+                            total -= sz
+                            deleted += 1
+                            freed += sz
+                        except OSError:
+                            pass
+
+            if deleted:
+                print(
+                    f"[EventLog] 清理旧日志: 删除 {deleted} 个文件, "
+                    f"释放 {freed / 1024 / 1024:.1f} MB"
+                )
+        except Exception as e:
+            print(f"[EventLog] 清理旧日志失败: {e}")
 
     def stop(self):
         """停止 EventLog，关闭文件"""
