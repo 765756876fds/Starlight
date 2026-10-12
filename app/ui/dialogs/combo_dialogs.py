@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 from typing import List, Optional, Tuple
+from app.ui.theme.colors import Colors
+
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -94,7 +96,7 @@ class TriggerCaptureDialog(QDialog):
         layout.addWidget(self.lbl_display)
         self.lbl_hint = QLabel("支持字母与主键盘数字；Shift/Ctrl/F1 等特殊键不支持")
         self.lbl_hint.setWordWrap(True)
-        self.lbl_hint.setStyleSheet("color: #9090a8; font-size: 11px;")
+        self.lbl_hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         layout.addWidget(self.lbl_hint)
 
         btns = QHBoxLayout()

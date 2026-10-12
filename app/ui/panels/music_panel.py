@@ -1,9 +1,11 @@
-﻿"""音乐面板（本地 + 在线）。"""
+"""音乐面板（本地 + 在线）。"""
 from PySide6.QtCore import QThread, Qt, QTimer, QObject, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget,
 )
+
+from ..theme.colors import Colors
 
 
 class _SearchWorker(QObject):
@@ -63,7 +65,7 @@ class MusicPanel(QWidget):
         self.btn_scan_local.clicked.connect(self._on_scan_local)
         scan_row.addWidget(self.btn_scan_local)
         self.lbl_scan_status = QLabel("")
-        self.lbl_scan_status.setStyleSheet("color: #9090a8; font-size: 11px;")
+        self.lbl_scan_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         scan_row.addWidget(self.lbl_scan_status)
         scan_row.addStretch()
         ll.addLayout(scan_row)

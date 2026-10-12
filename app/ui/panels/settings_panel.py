@@ -9,17 +9,19 @@
 from __future__ import annotations
 
 from typing import Callable, Optional
+from app.ui.theme.colors import Colors
+
 
 from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-    QListWidget, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
+    QListWidget, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
     QVBoxLayout, QWidget,
 )
 
 from ..settings_store import (
     ALL_EXTENSIONS, load_music_dirs, save_music_dirs,
-    load_ui_prefs, save_ui_prefs, save_settings_yaml,
+    load_ui_prefs, save_ui_prefs, save_settings_yaml, reset_ui_prefs, reset_music_dirs,
     SETTINGS_PATH as _SETTINGS_PATH,
 )
 from ..widgets.toggle_button import ToggleButton
@@ -123,6 +125,7 @@ class SettingsPanel(QWidget):
         self._build_lol_group(root)
         self._build_ui_group(root)
         root.addStretch(1)
+        self._build_reset_row(root)
 
     # ---------- 🎵 音乐目录管理 ----------
 
@@ -150,7 +153,7 @@ class SettingsPanel(QWidget):
         self.btn_source_manage = QPushButton("音源管理…")
         self.btn_source_manage.clicked.connect(self._on_source_manage)
         self.lbl_scan_status = QLabel("")
-        self.lbl_scan_status.setStyleSheet("color: #9090a8; font-size: 11px;")
+        self.lbl_scan_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         btns.addWidget(self.btn_add_dir)
         btns.addWidget(self.btn_scan_all)
         btns.addWidget(self.btn_source_manage)
@@ -177,7 +180,7 @@ class SettingsPanel(QWidget):
                 w.deleteLater()
         if not self._dirs:
             lbl = QLabel("暂无音乐目录，点击「+ 添加目录」添加")
-            lbl.setStyleSheet("color: #9090a8; font-size: 11px;")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
             self._dirs_layout.addWidget(lbl)
             return
         for i, d in enumerate(self._dirs):
@@ -207,7 +210,7 @@ class SettingsPanel(QWidget):
         btn_del.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         btn_del.setMinimumWidth(32)
         btn_del.setFixedHeight(28)
-        btn_del.setStyleSheet("color: #d9534f; font-weight: bold;")
+        btn_del.setStyleSheet(f"color: {Colors.DANGER}; font-weight: bold;")
         btn_del.setToolTip("删除此目录")
         btn_del.clicked.connect(lambda _=False, i=idx: self._on_del_dir(i))
         h.addWidget(btn_del)
@@ -318,7 +321,7 @@ class SettingsPanel(QWidget):
         self._rate_slider.setRange(-50, 50)
         self._rate_slider.setValue(0)
         self.lbl_rate = QLabel("语速：+0%")
-        self.lbl_rate.setStyleSheet("color: #9090a8; font-size: 11px;")
+        self.lbl_rate.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         lay.addWidget(self.lbl_rate)
         lay.addWidget(self._rate_slider)
 
@@ -326,7 +329,7 @@ class SettingsPanel(QWidget):
         self._vol_slider.setRange(0, 100)
         self._vol_slider.setValue(0)
         self.lbl_vol = QLabel("音量：+0%")
-        self.lbl_vol.setStyleSheet("color: #9090a8; font-size: 11px;")
+        self.lbl_vol.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         lay.addWidget(self.lbl_vol)
         lay.addWidget(self._vol_slider)
 
@@ -429,8 +432,74 @@ class SettingsPanel(QWidget):
         irow.addStretch()
         lay.addLayout(irow)
         lay.addWidget(QLabel("影响主界面各面板的定时刷新频率（当前值仅存 ui_prefs.json）。"))
+
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel("悬浮窗大小："))
+        self.cmb_overlay_scale = QComboBox()
+        self.cmb_overlay_scale.addItem("紧凑", 0.8)
+        self.cmb_overlay_scale.addItem("标准", 1.0)
+        self.cmb_overlay_scale.addItem("大", 1.2)
+        cur_scale = float(load_ui_prefs().get("overlay_scale", 1.0))
+        idx = self.cmb_overlay_scale.findData(cur_scale)
+        self.cmb_overlay_scale.setCurrentIndex(idx if idx >= 0 else 1)
+        srow.addWidget(self.cmb_overlay_scale)
+        srow.addStretch()
+        lay.addLayout(srow)
+        lay.addWidget(QLabel("影响游戏内敌方 CD 悬浮窗的图标与文字大小。"))
         root.addWidget(box)
+
         self.spin_refresh.valueChanged.connect(self._on_refresh_changed)
+        self.cmb_overlay_scale.currentIndexChanged.connect(self._on_overlay_scale)
+
+    def _on_overlay_scale(self, *_args) -> None:
+        s = float(self.cmb_overlay_scale.currentData() or 1.0)
+        save_ui_prefs({"overlay_scale": s})
+
+    def _build_reset_row(self, root: QVBoxLayout) -> None:
+        """设置页底部：恢复默认设置（只重置设置页管理的配置）。"""
+        row = QHBoxLayout()
+        row.addStretch()
+        btn = QPushButton("恢复默认设置")
+        btn.setStyleSheet(f"color: {Colors.DANGER};")
+        btn.setToolTip("重置界面偏好 / 悬浮窗设置 / 音乐目录 / TTS 音色")
+        btn.clicked.connect(self._on_reset_defaults)
+        row.addWidget(btn)
+        root.addLayout(row)
+
+    def _on_reset_defaults(self) -> None:
+        ret = QMessageBox.question(
+            self, "恢复默认设置",
+            "将重置：界面偏好 / 悬浮窗设置 / 音乐目录 / TTS 音色\n\n"
+            "不影响：连招配置 / mpv 路径 / 音源 / 自动化配置\n\n确定继续？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ret != QMessageBox.Yes:
+            return
+        reset_ui_prefs()
+        reset_music_dirs()
+        save_settings_yaml({"tts": {
+            "edge_voice": "zh-CN-XiaoxiaoNeural",
+            "rate": "+0%",
+            "volume": "+0%",
+        }})
+        # 刷新面板 UI
+        self._dirs = load_music_dirs()
+        self._render_dirs()
+        self._load_tts_values()
+        prefs = load_ui_prefs()
+        self.btn_gate.set_state(bool(prefs.get("combo_window_gate", True)))
+        self.btn_equip.set_state(bool(prefs.get("equip_notify", True)))
+        self.spin_refresh.setValue(int(prefs.get("ui_refresh_interval", 500)))
+        idx = self.cmb_overlay_scale.findData(1.0)
+        self.cmb_overlay_scale.setCurrentIndex(idx if idx >= 0 else 1)
+        if self._on_refresh_changed is not None:
+            self._on_refresh_changed(int(prefs.get("ui_refresh_interval", 500)))
+        if self._tts is not None:
+            try:
+                self._tts.set_voice("zh-CN-XiaoxiaoNeural")
+                self._tts.set_rate("+0%")
+                self._tts.set_volume("+0%")
+            except Exception as e:
+                print(f"[Settings] TTS 重置应用失败: {e}")
 
     def _on_refresh_changed(self, ms: int) -> None:
         save_ui_prefs({"ui_refresh_interval": int(ms)})

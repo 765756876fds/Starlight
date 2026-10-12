@@ -14,6 +14,7 @@ class Colors:
     ACCENT_PRESSED = "#3a8eef"
     SUCCESS = "#4ade80"
     WARNING = "#f59e0b"
+    WARNING_LIGHT = "#ffcc80"
     DANGER = "#ef4444"
     INFO = "#06b6d4"
     TEAM_ALLY = "#4a9eff"

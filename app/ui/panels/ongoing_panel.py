@@ -1,9 +1,11 @@
-﻿"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
+"""对局信息面板：展示 ChampSelect 10 玩家快照。"""
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 import datetime, os, json
+
+from app.ui.theme.colors import Colors
 
 
 def _zh_map() -> dict:
@@ -140,7 +142,7 @@ class _LineChart(QWidget):
         if v1 == v0: v1 = v0 + 1
         w, h = self.width(), self.height()
         pad = 30
-        pen = QPen(QColor("#4fc3f7"), 2)
+        pen = QPen(QColor(Colors.ACCENT), 2)
         p.setPen(pen)
         prev = None
         for t, v in self._pts:
@@ -394,7 +396,7 @@ def _zh_position(pos: str) -> str:
 def _card(snap, is_enemy: bool) -> QFrame:
     card = QFrame()
     card.setFrameShape(QFrame.StyledPanel)
-    border = "border: 2px solid #c62828;" if is_enemy else "border: 2px solid #1565c0;"
+    border = f"border: 2px solid {Colors.DANGER};" if is_enemy else f"border: 2px solid {Colors.ACCENT};"
     card.setStyleSheet(border + " border-radius: 6px; padding: 6px;")
     lay = QVBoxLayout(card)
 
@@ -433,7 +435,7 @@ def _card(snap, is_enemy: bool) -> QFrame:
         if extras:
             lay.addWidget(QLabel("<small>" + "  ".join(extras) + "</small>"))
         row = QLabel()
-        colors = ["#2e7d32" if m.win else "#c62828" for m in snap.recent_matches[:5]]
+        colors = [Colors.SUCCESS if m.win else Colors.DANGER for m in snap.recent_matches[:5]]
         row.setText("".join(
             f'<span style="background:{c}; color:white; padding:2px 6px;">{"胜" if snap.recent_matches[i].win else "负"}</span> '
             for i, c in enumerate(colors)

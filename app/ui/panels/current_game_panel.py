@@ -1,4 +1,4 @@
-﻿"""当前对局面板：双排卡片布局，左己方右敌方。"""
+"""当前对局面板：双排卡片布局，左己方右敌方。"""
 from datetime import datetime
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QScrollArea, QWidget
@@ -9,6 +9,7 @@ from app.lol.ongoing.sgp_server import SgpServerResolver
 from app.lol.ongoing.sgp_provider import SgpMatchHistoryProvider
 from app.lol.ongoing.intelligence import PlayerIntelligenceService
 from app.lol.data.champion_catalog import ChampionCatalog
+from app.ui.theme.colors import Colors
 
 
 _POSITION_MAP = {
@@ -36,7 +37,7 @@ class PlayerCard(QFrame):
     def __init__(self, is_ally=True, parent=None):
         super().__init__(parent)
         self.is_ally = is_ally
-        border_color = "#4a9eff" if is_ally else "#ff4a4a"
+        border_color = Colors.ACCENT if is_ally else Colors.DANGER
         self.setStyleSheet(f"""
             PlayerCard {{
                 border: 1px solid {border_color};
@@ -60,11 +61,11 @@ class PlayerCard(QFrame):
         layout.addLayout(self.row1)
 
         self.lbl_line2 = QLabel("段位 · 位置 · 近20场")
-        self.lbl_line2.setStyleSheet("color: #cccccc; font-size: 12px;")
+        self.lbl_line2.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
         layout.addWidget(self.lbl_line2)
 
         self.lbl_line3 = QLabel("KDA · 常用英雄")
-        self.lbl_line3.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        self.lbl_line3.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
         layout.addWidget(self.lbl_line3)
 
         self.lbl_mastery = QLabel("绝活Top3: -")
@@ -72,7 +73,7 @@ class PlayerCard(QFrame):
         layout.addWidget(self.lbl_mastery)
 
         self.lbl_current = QLabel("本局: -")
-        self.lbl_current.setStyleSheet("color: #cccccc; font-size: 12px;")
+        self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
         layout.addWidget(self.lbl_current)
 
     def update_data(self, name, level, rank, position, winloss, kda, champions,
@@ -80,9 +81,9 @@ class PlayerCard(QFrame):
         self.lbl_name.setText(f"{name}  Lv.{level}")
         if streak_text:
             if "胜" in streak_text:
-                self.lbl_streak.setStyleSheet("color: #4caf50; font-size: 11px; font-weight: bold;")
+                self.lbl_streak.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 11px; font-weight: bold;")
             else:
-                self.lbl_streak.setStyleSheet("color: #f44336; font-size: 11px; font-weight: bold;")
+                self.lbl_streak.setStyleSheet(f"color: {Colors.DANGER}; font-size: 11px; font-weight: bold;")
             self.lbl_streak.setText(streak_text)
         else:
             self.lbl_streak.setText("")
@@ -111,13 +112,13 @@ class PlayerCard(QFrame):
         if champion_zh:
             if is_mastery is True:
                 self.lbl_current.setText(f"本局: {champion_zh}  ✅ 是绝活")
-                self.lbl_current.setStyleSheet("color: #4caf50; font-size: 12px;")
+                self.lbl_current.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 12px;")
             elif is_mastery is False:
                 self.lbl_current.setText(f"本局: {champion_zh}  ❌ 非绝活")
-                self.lbl_current.setStyleSheet("color: #999999; font-size: 12px;")
+                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
             else:
                 self.lbl_current.setText(f"本局: {champion_zh}  绝活: 未知")
-                self.lbl_current.setStyleSheet("color: #cccccc; font-size: 12px;")
+                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
         else:
             self.lbl_current.setText("本局: -")
 
@@ -160,7 +161,7 @@ class CurrentGamePanel(QWidget):
         self.lbl_ally_title = QLabel("🟦 己方")
         self.lbl_ally_title.setStyleSheet("color: #4a9eff; font-weight: bold; font-size: 13px;")
         self.lbl_enemy_title = QLabel("🔴 敌方")
-        self.lbl_enemy_title.setStyleSheet("color: #ff4a4a; font-weight: bold; font-size: 13px;")
+        self.lbl_enemy_title.setStyleSheet(f"color: {Colors.DANGER}; font-weight: bold; font-size: 13px;")
         cols_header.addWidget(self.lbl_ally_title)
         cols_header.addWidget(self.lbl_enemy_title)
         root.addLayout(cols_header)

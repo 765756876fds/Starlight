@@ -908,6 +908,9 @@ class Application:
                 cooldown_manager_provider=lambda: cm,
             )
             self._overlay_window = OverlayWindow(m)
+            # 接线：主窗口"显示游戏内 Overlay"勾选框 → set_overlay_refs（勾=显示、取消=隐藏）
+            if getattr(self, "_main_window", None) is not None:
+                self._main_window.set_overlay_refs(m, self._overlay_window)
             
             # H.4.4: 连接 Overlay 点击信号 → EventBus → alarm.create_flash
             def on_spell_clicked(champion_name: str, spell_name: str):

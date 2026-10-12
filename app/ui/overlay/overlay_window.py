@@ -1,4 +1,4 @@
-﻿"""OverlayWindow：Qt 透明无边框置顶浮窗（敌方五人 CD + 可点击召唤师技能）。
+"""OverlayWindow：Qt 透明无边框置顶浮窗（敌方五人 CD + 可点击召唤师技能）。
 
 H.4.4-R2 修正：
 - 真实英雄头像（Data Dragon）
@@ -10,7 +10,9 @@ H.4.4-R2 修正：
 from __future__ import annotations
 
 import sys
-from PySide6.QtCore import Qt, QTimer, Signal, QSize
+from app.ui.theme.colors import Colors
+
+from PySide6.QtCore import Qt, QTimer, Signal, QSize, QSettings
 from PySide6.QtGui import QFont, QPixmap, QPainter, QPainterPath, QColor
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget, QFrame,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
 from .overlay_model import OverlayModel, OverlaySpell, OverlaySkill, fmt_remaining
 from .overlay_assets import get_champion_portrait, get_summoner_spell_icon_by_sid, get_summoner_spell_icon_by_zh
 from ...lol.data.champion_catalog import ChampionCatalog
+from ..settings_store import load_ui_prefs
 
 # 全局 ChampionCatalog 实例
 _champion_catalog = ChampionCatalog()
@@ -28,12 +31,13 @@ class ClickableSpellIcon(QFrame):
     """可点击的召唤师技能图标。"""
     clicked = Signal(str, str)  # (champion_name, spell_name)
 
-    def __init__(self, champion_name: str, spell: OverlaySpell, parent=None):
+    def __init__(self, champion_name: str, spell: OverlaySpell, parent=None, size: int = 48):
         super().__init__(parent)
         self._champion_name = champion_name
         self._spell = spell
+        self._size = size
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(48, 48)
+        self.setFixedSize(size, size)
         
         # 加载图标（优先用 sid，其次用中文名）
         # print(f"[Spell Icon] champion={champion_name}, spell_id={spell.spell_id}, spell_name={spell.spell_name}")
@@ -49,12 +53,12 @@ class ClickableSpellIcon(QFrame):
         """根据技能状态更新样式。"""
         if self._spell.active:
             # CD 中：红色边框
-            self.setStyleSheet("""
-                QFrame {
-                    border: 2px solid #ff5252;
+            self.setStyleSheet(f"""
+                QFrame {{
+                    border: 2px solid {Colors.DANGER};
                     border-radius: 4px;
                     background: transparent;
-                }
+                }}
             """)
         else:
             # Ready：正常状态 - 无背景无边框，直接显示图标
@@ -81,7 +85,7 @@ class ClickableSpellIcon(QFrame):
                 # 白色大数字居中
                 painter.setOpacity(1.0)
                 painter.setPen(QColor(255, 255, 255))
-                painter.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
+                painter.setFont(QFont("Microsoft YaHei", max(8, int(14 * self._size / 48)), QFont.Bold))
                 txt = fmt_remaining(self._spell.remaining)
                 painter.drawText(self.rect(), Qt.AlignCenter, txt)
 
@@ -96,9 +100,10 @@ class ClickableSpellIcon(QFrame):
 
 class ChampionAvatar(QLabel):
     """英雄头像（Data Dragon 真实头像），支持死亡状态显示。"""
-    def __init__(self, name_en: str, parent=None):
+    def __init__(self, name_en: str, parent=None, size: int = 62):
         super().__init__(parent)
-        self.setFixedSize(62, 62)  # 130% 放大：48 → 62
+        self._size = size
+        self.setFixedSize(size, size)  # 130% 放大：48 → 62
         self.setAlignment(Qt.AlignCenter)
         self._name_en = name_en
         self._is_dead = False
@@ -121,46 +126,47 @@ class ChampionAvatar(QLabel):
 
     def _update_display(self):
         """更新显示。"""
+        _s = self._size
         if self._is_dead and self._respawn_timer > 0:
             # 死亡状态：半透明头像 + 中央大号白色倒计时
             if self._pixmap and not self._pixmap.isNull():
-                self.setPixmap(self._pixmap.scaled(62, 62, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
-            self.setStyleSheet("""
-                QLabel {
-                    border-radius: 24px;
+                self.setPixmap(self._pixmap.scaled(_s, _s, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+            self.setStyleSheet(f"""
+                QLabel {{
+                    border-radius: {int(24 * _s / 62)}px;
                     border: 2px solid rgba(255,255,255,0.3);
                     background-color: rgba(0, 0, 0, 0.5);
                     color: white;
                     font-weight: bold;
-                    font-size: 16px;
-                }
+                    font-size: {int(16 * _s / 62)}px;
+                }}
             """)
             self.setText(str(int(self._respawn_timer)))
         else:
             # 正常状态
             if self._pixmap and not self._pixmap.isNull():
-                self.setPixmap(self._pixmap.scaled(62, 62, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+                self.setPixmap(self._pixmap.scaled(_s, _s, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
                 self.setText("")
-                self.setStyleSheet("""
-                    QLabel {
-                        border-radius: 24px;
+                self.setStyleSheet(f"""
+                    QLabel {{
+                        border-radius: {int(24 * _s / 62)}px;
                         border: 2px solid rgba(255,255,255,0.3);
-                    }
+                    }}
                 """)
             else:
                 # 占位：首字母
                 self.setText(self._name_en[0] if self._name_en else "?")
-                self.setStyleSheet("""
-                    QLabel {
-                        background-color: #3F51B5;
+                self.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: {Colors.ACCENT};
                         color: white;
-                        border-radius: 24px;
+                        border-radius: {int(24 * _s / 62)}px;
                         font-weight: bold;
-                        font-size: 18px;
+                        font-size: {int(18 * _s / 62)}px;
                         border: 2px solid rgba(255,255,255,0.3);
-                    }
+                    }}
                 """)
-                self.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+                self.setFont(QFont("Microsoft YaHei", max(8, int(12 * _s / 62)), QFont.Bold))
 
 
 class OverlayWindow(QWidget):
@@ -170,7 +176,14 @@ class OverlayWindow(QWidget):
     def __init__(self, model: OverlayModel, parent=None):
         super().__init__(parent)
         self._model = model
-        
+        self._drag_offset = None
+        try:
+            self._scale = float(load_ui_prefs().get("overlay_scale", 1.0))
+        except Exception:
+            self._scale = 1.0
+        if self._scale <= 0 or self._scale > 3:
+            self._scale = 1.0
+
         # 窗口属性
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -189,6 +202,11 @@ class OverlayWindow(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(100)
+
+        # 2s 低频检查 ui_prefs 的缩放变化（设置页改动后自动生效，不依赖 main 接线）
+        self._scale_check = QTimer(self)
+        self._scale_check.timeout.connect(self._check_scale)
+        self._scale_check.start(2000)
 
         self._place_default()
         self._apply_ws_ex_layered()
@@ -210,21 +228,77 @@ class OverlayWindow(QWidget):
             print(f"[overlay] WS_EX_LAYERED 设置失败: {e}")
 
     def _place_default(self) -> None:
-        """自动计算窗口位置，确保完整落在屏幕内。"""
+        """自动计算窗口位置，确保完整落在屏幕内。优先恢复上次拖动位置。"""
         screen = QApplication.primaryScreen().availableGeometry()
-        # 窗口尺寸：宽度 380，高度自适应
-        w = 380
+        # 窗口尺寸：宽度按缩放系数，高度自适应
+        w = int(380 * self._scale)
         h = 300
-        # 右侧留 2px margin，顶部留 80px margin（贴近右屏幕边缘）
-        x = screen.width() - w - 2
-        y = 80
-        # 确保不超出屏幕
-        if x + w > screen.width():
+        try:
+            pos = QSettings("LoLMusicAgent", "Overlay").value("pos")
+        except Exception:
+            pos = None
+        if pos is not None:
+            x = int(pos.x())
+            y = int(pos.y())
+            # 限制在屏幕可见区域内（防止拖出屏后找不回）
+            x = max(screen.x(), min(x, screen.x() + screen.width() - w))
+            y = max(screen.y(), min(y, screen.y() + screen.height() - 40))
+        else:
+            # 默认右上角（右侧留 2px，顶部留 80px）
             x = screen.width() - w - 2
-        if y + h > screen.height():
-            y = screen.height() - h - 10
+            y = 80
+            if x + w > screen.width():
+                x = screen.width() - w - 2
+            if y + h > screen.height():
+                y = screen.height() - h - 10
         self.setGeometry(x, y, w, h)
-        print(f"[overlay] 窗口位置: x={x}, y={y}, w={w}, h={h}, screen={screen.width()}x{screen.height()}")
+
+    def set_scale(self, scale: float) -> None:
+        """设置缩放系数（紧凑 0.8 / 标准 1.0 / 大 1.2），立即重定位。"""
+        scale = float(scale)
+        if scale <= 0 or scale > 3:
+            scale = 1.0
+        if abs(scale - self._scale) < 1e-6:
+            return
+        self._scale = scale
+        self._place_default()
+
+    def _check_scale(self) -> None:
+        """低频检查 ui_prefs 缩放设置变化（设置页改后自动生效）。"""
+        try:
+            s = float(load_ui_prefs().get("overlay_scale", 1.0))
+        except Exception:
+            return
+        if s <= 0 or s > 3:
+            s = 1.0
+        if abs(s - self._scale) > 1e-6:
+            self._scale = s
+            self._place_default()
+
+    # ---- 拖动：按下空白/头像区域拖动窗口；技能图标点击仍由子控件消费 ----
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None and (event.buttons() & Qt.LeftButton):
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_offset is not None:
+            self._drag_offset = None
+            try:
+                QSettings("LoLMusicAgent", "Overlay").setValue("pos", self.pos())
+            except Exception:
+                pass
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def _clear(self):
         while self._root.count():
@@ -236,13 +310,14 @@ class OverlayWindow(QWidget):
     def _skill_dot(self, sk: OverlaySkill) -> QWidget:
         """Q/W/E/R 技能图标（用字母代替真实图标）。"""
         w = QFrame()
-        w.setFixedSize(32, 32)
+        _sz = int(32 * self._scale)
+        w.setFixedSize(_sz, _sz)
         w.setFrameShape(QFrame.StyledPanel)
         
         letter = sk.skill.upper() if sk.skill else "?"
         
         if sk.active:
-            color = "#ff9800" if sk.remaining < 10 else "#ffcc80"
+            color = Colors.WARNING if sk.remaining < 10 else Colors.WARNING_LIGHT
             txt = fmt_remaining(sk.remaining)
             w.setStyleSheet(f"""
                 QFrame {{
@@ -256,22 +331,22 @@ class OverlayWindow(QWidget):
             lbl = QLabel(txt)
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet("color: black; background: transparent; border: none; font-weight: bold;")
-            lbl.setFont(QFont("Microsoft YaHei", 7, QFont.Bold))
+            lbl.setFont(QFont("Microsoft YaHei", max(6, int(7 * self._scale)), QFont.Bold))
             layout.addWidget(lbl)
         else:
-            w.setStyleSheet("""
-                QFrame {
+            w.setStyleSheet(f"""
+                QFrame {{
                     background-color: rgba(76, 175, 80, 150);
                     border: 1px solid rgba(255,255,255,0.2);
                     border-radius: 4px;
-                }
+                }}
             """)
             layout = QVBoxLayout(w)
             layout.setContentsMargins(0, 0, 0, 0)
             lbl = QLabel(letter)
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet("color: white; background: transparent; border: none; font-weight: bold;")
-            lbl.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+            lbl.setFont(QFont("Microsoft YaHei", max(8, int(10 * self._scale)), QFont.Bold))
             layout.addWidget(lbl)
         
         return w
@@ -291,21 +366,21 @@ class OverlayWindow(QWidget):
         """)
         
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(142, 2, 2, 2)  # 左边距 142px，整体右移 140px
-        layout.setSpacing(14)  # 视觉间隔 14px ≈ 图标尺寸的 30%
+        layout.setContentsMargins(int(142 * self._scale), 2, 2, 2)  # 左边距随缩放
+        layout.setSpacing(int(14 * self._scale))  # 视觉间隔 14px ≈ 图标尺寸的 30%
         
         # 召唤师技能图标
-        spell1_icon = ClickableSpellIcon(row.champion_name, row.spell1)
+        spell1_icon = ClickableSpellIcon(row.champion_name, row.spell1, size=int(48 * self._scale))
         spell1_icon.clicked.connect(self.spell_clicked.emit)
         layout.addWidget(spell1_icon)
-        spell2_icon = ClickableSpellIcon(row.champion_name, row.spell2)
+        spell2_icon = ClickableSpellIcon(row.champion_name, row.spell2, size=int(48 * self._scale))
         spell2_icon.clicked.connect(self.spell_clicked.emit)
         layout.addWidget(spell2_icon)
         
         # 最右边：英雄头像（支持死亡状态）
         champ = _champion_catalog.get_by_id(row.champion_id) or _champion_catalog.get_by_name(row.champion_name)
         name_en = champ.name_en if champ else row.champion_name
-        avatar = ChampionAvatar(name_en)
+        avatar = ChampionAvatar(name_en, size=int(62 * self._scale))
         avatar.set_dead(row.is_dead, row.respawn_timer)
         layout.addWidget(avatar)
         

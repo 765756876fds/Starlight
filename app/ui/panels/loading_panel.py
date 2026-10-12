@@ -1,4 +1,6 @@
 from PySide6.QtCore import Qt
+from app.ui.theme.colors import Colors
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit,
 )
@@ -29,10 +31,10 @@ class LoadingPanel(QWidget):
         for key, name in MODULES:
             row = QHBoxLayout()
             dot = QLabel("○")
-            dot.setStyleSheet("color: #9090a8;")
+            dot.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
             lbl = QLabel(name)
             lbl2 = QLabel("等待...")
-            lbl2.setStyleSheet("color: #9090a8; font-size: 11px;")
+            lbl2.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
             row.addWidget(dot)
             row.addWidget(lbl)
             row.addStretch(1)

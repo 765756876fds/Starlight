@@ -2,15 +2,17 @@
 from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap, QPainter, QColor, QBrush
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from app.ui.theme.colors import Colors
+
 
 def _make_icon() -> QIcon:
     pix = QPixmap(64, 64)
-    pix.fill(QColor("#1e88e5"))
+    pix.fill(QColor(Colors.ACCENT))
     p = QPainter(pix)
     p.setBrush(QBrush(QColor("#ffffff")))
     p.setPen(QColor("#ffffff"))
     p.drawEllipse(12, 12, 40, 40)
-    p.setBrush(QBrush(QColor("#1e88e5")))
+    p.setBrush(QBrush(QColor(Colors.ACCENT)))
     p.drawEllipse(24, 24, 16, 16)
     p.end()
     return QIcon(pix)

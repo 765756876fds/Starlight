@@ -21,6 +21,7 @@ DEFAULT_PREFS = {
     "combo_window_gate": True,   # 仅 LoL 前台时触发（持久化）
     "equip_notify": True,        # 敌方装备语音提醒（持久化）
     "ui_refresh_interval": 500,  # 界面刷新间隔 ms
+    "overlay_scale": 1.0,        # 悬浮窗缩放系数（0.8 紧凑 / 1.0 标准 / 1.2 大）
 }
 
 
@@ -88,6 +89,24 @@ def save_ui_prefs(prefs: dict) -> bool:
         cur = load_ui_prefs()
         cur.update({k: v for k, v in prefs.items() if k in DEFAULT_PREFS})
         return _write_json(UI_PREFS_PATH, cur)
+
+
+def reset_ui_prefs() -> bool:
+    """恢复 ui_prefs.json 到默认值（仅设置页管理的字段）。"""
+    with _LOCK:
+        return _write_json(UI_PREFS_PATH, dict(DEFAULT_PREFS))
+
+
+def reset_music_dirs() -> bool:
+    """删除 music_dirs.json，下次 load_music_dirs() 从 settings.yaml 重新种子。"""
+    with _LOCK:
+        try:
+            if os.path.exists(MUSIC_DIRS_PATH):
+                os.remove(MUSIC_DIRS_PATH)
+            return True
+        except Exception as e:
+            print(f"[Settings] music_dirs.json 重置失败: {e}")
+            return False
 
 
 # ---------- settings.yaml（TTS 节更新，带锁） ----------
