@@ -29,6 +29,7 @@ class JSMusicSource(MusicSource):
         self._lock = threading.Lock()
         self._pending: dict = {}
         self._sources: List[str] = []
+        self._plugins: List[dict] = []   # [{name, type, status, error?}]
         self._ready = threading.Event()
         self._start_bridge()
         # 阻塞等待 bridge 就绪
@@ -123,6 +124,7 @@ class JSMusicSource(MusicSource):
             rid = msg.get("id")
             if rid == "_ready":
                 self._sources = msg.get("sources", [])
+                self._plugins = msg.get("plugins", [])
                 self._ready.set()
                 continue
             with self._lock:
@@ -156,12 +158,21 @@ class JSMusicSource(MusicSource):
     def list_sources(self) -> List[str]:
         return list(self._sources)
 
-    def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
-        if not keyword:
+    def list_plugins(self) -> List[dict]:
+        """结构化插件列表：[{name, type(musicfree/lx), status(ok/fail), error?}]。
+        供设置页「内置插件」UI 展示。"""
+        return [dict(p) for p in self._plugins]
+
+    def search_plugin(self, source: str, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+        """只搜指定插件（测试按钮用，不经 manager 遍历回退）。"""
+        if not keyword or not source:
             return []
-        result = self._call("search", {"source": "*", "keyword": keyword, "limit": limit})
+        result = self._call("search", {"source": source, "keyword": keyword, "limit": limit})
         if not result:
             return []
+        return self._parse_tracks(result)
+
+    def _parse_tracks(self, result: list) -> List[OnlineTrack]:
         out: List[OnlineTrack] = []
         for r in result:
             try:
@@ -177,6 +188,49 @@ class JSMusicSource(MusicSource):
             except Exception:
                 continue
         return out
+
+    def reload(self) -> bool:
+        """重新扫描插件目录：终止旧 bridge 进程并重启，等待新的 _ready。
+
+        - 进行中的 RPC（_pending）在旧进程终止后永远等不到响应：主动标记失败并
+          set event，避免调用方傻等 15s 超时（reload 会短暂中断搜索，预期行为）。
+        - 调用方应防抖（低频操作，连续点击只跑一次）。
+        """
+        with self._lock:
+            stale = list(self._pending.values())
+            self._pending.clear()
+        for box in stale:
+            box["result"] = None
+            box["event"].set()
+
+        if self._proc:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+            try:
+                self._proc.wait(timeout=2.0)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+
+        self._sources = []
+        self._plugins = []
+        self._ready.clear()
+        self._start_bridge()
+        ok = self._ready.wait(timeout=8.0)
+        return ok and self._proc is not None
+
+    def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+        if not keyword:
+            return []
+        result = self._call("search", {"source": "*", "keyword": keyword, "limit": limit})
+        if not result:
+            return []
+        return self._parse_tracks(result)
 
     def get_play_url(self, track: OnlineTrack) -> Optional[dict]:
         r = self._call("getUrl", {

@@ -74,6 +74,10 @@ class OnlineSourceManager:
     def list_sources(self) -> List[str]:
         return list(self._sources.keys())
 
+    def get_source(self, name: str) -> Optional[MusicSource]:
+        """按注册名取源（UI 等外部组件用，避免摸私有 dict）。"""
+        return self._sources.get(name)
+
     def search_all(self, keyword: str, limit_per_source: int = 10
                    ) -> Dict[str, List[OnlineTrack]]:
         out: Dict[str, List[OnlineTrack]] = {}

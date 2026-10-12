@@ -8,14 +8,17 @@
 """
 from __future__ import annotations
 
+import threading
+import urllib.error
+import urllib.request
 from typing import Callable, Optional
 from app.ui.theme.colors import Colors
 
 
-from PySide6.QtCore import Qt, QThread, QObject, Signal
+from PySide6.QtCore import Qt, QThread, QObject, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-    QListWidget, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
+    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
     QVBoxLayout, QWidget,
 )
 
@@ -40,6 +43,28 @@ _TTS_VOICES = [
     "en-US-AriaNeural",       # Aria（英女）
     "en-US-GuyNeural",        # Guy（英男）
 ]
+
+
+def _probe_url(url: str, headers, timeout: float = 5.0) -> str:
+    """探测 URL 能否播放：GET + Range: bytes=0-1024（只拉前 1KB，不下整首）。
+    200/206 → ✓；403/404 → ✗(403)；其他 → ✗(原因)。
+    带插件 headers（Referer）——否则开心汽水裸请求必 403，而 mpv 带 Referer
+    可能能播，探测结果要反映"真实播放能力"。
+    """
+    h = {"Range": "bytes=0-1024", "User-Agent": "Mozilla/5.0"}
+    if headers:
+        for k in ("Referer", "User-Agent", "Cookie", "Authorization"):
+            if k in headers:
+                h[k] = headers[k]
+    req = urllib.request.Request(url, headers=h, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = resp.getcode()
+            return "✓" if code in (200, 206) else f"✗({code})"
+    except urllib.error.HTTPError as e:
+        return f"✗({e.code})"
+    except Exception as e:
+        return f"✗({type(e).__name__})"
 
 
 class _ScanWorker(QObject):
@@ -113,6 +138,9 @@ class SettingsPanel(QWidget):
         self._overlay_toggle = overlay_toggle
         self._overlay_enabled = bool(overlay_enabled)
         self._scan_thread = None
+        self._js_source = None
+        self._reloading = False
+        self._plugin_rows: dict = {}
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -125,6 +153,7 @@ class SettingsPanel(QWidget):
         outer.addWidget(scroll)
 
         self._build_music_group(root)
+        self._build_plugins_group(root)
         self._build_tts_group(root)
         self._build_lol_group(root)
         self._build_ui_group(root)
@@ -167,6 +196,177 @@ class SettingsPanel(QWidget):
         root.addWidget(box)
         self._dirs: list = load_music_dirs()
         self._render_dirs()
+
+    # ---------- 🎛️ 内置插件（MusicFree/洛雪）----------
+
+    def _build_plugins_group(self, root: QVBoxLayout) -> None:
+        self._js_source = self._find_js_source()
+        box = QGroupBox("🎛️ 内置插件 (MusicFree/洛雪)")
+        lay = QVBoxLayout(box)
+
+        # 插件列表容器：QScrollArea + 行 widget（避开 QListWidget setItemWidget 压缩按钮）
+        # ——和音乐目录管理同一套模式，行宽不被列表控件压窄。
+        list_scroll = QScrollArea()
+        list_scroll.setWidgetResizable(True)
+        list_scroll.setMinimumHeight(120)
+        list_scroll.setMaximumHeight(200)   # 别占太高，13 行内可滚动
+        self._plugins_container = QWidget()
+        self._plugins_layout = QVBoxLayout(self._plugins_container)
+        self._plugins_layout.setContentsMargins(4, 4, 4, 4)
+        self._plugins_layout.setSpacing(2)   # 更紧凑的行间距
+        list_scroll.setWidget(self._plugins_container)
+        lay.addWidget(list_scroll)
+
+        hint = QLabel("在线搜索自动遍历全部 MusicFree 插件；点「测试」验证单源（搜索+URL+能否播）")
+        hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        btns = QHBoxLayout()
+        self.btn_refresh_plugins = QPushButton("刷新插件")
+        self.btn_refresh_plugins.setToolTip("重新扫描插件目录（新丢进的 .js 生效）；刷新会短暂中断搜索")
+        self.btn_refresh_plugins.clicked.connect(self._on_refresh_plugins)
+        self.lbl_plugin_status = QLabel("")
+        self.lbl_plugin_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        btns.addWidget(self.btn_refresh_plugins)
+        btns.addWidget(self.lbl_plugin_status)
+        btns.addStretch()
+        lay.addLayout(btns)
+        root.addWidget(box)
+        self._render_plugins()
+
+    def _find_js_source(self):
+        if self._music is None:
+            return None
+        om = getattr(self._music, "online_manager", None)
+        if om is None or not hasattr(om, "get_source"):
+            return None
+        try:
+            return om.get_source("js_bridge")
+        except Exception:
+            return None
+
+    def _render_plugins(self) -> None:
+        # 清空容器布局再重建（与 _render_dirs 同模式；spacer 由 takeAt 直接拿走）
+        while self._plugins_layout.count():
+            it = self._plugins_layout.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        self._plugin_rows = {}
+        if self._js_source is None:
+            lbl = QLabel("JS 桥接未启用（node 缺失或初始化失败）")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            self._plugins_layout.addWidget(lbl)
+            self.btn_refresh_plugins.setEnabled(False)
+            return
+        plugins = self._js_source.list_plugins() or []
+        if not plugins:
+            lbl = QLabel("无插件（目录为空）")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            self._plugins_layout.addWidget(lbl)
+            return
+        for p in plugins:
+            self._plugins_layout.addWidget(self._make_plugin_row(p))
+
+    def _make_plugin_row(self, p: dict) -> QWidget:
+        kind = "MusicFree" if p.get("type") == "musicfree" else "洛雪"
+        name = p.get("name", "?")
+        if p.get("status") == "ok":
+            state = "✅"
+        else:
+            err = p.get("error") or "加载失败"
+            err_short = err if len(err) <= 24 else err[:24] + "…"
+            state = f"❌ {err_short}"
+        row = QWidget()
+        row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        h = QHBoxLayout(row)
+        h.setContentsMargins(4, 1, 4, 1)   # 更紧凑的行内边距
+        lbl = QLabel(f"[{kind}] {name} {state}")
+        lbl.setWordWrap(True)
+        if p.get("status") != "ok":
+            lbl.setToolTip(f"[{kind}] {name}\n完整错误: {p.get('error') or '加载失败'}")
+        h.addWidget(lbl, 1)
+        if p.get("status") == "ok" and p.get("type") == "musicfree":
+            btn = QPushButton("测试")
+            btn.setFixedHeight(24)
+            btn.setMinimumWidth(64)   # 最小宽度保底；宽度由内容自适应，不再固定（中文字宽+字体缩放会变）
+            btn.clicked.connect(lambda _=False, n=name: self._on_test_plugin(n))
+            h.addWidget(btn)
+            self._plugin_rows[name] = lbl
+        h.addStretch()   # 行尾 stretch：标签占满、按钮靠右，行宽 = 面板宽
+        return row
+
+    def _on_test_plugin(self, name: str) -> None:
+        if self._js_source is None:
+            return
+        lbl = self._plugin_rows.get(name)
+        btn = self.sender()
+        if lbl is None or not isinstance(btn, QPushButton):
+            return
+        lbl.setText(f"[测试中…] {name}")
+        btn.setEnabled(False)
+
+        def worker():
+            try:
+                tracks = self._js_source.search_plugin(name, "晴天", 3)
+                n = len(tracks)
+                if n == 0:
+                    res = f"[MusicFree] {name} | 搜索 ✗(0条)"
+                else:
+                    url_res = "—"
+                    try:
+                        r = self._js_source.get_play_url(tracks[0])
+                        if r and r.get("url"):
+                            url_res = _probe_url(r["url"], r.get("headers"))
+                        else:
+                            url_res = "✗(null)"
+                    except Exception as e:
+                        url_res = f"✗({type(e).__name__})"
+                    res = f"[MusicFree] {name} | 搜索 ✓({n}条) | URL {url_res}"
+            except Exception as e:
+                res = f"[MusicFree] {name} | 测试失败 ({type(e).__name__})"
+            QTimer.singleShot(0, lambda r=res: self._finish_test(name, r, btn))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_test(self, name: str, res: str, btn: QPushButton) -> None:
+        lbl = self._plugin_rows.get(name)
+        if lbl is not None:
+            lbl.setText(res)
+        if btn is not None:
+            btn.setEnabled(True)
+
+    def _on_refresh_plugins(self) -> None:
+        if self._js_source is None or self._reloading:
+            return
+        self._reloading = True
+        self.btn_refresh_plugins.setEnabled(False)
+        self.btn_refresh_plugins.setText("刷新中…")
+        self.lbl_plugin_status.setText("刷新会短暂中断搜索…")
+
+        def worker():
+            ok = False
+            try:
+                ok = self._js_source.reload()
+            except Exception:
+                ok = False
+            try:
+                n = len(self._js_source.list_plugins() or [])
+            except Exception:
+                n = 0
+            QTimer.singleShot(0, lambda: self._finish_refresh(ok, n))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_refresh(self, ok: bool, n: int) -> None:
+        self._reloading = False
+        self.btn_refresh_plugins.setEnabled(True)
+        self.btn_refresh_plugins.setText("刷新插件")
+        if ok:
+            self.lbl_plugin_status.setText(f"已重载 {n} 个插件")
+        else:
+            self.lbl_plugin_status.setText(f"刷新超时，已加载 {n} 个")
+        self._render_plugins()
 
     def _on_source_manage(self):
         """打开音源管理对话框（从音乐面板挪到设置页）。"""

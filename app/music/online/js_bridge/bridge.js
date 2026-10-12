@@ -36,6 +36,7 @@ async function loadAll() {
     ...scanDir(mfDir, false),
     ...scanDir(lxDir, true),
   ];
+  const failures = [];
   for (const j of jobs) {
     try {
       const p = j.isLx ? await lxLoader.load(j.fp) : mfLoader.load(j.fp);
@@ -46,9 +47,16 @@ async function loadAll() {
       sources.set(base.toLowerCase(), p);
       console.error(`[bridge] loaded ${j.isLx ? 'lx' : 'mf'}: ${p.name} (alias=${base})`);
     } catch (e) {
+      failures.push({
+        name: path.basename(j.fp, '.js'),
+        type: j.isLx ? 'lx' : 'musicfree',
+        status: 'fail',
+        error: String((e && e.message) || e),
+      });
       console.error(`[bridge] load fail ${j.fp}: ${e.message}`);
     }
   }
+  return failures;
 }
 
 async function dispatch(method, params) {
@@ -102,10 +110,22 @@ async function dispatch(method, params) {
 }
 
 (async () => {
-  await loadAll();
+  const failures = await loadAll();
+  // 结构化插件列表：每个插件对象一条（Map 有 3 个别名 key → 按对象去重），
+  // 加载失败的单独收集（带 error）。
+  const seen = new Set();
+  const plugins = [];
+  for (const p of sources.values()) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    plugins.push({ name: p.name, type: p.type, status: 'ok' });
+  }
+  for (const f of failures) plugins.push(f);
   // ready event
   process.stdout.write(JSON.stringify({
-    id: '_ready', ok: true, sources: Array.from(sources.keys()),
+    id: '_ready', ok: true,
+    sources: Array.from(sources.keys()),
+    plugins,
   }) + '\n');
   startRpc(dispatch);
 })();

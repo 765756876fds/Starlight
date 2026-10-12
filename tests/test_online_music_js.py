@@ -102,3 +102,62 @@ def test_lx_mock_provides_rawscript():
     assert r.returncode == 0, r.stderr
     out = r.stdout.strip().split()
     assert out == ["function", "object", "function", "function"]
+
+
+def test_list_plugins_returns_copies():
+    """list_plugins 返回结构化插件列表的副本（改返回值不影响内部状态）。"""
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._plugins = [{"name": "开心汽水", "type": "musicfree", "status": "ok"}]
+    got = s.list_plugins()
+    assert got == [{"name": "开心汽水", "type": "musicfree", "status": "ok"}]
+    got[0]["name"] = "改坏了"
+    assert s._plugins[0]["name"] == "开心汽水"
+
+
+def test_search_plugin_targets_single_source(monkeypatch):
+    """search_plugin 只搜指定插件（source 精确传递，不走 manager 遍历）。"""
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._proc = FakeProc([])
+    s._lock = threading.Lock()
+    s._pending = {}
+    calls = {}
+
+    def fake_call(m, p, timeout=15.0):
+        calls.update(p)
+        return [{"source_name": "开心汽水", "track_id": "1", "title": "晴天"}]
+    monkeypatch.setattr(s, "_call", fake_call)
+    out = s.search_plugin("开心汽水", "晴天", 3)
+    assert calls == {"source": "开心汽水", "keyword": "晴天", "limit": 3}
+    assert out and out[0].source_name == "开心汽水" and out[0].title == "晴天"
+
+
+def test_reload_wakes_pending_and_restarts(monkeypatch):
+    """reload：清空 pending（主动唤醒等待方）+ 终止旧进程 + 重启等 _ready。"""
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._lock = threading.Lock()
+    box = {"event": threading.Event(), "result": "未决"}
+    s._pending = {"rid1": box}
+
+    class FakeProc:
+        def __init__(self):
+            self.killed = False
+        def terminate(self):
+            pass
+        def wait(self, timeout):
+            return 0
+        def kill(self):
+            self.killed = True
+    s._proc = FakeProc()
+    s._ready = threading.Event()
+
+    def fake_start():
+        s._proc = FakeProc()   # 新进程非 None
+        s._ready.set()         # 模拟新 bridge 已就绪（reload 内部会先 clear 再重启）
+    s._start_bridge = fake_start
+
+    ok = s.reload()
+    assert ok is True
+    assert s._pending == {}          # pending 清空
+    assert box["event"].is_set()     # 旧等待方被主动唤醒
+    assert box["result"] is None     # 唤醒语义 = 失败（_call 返回 None）
+    assert s._proc is not None       # 新进程已启动
