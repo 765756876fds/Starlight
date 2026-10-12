@@ -1,4 +1,4 @@
-﻿"""LoL Music Agent main entry."""
+"""LoL Music Agent main entry."""
 
 import os
 import sys
@@ -959,6 +959,8 @@ class Application:
             services_dict={"lcu": getattr(self.lol, "lcu", None) if getattr(self, "lol", None) else None},
             tts=getattr(self, "tts", None),
             equip_toggle=lambda on: setattr(self, "_equip_enabled", bool(on)),
+            overlay_toggle=window._on_overlay_toggle,
+            overlay_enabled=True,
                     )
         print("[Run] MainTabs built, switching")
         # 统一运行时状态：MainWindow 底部唯一 StatusBar 读取这套真实服务

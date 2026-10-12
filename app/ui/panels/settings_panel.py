@@ -101,6 +101,8 @@ class SettingsPanel(QWidget):
     def __init__(self, music=None, tts=None, combo_manager=None,
                  equip_toggle: Optional[Callable[[bool], None]] = None,
                  on_refresh_changed: Optional[Callable[[int], None]] = None,
+                 overlay_toggle: Optional[Callable[[bool], None]] = None,
+                 overlay_enabled: bool = True,
                  parent=None):
         super().__init__(parent)
         self._music = music
@@ -108,6 +110,8 @@ class SettingsPanel(QWidget):
         self._combo = combo_manager
         self._equip_toggle = equip_toggle
         self._on_refresh_changed = on_refresh_changed
+        self._overlay_toggle = overlay_toggle
+        self._overlay_enabled = bool(overlay_enabled)
         self._scan_thread = None
 
         scroll = QScrollArea()
@@ -422,6 +426,12 @@ class SettingsPanel(QWidget):
     def _build_ui_group(self, root: QVBoxLayout) -> None:
         box = QGroupBox("🖥️ 界面")
         lay = QVBoxLayout(box)
+
+        self.btn_overlay = ToggleButton("显示游戏内 Overlay", self._overlay_enabled)
+        self.btn_overlay.setMinimumWidth(180)
+        self.btn_overlay.toggled_state.connect(self._on_overlay_toggle)
+        lay.addWidget(self.btn_overlay)
+
         irow = QHBoxLayout()
         irow.addWidget(QLabel("刷新间隔（毫秒）："))
         self.spin_refresh = QSpinBox()
@@ -450,6 +460,10 @@ class SettingsPanel(QWidget):
 
         self.spin_refresh.valueChanged.connect(self._on_refresh_changed)
         self.cmb_overlay_scale.currentIndexChanged.connect(self._on_overlay_scale)
+
+    def _on_overlay_toggle(self, on: bool) -> None:
+        if self._overlay_toggle is not None:
+            self._overlay_toggle(on)
 
     def _on_overlay_scale(self, *_args) -> None:
         s = float(self.cmb_overlay_scale.currentData() or 1.0)
@@ -488,6 +502,9 @@ class SettingsPanel(QWidget):
         prefs = load_ui_prefs()
         self.btn_gate.set_state(bool(prefs.get("combo_window_gate", True)))
         self.btn_equip.set_state(bool(prefs.get("equip_notify", True)))
+        if self._overlay_toggle is not None:
+            self._overlay_toggle(True)  # 先同步后端（set_enabled(True)）
+        self.btn_overlay.set_state(True)  # 再同步 UI（blockSignals，不重复触发回调）
         self.spin_refresh.setValue(int(prefs.get("ui_refresh_interval", 500)))
         idx = self.cmb_overlay_scale.findData(1.0)
         self.cmb_overlay_scale.setCurrentIndex(idx if idx >= 0 else 1)

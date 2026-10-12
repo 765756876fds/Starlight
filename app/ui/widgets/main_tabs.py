@@ -29,7 +29,8 @@ class MainTabs(QWidget):
     def __init__(self, automation_service, cooldown_manager, music,
                  ongoing_service=None, services_dict=None,
                  snapshot_provider=None, history_repo=None,
-                 combo_manager=None, tts=None, equip_toggle=None, parent=None):
+                 combo_manager=None, tts=None, equip_toggle=None,
+                 overlay_toggle=None, overlay_enabled: bool = True, parent=None):
         super().__init__(parent)
         print("[UI] MainTabs 创建中")
         self._music = music
@@ -65,7 +66,8 @@ class MainTabs(QWidget):
         _add(lambda: MusicPanel(music), "音乐", "music")
         _add(lambda: SettingsPanel(
                 music=music, tts=tts, combo_manager=combo_manager,
-                equip_toggle=equip_toggle,
+                equip_toggle=equip_toggle, overlay_toggle=overlay_toggle,
+                overlay_enabled=overlay_enabled,
                 on_refresh_changed=self._apply_refresh_interval,
             ), "设置", "settings")
         layout.addWidget(tabs)

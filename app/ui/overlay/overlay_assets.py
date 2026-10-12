@@ -1,4 +1,4 @@
-﻿"""Overlay 资源管理器：下载和缓存英雄头像、召唤师技能图标。
+"""Overlay 资源管理器：下载和缓存英雄头像、召唤师技能图标。
 
 资源来源：
 - 英雄头像：Data Dragon Champion Portrait
@@ -44,10 +44,19 @@ def _download_file(url: str, cache_path: Path) -> bool:
         return False
 
 
+# 模块级内存缓存：原始 QPixmap 常驻内存，首次磁盘读后不再 IO
+# 不清理：总量有限（~173 头像 + ~10 技能图标，合计几 MB）
+# 失败不缓存：保持"下次可重试"的降级行为（调用方有占位图兜底）
+_portrait_cache: dict[str, Optional[QPixmap]] = {}
+_spell_icon_cache: dict[str, Optional[QPixmap]] = {}
+
+
 def get_champion_portrait(name_en: str) -> Optional[QPixmap]:
-    """获取英雄头像（自动下载并缓存）。"""
+    """获取英雄头像（自动下载并缓存，内存缓存命中后无磁盘 IO）。"""
     if not name_en:
         return None
+    if name_en in _portrait_cache:
+        return _portrait_cache[name_en]
     
     # Data Dragon 英雄头像 URL
     url = f"{_DDRAGON_BASE}/champion/{name_en}.png"
@@ -67,13 +76,17 @@ def get_champion_portrait(name_en: str) -> Optional[QPixmap]:
     size = min(w, h)
     x = (w - size) // 2
     y = (h - size) // 2
-    return pixmap.copy(x, y, size, size)
+    result = pixmap.copy(x, y, size, size)
+    _portrait_cache[name_en] = result
+    return result
 
 
 def get_summoner_spell_icon(name_en: str) -> Optional[QPixmap]:
-    """获取召唤师技能图标（自动下载并缓存）。"""
+    """获取召唤师技能图标（自动下载并缓存，内存缓存命中后无磁盘 IO）。"""
     if not name_en:
         return None
+    if name_en in _spell_icon_cache:
+        return _spell_icon_cache[name_en]
     
     # 如果是惩戒，尝试多个变体
     name_variants = [name_en]
@@ -91,6 +104,7 @@ def get_summoner_spell_icon(name_en: str) -> Optional[QPixmap]:
         
         pixmap = QPixmap(str(cache_file))
         if not pixmap.isNull():
+            _spell_icon_cache[name_en] = pixmap
             return pixmap
     
     return None
