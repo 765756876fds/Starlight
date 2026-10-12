@@ -23,7 +23,7 @@ from typing import Dict, Optional, List
 from dataclasses import dataclass, field
 
 from .champion_mastery import ChampionMasteryProvider, ChampionMasteryRecord, AVAILABLE
-from .intelligence import PlayerIntelligenceService, PlayerIntelligenceResult
+from .intelligence import PlayerIntelligenceService, PlayerIntelligenceResult, ChampionStat
 from .match_model import MatchRecord
 
 
@@ -44,6 +44,9 @@ class PlayerIntelligenceCacheEntry:
     recent_win_rate: float = 0.0
     recent_average_kda: float = 0.0
     habitual_positions: List[str] = None  # ["UTILITY"] 等
+
+    # B 行数据：近期英雄统计（analyze 产物，场次→KDA 排序）
+    champion_stats: List[ChampionStat] = None
 
     queried_mastery: bool = False
     queried_recent: bool = False
@@ -144,6 +147,7 @@ class OngoingIntelligenceService:
                     entry.recent_win_rate = intel_result.win_rate
                     entry.recent_average_kda = intel_result.average_kda
                     entry.habitual_positions = intel_result.habitual_positions
+                    entry.champion_stats = intel_result.champion_stats
                 else:
                     entry.recent_status = "EMPTY"
             except Exception as e:
@@ -154,6 +158,12 @@ class OngoingIntelligenceService:
         entry.queried_recent = True
         self._cache[puuid] = entry
         return entry
+
+    def get_cached(self, puuid: str) -> Optional[PlayerIntelligenceCacheEntry]:
+        """只读缓存命中（不触发任何请求）。未查询过返回 None。"""
+        if not puuid:
+            return None
+        return self._cache.get(puuid)
 
     def clear(self):
         """游戏结束时清空缓存"""

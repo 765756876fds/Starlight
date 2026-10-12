@@ -1,4 +1,5 @@
 """当前对局面板：双排卡片布局，左己方右敌方。"""
+import threading
 from datetime import datetime
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QScrollArea, QWidget
@@ -34,7 +35,7 @@ def _fmt_game_time(t: float) -> str:
 
 class PlayerCard(QFrame):
     """单个玩家卡片组件"""
-    def __init__(self, is_ally=True, parent=None):
+    def __init__(self, is_ally=True, show_skill=False, parent=None):
         super().__init__(parent)
         self.is_ally = is_ally
         border_color = Colors.ACCENT if is_ally else Colors.DANGER
@@ -68,16 +69,24 @@ class PlayerCard(QFrame):
         self.lbl_line3.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
         layout.addWidget(self.lbl_line3)
 
-        self.lbl_mastery = QLabel("绝活Top3: -")
-        self.lbl_mastery.setStyleSheet("color: #ffd700; font-size: 12px;")
-        layout.addWidget(self.lbl_mastery)
+        self.lbl_recent = QLabel("最近: -")
+        self.lbl_recent.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
+        layout.addWidget(self.lbl_recent)
+
+        # C 行（仅自己）：LCU 官方熟练度（全历史 mastery Top3）
+        self.lbl_skill = None
+        if show_skill:
+            self.lbl_skill = QLabel("绝活: -")
+            self.lbl_skill.setStyleSheet("color: #ffd700; font-size: 12px;")
+            layout.addWidget(self.lbl_skill)
 
         self.lbl_current = QLabel("本局: -")
         self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
         layout.addWidget(self.lbl_current)
 
     def update_data(self, name, level, rank, position, winloss, kda, champions,
-                    mastery_top3, is_mastery, streak_text="", champion_zh=""):
+                    is_mastery, streak_text="", champion_zh="",
+                    recent_top="", skill_top=""):
         self.lbl_name.setText(f"{name}  Lv.{level}")
         if streak_text:
             if "胜" in streak_text:
@@ -104,10 +113,19 @@ class PlayerCard(QFrame):
             line3_parts.append(f"常用: {champions}")
         self.lbl_line3.setText(" · ".join(line3_parts) if line3_parts else "-")
 
-        if mastery_top3:
-            self.lbl_mastery.setText(f"绝活Top3: {mastery_top3}")
+        if recent_top:
+            self.lbl_recent.setText(f"最近: {recent_top}")
         else:
-            self.lbl_mastery.setText("绝活Top3: 暂无数据")
+            self.lbl_recent.setText("最近: -")
+
+        # C 行：仅自己显示；无数据隐藏整行（不留"暂无数据"空行）
+        if self.lbl_skill is not None:
+            if skill_top:
+                self.lbl_skill.setText(f"绝活: {skill_top}")
+                self.lbl_skill.show()
+            else:
+                self.lbl_skill.setText("")
+                self.lbl_skill.hide()
 
         if champion_zh:
             if is_mastery is True:
@@ -132,6 +150,8 @@ class CurrentGamePanel(QWidget):
         self._catalog = ChampionCatalog()
 
         self._intelligence = None
+        self._loading_puuids: set = set()  # 情报查询进行中（防 1s 刷新重复触发）
+        self._loading_lock = threading.Lock()  # _loading_puuids 跨线程读写保护
         self._ongoing = ongoing_service
         self._lcu_get = lcu_get
         if lcu_get:
@@ -223,14 +243,37 @@ class CurrentGamePanel(QWidget):
             print(f"[UI] SGP provider 动态初始化失败: {e}")
             return None
 
-    def _get_or_create_card(self, team, idx):
+    def _get_or_create_card(self, team, idx, show_skill=False):
         cards = self.ally_cards if team == "ally" else self.enemy_cards
         layout = self.ally_layout if team == "ally" else self.enemy_layout
         while len(cards) <= idx:
-            card = PlayerCard(is_ally=(team == "ally"))
+            card = PlayerCard(is_ally=(team == "ally"), show_skill=show_skill)
             cards.append(card)
             layout.addWidget(card)
         return cards[idx]
+
+    def _ensure_intel(self, puuid: str, champion_id: int):
+        """懒触发玩家情报查询（后台线程，防重复）。"""
+        if not puuid or self._intelligence is None:
+            return
+        with self._loading_lock:
+            if puuid in self._loading_puuids:
+                return
+            if self._intelligence.get_cached(puuid) is not None:
+                return
+            self._loading_puuids.add(puuid)
+        threading.Thread(
+            target=self._fetch_intel, args=(puuid, champion_id), daemon=True
+        ).start()
+
+    def _fetch_intel(self, puuid: str, champion_id: int):
+        try:
+            self._intelligence.get_player_intelligence(puuid, champion_id)
+        except Exception as e:
+            print(f"[UI] 玩家情报查询失败 {puuid}: {e}")
+        finally:
+            with self._loading_lock:
+                self._loading_puuids.discard(puuid)
 
     def _fill_player_card(self, card, player):
         """纯渲染：从 CurrentGamePlayer 三区读取（identity=gameflow / realtime=2999 / history=loader）。
@@ -295,7 +338,6 @@ class CurrentGamePanel(QWidget):
             else:
                 kda_text += " (KDA --)"
 
-        mastery_top3_text = ""
         is_mastery = None
         rank_text = ""
         champions_text = ""
@@ -318,21 +360,47 @@ class CurrentGamePanel(QWidget):
                     ft += f" {snap_data.ranked_flex_lp}胜点"
                 rank_text += f" · {ft}"
 
-        # 绝活Top3（来自历史战绩 top_champions，中/英文名 → 映射中文）
-        if snap_data is not None and snap_data.data_state != "AVAILABLE" and not getattr(snap_data, "top_champions", None):
-            if getattr(snap_data, "data_state", None) == "NO_DATA":
-                mastery_top3_text = "暂无数据"
+        # B 行（最近状态，所有人）+ C 行（LCU mastery，仅自己）：懒触发 + 缓存读
+        intel_entry = None
+        recent_top = ""
+        skill_top = ""
+        puuid = getattr(player, "puuid", "") or ""
+        if puuid and self._intelligence is not None:
+            self._ensure_intel(puuid, getattr(player, "champion_id", 0) or 0)
+            intel_entry = self._intelligence.get_cached(puuid)
+            if intel_entry is None:
+                with self._loading_lock:
+                    loading_now = puuid in self._loading_puuids
+                recent_top = "获取中…" if loading_now else "-"
+            elif intel_entry.recent_status == "AVAILABLE":
+                stats = [c for c in (intel_entry.champion_stats or []) if c.games >= 5][:3]
+                if stats:
+                    recent_top = " · ".join(
+                        f"{c.champion_name} {c.games}场/{int(c.win_rate * 100)}%"
+                        for c in stats
+                    )
+                else:
+                    recent_top = "样本不足"
             else:
-                mastery_top3_text = "获取中…"
-        elif snap_data is not None and getattr(snap_data, "top_champions", None):
-            top3_names = []
+                recent_top = "-"
+
+            if (is_self and intel_entry is not None
+                    and intel_entry.mastery_status == "AVAILABLE"
+                    and intel_entry.mastery_top3):
+                parts = []
+                for m in intel_entry.mastery_top3[:3]:
+                    c = self._catalog.get_by_id(m.champion_id) if self._catalog else None
+                    zh = c.name_zh if c and c.name_zh else f"#{m.champion_id}"
+                    pts = f"{m.champion_points // 1000}k" if m.champion_points >= 1000 else str(m.champion_points)
+                    parts.append(f"{zh} Lv{m.champion_level} {pts}")
+                skill_top = " · ".join(parts)
+
+        # 本局是否使用 loader 常用英雄（is_mastery 用于 lbl_current，保留旧逻辑）
+        if snap_data is not None and getattr(snap_data, "top_champions", None):
             top3_cids = []
             for cname in snap_data.top_champions[:3]:
                 c = self._catalog.get_by_name(cname) if self._catalog else None
-                top3_names.append(c.name_zh if c and c.name_zh else cname)
                 top3_cids.append(c.cid if c else None)
-            mastery_top3_text = "/".join(top3_names)
-            # 本局是否使用绝活之一：identity.champion_id（gameflow cid）直接比较
             if getattr(player, "champion_id", 0):
                 is_mastery = player.champion_id in top3_cids
 
@@ -352,10 +420,11 @@ class CurrentGamePanel(QWidget):
             winloss=winloss_text,
             kda=kda_text,
             champions=champions_text,
-            mastery_top3=mastery_top3_text,
             is_mastery=is_mastery,
             streak_text=streak_text,
             champion_zh=champ,
+            recent_top=recent_top,
+            skill_top=skill_top,
         )
 
     def refresh(self):
@@ -387,14 +456,14 @@ class CurrentGamePanel(QWidget):
         self.lbl_title.setText(f"当前对局  时间 {_fmt_game_time(game_time)}  玩家 {n}")
 
         for i, p in enumerate(session.my_team):
-            card = self._get_or_create_card("ally", i)
+            card = self._get_or_create_card("ally", i, show_skill=bool(getattr(p, "is_self", False)))
             card.show()
             self._fill_player_card(card, p)
         for i in range(len(session.my_team), len(self.ally_cards)):
             self.ally_cards[i].hide()
 
         for i, p in enumerate(session.their_team):
-            card = self._get_or_create_card("enemy", i)
+            card = self._get_or_create_card("enemy", i, show_skill=bool(getattr(p, "is_self", False)))
             card.show()
             self._fill_player_card(card, p)
         for i in range(len(session.their_team), len(self.enemy_cards)):
