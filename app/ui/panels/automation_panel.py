@@ -48,6 +48,11 @@ class AutomationPanel(QWidget):
                 g.setFixedWidth(36)
                 g.clicked.connect(gear)
                 r.addWidget(g)
+            else:
+                # 无 ⚙ 的行：36px 空占位，保证与其他行右侧空间一致 → 4 按钮等宽
+                _spacer = QWidget()
+                _spacer.setFixedWidth(36)
+                r.addWidget(_spacer)
             return r
 
         form.addLayout(_row(self.btn_queue, self._open_queue_config))
