@@ -385,10 +385,13 @@ class CurrentGamePanel(QWidget):
             elif intel_entry.recent_status == "AVAILABLE":
                 stats = [c for c in (intel_entry.champion_stats or []) if c.games >= 5][:3]
                 if stats:
-                    recent_top = " · ".join(
-                        f"{c.champion_name} {c.games}场/{int(c.win_rate * 100)}%"
-                        for c in stats
-                    )
+                    parts = []
+                    for c in stats:
+                        # SGP championName 为英文 slug（如 Thresh），统一映射中文称号
+                        cc = self._catalog.get_by_id(c.champion_id) if self._catalog else None
+                        cname_zh = cc.name_zh if cc and cc.name_zh else c.champion_name
+                        parts.append(f"{cname_zh} {c.games}场/{int(c.win_rate * 100)}%")
+                    recent_top = " · ".join(parts)
                 else:
                     recent_top = "样本不足"
             else:
