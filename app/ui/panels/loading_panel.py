@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from app.ui.theme.colors import Colors
 
 from PySide6.QtWidgets import (
@@ -21,6 +21,9 @@ MODULES = [
 
 
 class LoadingPanel(QWidget):
+    # 跨线程状态更新：backend 线程 emit，AutoConnection 自动 queued 到 UI 线程
+    status_changed = Signal(str, str)  # (key, status)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._labels: dict[str, QLabel] = {}
@@ -47,6 +50,7 @@ class LoadingPanel(QWidget):
         self._log.setMaximumBlockCount(200)
         lay.addWidget(self._log, 1)
         get_log_bus().sig_log.connect(self._on_log)
+        self.status_changed.connect(self.set_module_status)
 
     def _on_log(self, text):
         self._log.appendPlainText(text)
@@ -67,3 +71,7 @@ class LoadingPanel(QWidget):
             dot.setText("●")
             dot.setStyleSheet("color: #ef4444;")
             lbl.setText("失败")
+        elif status == "disabled":
+            dot.setText("○")
+            dot.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+            lbl.setText("未启用")

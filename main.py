@@ -75,12 +75,19 @@ class Application:
         self.speech_judge: SpeechJudge = None
         self.event_log: EventLog = None
         self.automation = None
+        self._main_window = None  # LoadingPanel 状态灯接线（_set_module_status 用）
 
         # 鐘舵€?
         self._running = False
         self._shutdown_event = threading.Event()
 
     _initialized = False
+    def _set_module_status(self, key: str, status: str):
+        """更新 LoadingPanel 状态灯（跨线程安全：Signal queued；window 未就绪则跳过）"""
+        w = getattr(self, "_main_window", None)
+        if w is not None and hasattr(w, "_loading"):
+            w._loading.status_changed.emit(key, status)
+
     def _ensure_asr_running(self):
         """自动拉起 ASR llama-server（如果端口 8080 未运行）"""
         import socket
@@ -210,8 +217,10 @@ class Application:
                 _lx = str(_P("data/music_sources/lx").absolute())
                 self._js_source = JSMusicSource(_mf, _lx, user_variables=(self.config_data.get("online_music", {}).get("js_bridge", {}) or {}).get("user_variables") or {})
                 self.online_music_manager.register(self._js_source)
+                self._set_module_status("js", "ok")
             except Exception as e:
                 print(f"[Music] JS bridge 鍒濆鍖栧け璐? {e}")
+                self._set_module_status("js", "fail")
             self.music.set_online_manager(self.online_music_manager)
             # 同步「音源管理」UI 导入的自定义音源（config/music_sources.json）
             try:
@@ -254,8 +263,11 @@ class Application:
 
         # 5. 璇煶杈撳叆
         print("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
+        self._set_module_status("asr", "loading")
         self._ensure_asr_running()
         self.voice = VoiceRuntime(self.config_data)
+        self._set_module_status("asr", "ok")
+        self._set_module_status("intent", "ok")
 
         # 娉ㄥ唽 GameAlarm 鍛戒护澶勭悊锛堥€氳繃浜嬩欢锛?
         self._register_alarm_events()
@@ -283,18 +295,21 @@ class Application:
 
         # 鍚姩 Event Log锛堟渶鍏堝惎鍔級
         self.event_log.start()
+        self._set_module_status("eventlog", "ok")
 
         # 鍚姩璋冨害鍣?
         self.scheduler.start()
 
         # 鍚姩闊充箰妯″潡
         self.music.start()
+        self._set_module_status("music", "ok")
 
         # 鎵弿闊充箰搴擄紙鍚庡彴锛?
         threading.Thread(target=self._scan_music_library, daemon=True).start()
 
         # 鍚姩 LoL 妯″潡
         self.lol.start()
+        self._set_module_status("lol", "ok")
 
         # OngoingGameService 构造必须在 lcu discovery 之后：
         # 否则 _build_direct_getter / acct._direct 独立直连失效，退化为共享 lcu.get，
@@ -311,9 +326,11 @@ class Application:
         self._register_combo()
         # 鍚姩 TTS
         self.tts.start()
+        self._set_module_status("tts", "ok")
 
         # 鍚姩 Speech Queue
         self.speech_queue.start()
+        self._set_module_status("speech", "ok")
 
         # 鍚姩 Speech Judge
         self.speech_judge.start()
@@ -551,6 +568,9 @@ class Application:
             self.command_bus.register(CommandType.AUTO_BANPICK_TOGGLE, on_banpick_toggle)
             if cfg.enabled:
                 self.automation.start()
+                self._set_module_status("automation", "ok")
+            else:
+                self._set_module_status("automation", "disabled")
             print(f"[Automation] 宸叉敞鍐?enabled={cfg.enabled}")
         except Exception as e:
             print(f"[Automation] 娉ㄥ唽澶辫触: {e}")
@@ -828,7 +848,7 @@ class Application:
             cooldown_manager=None,
             music=None,
         )
-        window.resize(480, 640)
+        self._main_window = window
         window.show()
         window.raise_()
         window.activateWindow()
