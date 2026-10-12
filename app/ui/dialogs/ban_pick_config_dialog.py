@@ -1,13 +1,20 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QComboBox, QPushButton, QDialogButtonBox, QMessageBox,
+    QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QLineEdit, QPushButton, QDialogButtonBox, QMessageBox,
 )
 import json
 import os
 
+# 别名表（俗称/本名 → 称号）：导入失败则退化为 中文名/英文名/称号 三字段匹配
+try:
+    from app.lol.champion.normalizer import ALIASES as _ALIASES
+except Exception:
+    _ALIASES = {}
+
 
 class BanPickConfigDialog(QDialog):
-    """Ban / Pick 优先级列表编辑 - 英雄中文名选择，内部存ID"""
+    """Ban / Pick 优先级列表编辑 - 搜索式英雄选择（中文/英文/称号/俗称），内部存ID"""
 
     def __init__(self, title: str, current_list: list, parent=None):
         super().__init__(parent)
@@ -41,20 +48,17 @@ class BanPickConfigDialog(QDialog):
         self._refresh_list()
         lay.addWidget(self.list_widget)
 
-        # 改成可搜索的下拉框
-        add_row = QHBoxLayout()
-        self.combo_champion = QComboBox()
-        self.combo_champion.setEditable(True)  # 可输入搜索
-        # 按名字排序
-        sorted_names = sorted(self._name_to_id.keys())
-        self.combo_champion.addItems(sorted_names)
-        self.combo_champion.setCurrentText("")  # 默认不选中
-        add_row.addWidget(self.combo_champion, 1)
+        # 搜索式英雄选择：输入即过滤，双击/回车添加（与连招面板交互一致）
+        lay.addWidget(QLabel("选择英雄（搜索过滤，双击/回车添加）"))
+        self.edt_search = QLineEdit()
+        self.edt_search.setPlaceholderText("🔍 搜索英雄（中文/英文/别名）")
+        self.edt_search.textChanged.connect(self._refresh_candidates)
+        lay.addWidget(self.edt_search)
 
-        btn_add = QPushButton("添加")
-        btn_add.clicked.connect(self._on_add)
-        add_row.addWidget(btn_add)
-        lay.addLayout(add_row)
+        self.lst_candidates = QListWidget()
+        # itemActivated：双击或回车添加（避免单击浏览时误触）
+        self.lst_candidates.itemActivated.connect(self._on_pick)
+        lay.addWidget(self.lst_candidates, 1)
 
         btn_del = QPushButton("删除选中")
         btn_del.clicked.connect(self._on_delete)
@@ -64,6 +68,8 @@ class BanPickConfigDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
+
+        self._refresh_candidates()
 
     def _load_champions(self):
         """加载英雄数据，过滤掉皮肤变体"""
@@ -83,39 +89,46 @@ class BanPickConfigDialog(QDialog):
             print(f"[UI] 加载英雄数据失败: {e}")
         return []
 
+    def _hay(self, ch) -> str:
+        """匹配文本源：中文名 + 英文名 + 称号 + 该英雄的俗称/本名别名（v == title 判断归属）。"""
+        parts = [ch.get("name", ""), ch.get("alias", ""), ch.get("title", "")]
+        title = ch.get("title", "")
+        for k, v in _ALIASES.items():
+            if v == title:
+                parts.append(k)
+        return " ".join(parts).lower()
+
+    def _refresh_candidates(self):
+        """按搜索词过滤候选英雄列表（双击/回车添加）。"""
+        kw = self.edt_search.text().strip().lower()
+        self.lst_candidates.blockSignals(True)
+        self.lst_candidates.clear()
+        for ch in self._champions:
+            if kw and kw not in self._hay(ch):
+                continue
+            name = ch.get("name", "")
+            title = ch.get("title", "")
+            label = f"{name}（{title}）" if title else name
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, ch["id"])
+            self.lst_candidates.addItem(item)
+        self.lst_candidates.blockSignals(False)
+
     def _refresh_list(self):
         self.list_widget.clear()
         for cid in self._item_ids:
             name = self._id_to_name.get(cid, f"未知({cid})")
             QListWidgetItem(f"{name} (ID:{cid})", self.list_widget)
 
-    def _on_add(self):
-        text = self.combo_champion.currentText().strip()
-        if not text:
-            return
-
-        # 精确匹配中文名
-        if text in self._name_to_id:
-            cid = self._name_to_id[text]
-        else:
-            # 模糊匹配第一个
-            found = None
-            for name, c in self._name_to_id.items():
-                if text in name or name in text:
-                    found = (name, c)
-                    break
-            if found:
-                cid = found[1]
-            else:
-                QMessageBox.information(self, "提示", f"找不到英雄: {text}")
-                return
-
+    def _on_pick(self, item):
+        cid = item.data(Qt.UserRole)
         if cid in self._item_ids:
             QMessageBox.information(self, "提示", "已在列表中")
             return
         self._item_ids.append(cid)
         self._refresh_list()
-        self.combo_champion.setCurrentText("")
+        # clear() 会触发 textChanged → _refresh_candidates，无需手动再调
+        self.edt_search.clear()
 
     def _on_delete(self):
         row = self.list_widget.currentRow()
