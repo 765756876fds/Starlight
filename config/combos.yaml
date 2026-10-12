@@ -24,7 +24,7 @@ champions:
       - key: w
         delay_after_ms: 50
     - trigger: '4'
-      note: R闪（眼版）
+      note: 4眼位移
       sequence:
       - key: '4'
         delay_after_ms: 50
