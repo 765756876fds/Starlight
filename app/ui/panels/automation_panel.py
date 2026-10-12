@@ -34,20 +34,20 @@ class AutomationPanel(QWidget):
         self.btn_accept = ToggleButton("自动接受", False)
         self.btn_ban = ToggleButton("自动禁用", False)
         self.btn_pick = ToggleButton("自动选择", False)
-        # 4 个按钮同宽、左对齐（固定宽度，行内剩余空间靠右）
+        # 等宽自适应：Expanding 随行宽拉伸（最小 200 / 最大 300，同宽由相同约束保证）
         for _b in (self.btn_queue, self.btn_accept, self.btn_ban, self.btn_pick):
-            _b.setFixedWidth(120)
-            _b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            _b.setMinimumWidth(200)
+            _b.setMaximumWidth(300)
+            _b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         def _row(btn, gear=None):
             r = QHBoxLayout()
-            r.addWidget(btn)
+            r.addWidget(btn)  # Expanding，自动拉伸
             if gear is not None:
                 g = QPushButton("⚙")
                 g.setFixedWidth(36)
                 g.clicked.connect(gear)
                 r.addWidget(g)
-            r.addStretch()
             return r
 
         form.addLayout(_row(self.btn_queue, self._open_queue_config))
