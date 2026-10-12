@@ -18,8 +18,6 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from ..widgets.toggle_button import ToggleButton
-
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 CHAMPIONS_JSON = os.path.join(PROJECT_ROOT, "data", "lol_data", "champions.json")
 
@@ -41,16 +39,6 @@ class ComboPanel(QWidget):
         box_title = QLabel("一键连招")
         box_title.setStyleSheet("font-weight: bold;")
         layout.addWidget(box_title)
-
-        switches = QHBoxLayout()
-        self.btn_enable = ToggleButton("总开关", False)
-        self.btn_enable.toggled_state.connect(self._on_toggle)
-        switches.addWidget(self.btn_enable)
-        self.btn_gate = ToggleButton("仅 LoL 前台时触发", True)
-        self.btn_gate.toggled_state.connect(self._on_gate)
-        switches.addWidget(self.btn_gate)
-        switches.addStretch()
-        layout.addLayout(switches)
 
         self.edt_search = QLineEdit()
         self.edt_search.setPlaceholderText("🔍 搜索英雄（中文/英文/别名）")
@@ -174,14 +162,6 @@ class ComboPanel(QWidget):
         self._refresh_list()
 
     # ---------- 交互 ----------
-
-    def _on_toggle(self, enabled: bool) -> None:
-        if self._combo:
-            self._combo.set_enabled(enabled)
-
-    def _on_gate(self, enabled: bool) -> None:
-        if self._combo:
-            self._combo.set_window_gate(enabled)
 
     def _on_select(self, cur: Optional[QListWidgetItem], _prev=None) -> None:
         if cur is None:

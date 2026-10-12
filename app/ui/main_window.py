@@ -17,7 +17,7 @@ class MainWindow(QMainWindow):
                  music=None, ongoing_service=None, services=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("LoL Music Agent")
-        self.resize(500, 680)
+        self.resize(1100, 720)
         self._services = services or {}
 
         # 自动恢复上次窗口大小和位置

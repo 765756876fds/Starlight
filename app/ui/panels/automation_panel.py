@@ -51,10 +51,18 @@ class AutomationPanel(QWidget):
 
         layout.addWidget(box)
 
-        # 一键连招子面板（一期只读展示；combo_manager 由 main 注入）
+        # 一键连招：总开关（不持久化，默认关）+ [管理连招…] 弹窗（ComboPanel 装进 QDialog）
         if self._combo_manager is not None:
-            from .combo_panel import ComboPanel
-            layout.addWidget(ComboPanel(self._combo_manager))
+            combo_row = QHBoxLayout()
+            self.btn_combo_enable = ToggleButton("连招总开关", False)
+            self.btn_combo_enable.setMinimumWidth(180)
+            self.btn_combo_enable.toggled_state.connect(self._combo_manager.set_enabled)
+            combo_row.addWidget(self.btn_combo_enable)
+            self.btn_combo_manage = QPushButton("管理连招…")
+            self.btn_combo_manage.clicked.connect(self._open_combo_manager)
+            combo_row.addWidget(self.btn_combo_manage)
+            combo_row.addStretch()
+            layout.addLayout(combo_row)
 
         layout.addStretch()
 
@@ -72,6 +80,13 @@ class AutomationPanel(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
+
+    def _open_combo_manager(self):
+        """打开连招管理弹窗（非模态，关闭即销毁，ComboPanel 原样装入）。"""
+        from app.ui.dialogs.combo_manager_dialog import ComboManagerDialog
+        dlg = ComboManagerDialog(self._combo_manager, self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.show()
 
     def _open_queue_config(self):
         if self._svc is None:

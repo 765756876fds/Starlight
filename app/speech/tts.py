@@ -97,6 +97,15 @@ class TTSController:
 
         self._running = False
 
+    def set_voice(self, voice: str):
+        self.voice = voice
+
+    def set_rate(self, rate: str):
+        self.rate = rate
+
+    def set_volume(self, volume: str):
+        self.volume_pct = volume
+
     def start(self):
         """启动 TTS"""
         self._running = True

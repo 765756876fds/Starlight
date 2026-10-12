@@ -23,6 +23,23 @@ class _SearchWorker(QObject):
             self.failed.emit(str(e))
 
 
+class _ScanWorker(QObject):
+    """后台扫描本地音乐（复用 main 启动时的线程化 rescan 模式）。"""
+    done = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, music):
+        super().__init__()
+        self._music = music
+
+    def run(self):
+        try:
+            result = self._music.rescan()
+            self.done.emit(result or {})
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class MusicPanel(QWidget):
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
@@ -30,6 +47,7 @@ class MusicPanel(QWidget):
         self._tracks_by_row = []
         self._local_songs = []
         self._thread = None
+        self._scan_thread = None
 
         root = QVBoxLayout(self)
         tabs = QTabWidget()
@@ -38,6 +56,17 @@ class MusicPanel(QWidget):
         # ---- 本地 Tab ----
         local = QWidget()
         ll = QVBoxLayout(local)
+
+        # 扫描行（顶部）
+        scan_row = QHBoxLayout()
+        self.btn_scan_local = QPushButton("扫描本地音乐")
+        self.btn_scan_local.clicked.connect(self._on_scan_local)
+        scan_row.addWidget(self.btn_scan_local)
+        self.lbl_scan_status = QLabel("")
+        self.lbl_scan_status.setStyleSheet("color: #9090a8; font-size: 11px;")
+        scan_row.addWidget(self.lbl_scan_status)
+        scan_row.addStretch()
+        ll.addLayout(scan_row)
 
         # 搜索行
         local_search_row = QHBoxLayout()
@@ -157,6 +186,52 @@ class MusicPanel(QWidget):
         self._timer.start(1000)
 
     # ---- 本地 ----
+    def _on_scan_local(self):
+        """扫描本地音乐：读 music_dirs.json 启用目录 → 应用到 scanner → QThread rescan。"""
+        if self._music is None:
+            return
+        from ..settings_store import load_music_dirs, ALL_EXTENSIONS
+        dirs = [d for d in load_music_dirs() if d.get("enabled")]
+        if not dirs:
+            self.lbl_scan_status.setText("无启用的音乐目录，请到设置中添加")
+            return
+        exts = set()
+        for d in dirs:
+            for e in (d.get("extensions") or []):
+                e = str(e).lower().lstrip(".")
+                if e:
+                    exts.add("." + e)
+        if not exts:
+            exts = {"." + e for e in ALL_EXTENSIONS}
+        try:
+            self._music.scanner.scan_dirs = [d["path"] for d in dirs]
+            self._music.scanner.extensions = exts
+        except Exception as e:
+            self.lbl_scan_status.setText(f"应用扫描目录失败: {e}")
+            return
+        self.btn_scan_local.setEnabled(False)
+        self.lbl_scan_status.setText("扫描中…")
+        self._scan_thread = QThread()
+        self._scan_worker = _ScanWorker(self._music)
+        self._scan_worker.moveToThread(self._scan_thread)
+        self._scan_thread.started.connect(self._scan_worker.run)
+        self._scan_worker.done.connect(self._on_scan_done)
+        self._scan_worker.failed.connect(self._on_scan_failed)
+        self._scan_worker.done.connect(self._scan_thread.quit)
+        self._scan_worker.failed.connect(self._scan_thread.quit)
+        self._scan_thread.start()
+
+    def _on_scan_done(self, result: dict) -> None:
+        self.btn_scan_local.setEnabled(True)
+        self.lbl_scan_status.setText(
+            f"扫描完成：新增{result.get('added', 0)} 更新{result.get('updated', 0)} "
+            f"跳过{result.get('skipped', 0)} 错误{result.get('errors', 0)}")
+        self._load_local_all()
+
+    def _on_scan_failed(self, err: str) -> None:
+        self.btn_scan_local.setEnabled(True)
+        self.lbl_scan_status.setText(f"扫描失败: {err}")
+
     def _load_local_all(self):
         self.edit_local.setText("")
         self._refresh_local_list("")

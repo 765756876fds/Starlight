@@ -241,9 +241,13 @@ class Application:
         )
 
         # 敌方成装语音提醒（equipment_notifier，初始化失败不阻塞主流程）
+        self._equip_enabled = True
         try:
             from app.lol.equipment_notifier import EquipmentUpdateNotifier
             self.equip_notifier = EquipmentUpdateNotifier(self.speech_queue)
+            # 装备提醒持久化：启动读 ui_prefs.json（默认开）
+            from app.ui.settings_store import load_ui_prefs
+            self._equip_enabled = bool(load_ui_prefs().get("equip_notify", True))
         except Exception as _e:
             print(f"[Equipment] notifier 初始化失败: {_e}")
             self.equip_notifier = None
@@ -561,6 +565,13 @@ class Application:
             self.combo_manager = ComboManager(
                 ongoing_service=getattr(self, "ongoing_service", None),
             )
+            # 前台门持久化：启动读 ui_prefs.json（默认开）
+            try:
+                from app.ui.settings_store import load_ui_prefs
+                self.combo_manager.set_window_gate(
+                    bool(load_ui_prefs().get("combo_window_gate", True)))
+            except Exception:
+                pass
             self.combo_manager.start()
             print("[Combo] ComboManager 已启动（默认关闭，需在自动化面板开启）")
         except Exception as e:
@@ -696,6 +707,8 @@ class Application:
 
                     def _on_equip_tick(event):
                         try:
+                            if not getattr(self, "_equip_enabled", True):
+                                return
                             snap = _equip_snap_provider()
                             if snap and getattr(snap, "players", None):
                                 self.equip_notifier.update(snap.players)
@@ -941,6 +954,8 @@ class Application:
             snapshot_provider=lambda: (self.lol.current_snapshot if getattr(self, "lol", None) else None),
             combo_manager=getattr(self, "combo_manager", None),
             services_dict={"lcu": getattr(self.lol, "lcu", None) if getattr(self, "lol", None) else None},
+            tts=getattr(self, "tts", None),
+            equip_toggle=lambda on: setattr(self, "_equip_enabled", bool(on)),
                     )
         print("[Run] MainTabs built, switching")
         # 统一运行时状态：MainWindow 底部唯一 StatusBar 读取这套真实服务
