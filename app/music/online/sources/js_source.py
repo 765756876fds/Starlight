@@ -178,7 +178,7 @@ class JSMusicSource(MusicSource):
                 continue
         return out
 
-    def get_play_url(self, track: OnlineTrack) -> Optional[str]:
+    def get_play_url(self, track: OnlineTrack) -> Optional[dict]:
         r = self._call("getUrl", {
             "source": track.source_name,
             "track_id": track.track_id,
@@ -187,7 +187,11 @@ class JSMusicSource(MusicSource):
         })
         if not r:
             return None
-        return r.get("url")
+        # 返回 dict（url + 插件透传的 headers），供播放链按需设置 http-header-fields
+        return {
+            "url": r.get("url"),
+            "headers": r.get("headers") or None,
+        }
 
     def get_lyric(self, track: OnlineTrack) -> Optional[str]:
         r = self._call("getLyric", {

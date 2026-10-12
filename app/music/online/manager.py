@@ -114,12 +114,12 @@ class OnlineSourceManager:
                      version: int) -> List[OnlineTrack]:
         return src.search(kw, limit)
 
-    def get_play_url(self, track: OnlineTrack) -> Optional[str]:
+    def get_play_url(self, track: OnlineTrack) -> Optional[dict]:
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         src = self._sources.get(track.source_name)
         if src is not None:
             try:
-                return src.get_play_url(track)
+                return self._normalize_play_result(src.get_play_url(track))
             except Exception as e:
                 self._errors[track.source_name] = str(e)
                 return None
@@ -128,12 +128,21 @@ class OnlineSourceManager:
         # （旧行为语义，仅在此 miss 时触发，不拖累定向命中路径）。
         for s in self._sources.values():
             try:
-                url = s.get_play_url(track)
-                if url:
-                    return url
+                r = self._normalize_play_result(s.get_play_url(track))
+                if r:
+                    return r
             except Exception:
                 continue
         return None
+
+    @staticmethod
+    def _normalize_play_result(r):
+        """str 型源（http/demo/archive）包装成 dict；dict 型（js_bridge）原样。"""
+        if not r:
+            return None
+        if isinstance(r, dict):
+            return r
+        return {"url": r, "headers": None}
 
     def get_lyric(self, track: OnlineTrack) -> Optional[str]:
         src = self._sources.get(track.source_name)

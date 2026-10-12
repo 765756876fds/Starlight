@@ -236,7 +236,7 @@ def test_get_play_url_falls_back_when_source_name_is_bridge_name():
 
     t = OnlineTrack(source_name="酷我音乐", track_id="1", title="晴天")
     url = m.get_play_url(t)
-    assert url == "https://bridge.example.com/a.mp3"
+    assert url == {"url": "https://bridge.example.com/a.mp3", "headers": None}
     assert none_calls == ["酷我音乐"]     # 兜底遍历按注册序，None 后继续
     assert bridge_calls == ["酷我音乐"]   # 桥接源收到原始 source_name（bridge 需要）
 
@@ -252,7 +252,7 @@ def test_get_play_url_falls_back_when_source_name_is_bridge_name():
         def get_lyric(self, track): return None
     m2.register(Direct())
     t2 = OnlineTrack(source_name="ikun", track_id="2", title="歌")
-    assert m2.get_play_url(t2) == "https://ikun.example.com/b.mp3"
+    assert m2.get_play_url(t2) == {"url": "https://ikun.example.com/b.mp3", "headers": None}
     assert direct_calls == ["ikun"]
     assert m2._errors == {}
 
@@ -322,7 +322,7 @@ def test_search_play_online_uses_direct_source_lookup(tmp_path):
                             title="稻香", artist="周杰伦")
         mgr = MagicMock()
         mgr.search_all.return_value = {"kw_bridge": [track]}
-        mgr.get_play_url.return_value = "https://example.com/play"
+        mgr.get_play_url.return_value = {"url": "https://example.com/play", "headers": None}
         ctrl.online_manager = mgr
 
         result = ctrl.play_search_result("周杰伦稻香")

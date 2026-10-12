@@ -69,7 +69,24 @@ def test_get_play_url_returns_url(monkeypatch):
     s._pending = {}
     monkeypatch.setattr(s, "_call", lambda m, p, timeout=15.0: {"url": "http://x/y.mp3"})
     t = OnlineTrack(source_name="kg", track_id="1", title="x")
-    assert s.get_play_url(t) == "http://x/y.mp3"
+    assert s.get_play_url(t) == {"url": "http://x/y.mp3", "headers": None}
+
+
+def test_get_play_url_passes_plugin_headers(monkeypatch):
+    """插件返回 headers（如开心汽水的 douyin Referer）必须透传到播放链。"""
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._proc = FakeProc([])
+    s._lock = threading.Lock()
+    s._pending = {}
+    monkeypatch.setattr(s, "_call", lambda m, p, timeout=15.0: {
+        "url": "http://x/y.mp3",
+        "headers": {"Referer": "https://www.douyin.com/", "Accept": "*/*"},
+    })
+    t = OnlineTrack(source_name="kg", track_id="1", title="x")
+    assert s.get_play_url(t) == {
+        "url": "http://x/y.mp3",
+        "headers": {"Referer": "https://www.douyin.com/", "Accept": "*/*"},
+    }
 
 
 def test_lx_mock_provides_rawscript():

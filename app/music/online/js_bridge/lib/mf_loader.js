@@ -82,8 +82,13 @@ async function callGetUrl(plugin, rawItem, quality) {
   const result = await plugin.getMediaSource(item, quality || '320k');
   if (!result) return null;
   if (typeof result === 'string') return { url: result, quality };
-  if (result.url) return { url: result.url, quality: result.quality || quality };
-  return null;
+  const out = { url: result.url, quality: result.quality || quality };
+  // 透传插件返回的 headers（如开心汽水给 douyin Referer），供播放链设置
+  if (result.headers && typeof result.headers === 'object'
+      && Object.keys(result.headers).length) {
+    out.headers = result.headers;
+  }
+  return out;
 }
 
 async function callGetLyric(plugin, rawItem) {

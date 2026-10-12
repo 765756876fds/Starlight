@@ -22,6 +22,26 @@ from .search import MusicSearch
 from .lx_client import LxMusicClient
 
 
+# mpv http-header-fields 用逗号分隔，值含逗号会破坏语法；只转发安全字段。
+_HEADER_WHITELIST = ("Referer", "User-Agent", "Cookie", "Authorization")
+_WL_LOWER = {h.lower() for h in _HEADER_WHITELIST}
+
+
+def _pick_play_headers(headers):
+    """过滤插件 headers：只留白名单字段（大小写不敏感，HTTP 头大小写不敏感），
+    值含逗号跳过；空返回 None。"""
+    if not headers or not isinstance(headers, dict):
+        return None
+    out = {}
+    for k, v in headers.items():
+        if k.lower() not in _WL_LOWER:
+            continue
+        if not isinstance(v, str) or "," in v:
+            continue
+        out[k] = v
+    return out or None
+
+
 class MusicController:
     """
     音乐控制器
@@ -352,18 +372,27 @@ class MusicController:
                     # 旧逻辑遍历所有源串行调 get_play_url，demo/archive 对陌生 track 各自
                     # 发起 HTTP（超时 8s/个），导致在线播放最高 ~16s 延迟。
                     _t_url_start = time.time()
-                    play_url = self.online_manager.get_play_url(chosen)
+                    play_result = self.online_manager.get_play_url(chosen)
                     _t_url_ms = int((time.time() - _t_url_start) * 1000)
                     print(f"[Music] 获取播放URL，耗时 {_t_url_ms}ms")
-                    if play_url:
+                    if play_result:
                         print(f"[Music] 获取播放URL成功，开始在线播放...")
+                        play_url = play_result.get("url")
                         # 在线URL需要HTTP头。mpv 的 http-header-fields 是持久属性，
-                        # 酷我 Referer 一旦设置会跨源残留：切到其他音源后仍带着酷我
-                        # Referer。因此只对酷我系源设置 Referer，其他源重置为纯 UA。
+                        # 某源 Referer 一旦设置会跨源残留。因此每次播放前无条件重设
+                        # （覆盖式 set_property）：插件 headers（白名单）优先，
+                        # 否则仅酷我系源带 Referer，其他源重置为纯 UA。
+                        hdr = _pick_play_headers(play_result.get("headers"))
                         need_kw_header = ("kw" in chosen.source_name.lower()
                                           or "酷我" in chosen.source_name)
                         try:
-                            if need_kw_header:
+                            # 双保险：先清空 http-header-fields，再按分支设置——
+                            # 无论 mpv 对 list 属性是"覆盖"还是"追加"，旧 headers 都不会残留。
+                            self.mpv.set_property("http-header-fields", "")
+                            if hdr:
+                                fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
+                                self.mpv.set_property("http-header-fields", fields)
+                            elif need_kw_header:
                                 self.mpv.set_property(
                                     "http-header-fields",
                                     "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
@@ -606,19 +635,27 @@ class MusicController:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         if self.online_manager is None:
             return False
-        url = self.online_manager.get_play_url(track)
-        if not url:
+        result = self.online_manager.get_play_url(track)
+        if not result:
             print(f"[Music] online 无 URL: {track.title}")
             return False
+        url = result.get("url")
         print(f"[Music] play online: {track.title} -> {url[:80]}")
         try:
-            # mpv 的 http-header-fields 是持久属性：按实际播放音源设置/重置，
-            # 避免酷我 Referer 跨源残留（与 search_play 路径一致）。
+            # mpv 的 http-header-fields 是持久属性：每次播放前无条件重设，
+            # 避免某源 Referer 跨源残留（覆盖式 set_property）。
+            # 优先级：插件返回 headers（白名单过滤） > source_name 硬编码（酷我）。
             # 设置失败仅跳过 header，不影响播放流程。
-            need_kw_header = ("kw" in (track.source_name or "").lower()
-                              or "酷我" in (track.source_name or ""))
+            hdr = _pick_play_headers(result.get("headers"))
             try:
-                if need_kw_header:
+                # 双保险：先清空 http-header-fields，再按分支设置——
+                # 无论 mpv 对 list 属性是"覆盖"还是"追加"，旧 headers 都不会残留。
+                self.mpv.set_property("http-header-fields", "")
+                if hdr:
+                    fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
+                    self.mpv.set_property("http-header-fields", fields)
+                elif ("kw" in (track.source_name or "").lower()
+                      or "酷我" in (track.source_name or "")):
                     self.mpv.set_property(
                         "http-header-fields",
                         "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
