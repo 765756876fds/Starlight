@@ -1,7 +1,8 @@
 """自动化面板：4 个开关 + 状态显示。"""
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QPushButton, QGroupBox, QLabel, QVBoxLayout, QWidget,
+    QHBoxLayout, QPushButton, QGroupBox, QLabel, QSizePolicy, QVBoxLayout,
+    QWidget,
 )
 
 from ..widgets.toggle_button import ToggleButton
@@ -33,19 +34,24 @@ class AutomationPanel(QWidget):
         self.btn_accept = ToggleButton("自动接受", False)
         self.btn_ban = ToggleButton("自动禁用", False)
         self.btn_pick = ToggleButton("自动选择", False)
+        # 4 个按钮同宽、左对齐（固定宽度，行内剩余空间靠右）
+        for _b in (self.btn_queue, self.btn_accept, self.btn_ban, self.btn_pick):
+            _b.setFixedWidth(120)
+            _b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         def _row(btn, gear=None):
             r = QHBoxLayout()
-            r.addWidget(btn, 1)
+            r.addWidget(btn)
             if gear is not None:
                 g = QPushButton("⚙")
                 g.setFixedWidth(36)
                 g.clicked.connect(gear)
                 r.addWidget(g)
+            r.addStretch()
             return r
 
         form.addLayout(_row(self.btn_queue, self._open_queue_config))
-        form.addWidget(self.btn_accept)
+        form.addLayout(_row(self.btn_accept))
         form.addLayout(_row(self.btn_ban, self._open_ban_config))
         form.addLayout(_row(self.btn_pick, self._open_pick_config))
 

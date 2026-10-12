@@ -133,7 +133,7 @@ class SettingsPanel(QWidget):
         # 目录列表容器：QScrollArea + 行 widget（避开 QListWidget setItemWidget 压缩）
         list_scroll = QScrollArea()
         list_scroll.setWidgetResizable(True)
-        list_scroll.setMinimumHeight(160)
+        list_scroll.setMinimumHeight(100)  # 有内容时按内容撑高，无内容不占大块
         self._dirs_container = QWidget()
         self._dirs_layout = QVBoxLayout(self._dirs_container)
         self._dirs_layout.setContentsMargins(4, 4, 4, 4)
@@ -147,16 +147,27 @@ class SettingsPanel(QWidget):
         self.btn_scan_all = QPushButton("扫描全部")
         self.btn_scan_all.setProperty("class", "primary")
         self.btn_scan_all.clicked.connect(self._on_scan_all)
+        self.btn_source_manage = QPushButton("音源管理…")
+        self.btn_source_manage.clicked.connect(self._on_source_manage)
         self.lbl_scan_status = QLabel("")
         self.lbl_scan_status.setStyleSheet("color: #9090a8; font-size: 11px;")
         btns.addWidget(self.btn_add_dir)
         btns.addWidget(self.btn_scan_all)
+        btns.addWidget(self.btn_source_manage)
         btns.addWidget(self.lbl_scan_status)
         btns.addStretch()
         lay.addLayout(btns)
         root.addWidget(box)
         self._dirs: list = load_music_dirs()
         self._render_dirs()
+
+    def _on_source_manage(self):
+        """打开音源管理对话框（从音乐面板挪到设置页）。"""
+        if self._music is None:
+            return
+        from app.ui.dialogs.source_manage_dialog import SourceManageDialog
+        dlg = SourceManageDialog(self, on_sources_changed=self._music.sync_custom_sources)
+        dlg.exec()
 
     def _render_dirs(self) -> None:
         while self._dirs_layout.count():

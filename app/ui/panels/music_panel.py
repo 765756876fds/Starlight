@@ -75,12 +75,9 @@ class MusicPanel(QWidget):
         self.btn_local_search = QPushButton("搜索")
         self.btn_local_search.setProperty("class", "primary")
         self.btn_local_clear = QPushButton("清空")
-        self.btn_source_mgr = QPushButton("音源管理")
-        self.btn_source_mgr.clicked.connect(self._open_source_manager)
         local_search_row.addWidget(self.edit_local)
         local_search_row.addWidget(self.btn_local_search)
         local_search_row.addWidget(self.btn_local_clear)
-        local_search_row.addWidget(self.btn_source_mgr)
         ll.addLayout(local_search_row)
 
         # 本地列表
@@ -430,10 +427,3 @@ class MusicPanel(QWidget):
             if self.btn_highlight.text() != label:
                 self.btn_highlight.setText(label)
                 print(f"[UI] 高潮模式按钮同步: {label}")
-
-    def _open_source_manager(self):
-        """打开音源管理对话框"""
-        from app.ui.dialogs.source_manage_dialog import SourceManageDialog
-        # 对话框内导入/删除/启停后，把变更同步进在线播放链
-        dlg = SourceManageDialog(self, on_sources_changed=self._music.sync_custom_sources)
-        dlg.exec()

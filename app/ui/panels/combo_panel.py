@@ -69,6 +69,7 @@ class ComboPanel(QWidget):
         self.detail = QWidget()
         self._detail_layout = QVBoxLayout(self.detail)
         self._detail_layout.setContentsMargins(4, 0, 0, 0)
+        self._detail_layout.setAlignment(Qt.AlignTop)  # 内容顶对齐，不留垂直居中
         self.lbl_detail_champ = QLabel("当前英雄：-")
         self.lbl_detail_champ.setStyleSheet("font-weight: bold;")
         self._detail_layout.addWidget(self.lbl_detail_champ)
@@ -188,44 +189,47 @@ class ComboPanel(QWidget):
             hint.setWordWrap(True)
             hint.setStyleSheet("color: #9090a8; font-size: 11px;")
             self._detail_layout.addWidget(hint)
+            self._detail_layout.addStretch(1)  # 剩余空间留在底部，内容顶对齐
             return
         self.lbl_detail_champ.setText(f"当前英雄：{cc.name}")
         if not cc.combos:
             hint = QLabel("暂无连招，点击下方 [+ 添加连招] 创建")
             hint.setStyleSheet("color: #9090a8; font-size: 11px;")
             self._detail_layout.addWidget(hint)
-        for combo in cc.combos:
-            row = QWidget()
-            row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)  # 垂直不拉伸
-            h = QHBoxLayout(row)
-            h.setContentsMargins(0, 2, 0, 2)
-            lbl = QLabel(f"[{combo.trigger.upper()}] {combo.note}"
-                         f"（{combo.summary}）")
-            lbl.setWordWrap(True)
-            lbl.setStyleSheet("font-size: 11px;")
-            h.addWidget(lbl, 1)
-            btn = QPushButton("编辑")
-            # 显式 sizePolicy：水平 Minimum（最小宽度被尊重），不被容器压缩
-            btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-            btn.setMinimumWidth(56)
-            btn.setFixedHeight(28)
-            btn.clicked.connect(lambda _=False, c=combo:
-                                self._on_edit_combo(cc, c))
-            h.addWidget(btn)
-            btn_del = QPushButton("×")
-            # 删除连招按钮：红色醒目；sizePolicy 保证不被压缩
-            btn_del.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-            btn_del.setMinimumWidth(32)
-            btn_del.setFixedHeight(28)
-            btn_del.setStyleSheet("color: #d9534f; font-weight: bold;")
-            btn_del.setToolTip("删除此连招")
-            btn_del.clicked.connect(lambda _=False, c=combo:
-                                    self._on_delete_combo(cc, c))
-            h.addWidget(btn_del)
-            self._detail_layout.addWidget(row)
+        else:
+            for combo in cc.combos:
+                row = QWidget()
+                row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)  # 垂直不拉伸
+                h = QHBoxLayout(row)
+                h.setContentsMargins(0, 2, 0, 2)
+                lbl = QLabel(f"[{combo.trigger.upper()}] {combo.note}"
+                             f"（{combo.summary}）")
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet("font-size: 11px;")
+                h.addWidget(lbl, 1)
+                btn = QPushButton("编辑")
+                # 显式 sizePolicy：水平 Minimum（最小宽度被尊重），不被容器压缩
+                btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+                btn.setMinimumWidth(56)
+                btn.setFixedHeight(28)
+                btn.clicked.connect(lambda _=False, c=combo:
+                                    self._on_edit_combo(cc, c))
+                h.addWidget(btn)
+                btn_del = QPushButton("×")
+                # 删除连招按钮：红色醒目；sizePolicy 保证不被压缩
+                btn_del.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+                btn_del.setMinimumWidth(32)
+                btn_del.setFixedHeight(28)
+                btn_del.setStyleSheet("color: #d9534f; font-weight: bold;")
+                btn_del.setToolTip("删除此连招")
+                btn_del.clicked.connect(lambda _=False, c=combo:
+                                        self._on_delete_combo(cc, c))
+                h.addWidget(btn_del)
+                self._detail_layout.addWidget(row)
         btn_add = QPushButton("+ 添加连招")
         btn_add.clicked.connect(lambda _=False: self._on_add_combo(cc))
         self._detail_layout.addWidget(btn_add)
+        self._detail_layout.addStretch(1)  # 剩余空间留在底部，内容从上往下排
 
     # ---------- 二期：添加英雄 / 编辑连招 ----------
 

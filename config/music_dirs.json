@@ -1,0 +1,17 @@
+{
+  "dirs": [
+    {
+      "path": "D:\\落雪\\音乐文件",
+      "enabled": true,
+      "extensions": [
+        "mp3",
+        "flac",
+        "wav",
+        "m4a",
+        "ogg",
+        "ape"
+      ],
+      "exclude_subdirs": false
+    }
+  ]
+}
