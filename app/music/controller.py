@@ -6,6 +6,7 @@
 通过 CommandBus 接收音乐命令。
 """
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -40,6 +41,75 @@ def _pick_play_headers(headers):
             continue
         out[k] = v
     return out or None
+
+
+# ---------- 在线选源：同一首歌多源时，音质最优 → 同音质选最快 ----------
+
+def _quality_score(source_name: str, raw) -> int:
+    """从插件原始 item 提取音质等级：4=HiRes 3=高品/无损 2=标准 1=低 0=未知。
+    字段名来自真实搜索结果核对（kg/kw/wy 用 qualities 档位；溯音用 URL 码率）。"""
+    if not isinstance(raw, dict):
+        return 0
+    src = (source_name or "").lower()
+    # 溯音网易：search 直接给 url（share.duanx.cn/.../128k）→ 按 URL 实际码率
+    if "溯音" in src:
+        m = re.search(r"/(\d+)k", str(raw.get("url") or ""))
+        if m:
+            b = int(m.group(1))
+            return 3 if b >= 320 else (2 if b >= 192 else 1)
+        return 0
+    # 通用 qualities 档位（kg/kw/wy 真实结构）
+    q = raw.get("qualities")
+    if isinstance(q, dict):
+        keys = set(q.keys())
+        if keys & {"super", "lossless", "hires"}: return 4
+        if "high" in keys: return 3
+        if "standard" in keys: return 2
+        if "low" in keys: return 1
+        return 0
+    # tx 腾讯（当前搜索返回 0 条，留字段兼容）
+    if "tx" in src or "腾讯" in src:
+        if raw.get("size_flac"): return 3
+        if raw.get("size_320mp3"): return 2
+        return 0
+    return 0
+
+
+def _normalize(s: str) -> str:
+    """归一化：小写 + 去标点空格 + 去 feat. 后缀。归一化相同 = 同一首歌。"""
+    s = (s or "").strip().lower()
+    s = re.sub(r"[\[\(]feat\..*?[\]\)]", "", s)   # (feat. xx) / [feat. xx]
+    s = re.sub(r"\W+", "", s)                      # 去标点/空格/符号
+    return s
+
+
+def _kw_bonus(name: str) -> int:
+    """酷我系优先（验证过能播）——同音质同耗时的兜底 tie-break。"""
+    n = (name or "").lower()
+    return 0 if ("kw" in n or "酷我" in n) else 1
+
+
+def _pick_best(all_tracks, manager):
+    """同组（同一首歌）内选音质最优 + 最快；组间取"首个 source 第一条"所在组
+    （保留原"搜到啥播啥"的相关性语义，不全局抢音质）。"""
+    if not all_tracks:
+        return None
+    groups = {}
+    for idx, r in enumerate(all_tracks):
+        key = _normalize(r.title) + "|" + _normalize(r.artist)
+        groups.setdefault(key, []).append((idx, r))
+    # 首选组 = 首个 source 第一条所在组（原行为 all_tracks[0] 的歌，相关性最高）
+    first_key = _normalize(all_tracks[0].title) + "|" + _normalize(all_tracks[0].artist)
+    group = groups[first_key]
+    # 组内：音质降序 → 耗时升序 → 酷我优先 → 原顺序
+    def _lat(name):
+        v = manager.get_latency(name) if hasattr(manager, "get_latency") else None
+        return v if isinstance(v, (int, float)) else 99.0
+    group.sort(key=lambda t: (-_quality_score(t[1].source_name, t[1].extra.get("_raw")),
+                              _lat(t[1].source_name),
+                              _kw_bonus(t[1].source_name),
+                              t[0]))
+    return group[0][1]
 
 
 class MusicController:
@@ -357,15 +427,9 @@ class MusicController:
                 for src_name, tracks in online_dict.items():
                     all_tracks.extend(tracks)
                 if all_tracks:
-                    # 优先选酷我(kw)音源，已验证可匿名播放
-                    chosen = None
-                    for r in all_tracks:
-                        src_n = r.source_name.lower()
-                        if "kw" in src_n or "酷我" in src_n:
-                            chosen = r
-                            break
-                    if not chosen:
-                        chosen = all_tracks[0]
+                    # 选源：同一首歌多源时，音质最优 → 同音质选最快（替代旧的"酷我优先"；
+                    # 同音质同耗时时酷我系仍优先兜底，验证过能播）
+                    chosen = _pick_best(all_tracks, self.online_manager)
 
                     print(f"[Music] 在线找到: {chosen.title} - {chosen.artist} (音源: {chosen.source_name})")
                     # 定向取 URL：只调 chosen 对应的音源（manager 按 track.source_name 路由）。

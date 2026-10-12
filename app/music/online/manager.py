@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
@@ -18,6 +19,8 @@ class OnlineSourceManager:
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._timeout = request_timeout
         self._errors: Dict[str, str] = {}
+        # 各源最近一次搜索耗时（秒）——同音质选源时用"最快"排序。
+        self._latency: Dict[str, float] = {}
         # 音源版本号：register 递增、unregister 单调递增（删除标记）。
         # 同名源被替换/注销后，在途旧搜索任务的结果必须被丢弃且不得写回缓存。
         self._source_versions: Dict[str, int] = {}
@@ -116,7 +119,15 @@ class OnlineSourceManager:
 
     def _safe_search(self, src: MusicSource, kw: str, limit: int,
                      version: int) -> List[OnlineTrack]:
-        return src.search(kw, limit)
+        t0 = time.monotonic()
+        try:
+            return src.search(kw, limit)
+        finally:
+            self._latency[src.name] = time.monotonic() - t0
+
+    def get_latency(self, name: str) -> Optional[float]:
+        """某源最近一次搜索耗时（秒）；无记录返回 None（调用方用默认值兜底）。"""
+        return self._latency.get(name)
 
     def get_play_url(self, track: OnlineTrack) -> Optional[dict]:
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
