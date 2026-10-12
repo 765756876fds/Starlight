@@ -81,6 +81,16 @@ class PlayerIntelligenceResult:
     # 常用位置（来自历史比赛 teamPosition 统计）
     habitual_positions: List[str] = field(default_factory=list)  # ["UTILITY", "MIDDLE"] 等
 
+    # 近期形态（称号判定用）
+    streak: int = 0               # 20 场窗口：最新→最旧连续胜负：>0 连胜, <0 连败
+    utility_ratio: float = 0.0    # 近 20 场 UTILITY 占比（0~1，辅助判定用）
+
+    # 近 10 场窗口（档 1/2 请神/天人合一判定，<5 场不评）
+    games_10: int = 0
+    win_rate_10: float = 0.0
+    average_kda_10: float = 0.0
+    streak_10: int = 0
+
     # Champion Mastery Top 3（来自 LCU Champion Mastery API）
     mastery_status: str = ""     # AVAILABLE / EMPTY / UNAVAILABLE / NO_PUUID
     mastery_top3: List[ChampionMasteryRecord] = field(default_factory=list)
@@ -171,14 +181,52 @@ class PlayerIntelligenceService:
 
         result.raw_games = len(matches)
 
-        # 过滤有效比赛
-        valid_matches = [m for m in matches if _is_valid_match(m)]
+        # 过滤有效比赛（按时间降序：最新在前，供连胜/连败判定）
+        valid_matches = sorted(
+            (m for m in matches if _is_valid_match(m)),
+            key=lambda m: m.game_creation,
+            reverse=True,
+        )
 
         if not valid_matches:
             result.message = "no_valid_matches"
             return result
 
         result.games = len(valid_matches)
+
+        # 近期形态：连胜/连败（最新→最旧连续胜负）
+        if valid_matches and valid_matches[0].win is not None:
+            first_win = valid_matches[0].win
+            n = 0
+            for m in valid_matches:
+                if m.win is None or m.win != first_win:
+                    break
+                n += 1
+            result.streak = n if first_win else -n
+
+        # 近期形态：辅助占比（UTILITY 场次 / 有效场次）
+        util_count = sum(
+            1 for m in valid_matches
+            if (m.team_position or "").upper() == "UTILITY"
+        )
+        result.utility_ratio = util_count / len(valid_matches)
+
+        # 近 10 场窗口（档 1/2 用）：胜率 / KDA / 连胜
+        recent10 = valid_matches[:10]
+        result.games_10 = len(recent10)
+        if recent10:
+            w10 = sum(1 for m in recent10 if m.win)
+            result.win_rate_10 = w10 / len(recent10)
+            kda10_list = [_per_game_kda(m) for m in recent10]
+            result.average_kda_10 = sum(kda10_list) / len(kda10_list)
+            if recent10[0].win is not None:
+                first_win = recent10[0].win
+                n = 0
+                for m in recent10:
+                    if m.win is None or m.win != first_win:
+                        break
+                    n += 1
+                result.streak_10 = n if first_win else -n
 
         # 总统计
         kda_list = []

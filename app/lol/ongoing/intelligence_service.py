@@ -48,6 +48,16 @@ class PlayerIntelligenceCacheEntry:
     # B 行数据：近期英雄统计（analyze 产物，场次→KDA 排序）
     champion_stats: List[ChampionStat] = None
 
+    # 称号判定：连胜/连败 + 辅助占比
+    streak: int = 0
+    utility_ratio: float = 0.0
+
+    # 近 10 场窗口（档 1/2 用）
+    games_10: int = 0
+    win_rate_10: float = 0.0
+    average_kda_10: float = 0.0
+    streak_10: int = 0
+
     queried_mastery: bool = False
     queried_recent: bool = False
 
@@ -148,6 +158,12 @@ class OngoingIntelligenceService:
                     entry.recent_average_kda = intel_result.average_kda
                     entry.habitual_positions = intel_result.habitual_positions
                     entry.champion_stats = intel_result.champion_stats
+                    entry.streak = intel_result.streak
+                    entry.utility_ratio = intel_result.utility_ratio
+                    entry.games_10 = intel_result.games_10
+                    entry.win_rate_10 = intel_result.win_rate_10
+                    entry.average_kda_10 = intel_result.average_kda_10
+                    entry.streak_10 = intel_result.streak_10
                 else:
                     entry.recent_status = "EMPTY"
             except Exception as e:

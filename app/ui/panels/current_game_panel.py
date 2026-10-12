@@ -9,6 +9,7 @@ from app.lol.ongoing.intelligence_service import OngoingIntelligenceService
 from app.lol.ongoing.sgp_server import SgpServerResolver
 from app.lol.ongoing.sgp_provider import SgpMatchHistoryProvider
 from app.lol.ongoing.intelligence import PlayerIntelligenceService
+from app.lol.title import compute_title
 from app.lol.data.champion_catalog import ChampionCatalog
 from app.ui.theme.colors import Colors
 
@@ -86,7 +87,7 @@ class PlayerCard(QFrame):
 
     def update_data(self, name, level, rank, position, winloss, kda, champions,
                     is_mastery, streak_text="", champion_zh="",
-                    recent_top="", skill_top=""):
+                    recent_top="", skill_top="", title_text="", title_color=""):
         self.lbl_name.setText(f"{name}  Lv.{level}")
         if streak_text:
             if "胜" in streak_text:
@@ -97,14 +98,23 @@ class PlayerCard(QFrame):
         else:
             self.lbl_streak.setText("")
 
+        # line2 整行：称号（彩色，含段位）或原段位（灰） + 位置 · 胜负
         line2_parts = []
-        if rank:
+        if title_text:
+            line2_parts.append(title_text)
+        elif rank:
             line2_parts.append(rank)
         if position:
             line2_parts.append(position)
         if winloss:
             line2_parts.append(winloss)
         self.lbl_line2.setText(" · ".join(line2_parts) if line2_parts else "-")
+        if title_color:
+            self.lbl_line2.setStyleSheet(
+                f"color: {title_color}; font-size: 12px; font-weight: bold;")
+        else:
+            self.lbl_line2.setStyleSheet(
+                f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
 
         line3_parts = []
         if kda:
@@ -340,25 +350,17 @@ class CurrentGamePanel(QWidget):
 
         is_mastery = None
         rank_text = ""
+        title_text = ""
+        title_color = ""
         champions_text = ""
         streak_text = ""
 
-        # 段位（历史）：单双排 + 灵活组排
+        # 段位（历史）：只显示大段 + 小段（"翡翠 IV"）；LP/flex 详情不再显示（称号场景优先）
         if snap_data is not None and getattr(snap_data, "ranked_tier", None):
             tier = snap_data.ranked_tier
             rank_text = _TIER_ZH.get(tier.upper(), tier)
             if getattr(snap_data, "ranked_division", None):
                 rank_text += f" {snap_data.ranked_division}"
-            if getattr(snap_data, "ranked_lp", 0):
-                rank_text += f" {snap_data.ranked_lp}胜点"
-            flex_tier = getattr(snap_data, "ranked_flex_tier", None)
-            if flex_tier:
-                ft = _TIER_ZH.get(flex_tier.upper(), flex_tier)
-                if getattr(snap_data, "ranked_flex_division", None):
-                    ft += f" {snap_data.ranked_flex_division}"
-                if getattr(snap_data, "ranked_flex_lp", 0):
-                    ft += f" {snap_data.ranked_flex_lp}胜点"
-                rank_text += f" · {ft}"
 
         # B 行（最近状态，所有人）+ C 行（LCU mastery，仅自己）：懒触发 + 缓存读
         intel_entry = None
@@ -395,6 +397,25 @@ class CurrentGamePanel(QWidget):
                     parts.append(f"{zh} Lv{m.champion_level} {pts}")
                 skill_top = " · ".join(parts)
 
+            # 修仙称号（替换段位行左部）：严格按表；intel 就绪 + 有段位才评
+            if intel_entry is not None and intel_entry.recent_status == "AVAILABLE":
+                tier_raw = getattr(snap_data, "ranked_tier", None) if snap_data is not None else None
+                if tier_raw:
+                    tr = compute_title(
+                        win_rate=intel_entry.recent_win_rate,
+                        average_kda=intel_entry.recent_average_kda,
+                        streak=intel_entry.streak,
+                        utility_ratio=intel_entry.utility_ratio,
+                        tier=tier_raw,
+                        games_10=intel_entry.games_10,
+                        win_rate_10=intel_entry.win_rate_10,
+                        average_kda_10=intel_entry.average_kda_10,
+                        streak_10=intel_entry.streak_10,
+                    )
+                    if tr:
+                        title_text = tr.text
+                        title_color = tr.color
+
         # 本局是否使用 loader 常用英雄（is_mastery 用于 lbl_current，保留旧逻辑）
         if snap_data is not None and getattr(snap_data, "top_champions", None):
             top3_cids = []
@@ -425,6 +446,8 @@ class CurrentGamePanel(QWidget):
             champion_zh=champ,
             recent_top=recent_top,
             skill_top=skill_top,
+            title_text=title_text,
+            title_color=title_color,
         )
 
     def refresh(self):
