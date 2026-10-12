@@ -229,17 +229,23 @@ class CurrentGamePanel(QWidget):
         self._timer.start(1000)
 
     def _try_create_sgp_provider(self):
-        if not self._lcu_get:
+        # 优先走 OngoingGameService 的独立直连 getter（绕开共享连接断连窗口），
+        # 与 loader 的 SGP 通道同款；拿不到再退化共享 lcu_get（当前行为）。
+        getter = None
+        if self._ongoing is not None:
+            getter = getattr(self._ongoing, "get_direct_getter", lambda: None)()
+        getter = getter or self._lcu_get
+        if not getter:
             return None
         try:
-            resolver = SgpServerResolver(self._lcu_get)
+            resolver = SgpServerResolver(getter)
             _, sgp_base, _ = resolver.resolve()
             if not sgp_base:
                 return None
 
             def _get_token():
                 try:
-                    r = self._lcu_get("/entitlements/v1/token")
+                    r = getter("/entitlements/v1/token")
                     return r.get("accessToken") if isinstance(r, dict) else None
                 except Exception:
                     return None
@@ -265,6 +271,8 @@ class CurrentGamePanel(QWidget):
     def _ensure_intel(self, puuid: str, champion_id: int):
         """懒触发玩家情报查询（后台线程，防重复）。"""
         if not puuid or self._intelligence is None:
+            return
+        if self._intelligence.should_throttle(puuid):
             return
         with self._loading_lock:
             if puuid in self._loading_puuids:

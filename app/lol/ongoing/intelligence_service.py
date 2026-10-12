@@ -19,6 +19,7 @@ UI ViewModel
 """
 from __future__ import annotations
 
+import time
 from typing import Dict, Optional, List
 from dataclasses import dataclass, field
 
@@ -83,6 +84,7 @@ class OngoingIntelligenceService:
         self._sgp_factory = None  # 动态创建 SGP provider 的回调
         self._intelligence = intelligence_service or PlayerIntelligenceService()
         self._cache: Dict[str, PlayerIntelligenceCacheEntry] = {}
+        self._last_fail: Dict[str, float] = {}  # puuid -> 失败时间戳（30s 节流防风暴）
 
     def set_sgp_factory(self, factory):
         """注入动态创建 SGP provider 的回调（解决 LCU 后连问题）。"""
@@ -172,8 +174,17 @@ class OngoingIntelligenceService:
             entry.recent_status = "UNAVAILABLE"
 
         entry.queried_recent = True
-        self._cache[puuid] = entry
+        if entry.recent_status in ("UNAVAILABLE", "EMPTY"):
+            # 失败：不写缓存（否则一次性失败被永久缓存，永不重试）+ 记时间戳节流
+            self._last_fail[puuid] = time.monotonic()
+        else:
+            self._cache[puuid] = entry
+            self._last_fail.pop(puuid, None)  # 成功：写缓存 + 清失败时间戳
         return entry
+
+    def should_throttle(self, puuid: str, window: float = 30.0) -> bool:
+        """失败节流：最近失败在 window 秒内返回 True（不重试），防止每秒风暴。"""
+        return time.monotonic() - self._last_fail.get(puuid, 0.0) < window
 
     def get_cached(self, puuid: str) -> Optional[PlayerIntelligenceCacheEntry]:
         """只读缓存命中（不触发任何请求）。未查询过返回 None。"""
@@ -184,6 +195,7 @@ class OngoingIntelligenceService:
     def clear(self):
         """游戏结束时清空缓存"""
         self._cache.clear()
+        self._last_fail.clear()
 
     def __len__(self):
         return len(self._cache)

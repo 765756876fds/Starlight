@@ -130,6 +130,10 @@ class OngoingGameService:
         self._thread: Optional[threading.Thread] = None
 
     # ----- lifecycle -----
+    def get_direct_getter(self):
+        """返回独立直连 getter（绕开共享连接断连窗口）。"""
+        return self._dget
+
     def start(self) -> None:
         if self._thread is not None:
             return
