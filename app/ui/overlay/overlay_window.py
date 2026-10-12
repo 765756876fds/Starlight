@@ -9,6 +9,7 @@ H.4.4-R2 修正：
 """
 from __future__ import annotations
 
+import os
 import sys
 from app.ui.theme.colors import Colors
 
@@ -25,6 +26,10 @@ from ..settings_store import load_ui_prefs
 
 # 全局 ChampionCatalog 实例
 _champion_catalog = ChampionCatalog()
+
+# 调试开关：OVERLAY_FORCE_FULL_REBUILD=1 → 强制每帧全量重建（绕开增量刷新）
+# 用途：怀疑"增量漏更新"时开启对比排查
+_FORCE_FULL_REBUILD = os.environ.get("OVERLAY_FORCE_FULL_REBUILD") == "1"
 
 
 class ClickableSpellIcon(QFrame):
@@ -48,6 +53,12 @@ class ClickableSpellIcon(QFrame):
         if self._pixmap is None:
             print(f"[Spell Icon] 加载失败: spell_id={spell.spell_id}, spell_name={spell.spell_name}")
         self._update_style()
+
+    def set_spell(self, spell) -> None:
+        """增量更新：替换技能状态并重绘（不重建控件，复用现有图标）。"""
+        self._spell = spell
+        self._update_style()
+        self.update()
 
     def _update_style(self):
         """根据技能状态更新样式。"""
@@ -109,13 +120,9 @@ class ChampionAvatar(QLabel):
         self._is_dead = False
         self._respawn_timer = 0.0
         
-        # 加载头像
+        # 加载头像（已预乘 30% 透明度，见 overlay_assets.get_champion_portrait；
+        # 不用 QGraphicsOpacityEffect——每帧创建 effect 是主线程重活）
         self._pixmap = get_champion_portrait(name_en)
-        # 头像 50% 透明
-        from PySide6.QtWidgets import QGraphicsOpacityEffect
-        self._opacity_effect = QGraphicsOpacityEffect()
-        self._opacity_effect.setOpacity(0.3)
-        self.setGraphicsEffect(self._opacity_effect)
         self._update_display()
 
     def set_dead(self, is_dead: bool, respawn_timer: float = 0.0):
@@ -198,6 +205,11 @@ class OverlayWindow(QWidget):
         self._root.setContentsMargins(8, 8, 8, 8)
         self._root.setSpacing(6)
 
+        # 增量刷新状态：5 张卡创建一次，之后只更新变化的字段
+        self._cards: list = []          # 复用的卡片控件（与 rows 一一对应）
+        self._last_struct: list = []    # 每卡结构指纹（英雄/技能/缩放，变→全量重建）
+        self._last_state: list = []     # 每卡状态指纹（CD/死亡，变→增量更新）
+
         # 100ms 刷新定时器
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
@@ -211,6 +223,18 @@ class OverlayWindow(QWidget):
         self._place_default()
         self._apply_ws_ex_layered()
         self.hide()
+
+    def hideEvent(self, event):
+        """隐藏时停定时器（不做无用功）；show 时重启。"""
+        self._timer.stop()
+        self._scale_check.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        """显示时重启刷新与缩放检查定时器。"""
+        self._timer.start(100)
+        self._scale_check.start(2000)
+        super().showEvent(event)
 
     def _apply_ws_ex_layered(self) -> None:
         """保留 WS_EX_LAYERED（透明背景需要）。"""
@@ -386,8 +410,49 @@ class OverlayWindow(QWidget):
         
         # 把剩余空间挤到右边，避免 layout 平均分配间隔
         layout.addStretch()
+
+        # 挂增量更新引用（供 _refresh 状态变化时复用，不重建）
+        card.avatar = avatar
+        card.spell1_icon = spell1_icon
+        card.spell2_icon = spell2_icon
         
         return card
+
+    @staticmethod
+    def _row_struct(row, scale: float) -> tuple:
+        """结构指纹：英雄/技能/缩放变化 → 需要全量重建。"""
+        champ = _champion_catalog.get_by_id(row.champion_id) or _champion_catalog.get_by_name(row.champion_name)
+        name_en = champ.name_en if champ else row.champion_name
+        return (float(scale), row.champion_id, name_en,
+                row.spell1.spell_id, row.spell2.spell_id)
+
+    @staticmethod
+    def _row_state(row) -> tuple:
+        """状态指纹：CD/死亡变化 → 增量更新（不重建控件）。"""
+        return (row.is_dead, int(row.respawn_timer),
+                row.spell1.active, int(row.spell1.remaining),
+                row.spell2.active, int(row.spell2.remaining))
+
+    def _full_rebuild(self, rows) -> None:
+        """全量重建所有卡片（结构变化 / 长度变化 / 调试开关强制）。"""
+        self._clear()
+        self._cards = []
+        self._last_struct = []
+        self._last_state = []
+        for row in rows:
+            card = self._build_enemy_card(row)
+            self._cards.append(card)
+            self._last_struct.append(self._row_struct(row, self._scale))
+            self._last_state.append(None)  # 首帧强制走一次增量更新
+            self._root.addWidget(card)
+
+    def _sync_visibility(self, rows) -> None:
+        if not rows:
+            if self.isVisible():
+                self.hide()
+        else:
+            if not self.isVisible():
+                self.show()
 
     def _refresh(self) -> None:
         try:
@@ -396,19 +461,40 @@ class OverlayWindow(QWidget):
             import traceback
             traceback.print_exc()
             rows = []
-        
-        self._clear()
-        
-        if not rows:
-            if self.isVisible():
-                self.hide()
+
+        # 调试开关：强制每帧全量重建（排查"增量是否漏更新"用）
+        if _FORCE_FULL_REBUILD:
+            self._full_rebuild(rows)
+            self._sync_visibility(rows)
             return
-        
-        for row in rows:
-            card = self._build_enemy_card(row)
-            self._root.addWidget(card)
-        
-        if not self.isVisible():
-            self.show()
+
+        # 长度兜底：行数变化（含空↔非空）→ 全量重建，防漏更新
+        if len(self._cards) != len(rows):
+            self._full_rebuild(rows)
+            self._sync_visibility(rows)
+            return
+
+        if not rows:
+            self._sync_visibility(rows)
+            return
+
+        # 结构指纹：英雄/技能/缩放变化 → 全量重建一次
+        structs = [self._row_struct(r, self._scale) for r in rows]
+        if structs != self._last_struct:
+            self._full_rebuild(rows)
+            self._sync_visibility(rows)
+            return
+
+        # 状态指纹：CD/死亡变化 → 复用控件，只更新内容
+        states = [self._row_state(r) for r in rows]
+        for i, row in enumerate(rows):
+            if states[i] != self._last_state[i]:
+                card = self._cards[i]
+                card.avatar.set_dead(row.is_dead, row.respawn_timer)
+                card.spell1_icon.set_spell(row.spell1)
+                card.spell2_icon.set_spell(row.spell2)
+                self._last_state[i] = states[i]
+
+        self._sync_visibility(rows)
 
 

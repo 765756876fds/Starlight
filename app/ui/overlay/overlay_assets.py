@@ -13,7 +13,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap, QIcon, QPainter
 
 # Data Dragon 版本
 _DDRAGON_VERSION = "16.18.1"
@@ -77,6 +78,16 @@ def get_champion_portrait(name_en: str) -> Optional[QPixmap]:
     x = (w - size) // 2
     y = (h - size) // 2
     result = pixmap.copy(x, y, size, size)
+
+    # 预乘 30% 透明度（替代 QGraphicsOpacityEffect——每帧创建 effect 是主线程重活）
+    translucent = QPixmap(result.size())
+    translucent.fill(Qt.transparent)
+    p = QPainter(translucent)
+    p.setOpacity(0.3)
+    p.drawPixmap(0, 0, result)
+    p.end()
+    result = translucent
+
     _portrait_cache[name_en] = result
     return result
 
