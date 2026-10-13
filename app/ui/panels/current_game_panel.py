@@ -11,6 +11,7 @@ from app.lol.ongoing.sgp_provider import SgpMatchHistoryProvider
 from app.lol.ongoing.intelligence import PlayerIntelligenceService
 from app.lol.title import compute_title
 from app.lol.data.champion_catalog import ChampionCatalog
+from app.core.event_bus import Event, get_event_bus
 from app.ui.theme.colors import Colors
 
 
@@ -236,11 +237,14 @@ class CurrentGamePanel(QWidget):
             getter = getattr(self._ongoing, "get_direct_getter", lambda: None)()
         getter = getter or self._lcu_get
         if not getter:
+            self._publish_intel_event("intel.sgp_provider_failed", {"error": "no_lcu_getter"})
             return None
         try:
             resolver = SgpServerResolver(getter)
             _, sgp_base, _ = resolver.resolve()
             if not sgp_base:
+                # 静默失败路径：resolver 解析不到 base（平台 id 不在表/请求失败）——发事件防盲区
+                self._publish_intel_event("intel.sgp_provider_failed", {"error": "resolver_no_base"})
                 return None
 
             def _get_token():
@@ -251,12 +255,14 @@ class CurrentGamePanel(QWidget):
                     return None
 
             print(f"[UI] SGP provider 动态初始化成功: {sgp_base}")
+            self._publish_intel_event("intel.sgp_provider_ready", {"sgp_base": sgp_base})
             return SgpMatchHistoryProvider(
                 entitlements_token=_get_token,
                 sgp_base=lambda: sgp_base,
             )
         except Exception as e:
             print(f"[UI] SGP provider 动态初始化失败: {e}")
+            self._publish_intel_event("intel.sgp_provider_failed", {"error": str(e)})
             return None
 
     def _get_or_create_card(self, team, idx, show_skill=False):
@@ -284,11 +290,28 @@ class CurrentGamePanel(QWidget):
             target=self._fetch_intel, args=(puuid, champion_id), daemon=True
         ).start()
 
+    def _publish_intel_event(self, event_type: str, data: dict) -> None:
+        """intel/SGP 链路事件（进 data/events/ 日志，补 print 盲区）。"""
+        try:
+            get_event_bus().publish(Event(
+                event_type=event_type,
+                data=data,
+                source="ui",
+            ))
+        except Exception:
+            pass
+
     def _fetch_intel(self, puuid: str, champion_id: int):
         try:
             self._intelligence.get_player_intelligence(puuid, champion_id)
         except Exception as e:
             print(f"[UI] 玩家情报查询失败 {puuid}: {e}")
+            # 只 print 会丢日志（控制台关掉就没）→ 同时发事件，data/events/ 可查
+            self._publish_intel_event("intel.query_failed", {
+                "puuid": puuid,
+                "champion_id": champion_id,
+                "error": str(e),
+            })
         finally:
             with self._loading_lock:
                 self._loading_puuids.discard(puuid)
