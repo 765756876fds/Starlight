@@ -16,6 +16,10 @@ def _make_session(n=10):
 class FakeLcu:
     def __init__(self):
         self.calls = []
+        # P0a 断连熔断要求连接状态属性（service._tick 检查 lcu._connected/_session；
+        # _session 须非空——空 dict 是 falsy，仍会触发 conn_skip）
+        self._connected = True
+        self._session = {"connected": True}
     def get(self, endpoint):
         self.calls.append(endpoint)
         if "/lol-summoner/v2/summoners/by-puuid/" in endpoint or "/lol-summoner/v1/summoners/by-puuid/" in endpoint:
@@ -193,7 +197,9 @@ def test_service_independent_polling():
         return None
 
     svc = OngoingGameService(lcu=type("L", (), {"get": staticmethod(get),
-                                                "request_raw": staticmethod(request_raw)})(),
+                                                "request_raw": staticmethod(request_raw),
+                                                "_connected": True,
+                                                "_session": {"connected": True}})(),
                               poll_interval=0.05, rps=100, max_workers=1)
     svc.start()
     import time

@@ -70,6 +70,8 @@ class ObjectiveTimer:
     def _on_game_start(self, event: Event):
         # 重启附着到进行中对局时，首帧可能 game_time=0。先同步已知时间；
         # 只有 game_time>0 才立即排程，否则等第一个 GAME_TIME_UPDATE。
+        if not event:  # 防御：调用方误传 None（生产 EventBus 恒传 Event）
+            return
         gt = float(event.get("game_time", 0.0) or 0.0)
         try:
             self.game_alarm._current_game_time = gt

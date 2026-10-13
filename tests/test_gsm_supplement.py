@@ -37,6 +37,10 @@ class FakeLcu:
         self.phase = "InProgress"
         self.gf_session = None
         self.me_puuid = "m0"
+        # P0a 断连熔断要求连接状态属性（service._tick 检查 lcu._connected/_session；
+        # _session 须非空——空 dict 是 falsy，仍会触发 conn_skip）
+        self._connected = True
+        self._session = {"connected": True}
 
     def get(self, endpoint):
         if endpoint == "/lol-gameflow/v1/gameflow-phase":
