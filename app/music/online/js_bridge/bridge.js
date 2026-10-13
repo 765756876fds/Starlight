@@ -40,6 +40,7 @@ async function loadAll() {
   for (const j of jobs) {
     try {
       const p = j.isLx ? await lxLoader.load(j.fp) : mfLoader.load(j.fp);
+      p.filePath = j.fp;   // 记录本地路径（插件更新/替换用）
       sources.set(p.name, p);
       // aliases: basename (without .js) and lowercase
       const base = path.basename(j.fp, '.js');
@@ -103,6 +104,19 @@ async function dispatch(method, params) {
       } else {
         return await p.getLyric(source, raw_item || {});
       }
+    }
+    case 'checkUpdates': {
+      // 遍历 MusicFree 插件（按对象去重，忽略别名 key）→ 拉更新源取远端版本
+      const seen = new Set();
+      const out = [];
+      for (const p of sources.values()) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        if (p.type !== 'musicfree') continue;
+        const meta = await mfLoader.fetchUpdateMeta(p, params.timeout_ms || 10000);
+        out.push({ name: p.name, ...meta });
+      }
+      return out;
     }
     default:
       throw new Error('unknown method ' + method);

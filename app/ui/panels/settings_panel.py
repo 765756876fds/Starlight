@@ -134,6 +134,7 @@ class SettingsPanel(QWidget):
     _test_done = Signal(str, str)       # (插件名, 结果文本)
     _refresh_done = Signal(bool, int)   # (ok, 插件数)
     _data_done = Signal(str)            # 数据更新完成消息（跨线程回主线程）
+    _updates_done = Signal(str, object)  # (状态文本, 检查结果列表)
 
     def __init__(self, music=None, tts=None, combo_manager=None,
                  equip_toggle: Optional[Callable[[bool], None]] = None,
@@ -152,10 +153,14 @@ class SettingsPanel(QWidget):
         self._scan_thread = None
         self._js_source = None
         self._reloading = False
+        self._checking_updates = False
         self._plugin_rows: dict = {}
         self._test_btns: dict = {}
+        self._update_btns: dict = {}
+        self._plugin_updates: dict = {}   # name -> check_updates 结果（重渲染时合并进行）
         self._test_done.connect(self._on_test_done)
         self._refresh_done.connect(self._on_refresh_done)
+        self._updates_done.connect(self._on_updates_done)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -240,9 +245,13 @@ class SettingsPanel(QWidget):
         self.btn_refresh_plugins = QPushButton("刷新插件")
         self.btn_refresh_plugins.setToolTip("重新扫描插件目录（新丢进的 .js 生效）；刷新会短暂中断搜索")
         self.btn_refresh_plugins.clicked.connect(self._on_refresh_plugins)
+        self.btn_check_updates = QPushButton("🔍 检查更新")
+        self.btn_check_updates.setToolTip("拉取全部 MusicFree 插件更新源，对比版本；有新版的行会显示「更新」按钮")
+        self.btn_check_updates.clicked.connect(self._on_check_updates)
         self.lbl_plugin_status = QLabel("")
         self.lbl_plugin_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         btns.addWidget(self.btn_refresh_plugins)
+        btns.addWidget(self.btn_check_updates)
         btns.addWidget(self.lbl_plugin_status)
         btns.addStretch()
         lay.addLayout(btns)
@@ -268,6 +277,8 @@ class SettingsPanel(QWidget):
             if w is not None:
                 w.deleteLater()
         self._plugin_rows = {}
+        self._test_btns = {}
+        self._update_btns = {}
         if self._js_source is None:
             lbl = QLabel("JS 桥接未启用（node 缺失或初始化失败）")
             lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
@@ -300,6 +311,20 @@ class SettingsPanel(QWidget):
         lbl.setWordWrap(True)
         if p.get("status") != "ok":
             lbl.setToolTip(f"[{kind}] {name}\n完整错误: {p.get('error') or '加载失败'}")
+        # 检查更新结果（合并进行显示：有更新 / 已最新 / 检查失败）
+        upd = self._plugin_updates.get(name)
+        if upd:
+            if upd.get("error"):
+                err_short = upd["error"] if len(upd["error"]) <= 16 else upd["error"][:16] + "…"
+                lbl.setText(f"[{kind}] {name} {state} | 更新: ✗ {err_short}")
+                lbl.setToolTip(f"[{kind}] {name}\n检查更新失败: {upd['error']}")
+            elif upd.get("has_update"):
+                lbl.setText(f"[{kind}] {name} {state} | 有更新 "
+                            f"(v{upd.get('local_version')}→v{upd.get('remote_version')})")
+                lbl.setToolTip(f"[{kind}] {name}\n"
+                               f"本地 v{upd.get('local_version')} → 远端 v{upd.get('remote_version')}")
+            else:
+                lbl.setText(f"[{kind}] {name} {state} | 已最新 (v{upd.get('local_version')})")
         h.addWidget(lbl, 1)
         if p.get("status") == "ok" and p.get("type") == "musicfree":
             btn = QPushButton("测试")
@@ -309,6 +334,14 @@ class SettingsPanel(QWidget):
             h.addWidget(btn)
             self._plugin_rows[name] = lbl
             self._test_btns[name] = btn
+            # 有更新 → 行尾加「更新」按钮
+            if upd and upd.get("has_update"):
+                btn_upd = QPushButton("更新")
+                btn_upd.setFixedHeight(24)
+                btn_upd.setMinimumWidth(64)
+                btn_upd.clicked.connect(lambda _=False, n=name: self._on_update_plugin(n))
+                h.addWidget(btn_upd)
+                self._update_btns[name] = btn_upd
         h.addStretch()   # 行尾 stretch：标签占满、按钮靠右，行宽 = 面板宽
         return row
 
@@ -392,6 +425,79 @@ class SettingsPanel(QWidget):
         else:
             self.lbl_plugin_status.setText(f"刷新超时，已加载 {n} 个")
         self._render_plugins()
+
+    # ---------- 🔍 插件检查更新 ----------
+
+    def _on_check_updates(self) -> None:
+        if self._js_source is None or self._checking_updates:
+            return
+        self._checking_updates = True
+        self.btn_check_updates.setEnabled(False)
+        self.btn_check_updates.setText("检查中…")
+        self.lbl_plugin_status.setText("拉取更新源中…")
+
+        def worker():
+            updates = []
+            try:
+                updates = self._js_source.check_updates(timeout=25.0)
+            except Exception as e:
+                print(f"[CheckUpdates] worker 异常 {type(e).__name__}: {e}", flush=True)
+            n_upd = sum(1 for u in updates if u.get("has_update"))
+            msg = f"检查完成：{n_upd} 个有更新 / {len(updates)} 个已检查"
+            self._updates_done.emit(msg, updates)   # Signal 回主线程
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_updates_done(self, msg: str, updates: list) -> None:
+        self._checking_updates = False
+        self.btn_check_updates.setEnabled(True)
+        self.btn_check_updates.setText("🔍 检查更新")
+        self.lbl_plugin_status.setText(msg)
+        by_name = {}
+        for u in updates:
+            by_name[u.get("name") or u.get("file")] = u
+        self._plugin_updates = by_name
+        self._render_plugins()
+
+    def _on_update_plugin(self, name: str) -> None:
+        """用户点行内「更新」→ 确认框 → 后台备份+替换+reload。"""
+        if self._js_source is None:
+            return
+        upd = self._plugin_updates.get(name)
+        if not upd:
+            return
+        ret = QMessageBox.question(
+            self,
+            "确认更新插件",
+            f"将更新插件「{name}」\n"
+            f"v{upd.get('local_version')} → v{upd.get('remote_version')}\n\n"
+            f"更新会替换本地插件文件（旧版备份到 _trash/plugin_backup/），"
+            f"并短暂中断在线搜索。\n确定继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return
+        self.lbl_plugin_status.setText(f"更新 {name} 中…")
+        btn_upd = self._update_btns.get(name)
+        if btn_upd is not None:
+            btn_upd.setEnabled(False)
+            btn_upd.setText("更新中…")
+
+        def worker():
+            try:
+                result = self._js_source.update_plugin(name)
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            # 更新成功 → 从结果里移除该项（行回到无更新状态，下次「检查更新」重新拉）
+            remaining = [u for u in self._plugin_updates.values()
+                         if (u.get("name") or u.get("file")) != name]
+            self._updates_done.emit(
+                f"更新 {name}: {'成功（已重载）' if result.get('ok') else '失败: ' + str(result.get('error'))}",
+                remaining,
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_source_manage(self):
         """打开音源管理对话框（从音乐面板挪到设置页）。"""

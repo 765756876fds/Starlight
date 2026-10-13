@@ -1883,7 +1883,7 @@
   },
   {
     "id": 60003,
-    "name": "哨兵之殇",
+    "name": "加里奥",
     "title": "哨兵之殇",
     "alias": "Jade_Galio",
     "icon": "/lol-game-data/assets/v1/champion-icons/60003.png",
@@ -1905,7 +1905,7 @@
   },
   {
     "id": 60005,
-    "name": "德邦总管",
+    "name": "赵信",
     "title": "德邦总管",
     "alias": "Jade_XinZhao",
     "icon": "/lol-game-data/assets/v1/champion-icons/60005.png",
@@ -2239,6 +2239,17 @@
     ]
   },
   {
+    "id": 60039,
+    "name": "艾瑞莉娅",
+    "title": "刀锋意志",
+    "alias": "Jade_Irelia",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60039.png",
+    "roles": [
+      "fighter",
+      "assassin"
+    ]
+  },
+  {
     "id": 60040,
     "name": "迦娜",
     "title": "风暴之怒",
@@ -2271,6 +2282,17 @@
     ]
   },
   {
+    "id": 60043,
+    "name": "卡尔玛",
+    "title": "天启者",
+    "alias": "Jade_Karma",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60043.png",
+    "roles": [
+      "mage",
+      "support"
+    ]
+  },
+  {
     "id": 60044,
     "name": "塔里克",
     "title": "宝石骑士",
@@ -2289,6 +2311,16 @@
     "icon": "/lol-game-data/assets/v1/champion-icons/60045.png",
     "roles": [
       "mage"
+    ]
+  },
+  {
+    "id": 60051,
+    "name": "凯特琳",
+    "title": "皮城女警",
+    "alias": "Jade_Caitlyn",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60051.png",
+    "roles": [
+      "marksman"
     ]
   },
   {
@@ -2425,7 +2457,7 @@
   },
   {
     "id": 60078,
-    "name": "钢铁大使",
+    "name": "波比",
     "title": "钢铁大使",
     "alias": "Jade_Poppy",
     "icon": "/lol-game-data/assets/v1/champion-icons/60078.png",
@@ -2553,7 +2585,7 @@
   },
   {
     "id": 60102,
-    "name": "龙血武姬",
+    "name": "希瓦娜",
     "title": "龙血武姬",
     "alias": "Jade_Shyvana",
     "icon": "/lol-game-data/assets/v1/champion-icons/60102.png",
@@ -2574,8 +2606,40 @@
     ]
   },
   {
+    "id": 60104,
+    "name": "格雷福斯",
+    "title": "法外狂徒",
+    "alias": "Jade_Graves",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60104.png",
+    "roles": [
+      "marksman"
+    ]
+  },
+  {
+    "id": 60105,
+    "name": "菲兹",
+    "title": "潮汐海灵",
+    "alias": "Jade_Fizz",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60105.png",
+    "roles": [
+      "assassin",
+      "fighter"
+    ]
+  },
+  {
+    "id": 60111,
+    "name": "诺提勒斯",
+    "title": "深海泰坦",
+    "alias": "Jade_Nautilus",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60111.png",
+    "roles": [
+      "tank",
+      "support"
+    ]
+  },
+  {
     "id": 60114,
-    "name": "无双剑姬",
+    "name": "菲奥娜",
     "title": "无双剑姬",
     "alias": "Jade_Fiora",
     "icon": "/lol-game-data/assets/v1/champion-icons/60114.png",
@@ -2590,6 +2654,38 @@
     "title": "仙灵女巫",
     "alias": "Jade_Lulu",
     "icon": "/lol-game-data/assets/v1/champion-icons/60117.png",
+    "roles": [
+      "support",
+      "mage"
+    ]
+  },
+  {
+    "id": 60133,
+    "name": "德玛西亚之翼",
+    "title": "德玛西亚之翼",
+    "alias": "Jade_Quinn",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60133.png",
+    "roles": [
+      "marksman",
+      "assassin"
+    ]
+  },
+  {
+    "id": 60266,
+    "name": "亚托克斯",
+    "title": "暗裔剑魔",
+    "alias": "Jade_Aatrox",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60266.png",
+    "roles": [
+      "fighter"
+    ]
+  },
+  {
+    "id": 60267,
+    "name": "唤潮鲛姬",
+    "title": "唤潮鲛姬",
+    "alias": "Jade_Nami",
+    "icon": "/lol-game-data/assets/v1/champion-icons/60267.png",
     "roles": [
       "support",
       "mage"

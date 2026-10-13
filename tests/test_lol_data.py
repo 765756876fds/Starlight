@@ -7,10 +7,12 @@ from tests.test_lol_cooldown_e2e import FakeScheduler
 def test_964_abilities():
     import json
     d = json.load(open("data/lol_data/abilities.json", encoding="utf-8"))
-    assert len(d) == 964
+    # 数据可经设置页「更新数据」按钮刷新（用户实机 964→1000）：
+    # 断言下界而非硬编码，避免数据更新后测试过时。
+    assert len(d) >= 964
     champs = {a["champion_id"] for a in d}
     assert 3 in champs, "加里奥 id=3 必须存在"
-    assert len(champs) == 241
+    assert len(champs) >= 241
 
 
 def test_cooldown_by_level_present():
@@ -48,7 +50,8 @@ def test_invalid_skill_event_on_cd_zero():
     sched = FakeScheduler()
 
     class ZeroCatalog(AbilityCatalog):
-        def get_cooldown(self, cid, slot):
+        def get_cooldown_by_level(self, cid, slot, level=1):
+            # 生产路径 start_reminder 调 get_cooldown_by_level（不是 get_cooldown）
             return None
 
     mgr = CooldownManager(

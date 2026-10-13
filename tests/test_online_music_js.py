@@ -3,7 +3,7 @@ import json
 import threading
 import time
 
-from app.music.online.sources.js_source import JSMusicSource
+from app.music.online.sources.js_source import JSMusicSource, compare_versions
 from app.music.online.models import OnlineTrack
 
 
@@ -182,3 +182,40 @@ def test_reload_wakes_pending_and_restarts(monkeypatch):
     assert box["event"].is_set()     # 旧等待方被主动唤醒
     assert box["result"] is None     # 唤醒语义 = 失败（_call 返回 None）
     assert s._proc is not None       # 新进程已启动
+
+
+# ---------- compare_versions（插件版本对比） ----------
+
+def test_cmp_date_style_digits_compare_place_by_place():
+    """日期型：2025.10.01 vs 2025.9.16 → 10 > 9（逐位整数比，非字符串比）。"""
+    assert compare_versions("2025.10.01", "2025.9.16") == 1
+    assert compare_versions("2025.9.16", "2025.10.01") == -1
+
+
+def test_cmp_padding_short_versions():
+    """长度不齐补 0：1 vs 1.0.0 相等；1.0 vs 1.0.1 小。"""
+    assert compare_versions("1", "1.0.0") == 0
+    assert compare_versions("1.0", "1.0.1") == -1
+    assert compare_versions("2.0", "1.9.9") == 1
+
+
+def test_cmp_strip_v_prefix():
+    """剥 v/V 前缀：v1.2.3 == 1.2.3。"""
+    assert compare_versions("v1.2.3", "1.2.3") == 0
+    assert compare_versions("V2.0.0", "1.9.9") == 1
+
+
+def test_cmp_single_number():
+    """单数字：1.0.0 vs 1 → 相等；0.1.5 vs 1 → 小。"""
+    assert compare_versions("1.0.0", "1") == 0
+    assert compare_versions("0.1.5", "1") == -1
+    assert compare_versions("1.0.0", "0.1.5") == 1
+
+
+def test_cmp_parse_failure_returns_none():
+    """解析失败返回 None（未知，不报有更新）；空值 None。"""
+    assert compare_versions("abc", "1.0.0") is None
+    assert compare_versions("1.0.0", "1.x.0") is None
+    assert compare_versions("1.0.0", "") is None
+    assert compare_versions(None, "1.0.0") is None
+    assert compare_versions("", "") is None

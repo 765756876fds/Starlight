@@ -13,6 +13,39 @@ from ..models import OnlineTrack
 from ..source import MusicSource
 
 
+def compare_versions(a, b):
+    """版本号比较：拆整数逐位比，长度不齐补 0，剥 v/V 前缀。
+
+    返回 1（a>b）/ 0（相等）/ -1（a<b）；解析失败返回 None（视为"未知"，
+    调用方只把 >0 当"有更新"，None 走"未知"不提示更新）。
+    """
+    if not a or not b:
+        return None
+
+    def _parts(s):
+        s = str(s).strip().lstrip("vV")
+        parts = []
+        for seg in s.split("."):
+            seg = seg.strip()
+            if not seg or not seg.isdigit():
+                return None
+            parts.append(int(seg))
+        return parts
+
+    pa, pb = _parts(a), _parts(b)
+    if pa is None or pb is None:
+        return None
+    n = max(len(pa), len(pb))
+    for i in range(n):
+        x = pa[i] if i < len(pa) else 0   # 长度不齐补 0：1 vs 1.0.0 → 相等
+        y = pb[i] if i < len(pb) else 0
+        if x > y:
+            return 1
+        if x < y:
+            return -1
+    return 0
+
+
 class JSMusicSource(MusicSource):
     name = "js_bridge"
     display_name = "JS 音源桥接"
@@ -191,6 +224,75 @@ class JSMusicSource(MusicSource):
         out = self._parse_tracks(result)
         print(f"[search_plugin] parsed {len(out)} 条", flush=True)
         return out
+
+    # ---------- 插件检查更新 / 更新 ----------
+
+    def check_updates(self, timeout: float = 25.0) -> List[dict]:
+        """拉全部 MusicFree 插件的更新源，返回判断结果列表。
+
+        每项：{name, file, local_version, remote_version, has_update, error?}
+        新代码缓存在 _updates_cache（按 name），供 update_plugin 使用，不透传 UI。
+        """
+        self._updates_cache = {}
+        result = self._call("checkUpdates", {"timeout_ms": 10000}, timeout=timeout)
+        if not result:
+            return []
+        out = []
+        for r in result:
+            name = r.get("name") or r.get("file") or "?"
+            error = r.get("error")
+            entry = {
+                "name": name,
+                "file": r.get("file") or "",
+                "local_version": r.get("localVersion"),
+                "remote_version": r.get("remoteVersion"),
+                "error": error,
+            }
+            if error:
+                entry["has_update"] = False
+            else:
+                cmp = compare_versions(r.get("remoteVersion"), r.get("localVersion"))
+                entry["has_update"] = bool(cmp and cmp > 0)
+                if cmp is None:
+                    entry["error"] = "version-unknown"
+            if r.get("newCode"):
+                self._updates_cache[name] = r
+            out.append(entry)
+        return out
+
+    def update_plugin(self, name: str) -> dict:
+        """按用户确认更新单插件：备份旧版 → 原子写新版（本地文件名不变）→ reload bridge。
+
+        返回 {ok: True} 或 {ok: False, error}。
+        """
+        entry = (self._updates_cache or {}).get(name)
+        if not entry or not entry.get("newCode"):
+            return {"ok": False, "error": "no-cache"}
+        mf_dir = Path(self._mf_dir)
+        target = mf_dir / (entry.get("file") or "")
+        if not target.exists():
+            return {"ok": False, "error": f"missing {target.name}"}
+        try:
+            # 1) 备份旧版到 _trash/plugin_backup/<本地名>.<旧版本>
+            backup_dir = mf_dir.parent / "_trash" / "plugin_backup"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            ver = entry.get("local_version") or "unknown"
+            backup_path = backup_dir / f"{target.name}.{ver}"
+            import shutil
+            shutil.copy2(target, backup_path)
+            print(f"[JSBridge] 备份旧版: {target.name} -> {backup_path}", flush=True)
+            # 2) 原子写新版（tmp + os.replace，文件名不变）
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_text(entry["newCode"], encoding="utf-8")
+            os.replace(tmp, target)
+            print(f"[JSBridge] 已替换: {target.name} (v{entry.get('local_version')}"
+                  f" -> v{entry.get('remote_version')})", flush=True)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        # 3) reload bridge（新代码生效；短暂中断搜索，预期行为）
+        ok = self.reload()
+        self._updates_cache.pop(name, None)
+        return {"ok": ok, "error": None if ok else "reload-fail"}
 
     def _parse_tracks(self, result: list) -> List[OnlineTrack]:
         out: List[OnlineTrack] = []

@@ -2593,14 +2593,14 @@
     "champion_id": 50,
     "slot": "W",
     "name": "帝国视界",
-    "cooldown": 22.0,
+    "cooldown": 20.0,
     "cooldown_by_level": [
-      22.0,
-      21.0,
       20.0,
       19.0,
       18.0,
-      18.0
+      17.0,
+      16.0,
+      15.0
     ]
   },
   {
@@ -2901,14 +2901,14 @@
     "champion_id": 56,
     "slot": "R",
     "name": "鬼影重重",
-    "cooldown": 140.0,
+    "cooldown": 160.0,
     "cooldown_by_level": [
-      140.0,
-      115.0,
-      90.0,
-      90.0,
-      90.0,
-      90.0
+      160.0,
+      130.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0
     ]
   },
   {
@@ -3496,7 +3496,7 @@
       20.0,
       18.0,
       16.0,
-      14.0
+      16.0
     ]
   },
   {
@@ -4077,14 +4077,14 @@
     "champion_id": 82,
     "slot": "R",
     "name": "轮回绝境",
-    "cooldown": 140.0,
+    "cooldown": 120.0,
     "cooldown_by_level": [
-      140.0,
       120.0,
+      110.0,
       100.0,
-      90.0,
-      80.0,
-      8.0
+      100.0,
+      100.0,
+      100.0
     ]
   },
   {
@@ -7633,12 +7633,12 @@
     "champion_id": 266,
     "slot": "W",
     "name": "恶火束链",
-    "cooldown": 20.0,
+    "cooldown": 18.0,
     "cooldown_by_level": [
-      20.0,
       18.0,
-      16.0,
-      14.0,
+      16.5,
+      15.0,
+      13.5,
       12.0,
       12.0
     ]
@@ -9887,13 +9887,13 @@
     "champion_id": 60004,
     "slot": "E",
     "name": "传送之门",
-    "cooldown": 120.0,
+    "cooldown": 135.0,
     "cooldown_by_level": [
+      135.0,
       120.0,
       105.0,
       90.0,
       75.0,
-      60.0,
       60.0
     ]
   },
@@ -9901,14 +9901,14 @@
     "champion_id": 60004,
     "slot": "R",
     "name": "命运",
-    "cooldown": 130.0,
+    "cooldown": 180.0,
     "cooldown_by_level": [
-      130.0,
-      110.0,
+      180.0,
+      150.0,
+      120.0,
       90.0,
-      90.0,
-      90.0,
-      90.0
+      60.0,
+      30.0
     ]
   },
   {
@@ -10881,14 +10881,14 @@
     "champion_id": 60025,
     "slot": "W",
     "name": "痛苦腐蚀",
-    "cooldown": 10.0,
+    "cooldown": 12.0,
     "cooldown_by_level": [
-      10.0,
-      10.0,
-      10.0,
-      10.0,
-      10.0,
-      10.0
+      12.0,
+      12.0,
+      12.0,
+      12.0,
+      12.0,
+      12.0
     ]
   },
   {
@@ -10912,11 +10912,11 @@
     "cooldown": 120.0,
     "cooldown_by_level": [
       120.0,
-      110.0,
-      100.0,
-      10.0,
-      10.0,
-      10.0
+      120.0,
+      120.0,
+      120.0,
+      120.0,
+      120.0
     ]
   },
   {
@@ -11294,7 +11294,7 @@
       8.0,
       7.0,
       6.0,
-      6.0
+      5.0
     ]
   },
   {
@@ -11648,6 +11648,62 @@
     ]
   },
   {
+    "champion_id": 60039,
+    "slot": "Q",
+    "name": "利刃冲击",
+    "cooldown": 14.0,
+    "cooldown_by_level": [
+      14.0,
+      12.0,
+      10.0,
+      8.0,
+      6.0,
+      5.0
+    ]
+  },
+  {
+    "champion_id": 60039,
+    "slot": "W",
+    "name": "飞天姿态",
+    "cooldown": 15.0,
+    "cooldown_by_level": [
+      15.0,
+      15.0,
+      15.0,
+      15.0,
+      15.0,
+      15.0
+    ]
+  },
+  {
+    "champion_id": 60039,
+    "slot": "E",
+    "name": "均衡打击",
+    "cooldown": 8.0,
+    "cooldown_by_level": [
+      8.0,
+      8.0,
+      8.0,
+      8.0,
+      8.0,
+      8.0
+    ]
+  },
+  {
+    "champion_id": 60039,
+    "slot": "R",
+    "name": "至尊锋刃",
+    "cooldown": 70.0,
+    "cooldown_by_level": [
+      70.0,
+      60.0,
+      50.0,
+      40.0,
+      30.0,
+      20.0
+    ]
+  },
+  {
     "champion_id": 60040,
     "slot": "Q",
     "name": "飓风呼啸",
@@ -11816,6 +11872,62 @@
     ]
   },
   {
+    "champion_id": 60043,
+    "slot": "Q",
+    "name": "天国之刃",
+    "cooldown": 6.0,
+    "cooldown_by_level": [
+      6.0,
+      6.0,
+      6.0,
+      6.0,
+      6.0,
+      6.0
+    ]
+  },
+  {
+    "champion_id": 60043,
+    "slot": "W",
+    "name": "灵魂连接",
+    "cooldown": 15.0,
+    "cooldown_by_level": [
+      15.0,
+      14.0,
+      13.0,
+      12.0,
+      11.0,
+      10.0
+    ]
+  },
+  {
+    "champion_id": 60043,
+    "slot": "E",
+    "name": "灵魂护盾",
+    "cooldown": 10.0,
+    "cooldown_by_level": [
+      10.0,
+      10.0,
+      10.0,
+      10.0,
+      10.0,
+      10.0
+    ]
+  },
+  {
+    "champion_id": 60043,
+    "slot": "R",
+    "name": "梵咒",
+    "cooldown": 0.25,
+    "cooldown_by_level": [
+      0.25,
+      0.25,
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ]
+  },
+  {
     "champion_id": 60044,
     "slot": "Q",
     "name": "神圣洗礼",
@@ -11925,6 +12037,62 @@
       90.0,
       90.0,
       90.0
+    ]
+  },
+  {
+    "champion_id": 60051,
+    "slot": "Q",
+    "name": "和平使者",
+    "cooldown": 10.0,
+    "cooldown_by_level": [
+      10.0,
+      9.0,
+      8.0,
+      7.0,
+      6.0,
+      5.0
+    ]
+  },
+  {
+    "champion_id": 60051,
+    "slot": "W",
+    "name": "约德尔诱捕器",
+    "cooldown": 20.0,
+    "cooldown_by_level": [
+      20.0,
+      17.0,
+      14.0,
+      11.0,
+      8.0,
+      5.0
+    ]
+  },
+  {
+    "champion_id": 60051,
+    "slot": "E",
+    "name": "90口径绳网",
+    "cooldown": 18.0,
+    "cooldown_by_level": [
+      18.0,
+      16.0,
+      14.0,
+      12.0,
+      10.0,
+      8.0
+    ]
+  },
+  {
+    "champion_id": 60051,
+    "slot": "R",
+    "name": "让子弹飞",
+    "cooldown": 90.0,
+    "cooldown_by_level": [
+      90.0,
+      75.0,
+      60.0,
+      45.0,
+      30.0,
+      15.0
     ]
   },
   {
@@ -12855,14 +13023,14 @@
     "champion_id": 60084,
     "slot": "E",
     "name": "奥义！散华",
-    "cooldown": 7.0,
+    "cooldown": 5.0,
     "cooldown_by_level": [
-      7.0,
-      6.0,
       5.0,
       4.0,
       3.0,
-      7.0
+      2.0,
+      1.0,
+      0.0
     ]
   },
   {
@@ -13384,6 +13552,174 @@
     ]
   },
   {
+    "champion_id": 60104,
+    "slot": "Q",
+    "name": "大号铅弹",
+    "cooldown": 12.0,
+    "cooldown_by_level": [
+      12.0,
+      11.0,
+      10.0,
+      9.0,
+      8.0,
+      7.0
+    ]
+  },
+  {
+    "champion_id": 60104,
+    "slot": "W",
+    "name": "烟幕弹",
+    "cooldown": 20.0,
+    "cooldown_by_level": [
+      20.0,
+      19.0,
+      18.0,
+      17.0,
+      16.0,
+      15.0
+    ]
+  },
+  {
+    "champion_id": 60104,
+    "slot": "E",
+    "name": "快速拔枪",
+    "cooldown": 22.0,
+    "cooldown_by_level": [
+      22.0,
+      20.0,
+      18.0,
+      16.0,
+      14.0,
+      12.0
+    ]
+  },
+  {
+    "champion_id": 60104,
+    "slot": "R",
+    "name": "终极爆弹",
+    "cooldown": 100.0,
+    "cooldown_by_level": [
+      100.0,
+      90.0,
+      80.0,
+      70.0,
+      60.0,
+      50.0
+    ]
+  },
+  {
+    "champion_id": 60105,
+    "slot": "Q",
+    "name": "淘气打击",
+    "cooldown": 10.0,
+    "cooldown_by_level": [
+      10.0,
+      9.0,
+      8.0,
+      7.0,
+      6.0,
+      5.0
+    ]
+  },
+  {
+    "champion_id": 60105,
+    "slot": "W",
+    "name": "海石三叉戟",
+    "cooldown": 10.0,
+    "cooldown_by_level": [
+      10.0,
+      10.0,
+      10.0,
+      10.0,
+      10.0,
+      10.0
+    ]
+  },
+  {
+    "champion_id": 60105,
+    "slot": "E",
+    "name": "古灵/精怪",
+    "cooldown": 16.0,
+    "cooldown_by_level": [
+      16.0,
+      14.0,
+      12.0,
+      10.0,
+      8.0,
+      6.0
+    ]
+  },
+  {
+    "champion_id": 60105,
+    "slot": "R",
+    "name": "巨鲨强袭",
+    "cooldown": 100.0,
+    "cooldown_by_level": [
+      100.0,
+      85.0,
+      70.0,
+      55.0,
+      40.0,
+      25.0
+    ]
+  },
+  {
+    "champion_id": 60111,
+    "slot": "Q",
+    "name": "疏通航道",
+    "cooldown": 18.0,
+    "cooldown_by_level": [
+      18.0,
+      16.0,
+      14.0,
+      12.0,
+      10.0,
+      9.0
+    ]
+  },
+  {
+    "champion_id": 60111,
+    "slot": "W",
+    "name": "泰坦之怒",
+    "cooldown": 22.0,
+    "cooldown_by_level": [
+      22.0,
+      21.0,
+      20.0,
+      19.0,
+      18.0,
+      17.0
+    ]
+  },
+  {
+    "champion_id": 60111,
+    "slot": "E",
+    "name": "暗流涌动",
+    "cooldown": 10.0,
+    "cooldown_by_level": [
+      10.0,
+      10.0,
+      10.0,
+      10.0,
+      10.0,
+      10.0
+    ]
+  },
+  {
+    "champion_id": 60111,
+    "slot": "R",
+    "name": "深海冲击",
+    "cooldown": 140.0,
+    "cooldown_by_level": [
+      140.0,
+      110.0,
+      80.0,
+      50.0,
+      20.0,
+      -10.0
+    ]
+  },
+  {
     "champion_id": 60114,
     "slot": "Q",
     "name": "破空斩",
@@ -13408,7 +13744,7 @@
       8.0,
       7.0,
       6.0,
-      6.0
+      5.0
     ]
   },
   {
@@ -13429,14 +13765,14 @@
     "champion_id": 60114,
     "slot": "R",
     "name": "利刃华尔兹",
-    "cooldown": 130.0,
+    "cooldown": 150.0,
     "cooldown_by_level": [
+      150.0,
       130.0,
-      120.0,
       110.0,
-      110.0,
-      110.0,
-      110.0
+      90.0,
+      70.0,
+      50.0
     ]
   },
   {
@@ -13493,6 +13829,174 @@
       80.0,
       80.0,
       80.0
+    ]
+  },
+  {
+    "champion_id": 60133,
+    "slot": "Q",
+    "name": "炫目攻势",
+    "cooldown": 11.0,
+    "cooldown_by_level": [
+      11.0,
+      10.0,
+      9.0,
+      8.0,
+      7.0,
+      6.0
+    ]
+  },
+  {
+    "champion_id": 60133,
+    "slot": "W",
+    "name": "敏锐感知",
+    "cooldown": 50.0,
+    "cooldown_by_level": [
+      50.0,
+      45.0,
+      40.0,
+      35.0,
+      30.0,
+      25.0
+    ]
+  },
+  {
+    "champion_id": 60133,
+    "slot": "E",
+    "name": "旋翔掠杀",
+    "cooldown": 12.0,
+    "cooldown_by_level": [
+      12.0,
+      11.0,
+      10.0,
+      9.0,
+      8.0,
+      7.0
+    ]
+  },
+  {
+    "champion_id": 60133,
+    "slot": "R",
+    "name": "王牌搭档",
+    "cooldown": 140.0,
+    "cooldown_by_level": [
+      140.0,
+      110.0,
+      80.0,
+      50.0,
+      20.0,
+      -10.0
+    ]
+  },
+  {
+    "champion_id": 60266,
+    "slot": "Q",
+    "name": "黑暗之跃",
+    "cooldown": 16.0,
+    "cooldown_by_level": [
+      16.0,
+      15.0,
+      14.0,
+      13.0,
+      12.0,
+      11.0
+    ]
+  },
+  {
+    "champion_id": 60266,
+    "slot": "W",
+    "name": "血之渴望/血之报偿",
+    "cooldown": 0.5,
+    "cooldown_by_level": [
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5
+    ]
+  },
+  {
+    "champion_id": 60266,
+    "slot": "E",
+    "name": "痛苦利刃",
+    "cooldown": 12.0,
+    "cooldown_by_level": [
+      12.0,
+      11.0,
+      10.0,
+      9.0,
+      8.0,
+      7.0
+    ]
+  },
+  {
+    "champion_id": 60266,
+    "slot": "R",
+    "name": "浴血屠戮",
+    "cooldown": 100.0,
+    "cooldown_by_level": [
+      100.0,
+      85.0,
+      70.0,
+      55.0,
+      40.0,
+      25.0
+    ]
+  },
+  {
+    "champion_id": 60267,
+    "slot": "Q",
+    "name": "碧波之牢",
+    "cooldown": 14.0,
+    "cooldown_by_level": [
+      14.0,
+      13.0,
+      12.0,
+      11.0,
+      10.0,
+      9.0
+    ]
+  },
+  {
+    "champion_id": 60267,
+    "slot": "W",
+    "name": "冲击之潮",
+    "cooldown": 9.0,
+    "cooldown_by_level": [
+      9.0,
+      9.0,
+      9.0,
+      9.0,
+      9.0,
+      9.0
+    ]
+  },
+  {
+    "champion_id": 60267,
+    "slot": "E",
+    "name": "唤潮之佑",
+    "cooldown": 11.0,
+    "cooldown_by_level": [
+      11.0,
+      11.0,
+      11.0,
+      11.0,
+      11.0,
+      11.0
+    ]
+  },
+  {
+    "champion_id": 60267,
+    "slot": "R",
+    "name": "怒涛之啸",
+    "cooldown": 120.0,
+    "cooldown_by_level": [
+      120.0,
+      110.0,
+      100.0,
+      10.0,
+      10.0,
+      10.0
     ]
   }
 ]

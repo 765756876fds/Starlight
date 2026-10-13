@@ -2,20 +2,13 @@
 const path = require('path');
 const fs = require('fs');
 const vm = require('vm');
+const https = require('https');
 
-function load(filePath) {
-  if (typeof globalThis.env === 'undefined') globalThis.env = {};
-  if (typeof globalThis.log === 'undefined') globalThis.log = console.log;
-  if (typeof globalThis.onError === 'undefined') globalThis.onError = (e) => { throw e; };
-  delete require.cache[require.resolve(filePath)];
-
-  // Preprocess: MusicFree plugins sometimes write `let z = z || "..."` which
-  // is a TDZ self-reference that only works in their Hiker/Electron loader.
-  // Rewrite to `var z = (typeof z !== 'undefined' && z) ? z : ...`.
-  let src = fs.readFileSync(filePath, 'utf8');
+// 预处理 + 沙箱执行插件源码，返回导出模块对象。
+// 与 load() 共用：从文件读 + 预处理 + vm 沙箱（依赖从 js_bridge node_modules 解析）。
+function loadFromSource(src, filePath) {
   src = src.replace(/\blet\s+([a-zA-Z_$][\w$]*)\s*=\s*\1\s*\|\|\s*([^;]+);/g,
     'var $1 = (typeof $1 !== "undefined" && $1) ? $1 : $2;');
-  // Also handle `let t, z = z || ...`
   src = src.replace(/\blet\s+([a-zA-Z_$][\w$]*)\s*,\s*([a-zA-Z_$][\w$]*)\s*=\s*\2\s*\|\|\s*([^;]+);/g,
     'let $1; var $2 = (typeof $2 !== "undefined" && $2) ? $2 : $3;');
 
@@ -35,6 +28,17 @@ function load(filePath) {
   vm.runInContext(src, sandbox, { filename: filePath });
   const mod = module.exports;
   if (!mod || typeof mod !== 'object') throw new Error('MusicFree plugin did not export object');
+  return mod;
+}
+
+function load(filePath) {
+  if (typeof globalThis.env === 'undefined') globalThis.env = {};
+  if (typeof globalThis.log === 'undefined') globalThis.log = console.log;
+  if (typeof globalThis.onError === 'undefined') globalThis.onError = (e) => { throw e; };
+  delete require.cache[require.resolve(filePath)];
+
+  const src = fs.readFileSync(filePath, 'utf8');
+  const mod = loadFromSource(src, filePath);
   const sourceName = mod.platform || path.basename(filePath, '.js');
   // Attach user variables (from env MF_USER_VARIABLES) if plugin declares them.
   try {
@@ -58,6 +62,61 @@ function load(filePath) {
     getMediaSource: mod.getMediaSource,
     getLyric: mod.getLyric,
     raw: mod,
+  };
+}
+
+// GET 文本（跟随 301/302/303/307/308 重定向，最多 redirects 跳）。
+function fetchText(url, timeoutMs = 10000, redirects = 3) {
+  return new Promise((resolve, reject) => {
+    const doGet = (u, depth) => {
+      const uu = new URL(u);
+      const req = https.get({
+        hostname: uu.hostname,
+        path: uu.pathname + uu.search,
+        headers: { 'User-Agent': 'lol-music-agent' },
+      }, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode)
+            && res.headers.location && depth < redirects) {
+          res.resume();
+          const next = new URL(res.headers.location, uu).toString();
+          return doGet(next, depth + 1);
+        }
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => resolve({ status: res.statusCode, text: buf }));
+      });
+      req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
+      req.on('error', reject);
+    };
+    doGet(url, 0);
+  });
+}
+
+// 拉取插件更新源 → 沙箱加载新版 → 返回元信息（不判断版本，判断在 Python 侧）。
+// 返回 {file, localVersion, remoteVersion, newCode} 或 {error}。
+async function fetchUpdateMeta(plugin, timeoutMs = 10000) {
+  const srcUrl = plugin && plugin.raw && plugin.raw.srcUrl;
+  const filePath = plugin && plugin.filePath;
+  const file = filePath ? path.basename(filePath) : '?';
+  if (!srcUrl) return { file, error: 'no-src' };
+  let res;
+  try {
+    res = await fetchText(srcUrl, timeoutMs);
+  } catch (e) {
+    return { file, error: 'fetch-' + String((e && e.message) || e).slice(0, 60) };
+  }
+  if (res.status !== 200) return { file, error: 'http-' + res.status };
+  let remoteMod;
+  try {
+    remoteMod = loadFromSource(res.text, filePath || path.join(process.cwd(), file));
+  } catch (e) {
+    return { file, error: 'parse-' + String((e && e.message) || e).slice(0, 60) };
+  }
+  return {
+    file,
+    localVersion: (plugin.raw && plugin.raw.version) || null,
+    remoteVersion: remoteMod.version || null,
+    newCode: res.text,
   };
 }
 
@@ -114,4 +173,4 @@ async function callGetLyric(plugin, rawItem) {
   return null;
 }
 
-module.exports = { load, callSearch, callGetUrl, callGetLyric };
+module.exports = { load, loadFromSource, fetchText, fetchUpdateMeta, callSearch, callGetUrl, callGetLyric };
