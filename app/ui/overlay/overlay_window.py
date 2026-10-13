@@ -221,8 +221,9 @@ class OverlayWindow(QWidget):
         self.hide()
 
     def hideEvent(self, event):
-        """隐藏时停定时器（不做无用功）；show 时重启。"""
-        self._timer.stop()
+        """隐藏时不停止刷新定时器——_refresh 内部由 _sync_visibility 控制显隐；
+        若在此 stop，则一旦 hide 过就再无入口重新 start，overlay 永久消失。"""
+        # self._timer.stop()  # 修复：移除，否则 hide 一次后 timer 永不再启动
         super().hideEvent(event)
 
     def showEvent(self, event):
