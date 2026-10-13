@@ -766,6 +766,7 @@ class Application:
             _ONGOING_DEDUP_CODES = (
                 "ongoing.session_source", "ongoing.gsm_supplement", "ongoing.live_merged",
                 "ongoing.session_created", "history.error", "room.player", "history_summary",
+                "ongoing.conn_skip",   # LCU 未连接时每秒轮询打一次，去重
             )
             _ongoing_last: dict = {}
 
