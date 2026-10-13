@@ -4,13 +4,15 @@
 所有模块通过事件通信，避免模块间直接依赖。
 2999 -> StateDiff -> Event -> EventBus -> GameAlarm / UI / SpeechJudge
 """
-import asyncio
+import logging
 import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class EventPriority(Enum):
@@ -171,7 +173,26 @@ class EventBus:
             try:
                 handler(event)
             except Exception as e:
-                print(f"[EventBus] 事件处理异常 {event.event_type} -> {handler.__name__}: {e}")
+                handler_name = getattr(handler, "__name__", "?")
+                # X 方案双写：print → UI + print-{date}.log；logger.error → app.log（结构化）
+                print(f"[EventBus] 事件处理异常 {event.event_type} -> {handler_name}: {e}")
+                logger.error("事件处理异常 %s -> %s: %s", event.event_type, handler_name, e)
+                # SYSTEM_ERROR 分发自身失败：不嵌套发布，避免无限递归
+                if event.event_type == EventType.SYSTEM_ERROR:
+                    continue
+                try:
+                    self.publish(Event(
+                        event_type=EventType.SYSTEM_ERROR,
+                        data={
+                            "source_event_type": event.event_type,
+                            "source": event.source,
+                            "error_type": type(e).__name__,
+                            "error_msg": str(e),
+                        },
+                        source="event_bus",
+                    ))
+                except Exception:
+                    logger.error("发布 SYSTEM_ERROR 失败（源事件 %s）", event.event_type, exc_info=True)
 
     def publish_async(self, event: Event):
         """异步发布事件（在新线程中分发）"""
