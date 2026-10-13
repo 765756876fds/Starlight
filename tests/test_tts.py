@@ -173,6 +173,44 @@ class TestTTSController(unittest.TestCase):
         if out and os.path.exists(out):
             os.remove(out)
 
+    def test_qwen_body_has_rate_volume(self):
+        """Qwen 引擎：请求 body 含 rate（0.5~2.0 float）与 volume（0~100 int）"""
+        tts = TTSController(self._qwen_config(qwen_rate=1.5, qwen_volume=80))
+        with mock.patch("requests.post") as m_post, mock.patch("requests.get") as m_get:
+            m_post.return_value.status_code = 200
+            m_post.return_value.json.return_value = {
+                "output": {"audio": {"url": "http://fake-oss/x.wav"}}
+            }
+            m_get.return_value.raise_for_status.return_value = None
+            m_get.return_value.content = b"\x00" * 4096
+            out = tts._generate_audio("测试")
+        self.assertIsNotNone(out)
+        body = m_post.call_args.kwargs["json"]
+        self.assertEqual(body["input"]["rate"], 1.5)
+        self.assertEqual(body["input"]["volume"], 80)
+        if out and os.path.exists(out):
+            os.remove(out)
+
+    def test_qwen_setters_route_by_engine(self):
+        """set_voice/set_rate/set_volume 按引擎路由（qwen 改 qwen_* 字段）"""
+        tts = TTSController(self._qwen_config())
+        tts.set_voice("longanhuan_v3.1")
+        tts.set_rate(1.2)
+        tts.set_volume(60)
+        self.assertEqual(tts.qwen_voice, "longanhuan_v3.1")
+        self.assertEqual(tts.qwen_rate, 1.2)
+        self.assertEqual(tts.qwen_volume, 60)
+        # Edge 字段不受影响
+        self.assertEqual(tts.voice, "zh-CN-XiaoxiaoNeural")
+
+    def test_has_qwen_key(self):
+        """has_qwen_key() 公开方法：config 有 Key → True；无 Key 且文件缺失 → False"""
+        tts = TTSController(self._qwen_config())
+        self.assertTrue(tts.has_qwen_key())          # config 里 sk-test
+        tts2 = TTSController(self._qwen_config(qwen_api_key=""))
+        with mock.patch.object(TTSController, "_resolve_qwen_key", return_value=""):
+            self.assertFalse(tts2.has_qwen_key())    # 三级全空 → False
+
 
 if __name__ == "__main__":
     unittest.main()

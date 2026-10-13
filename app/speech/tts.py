@@ -72,6 +72,12 @@ class TTSController:
         self.qwen_base_url = config.get("qwen_base_url", "https://dashscope.aliyuncs.com/api/v1")
         self.qwen_model = config.get("qwen_model", "qwen-audio-3.1-tts-flash")
         self.qwen_voice = config.get("qwen_voice", "longanlingxin_v3.1")
+        try:
+            self.qwen_rate = float(config.get("qwen_rate", 1.0))
+            self.qwen_volume = int(config.get("qwen_volume", 50))
+        except Exception:
+            self.qwen_rate = 1.0
+            self.qwen_volume = 50
 
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -104,13 +110,28 @@ class TTSController:
         self._running = False
 
     def set_voice(self, voice: str):
-        self.voice = voice
+        if self.engine == "qwen":
+            self.qwen_voice = voice
+        else:
+            self.voice = voice
 
-    def set_rate(self, rate: str):
-        self.rate = rate
+    def set_rate(self, rate):
+        if self.engine == "qwen":
+            try:
+                self.qwen_rate = float(rate)
+            except Exception:
+                self.qwen_rate = 1.0
+        else:
+            self.rate = rate
 
-    def set_volume(self, volume: str):
-        self.volume_pct = volume
+    def set_volume(self, volume):
+        if self.engine == "qwen":
+            try:
+                self.qwen_volume = int(volume)
+            except Exception:
+                self.qwen_volume = 50
+        else:
+            self.volume_pct = volume
 
     def start(self):
         """启动 TTS"""
@@ -272,6 +293,10 @@ class TTSController:
                 self._finished_published = True
                 self._publish_event(EventType.SPEECH_FINISHED, {"reason": "completed"})
 
+    def has_qwen_key(self) -> bool:
+        """Qwen API Key 是否已配置（环境变量 / settings 值 / tools/.qwen_key）。"""
+        return bool(self._resolve_qwen_key(self.config))
+
     def _resolve_qwen_key(self, config: Dict[str, Any]) -> str:
         """Qwen API Key：环境变量 QWEN_API_KEY > settings 值 > tools/.qwen_key（已 gitignore）"""
         env_key = os.environ.get("QWEN_API_KEY", "")
@@ -378,6 +403,8 @@ class TTSController:
                     "voice": self.qwen_voice,
                     "format": "wav",
                     "sample_rate": 24000,
+                    "rate": self.qwen_rate,      # 语速 0.5~2.0（float）
+                    "volume": self.qwen_volume,  # 音量 0~100（int）
                 },
             }
             resp = requests.post(

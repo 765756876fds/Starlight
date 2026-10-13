@@ -19,8 +19,8 @@ from app.ui.theme.colors import Colors
 from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
-    QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ..settings_store import (
@@ -31,8 +31,43 @@ from ..settings_store import (
 from ..widgets.toggle_button import ToggleButton
 from ...lol.data.lol_data_updater import update_all as _update_lol_data
 
-# 内置常用 TTS 音色（可编辑下拉，支持手动输入任意 edge-tts 语音名）
-_TTS_VOICES = [
+# ---------- TTS 音色常量表（按引擎） ----------
+
+# Qwen-Audio-TTS（qwen-audio-3.1-tts-flash）官方音色 28 个：(voice 参数, 中文描述)
+# 显示格式"代号（描述）"，无描述的只显示代号
+_QWEN_VOICES = [
+    ("longanlingxin_v3.1", "龙安灵心·女"),   # 默认
+    ("longanhuan_v3.1", "龙安欢·女"),
+    ("longanfengyue_v3.1", "龙安风悦·女"),
+    ("xunanchuan_v3.1", "许南川·男"),
+    ("yuxiaoyun_v3.1", "于小云·女"),
+    ("anmingyuan_v3.1", "安明远·男"),
+    ("wenhuaiqing_v3.1", "温怀清·女"),
+    ("anruorou_v3.1", "安若柔·女"),
+    ("guyunshu_v3.1", "顾云舒·女"),
+    ("huozhuoshi_v3.1", "霍拙石·男"),
+    ("yeqinghe_v3.1", "叶清禾·女"),
+    ("yunhuanhuan_v3.1", "云欢欢·女"),
+    ("xuxiaoqiao_v3.1", "徐小俏·女"),
+    ("baianran_v3.1", "白安然·女"),
+    ("xuyanchu_v3.1", "许言初·女"),
+    ("yezhiqing_v3.1", "叶知晴·女"),
+    ("Emily_v3.1", "Emily·英女"),
+    ("Luna_v3.1", "Luna·英女"),
+    ("Eric_v3.1", "Eric·英男"),
+    ("Luca_v3.1", "Luca·英男"),
+    ("Abby_v3.1", "Abby·美女"),
+    ("Beth_v3.1", "Beth·美女"),
+    ("Betty_v3.1", "Betty·美女"),
+    ("Cindy_v3.1", "Cindy·美女"),
+    ("Donna_v3.1", "Donna·美女"),
+    ("Andy_v3.1", "Andy·美男"),
+    ("Brian_v3.1", "Brian·美男"),
+    ("David_v3.1", "David·美男"),
+]
+
+# Edge TTS 常用音色（现有 11 个保留；Edge 403 时动态拉不到，写死）
+_EDGE_VOICES = [
     "zh-CN-XiaoxiaoNeural",   # 晓晓（女）
     "zh-CN-XiaoyiNeural",     # 晓伊（女）
     "zh-CN-YunxiNeural",      # 云希（男）
@@ -45,6 +80,29 @@ _TTS_VOICES = [
     "en-US-AriaNeural",       # Aria（英女）
     "en-US-GuyNeural",        # Guy（英男）
 ]
+
+_QWEN_DEFAULT_VOICE = "longanlingxin_v3.1"
+_EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+
+
+def _voice_label(vid: str, desc: str) -> str:
+    """音色下拉显示："代号（描述）"；无描述只显示代号。"""
+    return f"{vid}（{desc}）" if desc else vid
+
+
+def _qwen_rate(n: int) -> float:
+    """Qwen 语速映射：滑块 ±100 → rate 0.5~2.0。"""
+    return 1.0 + n / 100.0
+
+
+def _qwen_vol(n: int) -> int:
+    """Qwen 音量映射：滑块 0~100 → volume 0~100。"""
+    return int(n)
+
+
+def _edge_pct(n: int) -> str:
+    """Edge 百分比映射：滑块 → "+N%"。"""
+    return f"{n:+d}%"
 
 
 def _probe_url(url: str, headers, timeout: float = 5.0) -> str:
@@ -643,38 +701,87 @@ class SettingsPanel(QWidget):
         box = QGroupBox("🎤 语音 TTS")
         lay = QVBoxLayout(box)
 
+        # 引擎下拉（最上；切换联动音色/滑块）
+        erow = QHBoxLayout()
+        erow.addWidget(QLabel("引擎："))
+        self.cmb_engine = QComboBox()
+        self.cmb_engine.addItem("Qwen（阿里云）", "qwen")
+        self.cmb_engine.addItem("Edge（在线）", "edge")
+        self.cmb_engine.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        erow.addWidget(self.cmb_engine, 1)
+        lay.addLayout(erow)
+
+        # 音色下拉（只选，按引擎填充）
         vrow = QHBoxLayout()
         vrow.addWidget(QLabel("音色："))
         self.cmb_voice = QComboBox()
-        self.cmb_voice.setEditable(True)
-        self.cmb_voice.addItems(_TTS_VOICES)
+        self.cmb_voice.setEditable(False)
         self.cmb_voice.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         vrow.addWidget(self.cmb_voice, 1)
         lay.addLayout(vrow)
 
+        # 语速滑块（qwen：±100 → 0.5~2.0；edge：-50~+50 → +N%）
         self._rate_slider = QSlider(Qt.Horizontal)
-        self._rate_slider.setRange(-50, 50)
         self._rate_slider.setValue(0)
-        self.lbl_rate = QLabel("语速：+0%")
+        self.lbl_rate = QLabel("语速：")
         self.lbl_rate.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         lay.addWidget(self.lbl_rate)
         lay.addWidget(self._rate_slider)
 
+        # 音量滑块（qwen：0~100 int；edge：0~100 → +N%）
         self._vol_slider = QSlider(Qt.Horizontal)
-        self._vol_slider.setRange(0, 100)
         self._vol_slider.setValue(0)
-        self.lbl_vol = QLabel("音量：+0%")
+        self.lbl_vol = QLabel("音量：")
         self.lbl_vol.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         lay.addWidget(self.lbl_vol)
         lay.addWidget(self._vol_slider)
+
+        # API Key 行：状态 + 密码输入 + 保存（写 tools/.qwen_key，不碰 settings.yaml）
+        krow = QHBoxLayout()
+        krow.addWidget(QLabel("API Key："))
+        self.lbl_key_status = QLabel("")
+        self.lbl_key_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        krow.addWidget(self.lbl_key_status)
+        self._key_edit = QLineEdit()
+        self._key_edit.setEchoMode(QLineEdit.Password)
+        self._key_edit.setPlaceholderText("sk-...（仅本地保存 tools/.qwen_key）")
+        krow.addWidget(self._key_edit, 1)
+        self._btn_key_save = QPushButton("保存")
+        krow.addWidget(self._btn_key_save)
+        lay.addLayout(krow)
 
         root.addWidget(box)
 
         # 从 settings.yaml 加载当前值并接线
         self._load_tts_values()
+        self.cmb_engine.currentIndexChanged.connect(self._on_engine_change)
         self.cmb_voice.currentTextChanged.connect(self._on_tts_change)
         self._rate_slider.valueChanged.connect(self._on_tts_change)
         self._vol_slider.valueChanged.connect(self._on_tts_change)
+        self._btn_key_save.clicked.connect(self._on_key_save)
+
+    def _fill_voices(self, engine: str, current_vid: str = "") -> None:
+        """按引擎填充音色下拉（只选）。blockSignals 防填充过程误触发变更。"""
+        self.cmb_voice.blockSignals(True)
+        self.cmb_voice.clear()
+        if engine == "qwen":
+            for vid, desc in _QWEN_VOICES:
+                self.cmb_voice.addItem(_voice_label(vid, desc), vid)
+        else:
+            for vid in _EDGE_VOICES:
+                self.cmb_voice.addItem(vid, vid)
+        if current_vid:
+            i = self.cmb_voice.findData(current_vid)
+            if i >= 0:
+                self.cmb_voice.setCurrentIndex(i)
+            else:
+                self.cmb_voice.insertItem(0, _voice_label(current_vid, ""), current_vid)
+                self.cmb_voice.setCurrentIndex(0)
+        self.cmb_voice.blockSignals(False)
+
+    def _current_voice_id(self) -> str:
+        """当前音色 id（下拉 data；兜底取显示文本）。"""
+        return self.cmb_voice.currentData() or self.cmb_voice.currentText().strip()
 
     def _load_tts_values(self) -> None:
         try:
@@ -682,37 +789,106 @@ class SettingsPanel(QWidget):
             with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
             tts_cfg = cfg.get("tts", {})
-            voice = tts_cfg.get("edge_voice", "zh-CN-XiaoxiaoNeural")
-            rate = tts_cfg.get("rate", "+0%")
-            volume = tts_cfg.get("volume", "+0%")
         except Exception:
             return
-        # 音色：已有值不在内置列表时补进去（可编辑下拉）
-        if self.cmb_voice.findText(voice) < 0:
-            self.cmb_voice.insertItem(0, voice)
-        self.cmb_voice.setCurrentText(voice)
-        try:
+        engine = tts_cfg.get("engine", "qwen")
+        idx = self.cmb_engine.findData(engine)
+        # blockSignals：加载期间不触发 _on_engine_change（防止误写配置）
+        self.cmb_engine.blockSignals(True)
+        self.cmb_engine.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cmb_engine.blockSignals(False)
+        if engine == "qwen":
+            voice = tts_cfg.get("qwen_voice", _QWEN_DEFAULT_VOICE)
+            try:
+                rate = float(tts_cfg.get("qwen_rate", 1.0))
+                volume = int(tts_cfg.get("qwen_volume", 50))
+            except Exception:
+                rate, volume = 1.0, 50
+            self._fill_voices("qwen", voice)
+            self._rate_slider.blockSignals(True)
+            self._rate_slider.setRange(-100, 100)
+            self._rate_slider.setValue(int(round((rate - 1.0) * 100)))
+            self._rate_slider.blockSignals(False)
+            self._vol_slider.blockSignals(True)
+            self._vol_slider.setRange(0, 100)
+            self._vol_slider.setValue(volume)
+            self._vol_slider.blockSignals(False)
+            self.lbl_rate.setText(f"语速：{rate:.2f}（{self._rate_slider.value():+d}%）")
+            self.lbl_vol.setText(f"音量：{volume}")
+        else:
+            voice = tts_cfg.get("edge_voice", _EDGE_DEFAULT_VOICE)
+            rate = tts_cfg.get("rate", "+0%")
+            volume = tts_cfg.get("volume", "+0%")
+            self._fill_voices("edge", voice)
+            self._rate_slider.blockSignals(True)
+            self._rate_slider.setRange(-50, 50)
             self._rate_slider.setValue(int(str(rate).replace("%", "").replace("+", "")))
-        except Exception:
-            pass
-        try:
+            self._rate_slider.blockSignals(False)
+            self._vol_slider.blockSignals(True)
+            self._vol_slider.setRange(0, 100)
             self._vol_slider.setValue(int(str(volume).replace("%", "").replace("+", "")))
-        except Exception:
-            pass
-        self.lbl_rate.setText(f"语速：{self._rate_slider.value():+d}%")
-        self.lbl_vol.setText(f"音量：{self._vol_slider.value():+d}%")
+            self._vol_slider.blockSignals(False)
+            self.lbl_rate.setText(f"语速：{rate}")
+            self.lbl_vol.setText(f"音量：{volume}")
+        self._refresh_key_status()
+
+    def _on_engine_change(self, *_args) -> None:
+        """切引擎：音色重置为该引擎默认 + 滑块范围/值切换（blockSignals 防误触发）。"""
+        engine = self.cmb_engine.currentData() or "qwen"
+        if engine == "qwen":
+            self._fill_voices("qwen", _QWEN_DEFAULT_VOICE)
+            self._rate_slider.blockSignals(True)
+            self._rate_slider.setRange(-100, 100)
+            self._rate_slider.setValue(0)
+            self._rate_slider.blockSignals(False)
+            self._vol_slider.blockSignals(True)
+            self._vol_slider.setRange(0, 100)
+            self._vol_slider.setValue(50)
+            self._vol_slider.blockSignals(False)
+            self.lbl_rate.setText("语速：1.00（+0%）")
+            self.lbl_vol.setText("音量：50")
+        else:
+            self._fill_voices("edge", _EDGE_DEFAULT_VOICE)
+            self._rate_slider.blockSignals(True)
+            self._rate_slider.setRange(-50, 50)
+            self._rate_slider.setValue(0)
+            self._rate_slider.blockSignals(False)
+            self._vol_slider.blockSignals(True)
+            self._vol_slider.setRange(0, 100)
+            self._vol_slider.setValue(0)
+            self._vol_slider.blockSignals(False)
+            self.lbl_rate.setText("语速：+0%")
+            self.lbl_vol.setText("音量：+0%")
+        # 保存新引擎默认值 + 立即生效
+        self._on_tts_change()
 
     def _on_tts_change(self, *_args) -> None:
-        voice = self.cmb_voice.currentText().strip()
-        rate = f"{self._rate_slider.value():+d}%"
-        volume = f"{self._vol_slider.value():+d}%"
-        self.lbl_rate.setText(f"语速：{rate}")
-        self.lbl_vol.setText(f"音量：{volume}")
-        # 持久化到 settings.yaml tts 节（带锁）
-        save_settings_yaml({"tts": {
-            "edge_voice": voice, "rate": rate, "volume": volume,
-        }})
-        # 立即生效（TTSController setter，下次生成即用新值）
+        engine = self.cmb_engine.currentData() or "qwen"
+        voice = self._current_voice_id()
+        if engine == "qwen":
+            rate = _qwen_rate(self._rate_slider.value())
+            volume = _qwen_vol(self._vol_slider.value())
+            self.lbl_rate.setText(f"语速：{rate:.2f}（{self._rate_slider.value():+d}%）")
+            self.lbl_vol.setText(f"音量：{volume}")
+            # 持久化到 settings.yaml tts 节（带锁）；Key 不在此文件
+            save_settings_yaml({"tts": {
+                "engine": "qwen",
+                "qwen_voice": voice,
+                "qwen_rate": round(rate, 2),
+                "qwen_volume": volume,
+            }})
+        else:
+            rate = _edge_pct(self._rate_slider.value())
+            volume = _edge_pct(self._vol_slider.value())
+            self.lbl_rate.setText(f"语速：{rate}")
+            self.lbl_vol.setText(f"音量：{volume}")
+            save_settings_yaml({"tts": {
+                "engine": "edge",
+                "edge_voice": voice,
+                "rate": rate,
+                "volume": volume,
+            }})
+        # 立即生效（TTSController setter 按引擎路由，下次生成即用新值）
         if self._tts is not None:
             try:
                 self._tts.set_voice(voice)
@@ -720,6 +896,39 @@ class SettingsPanel(QWidget):
                 self._tts.set_volume(volume)
             except Exception as e:
                 print(f"[Settings] TTS 应用失败: {e}")
+
+    def _refresh_key_status(self) -> None:
+        """Key 状态：走 TTSController.has_qwen_key()（环境变量 / settings / tools/.qwen_key）。"""
+        configured = False
+        if self._tts is not None:
+            try:
+                configured = self._tts.has_qwen_key()
+            except Exception:
+                configured = False
+        if configured:
+            self.lbl_key_status.setText("已配置 ✓")
+            self.lbl_key_status.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 11px;")
+        else:
+            self.lbl_key_status.setText("未配置")
+            self.lbl_key_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+
+    def _on_key_save(self) -> None:
+        """保存 API Key 到 tools/.qwen_key（gitignore），不碰 settings.yaml。"""
+        key = self._key_edit.text().strip()
+        if not key:
+            QMessageBox.warning(self, "API Key", "请输入 Key（sk-...）")
+            return
+        from pathlib import Path
+        key_path = Path(__file__).resolve().parents[3] / "tools" / ".qwen_key"
+        try:
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            key_path.write_text(key + "\n", encoding="utf-8")
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"写入 {key_path} 失败: {e}")
+            return
+        self._key_edit.clear()
+        self._refresh_key_status()
+        print(f"[Settings] Qwen API Key 已保存（{key_path}）")
 
     # ---------- 🎮 LoL 开关 ----------
 
@@ -843,9 +1052,10 @@ class SettingsPanel(QWidget):
         reset_ui_prefs()
         reset_music_dirs()
         save_settings_yaml({"tts": {
-            "edge_voice": "zh-CN-XiaoxiaoNeural",
-            "rate": "+0%",
-            "volume": "+0%",
+            "engine": "qwen",
+            "qwen_voice": _QWEN_DEFAULT_VOICE,
+            "qwen_rate": 1.0,
+            "qwen_volume": 50,
         }})
         # 刷新面板 UI
         self._dirs = load_music_dirs()
@@ -862,9 +1072,9 @@ class SettingsPanel(QWidget):
             self._on_refresh_changed(int(prefs.get("ui_refresh_interval", 500)))
         if self._tts is not None:
             try:
-                self._tts.set_voice("zh-CN-XiaoxiaoNeural")
-                self._tts.set_rate("+0%")
-                self._tts.set_volume("+0%")
+                self._tts.set_voice(_QWEN_DEFAULT_VOICE)
+                self._tts.set_rate(1.0)
+                self._tts.set_volume(50)
             except Exception as e:
                 print(f"[Settings] TTS 重置应用失败: {e}")
 
