@@ -155,3 +155,6 @@ _trash/
 
 # 运行时界面偏好（每台电脑不同，不跟踪）
 config/ui_prefs.json
+
+# 排查产物文档（留档参考，不进版本控制）
+docs/debug/
