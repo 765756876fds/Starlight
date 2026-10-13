@@ -153,19 +153,24 @@ class OngoingIntelligenceService:
                         mastery_status=status,
                         mastery_top3=top3,
                     )
-                    entry.recent_status = "AVAILABLE"
-                    entry.recent_raw_games = intel_result.raw_games
-                    entry.recent_games = intel_result.games
-                    entry.recent_win_rate = intel_result.win_rate
-                    entry.recent_average_kda = intel_result.average_kda
-                    entry.habitual_positions = intel_result.habitual_positions
-                    entry.champion_stats = intel_result.champion_stats
-                    entry.streak = intel_result.streak
-                    entry.utility_ratio = intel_result.utility_ratio
-                    entry.games_10 = intel_result.games_10
-                    entry.win_rate_10 = intel_result.win_rate_10
-                    entry.average_kda_10 = intel_result.average_kda_10
-                    entry.streak_10 = intel_result.streak_10
+                    # 有效比赛数 ≥1 才标 AVAILABLE；0 有效场（训练营/自定义全被 PVE
+                    # 过滤）→ EMPTY：不评称号，避免 0 数据进 compute_title 落空
+                    if intel_result.games >= 1:
+                        entry.recent_status = "AVAILABLE"
+                        entry.recent_raw_games = intel_result.raw_games
+                        entry.recent_games = intel_result.games
+                        entry.recent_win_rate = intel_result.win_rate
+                        entry.recent_average_kda = intel_result.average_kda
+                        entry.habitual_positions = intel_result.habitual_positions
+                        entry.champion_stats = intel_result.champion_stats
+                        entry.streak = intel_result.streak
+                        entry.utility_ratio = intel_result.utility_ratio
+                        entry.games_10 = intel_result.games_10
+                        entry.win_rate_10 = intel_result.win_rate_10
+                        entry.average_kda_10 = intel_result.average_kda_10
+                        entry.streak_10 = intel_result.streak_10
+                    else:
+                        entry.recent_status = "EMPTY"
                 else:
                     entry.recent_status = "EMPTY"
             except Exception as e:

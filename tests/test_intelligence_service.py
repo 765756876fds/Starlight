@@ -38,8 +38,10 @@ def test_throttle_active_then_expires():
 
 
 def test_success_caches_and_clears_throttle():
-    """SGP 成功 → 写缓存 + 清失败时间戳。"""
-    svc = _make_service(intelligence_service=MagicMock())
+    """SGP 成功（有效场 ≥1）→ 写缓存 + 清失败时间戳。"""
+    intel = MagicMock()
+    intel.analyze.return_value.games = 5  # 有效场 ≥1 → AVAILABLE
+    svc = _make_service(intelligence_service=intel)
     # 先失败一次（制造 _last_fail 残留）
     with patch.object(svc, "_ensure_sgp", return_value=None):
         svc.get_player_intelligence("puuid-3")
@@ -57,3 +59,20 @@ def test_success_caches_and_clears_throttle():
     assert entry.recent_status == "AVAILABLE"
     assert svc.get_cached("puuid-3") is not None  # 成功写缓存
     assert svc.should_throttle("puuid-3") is False  # 失败时间戳已清
+
+
+def test_zero_valid_games_not_available():
+    """训练营/自定义：records 非空但有效场 0（全被 PVE 过滤）
+    → recent_status=EMPTY 且不写缓存（不评称号，避免 0 数据落空）。"""
+    intel = MagicMock()
+    intel.analyze.return_value.games = 0
+    svc = _make_service(intelligence_service=intel)
+    prov = MagicMock()
+    res = MagicMock()
+    res.state = "AVAILABLE"
+    res.records = [MagicMock()]  # 原始记录非空（全是 PVE/训练营）
+    prov.recent.return_value = res
+    svc._sgp = prov
+    entry = svc.get_player_intelligence("puuid-4")
+    assert entry.recent_status == "EMPTY"
+    assert svc.get_cached("puuid-4") is None  # EMPTY 不写缓存 → 可重试

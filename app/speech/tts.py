@@ -398,10 +398,23 @@ class TTSController:
                 print(f"[TTS] Qwen 响应无音频 URL: {data.get('code', resp.text[:200])}")
                 return None
 
-            audio_resp = requests.get(audio["url"], timeout=30)
-            audio_resp.raise_for_status()
+            # 下载音频：OSS 国内域名偶尔 DNS 抖动/瞬时失败，重试 2 次（间隔 1s）；
+            # 3 次全失败返回 None → 外层回退 Edge TTS（保持）
+            audio_bytes = None
+            for attempt in range(1, 4):
+                try:
+                    audio_resp = requests.get(audio["url"], timeout=30)
+                    audio_resp.raise_for_status()
+                    audio_bytes = audio_resp.content
+                    break
+                except Exception as e:
+                    print(f"[TTS] Qwen 音频下载失败（第 {attempt} 次）: {e}")
+                    if attempt < 3:
+                        time.sleep(1)
+            if audio_bytes is None:
+                return None
             with open(output_file, "wb") as f:
-                f.write(audio_resp.content)
+                f.write(audio_bytes)
 
             if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
                 return output_file
