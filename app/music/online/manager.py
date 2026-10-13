@@ -138,9 +138,20 @@ class OnlineSourceManager:
             except Exception as e:
                 self._errors[track.source_name] = str(e)
                 return None
-        # 定向 miss：track.source_name 可能是桥接源的内部音源名（如 js_bridge
-        # 返回的"酷我音乐"），而非注册名。遍历已注册源取第一个可播放 URL
-        # （旧行为语义，仅在此 miss 时触发，不拖累定向命中路径）。
+        # 定向 miss：track.source_name 可能是 js_bridge 的内部插件名（如"酷狗音乐"），
+        # 而非注册名。优先调 accepts 命中的源（js_bridge 天然按插件名路由），
+        # 避免遍历 http 源对陌生 track 发无谓 HTTP 请求（旧行为每个源超时 8s）。
+        for s in self._sources.values():
+            try:
+                acc = getattr(s, "accepts", None)
+                if acc is None or not acc(track):
+                    continue
+                r = self._normalize_play_result(s.get_play_url(track))
+                if r:
+                    return r
+            except Exception:
+                continue
+        # 仍 miss（未知 track / accepts 源也失败）：回退旧行为全遍历
         for s in self._sources.values():
             try:
                 r = self._normalize_play_result(s.get_play_url(track))

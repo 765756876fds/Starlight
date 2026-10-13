@@ -467,7 +467,8 @@ class MusicController:
                         # 否则仅酷我系源带 Referer，其他源重置为纯 UA。
                         hdr = _pick_play_headers(play_result.get("headers"))
                         need_kw_header = ("kw" in chosen.source_name.lower()
-                                          or "酷我" in chosen.source_name)
+                                          or "酷我" in chosen.source_name
+                                          or "kuwo" in (play_url or "").lower())   # URL 是酷我 CDN → 带酷我 Referer
                         try:
                             # 双保险：先清空 http-header-fields，再按分支设置——
                             # 无论 mpv 对 list 属性是"覆盖"还是"追加"，旧 headers 都不会残留。

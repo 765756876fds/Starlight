@@ -131,6 +131,27 @@ def test_search_plugin_targets_single_source(monkeypatch):
     assert out and out[0].source_name == "开心汽水" and out[0].title == "晴天"
 
 
+def test_accepts_plugin_name_true():
+    """accepts：内部插件名（"酷狗音乐"）命中；注册名（"js_bridge"）命中；未知返回 False。"""
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._plugins = [
+        {"name": "酷狗音乐", "type": "musicfree", "status": "ok"},
+        {"name": "酷我音乐", "type": "musicfree", "status": "ok"},
+        {"name": "lx (2)", "type": "lx", "status": "fail"},
+    ]
+    assert s.accepts(OnlineTrack(source_name="酷狗音乐", track_id="1", title="x")) is True
+    assert s.accepts(OnlineTrack(source_name="lx (2)", track_id="1", title="x")) is True   # 含加载失败项（name 有值）
+    assert s.accepts(OnlineTrack(source_name="js_bridge", track_id="1", title="x")) is True
+    assert s.accepts(OnlineTrack(source_name="某外部源", track_id="1", title="x")) is False
+
+
+def test_accepts_broken_plugins_falls_back_true():
+    """_plugins 元素异常时放行（bridge 仍能按名路由）。"""
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._plugins = ["不是dict"]
+    assert s.accepts(OnlineTrack(source_name="酷狗音乐", track_id="1", title="x")) is True
+
+
 def test_reload_wakes_pending_and_restarts(monkeypatch):
     """reload：清空 pending（主动唤醒等待方）+ 终止旧进程 + 重启等 _ready。"""
     s = JSMusicSource.__new__(JSMusicSource)

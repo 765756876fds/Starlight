@@ -257,6 +257,39 @@ def test_get_play_url_falls_back_when_source_name_is_bridge_name():
     assert m2._errors == {}
 
 
+def test_get_play_url_accepts_preferred_on_miss():
+    """定向 miss 时 accepts 命中的源优先（js_bridge 按插件名路由），
+    不再先遍历其他源（避免对陌生 track 发无谓请求）。"""
+    calls = []
+
+    class AcceptingBridge(MusicSource):
+        name = "js_bridge"
+        def search(self, keyword, limit=20): return []
+        def get_play_url(self, track):
+            calls.append(("bridge", track.source_name))
+            return "https://bridge.example.com/a.mp3"
+        def get_lyric(self, track): return None
+        def accepts(self, track):
+            return track.source_name == "酷狗音乐"
+
+    class Other(MusicSource):
+        name = "other"
+        def search(self, keyword, limit=20): return []
+        def get_play_url(self, track):
+            calls.append(("other", track.source_name))
+            return None
+        def get_lyric(self, track): return None
+
+    m = OnlineSourceManager()
+    m.register(Other())            # 先注册（旧全遍历会先碰它）
+    m.register(AcceptingBridge())
+    t = OnlineTrack(source_name="酷狗音乐", track_id="1", title="晴天")
+    assert m.get_play_url(t) == {"url": "https://bridge.example.com/a.mp3", "headers": None}
+    # other 不应被调用（accepts 命中轮直接到 bridge）
+    assert calls == [("bridge", "酷狗音乐")]
+    m.close()
+
+
 def test_slow_source_timeout_does_not_hold_others():
     """慢源超时兜底：单个慢源被整体超时切断，不影响其他源结果。"""
     import time

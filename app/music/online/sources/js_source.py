@@ -165,6 +165,20 @@ class JSMusicSource(MusicSource):
         供设置页「内置插件」UI 展示。"""
         return [dict(p) for p in self._plugins]
 
+    def accepts(self, track) -> bool:
+        """track.source_name 是否本源内部插件名（"酷狗音乐"等）或注册名。
+        manager 定向 miss 时优先命中本源，避免遍历 http 源发无谓请求。
+        _plugins 由 _ready 消息填充（bridge 启动即填）；空/未知时放行，
+        让 bridge 自行按插件名路由（正常路径总能匹配）。"""
+        if not track or not track.source_name:
+            return False
+        if track.source_name == self.name:      # "js_bridge" 自身
+            return True
+        try:
+            return any(p.get("name") == track.source_name for p in self._plugins)
+        except Exception:
+            return True   # _plugins 元素异常时放行（bridge 仍能按名路由）
+
     def search_plugin(self, source: str, keyword: str, limit: int = 20) -> List[OnlineTrack]:
         """只搜指定插件（测试按钮用，不经 manager 遍历回退）。"""
         if not keyword or not source:
