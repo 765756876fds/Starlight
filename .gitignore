@@ -92,6 +92,12 @@ data/asr_test/
 *.secret
 secrets.yaml
 
+# Qwen TTS API key (local only, never commit)
+tools/.qwen_key
+
+# Qwen TTS audition outputs
+data/tts_qwen_test/
+
 # JS music sources (user files)
 data/music_sources/
 

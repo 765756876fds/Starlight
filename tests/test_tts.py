@@ -5,10 +5,22 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.speech.tts import TTSController, TTSState
+
+
+class FakeCommunicate:
+    """离线 fake：替代 edge_tts.Communicate（写一个 >1000 字节的假音频）"""
+
+    def __init__(self, **kwargs):
+        pass
+
+    async def save(self, path: str):
+        with open(path, "wb") as f:
+            f.write(b"\x00" * 2048)
 
 
 class TestTTSController(unittest.TestCase):
@@ -25,6 +37,9 @@ class TestTTSController(unittest.TestCase):
             "mpv_path": r"D:\新建文件夹 (2)\mpv.exe",
             "enabled": True,
         }
+        # 离线化：mock Edge TTS（避免真实网络 403 依赖）
+        self._edge_patcher = mock.patch("edge_tts.Communicate", FakeCommunicate)
+        self._edge_patcher.start()
         self.tts = TTSController(self.config)
         self.tts.start()
 
@@ -32,6 +47,7 @@ class TestTTSController(unittest.TestCase):
         """每个测试后清理"""
         self.tts.stop()
         time.sleep(0.5)
+        self._edge_patcher.stop()
 
     def test_1_initial_state(self):
         """测试初始状态"""
@@ -104,6 +120,58 @@ class TestTTSController(unittest.TestCase):
             time.sleep(0.2)
 
         self.assertEqual(self.tts.get_state(), TTSState.IDLE)
+
+    def _qwen_config(self, **overrides):
+        cfg = {
+            "engine": "qwen",
+            "output_dir": "./data/tts_test",
+            "qwen_api_key": "sk-test",
+            "qwen_base_url": "https://dashscope.aliyuncs.com/api/v1",
+            "qwen_model": "qwen-audio-3.1-tts-flash",
+            "qwen_voice": "longanlingxin_v3.1",
+        }
+        cfg.update(overrides)
+        return cfg
+
+    def test_qwen_generate_success(self):
+        """Qwen 引擎：合成成功返回 wav 文件"""
+        tts = TTSController(self._qwen_config())
+        with mock.patch("requests.post") as m_post, mock.patch("requests.get") as m_get:
+            m_post.return_value.status_code = 200
+            m_post.return_value.json.return_value = {
+                "output": {"audio": {"url": "http://fake-oss/x.wav"}}
+            }
+            m_get.return_value.raise_for_status.return_value = None
+            m_get.return_value.content = b"\x00" * 4096
+            out = tts._generate_audio("测试")
+        self.assertIsNotNone(out)
+        self.assertTrue(out.endswith(".wav"))
+        self.assertTrue(os.path.exists(out))
+        self.assertGreater(os.path.getsize(out), 1000)
+        if out and os.path.exists(out):
+            os.remove(out)
+
+    def test_qwen_fail_fallback_edge(self):
+        """Qwen 失败 → 回退 Edge 引擎（保底）"""
+        tts = TTSController(self._qwen_config())
+        with mock.patch("requests.post", side_effect=RuntimeError("boom")):
+            out = tts._generate_audio("测试")
+        # Qwen 失败 → 回退 edge（FakeCommunicate 成功写假 mp3）
+        self.assertIsNotNone(out)
+        self.assertTrue(out.endswith(".mp3"))
+        if out and os.path.exists(out):
+            os.remove(out)
+
+    def test_qwen_missing_key(self):
+        """Qwen 无 Key → 不发起 Qwen 请求（自动回退 Edge）"""
+        with mock.patch.object(TTSController, "_resolve_qwen_key", return_value=""):
+            tts = TTSController(self._qwen_config(qwen_api_key=""))
+            with mock.patch("requests.post") as m_post:
+                out = tts._generate_audio("测试")
+        m_post.assert_not_called()              # Qwen 请求从未发出
+        self.assertTrue(out.endswith(".mp3"))   # 回退 Edge（FakeCommunicate）成功
+        if out and os.path.exists(out):
+            os.remove(out)
 
 
 if __name__ == "__main__":

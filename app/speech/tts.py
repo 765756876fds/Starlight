@@ -67,6 +67,12 @@ class TTSController:
         self.enabled = config.get("enabled", True)
         self.mpv_path = config.get("mpv_path", r"D:\新建文件夹 (2)\mpv.exe")
 
+        # Qwen（阿里云百炼）引擎配置
+        self.qwen_api_key = self._resolve_qwen_key(config)
+        self.qwen_base_url = config.get("qwen_base_url", "https://dashscope.aliyuncs.com/api/v1")
+        self.qwen_model = config.get("qwen_model", "qwen-audio-3.1-tts-flash")
+        self.qwen_voice = config.get("qwen_voice", "longanlingxin_v3.1")
+
         os.makedirs(self.output_dir, exist_ok=True)
 
         self.event_bus = get_event_bus()
@@ -266,9 +272,34 @@ class TTSController:
                 self._finished_published = True
                 self._publish_event(EventType.SPEECH_FINISHED, {"reason": "completed"})
 
+    def _resolve_qwen_key(self, config: Dict[str, Any]) -> str:
+        """Qwen API Key：环境变量 QWEN_API_KEY > settings 值 > tools/.qwen_key（已 gitignore）"""
+        env_key = os.environ.get("QWEN_API_KEY", "")
+        if env_key:
+            return env_key
+        cfg_key = config.get("qwen_api_key", "")
+        if cfg_key:
+            return cfg_key
+        key_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "tools", ".qwen_key",
+        )
+        if os.path.exists(key_file):
+            try:
+                with open(key_file, encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return ""
+
     def _generate_audio(self, text: str) -> Optional[str]:
         """生成音频文件（同步，在后台线程执行）"""
-        if self.engine != "edge":
+        if self.engine == "qwen":
+            output_file = self._generate_qwen_audio(text)
+            if output_file:
+                return output_file
+            print("[TTS] Qwen 生成失败，回退 Edge TTS")
+        elif self.engine != "edge":
             print(f"[TTS] 不支持的引擎: {self.engine}")
             return None
 
@@ -325,6 +356,64 @@ class TTSController:
 
         except Exception as e:
             print(f"[TTS] Edge TTS 生成失败: {e}")
+            return None
+
+    def _generate_qwen_audio(self, text: str) -> Optional[str]:
+        """阿里云百炼 Qwen TTS 合成（同步，在后台线程执行）"""
+        if not self.qwen_api_key:
+            print("[TTS] Qwen API Key 未配置（settings.yaml / tools/.qwen_key / QWEN_API_KEY）")
+            return None
+
+        filename = f"tts_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}.wav"
+        output_file = os.path.join(self.output_dir, filename)
+
+        try:
+            import requests
+
+            url = self.qwen_base_url.rstrip("/") + "/services/audio/tts/SpeechSynthesizer"
+            body = {
+                "model": self.qwen_model,
+                "input": {
+                    "text": text,
+                    "voice": self.qwen_voice,
+                    "format": "wav",
+                    "sample_rate": 24000,
+                },
+            }
+            resp = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self.qwen_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                print(f"[TTS] Qwen 合成失败: HTTP {resp.status_code} {resp.text[:200]}")
+                return None
+            data = resp.json()
+            audio = data.get("output", {}).get("audio", {})
+            if not audio.get("url"):
+                print(f"[TTS] Qwen 响应无音频 URL: {data.get('code', resp.text[:200])}")
+                return None
+
+            audio_resp = requests.get(audio["url"], timeout=30)
+            audio_resp.raise_for_status()
+            with open(output_file, "wb") as f:
+                f.write(audio_resp.content)
+
+            if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
+                return output_file
+            print("[TTS] Qwen 生成的音频文件无效")
+            return None
+        except Exception as e:
+            print(f"[TTS] Qwen TTS 生成失败: {e}")
+            try:
+                if os.path.exists(output_file):
+                    os.remove(output_file)
+            except Exception:
+                pass
             return None
 
     def _play_audio(self, filepath: str) -> bool:
