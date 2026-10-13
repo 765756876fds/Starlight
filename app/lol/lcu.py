@@ -13,7 +13,6 @@ LCU (League Client Update) 客户端连接
 """
 import json
 import os
-import re
 import ssl
 import threading
 import time

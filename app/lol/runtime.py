@@ -8,8 +8,6 @@ LoL 运行时 - 整合 2999 数据读取、快照、状态差异、GameAlarm
 - 管理 GameAlarm
 - 通过 EventBus 发布所有游戏事件
 """
-import threading
-import time
 from typing import Any, Dict, Optional
 
 from ..core.event_bus import EventBus, Event, EventType, get_event_bus

@@ -272,16 +272,6 @@ class OverlayWindow(QWidget):
                 y = screen.height() - h - 10
         self.setGeometry(x, y, w, h)
 
-    def set_scale(self, scale: float) -> None:
-        """设置缩放系数（保留内部方法，仅用于固定尺寸初始化；外部不再调用）。"""
-        scale = float(scale)
-        if scale <= 0 or scale > 3:
-            scale = 1.0
-        if abs(scale - self._scale) < 1e-6:
-            return
-        self._scale = scale
-        self._place_default()
-
     # ---- 拖动：按下空白/头像区域拖动窗口；技能图标点击仍由子控件消费 ----
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

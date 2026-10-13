@@ -16,7 +16,7 @@ from .match_model import (
     MatchRecord, MatchHistoryResult,
     AVAILABLE, NO_DATA, ERROR,
 )
-from .sgp_provider import SgpMatchHistoryProvider, tencent_sgp_base_from_platform
+from .sgp_provider import SgpMatchHistoryProvider
 
 # 最小 queueId -> 模式标签
 _QUEUE_LABELS = {

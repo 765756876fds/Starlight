@@ -125,7 +125,8 @@ def test_scale_change_rebuild_once(win):
     w._refresh()
     old_ids = _cards_ids(w)
 
-    w.set_scale(1.2)      # 只改几何；重建由下一帧 _refresh 的结构指纹触发
+    w._scale = 1.2        # set_scale 已删；直接改内部状态（等价于原方法后半段）
+    w._place_default()
     w._refresh()
     new_ids = _cards_ids(w)
     assert new_ids != old_ids  # 重建一次（新尺寸）

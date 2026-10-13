@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Optional, List
-import json
 
 from .match_model import MatchRecord, MatchHistoryResult, AVAILABLE, NO_DATA, ERROR
 from .sgp_server import SgpServerResolver
