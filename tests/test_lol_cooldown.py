@@ -45,6 +45,7 @@ def make_mgr(events=None, remind_before=5.0):
         remind_before=remind_before,
         scheduler=sched,
     )
+    mgr.set_game_time(0.0)  # 同步游戏时钟：未同步时 start_reminder 返回 None
     return mgr, sched, events
 
 
@@ -57,8 +58,9 @@ class TestSummonerSpellCatalog:
 
     def test_teleport(self):
         c = SummonerSpellCatalog()
-        assert c.get_by_name("Teleport").cooldown == 360.0
-        assert c.get_by_name("传送").cooldown == 360.0
+        # 数据更新后：传送 CD 300s
+        assert c.get_by_name("Teleport").cooldown == 300.0
+        assert c.get_by_name("传送").cooldown == 300.0
 
     def test_get_by_id(self):
         c = SummonerSpellCatalog()
@@ -118,7 +120,7 @@ class TestCooldownManager:
         ev = []
         mgr, sched, ev = make_mgr(events=ev)
         r = mgr.start_reminder("亚索", "闪现")
-        sched.trigger(f"cd-ready-{r.id}")
+        mgr.set_game_time(r.ready_at)  # 新架构：推进时钟到 ready 点
         assert COOLDOWN_READY in [c for c, _ in ev]
         assert mgr.get(r.id) is None
 

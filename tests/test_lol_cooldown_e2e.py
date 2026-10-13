@@ -37,7 +37,7 @@ class FakeScheduler:
 
 def make_mgr(events, speeches, sched=None):
     sched = sched or FakeScheduler()
-    return CooldownManager(
+    mgr = CooldownManager(
         champions=ChampionCatalog(),
         abilities=AbilityCatalog(),
         spells=SummonerSpellCatalog(),
@@ -45,7 +45,9 @@ def make_mgr(events, speeches, sched=None):
         speech_enqueue=lambda text, eid: speeches.append((text, eid)),
         remind_before=5.0,
         scheduler=sched,
-    ), sched
+    )
+    mgr.set_game_time(0.0)  # 同步游戏时钟：未同步时 start_reminder 返回 None
+    return mgr, sched
 
 
 def test_real_catalog_loaded():
@@ -72,19 +74,16 @@ def test_full_chain_enemy_flash():
     assert reminder.base_cooldown == 300.0
     assert reminder.side == "enemy"
 
-    # 触发 remind 任务（cd-remind-<id>）
-    remind_tid = f"cd-remind-{reminder.id}"
-    assert remind_tid in sched.tasks
-    sched.trigger(remind_tid)
+    # 触发 remind：推进游戏时钟到提醒点（新架构：无 cd-remind 任务，set_game_time 驱动）
+    mgr.set_game_time(reminder.remind_at)
     assert any(c == COOLDOWN_REMIND for c, _ in events)
     assert speeches, "SpeechQueue should receive text"
     text, eid = speeches[-1]
     assert "敌方亚索闪现" in text
-    assert "即将转好" in text
+    assert "应该快好了" in text  # _remind_text：召唤师技能 remind_before>=20 → "应该快好了"
 
     # ready
-    ready_tid = f"cd-ready-{reminder.id}"
-    sched.trigger(ready_tid)
+    mgr.set_game_time(reminder.ready_at)
     assert any(c == COOLDOWN_READY for c, _ in events)
 
 

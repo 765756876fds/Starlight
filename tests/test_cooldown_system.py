@@ -61,9 +61,11 @@ class FakeScheduler:
 # ---------------- 数据层 ----------------
 
 def _manager():
-    return CooldownManager(on_event=lambda c, d: None,
-                           speech_enqueue=lambda t, e: None,
-                           scheduler=FakeScheduler())
+    m = CooldownManager(on_event=lambda c, d: None,
+                        speech_enqueue=lambda t, e: None,
+                        scheduler=FakeScheduler())
+    m.set_game_time(0.0)  # 同步游戏时钟：未同步时 start_reminder 会返回 None
+    return m
 
 
 def test_data_champion_slots_exist():
@@ -160,6 +162,7 @@ def test_tracker_start_and_remind():
     m = CooldownManager(on_event=lambda c, d: None,
                         speech_enqueue=lambda t, e: spoken.append(t),
                         scheduler=sched)
+    m.set_game_time(0.0)  # 同步游戏时钟
     champ = m._champions.all()[0].name_zh
     r = m.start_reminder(champ, "W", side="enemy")
     assert r is not None
@@ -167,8 +170,8 @@ def test_tracker_start_and_remind():
     # R 大招提醒阈值 15
     rr = m.start_reminder(champ, "R", side="enemy")
     assert rr.remind_before == 15.0
-    # 触发 remind 调度 → 应播报（走 speech_enqueue，不是直接 TTS）
-    sched.fire("cd-remind-")
+    # 触发 remind：推进游戏时钟到提醒点（新架构：无现实定时器，set_game_time 驱动）
+    m.set_game_time(max(r.remind_at, rr.remind_at))
     assert spoken, "应通过 speech_enqueue 播报"
 
 

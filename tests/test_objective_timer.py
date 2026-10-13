@@ -60,10 +60,11 @@ def _game_end(bus):
     ))
 
 
-def _dragon_kill(bus, game_time, dragon_type=""):
+def _dragon_kill(bus, game_time, dragon_type="", killer_team=""):
     bus.publish(Event(
         event_type=EventType.DRAGON_KILLED,
-        data={"game_time": game_time, "dragon_type": dragon_type},
+        data={"game_time": game_time, "dragon_type": dragon_type,
+              "killer_team": killer_team},
         source="test"
     ))
 
@@ -80,8 +81,9 @@ class TestFixedResources:
     """固定资源首次刷新"""
 
     def test_void_grubs_first_reminder(self, timer, alarm, bus):
-        """7:00 提醒巢虫"""
+        """7:00 提醒巢虫（8:00 刷新、提前 60s）"""
         _game_start(bus)
+        _time_update(bus, 60)   # 先排程（60 < 所有提醒点；直接跳提醒点会被 _schedule_for 跳过）
         _time_update(bus, 420)  # 7:00
         active = alarm.get_active_alarms()
         # 巢虫 alarm 应已触发
@@ -91,8 +93,9 @@ class TestFixedResources:
         assert triggered[0].status == AlarmStatus.TRIGGERED
 
     def test_herald_first_reminder(self, timer, alarm, bus):
-        """14:00 提醒先锋"""
+        """14:00 提醒先锋（15:00 刷新、提前 60s）"""
         _game_start(bus)
+        _time_update(bus, 60)   # 先排程
         _time_update(bus, 840)  # 14:00
         herald_alarms = [a for a in alarm.alarms.values()
                          if a.data.get("objective") == "herald"]
@@ -100,8 +103,9 @@ class TestFixedResources:
         assert herald_alarms[0].status == AlarmStatus.TRIGGERED
 
     def test_dragon_first_reminder(self, timer, alarm, bus):
-        """4:20 提醒小龙"""
+        """4:20 提醒小龙（5:00 刷新、提前 40s）"""
         _game_start(bus)
+        _time_update(bus, 60)   # 先排程
         _time_update(bus, 260)  # 4:20
         dragon_alarms = [a for a in alarm.alarms.values()
                          if a.data.get("objective") == "dragon"]
@@ -109,8 +113,9 @@ class TestFixedResources:
         assert dragon_alarms[0].status == AlarmStatus.TRIGGERED
 
     def test_baron_first_reminder(self, timer, alarm, bus):
-        """19:20 提醒大龙"""
+        """19:20 提醒大龙（20:00 刷新、提前 40s）"""
         _game_start(bus)
+        _time_update(bus, 60)    # 先排程
         _time_update(bus, 1160)  # 19:20
         baron_alarms = [a for a in alarm.alarms.values()
                         if a.data.get("objective") == "baron"]
@@ -177,7 +182,7 @@ class TestElder:
         """4条龙后 -> +6min 首次 Elder"""
         _game_start(bus)
         for i in range(4):
-            _dragon_kill(bus, 600 + i * 100)  # 4条龙
+            _dragon_kill(bus, 600 + i * 100, killer_team="Blue")  # 同队 4 条触发 Soul
         elder = [a for a in alarm.alarms.values()
                  if a.data.get("objective") == "elder"]
         assert len(elder) >= 1
@@ -281,13 +286,25 @@ class TestGetNextTimers:
         ot = ObjectiveTimer(FakeAlarm())
         assert ot.get_next_timers() == []
 
-    def test_after_game_start(self):
+    def test_none_event_guard(self):
+        """防御：_on_game_start(None) 不抛异常、不排程（生产 EventBus 恒传 Event）"""
         from app.lol.objective_timer import ObjectiveTimer
         class FakeAlarm:
             _current_game_time = 0
             def schedule_objective_reminder(self, *a, **kw): pass
         ot = ObjectiveTimer(FakeAlarm())
         ot._on_game_start(None)
+        assert ot.get_next_timers() == []
+
+    def test_after_game_start(self):
+        from app.lol.objective_timer import ObjectiveTimer
+        from app.core.event_bus import Event, EventType
+        class FakeAlarm:
+            _current_game_time = 0
+            def schedule_objective_reminder(self, *a, **kw): pass
+        ot = ObjectiveTimer(FakeAlarm())
+        ot._on_game_start(Event(
+            event_type=EventType.GAME_STARTED, data={"game_time": 30.0}))
         names = [t["name"] for t in ot.get_next_timers()]
         assert "小龙" in names
         assert "大龙" in names
@@ -295,11 +312,13 @@ class TestGetNextTimers:
 
     def test_dragon_respawn_remaining(self):
         from app.lol.objective_timer import ObjectiveTimer
+        from app.core.event_bus import Event, EventType
         class FakeAlarm:
             _current_game_time = 0
             def schedule_objective_reminder(self, *a, **kw): pass
         ot = ObjectiveTimer(FakeAlarm())
-        ot._on_game_start(None)
+        ot._on_game_start(Event(
+            event_type=EventType.GAME_STARTED, data={"game_time": 30.0}))
         class E:
             data = {"dragon_type": "normal"}
             def get(self, k, d=None): return 200
