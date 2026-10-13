@@ -79,12 +79,17 @@ class TestRuntimeGameEndGuard:
         runtime._handle_game_end_detection.assert_not_called()
 
     def test_game_time_stagnant_still_triggers(self):
-        """真结束场景 game_time=100 连续 11 帧不变：仍触发游戏结束检测（防改过头）"""
+        """真结束场景：phase 已离开 + 曾递增 + game_time 连续 11 帧不变 → 仍触发（防改过头）"""
         runtime = self._create_runtime()
         runtime._game_active = True
+        runtime._last_known_phase = "EndOfGame"  # phase 离开集合（修 1 放行前提）
         runtime.live_api.is_available.return_value = True
+        # 先跑 1 轮递增：game_time 100 → 101，置 ever_progressed=True（修 2 门槛）
         runtime.live_api.get_all_game_data.return_value = _make_all_data(100.0)
-
+        runtime._poll_game_data()
+        runtime.live_api.get_all_game_data.return_value = _make_all_data(101.0)
+        runtime._poll_game_data()
+        # 再 11 帧停滞（game_time=101 不变）
         for _ in range(11):
             runtime._poll_game_data()
 

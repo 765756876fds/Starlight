@@ -94,6 +94,10 @@ class LoLRuntime:
         self._game_time_stagnant_count: int = 0
         self._game_time_stagnant_fired: bool = False  # 停滞打印只打一次（防刷屏），game_time 恢复后复位
         self._max_stagnant_count: int = 10  # 连续 10 次轮询（约 10 秒）game_time 无变化则判定游戏结束
+        # 是否见过 game_time 递增（游戏真正开始计时过）；仅"非集合→集合"边沿复位
+        self._game_time_ever_progressed: bool = False
+        # 真结束等待新局标志：置位后禁止 _game_active 翻转，防误判循环
+        self._game_ended_waiting_new_game: bool = False
 
     def start(self):
         """启动 LoL 运行时"""
@@ -146,17 +150,18 @@ class LoLRuntime:
             if self._game_active:
                 # 游戏可能结束，进入 grace window 确认阶段；
                 # 但仅当 LCU phase 明确离开游戏时才判结束——
-                # 加载界面/对局中 2999 暂时不可用是正常的，不算结束。
-                if getattr(self, "_last_known_phase", None) not in _IN_GAME_PHASES:
+                # 加载界面/对局中 2999 暂时不可用是正常的，不算结束；
+                # phase 为 None（LCU 从未连上）也视为"仍在游戏"，不放行。
+                _phase = getattr(self, "_last_known_phase", None)
+                if _phase is not None and _phase not in _IN_GAME_PHASES:
                     self._handle_game_end_detection()
             return
 
         # 游戏正在运行
-        if not self._game_active:
-            # 新游戏开始，清除 GameEnd 缓存和标记
+        if not self._game_active and not self._game_ended_waiting_new_game:
+            # 新游戏开始（waiting 为 True 时不允许翻转，等待 phase 回集合触发边沿重置）
+            # published/retry_count 的重置已移交 _poll_lcu 的"非集合→集合"边沿
             self._cached_game_end_result = None
-            self._game_end_published = False
-            self._game_end_retry_count = 0
             self._game_active = True
             self.state_store.set(StateNamespace.GAME, "is_active", True)
 
@@ -177,19 +182,29 @@ class LoLRuntime:
                 self._game_time_stagnant_count = 0
                 self._game_time_stagnant_fired = False
                 self._last_game_time = current_gt
+                # ever_progressed 不清零：仅"非集合→集合"边沿复位（加载界面不清，防重连误判）
                 # 不进入停滞检测，继续正常流程
             else:
                 if current_gt == self._last_game_time:
                     self._game_time_stagnant_count += 1
                     if self._game_time_stagnant_count >= self._max_stagnant_count:
-                        # 打印只打一次（fired 标志防刷屏）；_handle_game_end_detection 每轮照常调用，
-                        # 保证 grace window 重试计数正常推进（真结束仍能按时发布 GAME_ENDED）
-                        if not self._game_time_stagnant_fired:
-                            self._game_time_stagnant_fired = True
-                            print(f"[Runtime] GAME_ENDED: game_time stagnant for {self._game_time_stagnant_count} polls")
-                        self._handle_game_end_detection()
-                        return
+                        # phase 守卫：None（LCU 从未连上）或仍在游戏阶段 → 不算结束，
+                        # 保留计数继续累积，不 return，走正常流程（等 phase 离开或 game_time 恢复）
+                        _phase = getattr(self, "_last_known_phase", None)
+                        if _phase is not None and _phase not in _IN_GAME_PHASES:
+                            # 修 2 门槛：必须见过 game_time 递增（游戏真正开始计时过）
+                            if self._game_time_ever_progressed:
+                                # 打印只打一次（fired 标志防刷屏）；_handle_game_end_detection 每轮照常调用，
+                                # 保证 grace window 重试计数正常推进（真结束仍能按时发布 GAME_ENDED）
+                                if not self._game_time_stagnant_fired:
+                                    self._game_time_stagnant_fired = True
+                                    print(f"[Runtime] GAME_ENDED: game_time stagnant for {self._game_time_stagnant_count} polls")
+                                self._handle_game_end_detection()
+                                return
                 else:
+                    if current_gt > self._last_game_time:
+                        # 见过递增：修 2 门槛通过（仅"非集合→集合"边沿复位）
+                        self._game_time_ever_progressed = True
                     self._game_time_stagnant_count = 0
                     self._game_time_stagnant_fired = False
                 self._last_game_time = current_gt
@@ -224,6 +239,7 @@ class LoLRuntime:
                     if self._game_end_published:
                         continue  # 已经发布过，跳过重复
                     self._game_end_published = True
+                    self._game_active = False  # A 方案：与 _handle_game_end_detection 对称
                     # 如果缓存中有 result，优先使用
                     if self._cached_game_end_result and not event.data.get('result'):
                         event.data['result'] = self._cached_game_end_result
@@ -290,6 +306,11 @@ class LoLRuntime:
 
         if not self.lcu.connected:
             # LCU 断开
+            # 已知盲区（记录不改）：对局中 LCU 断连 + 游戏结束 + 新局开始后才重连，
+            # 重连后 phase 可能直接从集合（GameStart/InProgress）开始，错过"非集合→集合"
+            # 边沿 → 上局 published 残留 → 下局结束可能漏发布一次 GAME_ENDED。
+            # 概率极低（四事件连续发生），影响仅是漏发布（非误发布、非循环），
+            # 修法（断连时置 waiting）有死锁风险（重连 phase 在集合时 waiting 永不复位），故不改。
             if self._lcu_was_connected:
                 self._lcu_was_connected = False
                 self._last_lcu_phase = None
@@ -331,8 +352,25 @@ class LoLRuntime:
             "PreEndOfGame", "EndOfGame", "Tournament"
         }
         normalized_phase = phase if phase in known_phases else "Unknown"
-        # 记录最近一次有效 phase（断连不清；供游戏结束守卫使用）
+        # 边沿检测：用本轮更新前的 _last_known_phase 判断状态转移（边沿动作，非持续动作）
+        prev = self._last_known_phase
         self._last_known_phase = normalized_phase
+
+        prev_in_game = prev is not None and prev in _IN_GAME_PHASES
+        cur_in_game = normalized_phase in _IN_GAME_PHASES
+
+        if not prev_in_game and cur_in_game:
+            # 非集合 → 集合：新局开始，重置全部（为下一局发布做准备）
+            self._game_ended_waiting_new_game = False
+            self._game_end_published = False
+            self._game_end_retry_count = 0
+            self._game_time_stagnant_count = 0
+            self._game_time_stagnant_fired = False
+            self._game_time_ever_progressed = False
+        elif prev_in_game and not cur_in_game:
+            # 集合 → 非集合：真结束，置 waiting（count/ever_progressed 保留，兜底场景仍可判）
+            self._game_ended_waiting_new_game = True
+        # 集合 → 集合 / 非集合 → 非集合：无动作（对局中每轮 InProgress 不重置任何字段）
 
         # 更新状态存储
         self.state_store.set(StateNamespace.LCU, "gameflow_phase", normalized_phase)
