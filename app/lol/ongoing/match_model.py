@@ -19,6 +19,12 @@ SGP_UNAVAILABLE = "SGP_UNAVAILABLE"
 ERROR = "ERROR"
 
 
+# 计入统计的队列白名单（唯一权威口径，intelligence 与 loader 共用）：
+#   400 匹配 / 430 匹配(盲选) / 460·490 匹配变体 / 420 单双排 / 440 灵活排位
+# 排除：470(双人排位) / 0(自定义) / 880(未知娱乐变体) / 全部 PVE·特殊模式
+_VALID_QUEUE_IDS = {400, 420, 430, 440, 460, 490}
+
+
 @dataclass
 class MatchRecord:
     game_id: int = 0

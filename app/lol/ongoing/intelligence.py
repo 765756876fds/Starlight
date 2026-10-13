@@ -13,22 +13,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 
-from .match_model import MatchRecord
+from .match_model import MatchRecord, _VALID_QUEUE_IDS
 from .champion_mastery import ChampionMasteryRecord
 
 
-# PVE / 无效队列过滤（复用 account_history.py 的 queue_id 定义）
-_PVE_QUEUE_IDS = {
-    0,       # 自定义
-    3140,    # 新手/训练
-    870,     # 人机
-    890,     # 极限闪击（特殊模式，可选过滤）
-    840, 830, 850, 800, 820,  # 人机
-    900, 1010, 1900,  # 无限火力（特殊模式）
-    450,     # 大乱斗（可选保留，本轮先过滤掉）
-    700, 720,  # 克隆/围场
-    1020, 1300,  # ONE for ALL / 纳什男爵
-}
+def _is_valid_match(m: MatchRecord) -> bool:
+    """判断是否为有效比赛（只算匹配/单双排/灵活排位，其余全排除）"""
+    # 必须有胜负结果
+    if m.win is None:
+        return False
+    # 必须有 KDA 数据
+    if m.kills is None or m.deaths is None or m.assists is None:
+        return False
+    # 白名单：非 {400,420,430,440,460,490} 一律排除（自定义/人机/大乱斗/娱乐/未知）
+    if m.queue_id not in _VALID_QUEUE_IDS:
+        return False
+    return True
 
 
 @dataclass
@@ -104,20 +104,6 @@ class PlayerIntelligenceResult:
     # 状态
     valid: bool = False
     message: str = ""
-
-
-def _is_valid_match(m: MatchRecord) -> bool:
-    """判断是否为有效比赛（非 PVE / 非特殊模式）"""
-    # 必须有胜负结果
-    if m.win is None:
-        return False
-    # 必须有 KDA 数据
-    if m.kills is None or m.deaths is None or m.assists is None:
-        return False
-    # 过滤 PVE / 特殊模式
-    if m.queue_id in _PVE_QUEUE_IDS:
-        return False
-    return True
 
 
 def _per_game_kda(m: MatchRecord) -> float:

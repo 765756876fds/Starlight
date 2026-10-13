@@ -7,11 +7,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional
 
 from .cache import SnapshotCache
-from .match_model import MatchHistoryResult, MatchRecord, NO_DATA
+from .match_model import MatchHistoryResult, MatchRecord, NO_DATA, _VALID_QUEUE_IDS
 from .models import PlayerSnapshot
-
-# 计入KDA/绝活统计的队列：匹配 + 排位（0=未知/自定义兼容，训练3140/娱乐模式不计入）
-_RANKED_QUEUES = {0, 400, 420, 430, 440, 460, 470, 490}
 
 
 class RateLimiter:
@@ -217,8 +214,8 @@ class OngoingGameLoader:
         # 3. 历史战绩：统一走 SGP AccountMatchHistoryService（SUMMARY, count=n）
         result = self._fetch_history(puuid)
         state = result.state
-        # 只统计匹配+排位对局（训练/自定义特殊模式不进入KDA/绝活统计）
-        records = [m for m in result.records if m.queue_id in _RANKED_QUEUES][: self._recent_n]
+        # 只统计匹配/单双排/灵活排位（白名单，与 intelligence 同口径；自定义/人机/娱乐/未知全排除）
+        records = [m for m in result.records if m.queue_id in _VALID_QUEUE_IDS][: self._recent_n]
         if not records and result.records:
             state = NO_DATA  # 有记录但全是训练/娱乐模式，不参与统计
 

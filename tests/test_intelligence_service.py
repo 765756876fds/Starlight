@@ -76,3 +76,28 @@ def test_zero_valid_games_not_available():
     entry = svc.get_player_intelligence("puuid-4")
     assert entry.recent_status == "EMPTY"
     assert svc.get_cached("puuid-4") is None  # EMPTY 不写缓存 → 可重试
+
+
+def test_is_valid_match_queue_whitelist():
+    """队列白名单：只算 匹配(400/430/460/490) + 单双排(420) + 灵活(440)。
+    470 双人排位 / 0 自定义 / 880 未知娱乐 / 人机 870 / 大乱斗 450 → 全排除。"""
+    from app.lol.ongoing.intelligence import _is_valid_match
+    from app.lol.ongoing.match_model import MatchRecord
+
+    def rec(qid):
+        return MatchRecord(game_id=1, game_creation=1, queue_id=qid,
+                           champion_name="Yasuo", win=True, kills=5, deaths=2, assists=8)
+
+    for qid in (400, 420, 430, 440, 460, 490):
+        assert _is_valid_match(rec(qid)) is True, f"queue {qid} 应算有效"
+    for qid in (470, 0, 880, 870, 450):
+        assert _is_valid_match(rec(qid)) is False, f"queue {qid} 应排除"
+
+
+def test_is_valid_match_requires_result_data():
+    """胜负/KDA 缺失 → 无效（与队列无关）。"""
+    from app.lol.ongoing.intelligence import _is_valid_match
+    from app.lol.ongoing.match_model import MatchRecord
+
+    assert _is_valid_match(MatchRecord(queue_id=420, win=None)) is False
+    assert _is_valid_match(MatchRecord(queue_id=420, win=True, kills=None, deaths=2, assists=8)) is False
