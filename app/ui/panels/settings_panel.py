@@ -29,6 +29,7 @@ from ..settings_store import (
     SETTINGS_PATH as _SETTINGS_PATH,
 )
 from ..widgets.toggle_button import ToggleButton
+from ...lol.data.lol_data_updater import update_all as _update_lol_data
 
 # 内置常用 TTS 音色（可编辑下拉，支持手动输入任意 edge-tts 语音名）
 _TTS_VOICES = [
@@ -132,6 +133,7 @@ class SettingsPanel(QWidget):
     # 后台线程调度 UI 更新——跨线程必须走 Signal，AutoConnection 自动转 QueuedConnection）
     _test_done = Signal(str, str)       # (插件名, 结果文本)
     _refresh_done = Signal(bool, int)   # (ok, 插件数)
+    _data_done = Signal(str)            # 数据更新完成消息（跨线程回主线程）
 
     def __init__(self, music=None, tts=None, combo_manager=None,
                  equip_toggle: Optional[Callable[[bool], None]] = None,
@@ -632,7 +634,21 @@ class SettingsPanel(QWidget):
         self.btn_equip.toggled_state.connect(self._on_equip)
         lay.addWidget(self.btn_equip)
 
+        # LoL 静态数据一键更新（英雄/技能/装备）
+        h_data = QHBoxLayout()
+        self.btn_update_data = QPushButton("🔄 更新数据（英雄/技能/装备）")
+        self.btn_update_data.setMinimumWidth(180)
+        self.btn_update_data.clicked.connect(self._on_update_data)
+        h_data.addWidget(self.btn_update_data)
+        self.lbl_update_status = QLabel("")
+        self.lbl_update_status.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
+        self.lbl_update_status.setWordWrap(True)
+        h_data.addWidget(self.lbl_update_status, 1)
+        lay.addLayout(h_data)
+
         root.addWidget(box)
+        self._data_done.connect(self._on_data_done)
 
     def _on_gate(self, on: bool) -> None:
         if self._combo is not None:
@@ -644,6 +660,30 @@ class SettingsPanel(QWidget):
         if self._equip_toggle is not None:
             self._equip_toggle(on)
         print(f"[Equipment] 装备提醒: {'开' if on else '关'}")  # 对齐 [Combo] 格式
+
+    # ---------- 🎮 LoL 数据更新 ----------
+
+    def _on_update_data(self) -> None:
+        """点「更新数据」→ 后台线程拉取英雄/技能/装备（~30-60s），完成经 Signal 回主线程。"""
+        self.btn_update_data.setEnabled(False)
+        self.btn_update_data.setText("更新中…")
+
+        def worker():
+            try:
+                stats = _update_lol_data(timeout=10.0)
+                msg = (f"已更新：{stats['champions']} 英雄 / {stats['abilities']} 技能 / "
+                       f"{stats['items']} 装备（重启后全部生效）")
+            except Exception as e:  # noqa: BLE001
+                msg = f"更新失败：{e}（旧数据保留）"
+            self._data_done.emit(msg)  # 后台线程 emit → Qt 自动 QueuedConnection 投递主线程
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_data_done(self, msg: str) -> None:
+        """主线程槽：恢复按钮 + 显示结果。"""
+        self.lbl_update_status.setText(msg)
+        self.btn_update_data.setEnabled(True)
+        self.btn_update_data.setText("🔄 更新数据（英雄/技能/装备）")
 
     # ---------- 🖥️ 界面 ----------
 
