@@ -19,11 +19,41 @@ from typing import Any, Dict
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
+# 原始 stderr：绕过 TeeStream 劫持，供 LogRedirect 初始化失败时留原始痕迹
+origin_stderr = sys.__stderr__
 try:
     from app.core.log_redirect import install_log_redirect
-    install_log_redirect()
-except Exception:
-    pass
+    install_log_redirect(log_dir=os.path.join(PROJECT_ROOT, "logs"))
+except Exception as e:
+    # pythonw.exe（无控制台）下 sys.__stderr__ 可能为 None，需判空
+    try:
+        if origin_stderr:
+            origin_stderr.write(f"[LogRedirect] install failed: {e}\n")
+            origin_stderr.flush()
+    except Exception:
+        pass
+
+import logging
+import logging.handlers
+
+# 标准库 logging root 配置：scanner 等 getLogger(__name__) 继承，落盘 logs/app.log
+try:
+    os.makedirs(os.path.join(PROJECT_ROOT, "logs"), exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=[
+            logging.handlers.TimedRotatingFileHandler(
+                os.path.join(PROJECT_ROOT, "logs", "app.log"),
+                when="midnight",
+                encoding="utf-8",
+                backupCount=30,        # 只保留最近 30 天的 app.log 滚动备份
+            )
+        ],
+    )
+except Exception as e:
+    # 此时 stdout 已被 TeeStream 接管，此 print 会落进 print-{date}.log 自证
+    print(f"[LogInit] basicConfig 失败: {e}")
 
 from app.core.config import get_config
 from app.core.event_bus import get_event_bus, Event, EventType
@@ -391,6 +421,13 @@ class Application:
             self.event_log.stop()
 
         print("...")
+
+        # 收尾：flush+close 重定向落盘句柄（print-{date}.log / error-{date}.log）
+        try:
+            from app.core.log_redirect import close_redirect
+            close_redirect()
+        except Exception:
+            pass
 
     def _scan_music_library(self):
         """doc"""
