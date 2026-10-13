@@ -1,9 +1,9 @@
 """OverlayModel 单元测试（不依赖 Qt event loop / 真实 2999）。
 
 覆盖：position normalization / sorting / 敌方 5 人构造 / spell1+spell2 /
-timer start / 去重 / remaining / <10 / >999 / ready / InProgress 显隐 /
-game end clear / 新局不继承 / voice flash 桥接 / dynamic SSH / game_time 暂停 /
-100ms 刷新不重复建 timer。
+timer 显示（生产路径：CooldownManager → Overlay 只读渲染）/ remaining /
+<10 / >999 / ready / InProgress 显隐 / game end clear / 新局不继承 /
+dynamic SSH / game_time 暂停 / 100ms 刷新不改 CM 状态。
 """
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from app.lol.cooldown.calculator import CooldownCalculator
 # ---------- fakes ----------
 FLASH = {"id": 4, "displayName": "SummonerFlash"}
 TELEPORT = {"id": 12, "displayName": "SummonerTeleport"}
-IGNITE = {"id": 14, "displayName": "SummonerDot"}
 
 
 def _player(cid, name, position, spells=(FLASH, TELEPORT)):
@@ -38,11 +37,37 @@ def _snapshot(players, game_time=120.0):
     return SimpleNamespace(game_time=game_time, enemy_team=list(players))
 
 
-def _model(players=None, game_time=120.0, phase="InProgress"):
+class FakeCM:
+    """模拟 CooldownManager.get_active_reminders（生产路径：语音 cooldown.start →
+    CooldownManager → Overlay 只读渲染；game.ended → CM.clear()）。"""
+
+    def __init__(self, reminders=None):
+        self.reminders = list(reminders or [])
+
+    def get_active_reminders(self):
+        return [dict(r) for r in self.reminders]
+
+    def clear(self):
+        self.reminders.clear()
+
+
+def _rem(champion_name, skill, remaining):
+    """对齐 manager.get_active_reminders 字段子集（Overlay 只读 champion_name/skill/remaining）。"""
+    return {
+        "id": "fake", "champion_name": champion_name, "skill": skill,
+        "skill_type": "summoner", "estimated_cooldown": 0.0, "used_at": 0.0,
+        "ready_at": 0.0, "remind_at": 0.0, "remaining": remaining,
+        "side": "enemy", "status": "ACTIVE",
+    }
+
+
+def _model(players=None, game_time=120.0, phase="InProgress", cm_reminders=None):
     snap = _snapshot(players or [], game_time)
+    cm = FakeCM(cm_reminders)   # 共享同一实例：测试改 cm 状态，get_rows 读到同一份
     return OverlayModel(
         snapshot_provider=lambda: snap,
         phase_provider=lambda: phase,
+        cooldown_manager_provider=lambda: cm,
     )
 
 
@@ -98,43 +123,31 @@ def test_spell1_spell2_populated():
     assert row.spell2.active is False and row.spell1.active is False
 
 
-# ---------- timer start / remaining / dedup ----------
+# ---------- timer 显示（生产路径：CooldownManager → Overlay 只读渲染）----------
 def test_timer_start_and_remaining():
-    m = _model([_player(1, "盖伦", "top")], game_time=100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", cooldown=300.0, game_time=100.0)
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 300.0)])
     row = m.get_rows()[0]
     assert row.spell1.active is True
-    assert abs(row.spell1.remaining - 300.0) < 1e-6  # 100 + 300 - 100
+    assert abs(row.spell1.remaining - 300.0) < 1e-6
 
 
 def test_timer_advances_with_game_time():
-    m = _model([_player(1, "盖伦", "top")], game_time=100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", cooldown=300.0, game_time=100.0)
-    # game_time 推进 50s -> 剩余减 50
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 300.0)])
+    # CM 内部已按 game_time 推进 50s 算好 remaining=250（"推进"逻辑归 CooldownManager，有 CM 单测）
+    cm = m._cooldown_manager_provider()
+    cm.reminders = [_rem("盖伦", "闪现", 250.0)]
     m._snapshot_provider = lambda: _snapshot([_player(1, "盖伦", "top")], game_time=150.0)
     row = m.get_rows()[0]
     assert abs(row.spell1.remaining - 250.0) < 1e-6
 
 
-def test_timer_dedup_same_slot():
-    m = _model([_player(1, "盖伦", "top")], game_time=100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", 300.0, 100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", 300.0, 120.0)  # 再交闪
-    assert m.timer_count() == 1  # 不叠加
-    m._snapshot_provider = lambda: _snapshot([_player(1, "盖伦", "top")], game_time=120.0)
-    row = m.get_rows()[0]
-    # ready_at = 120 + 300 = 420；now=120 -> remaining 300
-    assert abs(row.spell1.remaining - 300.0) < 1e-6
-
-
 def test_two_slots_independent():
-    m = _model([_player(1, "盖伦", "top")], game_time=100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", 300.0, 100.0)
-    m.record_spell_cast(1, "盖伦", 2, 14, "点燃", 180.0, 110.0)
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 300.0), _rem("盖伦", "传送", 190.0)])
     row = m.get_rows()[0]
-    assert m.timer_count() == 2
     assert abs(row.spell1.remaining - 300.0) < 1e-6
-    # slot2 ready_at = 110 + 180 = 290；now=100 -> 190
     assert abs(row.spell2.remaining - 190.0) < 1e-6
 
 
@@ -178,79 +191,64 @@ def test_disabled_hides():
 
 
 def test_game_end_clear():
-    m = _model([_player(1, "盖伦", "top")])
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", 300.0, 100.0)
-    assert m.timer_count() == 1
-    m.clear()
-    assert m.timer_count() == 0
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 300.0)])
+    cm = m._cooldown_manager_provider()
+    assert len(cm.reminders) == 1
+    assert m.get_rows()[0].spell1.active is True
+    cm.clear()   # 生产：game.ended → cooldown_manager.clear()
+    assert len(cm.reminders) == 0
     row = m.get_rows()[0]
     assert row.spell1.active is False
 
 
 def test_new_game_no_inherit():
-    m = _model([_player(1, "盖伦", "top")])
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", 300.0, 100.0)
-    m.clear()  # 模拟离开 InProgress / game end
-    # 新局换了英雄，但 timer 已清空
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 300.0)])
+    cm = m._cooldown_manager_provider()
+    cm.clear()  # 模拟 game end / 离开 InProgress → CM 清空，新局不继承
     rows = m.get_rows()
     assert all(not r.spell1.active and not r.spell2.active for r in rows)
 
 
-# ---------- voice flash -> overlay timer (模拟桥接) ----------
-def test_voice_flash_bridge_records_correct_slot():
-    enemy = _player(5, "赛娜", "sup", (TELEPORT, FLASH))  # Flash 在 slot2(F)
-    m = _model([enemy], game_time=200.0)
-    # 模拟 main.py on_create_flash 的桥接：定位 Flash 槽
-    spells = enemy.summoner_spells
-    slot = 0
-    for idx, sd in enumerate(spells[:2]):
-        if sd.get("id") == 4 or "flash" in str(sd.get("displayName", "")).lower():
-            slot = idx + 1
-            break
-    assert slot == 2
-    m.record_spell_cast(5, "赛娜", slot, 4, "闪现", 230.77, 200.0)
-    row = m.get_rows()[0]
-    assert row.spell2.active is True
-    assert row.spell1.active is False
-    assert abs(row.spell2.remaining - 230.77) < 1e-6
-
-
 # ---------- dynamic SSH (复用 ssh_provider + calculator) ----------
 def test_dynamic_ssh_formula():
-    # 星界洞悉 18 + 明朗靴 12 = 30 SSH
+    # 星界洞悉 18 + 明朗靴 10 = 28 SSH（明朗靴实测锚点：300*100/(100+10)≈272.73s）
     items = [{"itemID": 3158}]
     runes = [{"displayName": "Cosmic Insight"}]
     ssh, sources, status = summoner_spell_haste(items, runes)
-    assert ssh == 30.0
+    assert ssh == 28.0
     assert status == "ok"
     eff = CooldownCalculator.for_summoner(300.0, summoner_spell_haste=ssh)
-    # 300 * 100 / 130 = 230.77
-    assert abs(eff - 230.77) < 0.01
+    # 300 * 100 / 128 = 234.375
+    assert abs(eff - 234.375) < 0.01
 
 
 def test_overlay_uses_ssh_adjusted_cooldown():
-    m = _model([_player(1, "盖伦", "top")], game_time=100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", cooldown=230.77, game_time=100.0)
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 230.77)])
     row = m.get_rows()[0]
     assert abs(row.spell1.remaining - 230.77) < 1e-6
 
 
 # ---------- game_time pause ----------
 def test_game_time_pause_freezes_remaining():
-    m = _model([_player(1, "盖伦", "top")], game_time=100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", 300.0, 100.0)
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 300.0)])
     r1 = m.get_rows()[0].spell1.remaining
-    # game_time 不变（暂停）-> remaining 不变
+    # game_time 不变（暂停）-> CM remaining 不变 -> 显示不变
     r2 = m.get_rows()[0].spell1.remaining
     assert abs(r1 - r2) < 1e-6
+    assert r1 == 300.0
 
 
-# ---------- 100ms refresh 不重复建 timer ----------
+# ---------- 100ms 刷新不改变 CM 状态 ----------
 def test_refresh_does_not_create_timers():
-    m = _model([_player(1, "盖伦", "top")], game_time=100.0)
-    m.record_spell_cast(1, "盖伦", 1, 4, "闪现", 300.0, 100.0)
-    before = m.timer_count()
+    m = _model([_player(1, "盖伦", "top")], game_time=100.0,
+               cm_reminders=[_rem("盖伦", "闪现", 300.0)])
+    cm = m._cooldown_manager_provider()
+    before = len(cm.reminders)
     # 模拟 100ms 轮询多次渲染
     for _ in range(5):
         m.get_rows()
-    assert m.timer_count() == before
+    assert len(cm.reminders) == before

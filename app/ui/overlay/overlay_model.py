@@ -2,14 +2,10 @@
 
 数据直接来自 2999 GameSnapshot.enemy_team（不依赖 PUUID、不复制 LCU player selection）：
 每人 champion + position + 两个召唤师技能槽（summonerSpellOne / summonerSpellTwo）。
-计时锚定游戏内 game_time（游戏暂停时不前进），UI 仅做 100ms presentation 刷新。
+剩余时间来自 CooldownManager.get_active_reminders（语音「对面X闪现了」→ cooldown.start
+指令 → CooldownManager.handle_start → 本模型只读渲染），锚定游戏内 game_time。
 
-计时来源：
-- 语音「对面X闪现了」：main.py 在 GameAlarmEngine.create_flash_alarm 成功后调用
-  record_spell_cast(...)，与语音提醒解耦。
-- 同一 (champion_id, slot) 重复记录 = 更新/覆盖，不叠加（去重）。
-
-本模型不新建任何 TimerEngine；计时器只是 {key: state} 字典，剩余时间按 game_time 现算。
+本模型不新建任何 TimerEngine；剩余时间由 CooldownManager 现算，本模型只读展示。
 """
 from __future__ import annotations
 
@@ -132,8 +128,6 @@ class OverlayModel:
         self._champions = ChampionCatalog()
         self._enabled = True
         self._cooldown_manager_provider = cooldown_manager_provider or (lambda: None)
-        # (champion_id, slot) -> timer state
-        self._timers: Dict[tuple, dict] = {}
 
     # ----- 开关（供 MainWindow 复选框）-----
     def set_enabled(self, on: bool) -> None:
@@ -141,37 +135,6 @@ class OverlayModel:
 
     def is_enabled(self) -> bool:
         return self._enabled
-
-    # ----- 计时写入（语音记闪现走这里）-----
-    def record_spell_cast(
-        self,
-        champion_id: int,
-        champion_name: str,
-        slot: int,
-        spell_id: int,
-        spell_name: str,
-        cooldown: float,
-        game_time: float,
-    ) -> None:
-        """记录一次敌方召唤师技能使用。同 (champion_id, slot) 重复调用=覆盖更新。"""
-        key = (int(champion_id or 0), int(slot))
-        start = float(game_time or 0.0)
-        cd = float(cooldown or 0.0)
-        self._timers[key] = {
-            "start": start,
-            "cooldown": cd,
-            "ready_at": start + cd,
-            "spell_id": int(spell_id or 0),
-            "spell_name": spell_name or "",
-            "champion_name": champion_name or "",
-        }
-
-    def clear(self) -> None:
-        """game end / 离开 InProgress：清空计时，新局不继承。"""
-        self._timers.clear()
-
-    def timer_count(self) -> int:
-        return len(self._timers)
 
     # ----- 渲染数据 -----
     def get_rows(self) -> List[OverlayEnemyRow]:
