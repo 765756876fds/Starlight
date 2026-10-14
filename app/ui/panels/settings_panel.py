@@ -20,7 +20,7 @@ from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider,
-    QSpinBox, QVBoxLayout, QWidget,
+    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..settings_store import (
@@ -229,23 +229,43 @@ class SettingsPanel(QWidget):
         self._refresh_done.connect(self._on_refresh_done)
         self._updates_done.connect(self._on_updates_done)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner = QWidget()
-        root = QVBoxLayout(inner)
-        root.setSpacing(10)
-        scroll.setWidget(inner)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll)
+        self._tabs = QTabWidget()
+        outer.addWidget(self._tabs)
 
-        self._build_music_group(root)
-        self._build_plugins_group(root)
-        self._build_tts_group(root)
-        self._build_lol_group(root)
-        self._build_ui_group(root)
-        root.addStretch(1)
-        self._build_reset_row(root)
+        tab_music = self._make_tab_page("音乐")
+        tab_voice = self._make_tab_page("语音")
+        tab_game = self._make_tab_page("游戏")
+        tab_ui = self._make_tab_page("界面")
+
+        # Tab 1 音乐：音乐目录管理 + 内置插件
+        self._build_music_group(tab_music)
+        self._build_plugins_group(tab_music)
+        tab_music.addStretch(1)
+        # Tab 2 语音：语音 TTS
+        self._build_tts_group(tab_voice)
+        tab_voice.addStretch(1)
+        # Tab 3 游戏：LoL
+        self._build_lol_group(tab_game)
+        tab_game.addStretch(1)
+        # Tab 4 界面：界面 + 恢复默认（底部）
+        self._build_ui_group(tab_ui)
+        tab_ui.addStretch(1)
+        self._build_reset_row(tab_ui)
+
+    def _make_tab_page(self, title: str) -> QVBoxLayout:
+        """新建一个 tab 页：QScrollArea → QWidget → QVBoxLayout。
+        返回 layout 供 _build_* 填充；每页独立滚动。"""
+        page = QScrollArea()
+        page.setWidgetResizable(True)
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
+        lay.setSpacing(10)
+        lay.setContentsMargins(8, 8, 8, 8)
+        page.setWidget(inner)
+        self._tabs.addTab(page, title)
+        return lay
 
     # ---------- 🎵 音乐目录管理 ----------
 
@@ -291,18 +311,13 @@ class SettingsPanel(QWidget):
         box = QGroupBox("🎛️ 内置插件 (MusicFree/洛雪)")
         lay = QVBoxLayout(box)
 
-        # 插件列表容器：QScrollArea + 行 widget（避开 QListWidget setItemWidget 压缩按钮）
-        # ——和音乐目录管理同一套模式，行宽不被列表控件压窄。
-        list_scroll = QScrollArea()
-        list_scroll.setWidgetResizable(True)
-        list_scroll.setMinimumHeight(120)
-        list_scroll.setMaximumHeight(200)   # 别占太高，13 行内可滚动
+        # 插件行容器：直接平铺（不再内嵌 QScrollArea → 双重滚动）。
+        # tab 页外层 QScrollArea 负责滚动；插件数通常 ~7 个，平铺可接受。
         self._plugins_container = QWidget()
         self._plugins_layout = QVBoxLayout(self._plugins_container)
         self._plugins_layout.setContentsMargins(4, 4, 4, 4)
         self._plugins_layout.setSpacing(2)   # 更紧凑的行间距
-        list_scroll.setWidget(self._plugins_container)
-        lay.addWidget(list_scroll)
+        lay.addWidget(self._plugins_container)
 
         hint = QLabel("在线搜索自动遍历全部 MusicFree 插件；点「测试」验证单源（搜索+URL+能否播）")
         hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
@@ -346,6 +361,7 @@ class SettingsPanel(QWidget):
         self._plugin_rows = {}
         self._test_btns = {}
         self._update_btns = {}
+        self._delete_btns = {}
         if self._js_source is None:
             lbl = QLabel("JS 桥接未启用（node 缺失或初始化失败）")
             lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
@@ -393,6 +409,12 @@ class SettingsPanel(QWidget):
             else:
                 lbl.setText(f"[{kind}] {name} {state} | 已最新 (v{upd.get('local_version')})")
         h.addWidget(lbl, 1)
+        btn_del = QPushButton("删除")
+        btn_del.setFixedHeight(24)
+        btn_del.setMinimumWidth(56)
+        btn_del.clicked.connect(lambda _=False, n=name: self._on_delete_plugin(n))
+        h.addWidget(btn_del)
+        self._delete_btns[name] = btn_del
         if p.get("status") == "ok" and p.get("type") == "musicfree":
             btn = QPushButton("测试")
             btn.setFixedHeight(24)
@@ -487,6 +509,12 @@ class SettingsPanel(QWidget):
         self._reloading = False
         self.btn_refresh_plugins.setEnabled(True)
         self.btn_refresh_plugins.setText("刷新插件")
+        tail = getattr(self, "_delete_result_tail", "")
+        if tail:
+            self.lbl_plugin_status.setText(tail)
+            self._delete_result_tail = ""
+            self._render_plugins()
+            return
         if ok:
             self.lbl_plugin_status.setText(f"已重载 {n} 个插件")
         else:
@@ -563,6 +591,42 @@ class SettingsPanel(QWidget):
                 f"更新 {name}: {'成功（已重载）' if result.get('ok') else '失败: ' + str(result.get('error'))}",
                 remaining,
             )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_delete_plugin(self, name: str) -> None:
+        """确认 → 后台删除插件文件 + reload → 回主线程刷新列表。"""
+        if self._js_source is None:
+            return
+        ret = QMessageBox.question(
+            self,
+            "确认删除插件",
+            f"将删除插件文件「{name}」并重新加载插件列表。\n\n"
+            f"删除会短暂中断在线搜索。\n确定继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return
+        self.lbl_plugin_status.setText(f"删除 {name} 中…")
+        btn_del = self._delete_btns.get(name)
+        if btn_del is not None:
+            btn_del.setEnabled(False)
+            btn_del.setText("删除中…")
+
+        def worker():
+            try:
+                result = self._js_source.delete_plugin(name)
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            self._delete_result_tail = (
+                f"删除 {name}: {'成功（已重载）' if result.get('ok') else '失败: ' + str(result.get('error'))}"
+            )
+            try:
+                n = len(self._js_source.list_plugins() or [])
+            except Exception:
+                n = 0
+            self._refresh_done.emit(result.get("ok"), n)   # Signal 回主线程
 
         threading.Thread(target=worker, daemon=True).start()
 

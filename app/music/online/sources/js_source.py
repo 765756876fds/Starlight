@@ -308,6 +308,50 @@ class JSMusicSource(MusicSource):
         self._updates_cache.pop(name, None)
         return {"ok": ok, "error": None if ok else "reload-fail"}
 
+    def delete_plugin(self, name: str) -> dict:
+        """删除插件文件并 reload bridge（清理 X 状态/不想要的插件）。
+
+        定位顺序：① _plugins 里该 name 的 file 字段（bridge 上报，成功/失败插件都有）；
+        ② lx 插件兜底 lx_dir/{name}.js（lx name=basename，中文文件名直接拼）。
+        只允许删 mf_dir / lx_dir 内的 .js（relative_to 判定，防前缀误判/路径穿越）。
+        删除后 reload 生效（bridge 重扫，列表自动刷新）。
+        返回 {ok: True} 或 {ok: False, error: str}。
+        """
+        try:
+            target = None
+            for p in self._plugins:
+                if p.get("name") == name:
+                    f = p.get("file")
+                    if f:
+                        target = Path(f)
+                    break
+            if target is None:
+                cand = Path(self._lx_dir) / f"{name}.js"
+                if cand.exists():
+                    target = cand
+            if target is None or not target.exists():
+                return {"ok": False, "error": f"找不到插件文件: {name}"}
+            if not target.is_file() or target.suffix.lower() != ".js":
+                return {"ok": False, "error": f"拒绝删除非插件文件: {target.name}"}
+            allowed = {Path(self._mf_dir).resolve(), Path(self._lx_dir).resolve()}
+            real = target.resolve()
+            in_allowed = False
+            for d in allowed:
+                try:
+                    real.relative_to(d)
+                    in_allowed = True
+                    break
+                except ValueError:
+                    continue
+            if not in_allowed:
+                return {"ok": False, "error": f"拒绝删除音源目录外文件: {real}"}
+            print(f"[JSBridge] 删除插件: {real}", flush=True)
+            os.remove(real)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        ok = self.reload()
+        return {"ok": ok, "error": None if ok else "reload-fail"}
+
     def _parse_tracks(self, result: list) -> List[OnlineTrack]:
         out: List[OnlineTrack] = []
         for r in result:

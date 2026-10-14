@@ -51,6 +51,7 @@ async function loadAll() {
       failures.push({
         name: path.basename(j.fp, '.js'),
         type: j.isLx ? 'lx' : 'musicfree',
+        file: j.fp,
         status: 'fail',
         error: String((e && e.message) || e),
       });
@@ -132,7 +133,7 @@ async function dispatch(method, params) {
   for (const p of sources.values()) {
     if (seen.has(p)) continue;
     seen.add(p);
-    plugins.push({ name: p.name, type: p.type, status: 'ok' });
+    plugins.push({ name: p.name, type: p.type, status: 'ok', file: p.filePath });
   }
   for (const f of failures) plugins.push(f);
   // ready event
