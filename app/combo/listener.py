@@ -5,8 +5,8 @@
 执行后 grace 窗口），本层只做基础过滤。
 
 watchdog：Windows 低级键盘钩子回调超 300ms 会被静默移除，且 keyboard 库
-不自动重连——本层内置看门狗，零回调超 20s 判定掉线后自动重新 hook
-（幂等），连续 3 次失败停止，故障不冒泡。
+不自动重连——本层内置看门狗，零回调超 60s 判定掉线后自动重新 hook
+（幂等），连续 3 次失败停止（成功重连清零计数），故障不冒泡。
 """
 from __future__ import annotations
 
@@ -38,10 +38,10 @@ class ComboListener:
         self._stop_watch = threading.Event()
         self._watch_thread: Optional[threading.Thread] = None
         self._reconnects = 0
-        self._MAX_RECONNECTS = 3   # 连续重连上限，防循环
-        # 零回调超 20s 判定 hook 可能掉线。20s 是"掉线后无反应窗口"的平衡：
-        # 太短频繁误判空闲重连，太长掉线窗口久；20s 阈值 + 5s 轮询 = 最坏 25s 发现掉线。
-        self._WATCH_IDLE_S = 20.0
+        self._MAX_RECONNECTS = 3   # 连续重连上限（连续失败），防循环
+        # 零回调超 60s 判定 hook 可能掉线。60s 覆盖死亡/复活/看小地图等常见空闲；
+        # 太短会把"用户空闲"误判成掉线（假警报 + 无谓重连 + 日志刷屏）。
+        self._WATCH_IDLE_S = 60.0
         self._WATCH_INTERVAL = 5.0 # 看门狗轮询间隔
 
     def start(self) -> None:
@@ -123,6 +123,6 @@ class ComboListener:
                 self._remove_hook = keyboard.hook(self._callback)
                 self._hooked = True
                 self._last_cb_ts = time.monotonic()
-                print("[Combo] 键盘监听已重连")
+                self._reconnects = 0   # 重连成功清零：3 次上限 = 连续失败上限
             except Exception as e:
                 print(f"[Combo] 键盘监听重连失败: {e}")

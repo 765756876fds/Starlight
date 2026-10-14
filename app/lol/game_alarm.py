@@ -45,9 +45,10 @@ class Alarm:
     alarm_id: str
     alarm_type: AlarmType
     title: str                    # 显示标题，如 "莎弥拉 闪现"
-    game_time_start: float        # 开始时的游戏时间
+    game_time_start: float        # 开始时的基准时间（game=游戏时间 / wall=time.monotonic()）
     duration: float               # 持续时间（秒）
     lead_time: float = 10.0       # 提前多久提醒（秒）
+    time_base: str = "game"       # 计时基准："game"=游戏时间（默认）/"wall"=现实时间
     status: AlarmStatus = AlarmStatus.ACTIVE
     created_at: float = field(default_factory=time.time)
     triggered_at: Optional[float] = None
@@ -104,6 +105,7 @@ class GameAlarmEngine:
         self._lock = threading.Lock()
         self._current_game_time: float = 0.0
         self._running = False
+        self._wall_thread: Optional[threading.Thread] = None
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -118,11 +120,17 @@ class GameAlarmEngine:
     def start(self):
         """启动提醒引擎"""
         self._running = True
+        self._wall_thread = threading.Thread(
+            target=self._wall_loop, daemon=True, name="game-alarm-wall")
+        self._wall_thread.start()
         print("[GameAlarm] 引擎已启动")
 
     def stop(self):
         """停止提醒引擎"""
         self._running = False
+        if self._wall_thread and self._wall_thread.is_alive():
+            self._wall_thread.join(timeout=1.0)
+        self._wall_thread = None
         with self._lock:
             self.alarms.clear()
         print("[GameAlarm] 引擎已停止")
@@ -246,14 +254,19 @@ class GameAlarmEngine:
 
         用户说："两分钟后提醒我"
         """
-        gt = game_time if game_time is not None else self._current_game_time
+        # 显式传 game_time → 对局内计时（game 基准）；不传 → 现实时间（wall 基准，非对局也能触发）
+        if game_time is not None:
+            _base, _start = "game", game_time
+        else:
+            _base, _start = "wall", time.monotonic()
         alarm = Alarm(
             alarm_id=str(uuid.uuid4()),
             alarm_type=AlarmType.CUSTOM,
             title=title,
-            game_time_start=gt,
+            game_time_start=_start,
             duration=duration,
             lead_time=lead_time,
+            time_base=_base,
             data={"source": "USER_MEMORY", "content": content},
         )
         with self._lock:
@@ -430,19 +443,80 @@ class GameAlarmEngine:
         return leads.get(objective_type, 40.0)
 
     def _on_game_start(self, event: Event):
-        """游戏开始 -> 重置"""
+        """游戏开始 -> 重置（只清 game 基准提醒；wall 日常提醒跨对局保留，避免进游戏瞬间误清）"""
         with self._lock:
-            self.alarms.clear()
+            for alarm in self.alarms.values():
+                if alarm.time_base == "game":
+                    alarm.status = AlarmStatus.EXPIRED
         self._current_game_time = 0.0
         self._objective_states.clear()
 
     def _on_game_end(self, event: Event):
-        """游戏结束 -> 清理"""
+        """游戏结束 -> 清理（game 基准提醒过期；wall 基准的日常提醒保留，由 wall 线程继续驱动）"""
         with self._lock:
             for alarm in self.alarms.values():
-                alarm.status = AlarmStatus.EXPIRED
+                if alarm.time_base == "game":
+                    alarm.status = AlarmStatus.EXPIRED
 
     # ===== 内部方法 =====
+
+    def _fire_triggers(self, alarms: List[Alarm]) -> None:
+        """把到期提醒置为 TRIGGERED 并发 ALARM_TRIGGERED（now 按各 alarm 基准取值）。"""
+        for alarm in alarms:
+            alarm.status = AlarmStatus.TRIGGERED
+            alarm.triggered_at = time.time()
+            now = time.monotonic() if alarm.time_base == "wall" else self._current_game_time
+            remaining = alarm.remaining(now)
+            self.event_bus.publish(Event(
+                event_type=EventType.ALARM_TRIGGERED,
+                data={
+                    "alarm": self._alarm_to_dict(alarm),
+                    "remaining": remaining,
+                    "game_time": now,      # wall 时传 wall 现值（字段名保持，语义=基准时间）
+                },
+                source="game_alarm"
+            ))
+
+    def _check_wall_alarms(self) -> None:
+        """只检查 wall 基准提醒（wall 线程专用）。
+
+        不碰 game 基准提醒：wall 线程用 1s 轮询驱动，若连带检查 game alarm，
+        会用 stale 的 _current_game_time 判断，可能误触发"对局结束后本不该触发的对局内提醒"。
+        """
+        to_trigger = []
+        to_expire = []
+        with self._lock:
+            for alarm in self.alarms.values():
+                if alarm.status != AlarmStatus.ACTIVE or alarm.time_base != "wall":
+                    continue
+                now = time.monotonic()
+                if alarm.should_trigger(now):
+                    to_trigger.append(alarm)
+                elif alarm.is_expired(now):
+                    to_expire.append(alarm)
+        self._fire_triggers(to_trigger)
+        for alarm in to_expire:
+            alarm.status = AlarmStatus.EXPIRED
+        self._update_state()
+
+    def _wall_loop(self) -> None:
+        """wall 基准（现实时间）提醒驱动：1s 轮询，仅当存在 wall alarm 时检查。
+
+        非对局时 gameTime 不更新 → GAME_TIME_UPDATE 事件不来，
+        wall alarm 由本线程独立驱动（喝水等日常提醒不依赖对局）。
+        """
+        while self._running:
+            time.sleep(1.0)
+            try:
+                with self._lock:
+                    has_wall = any(
+                        a.time_base == "wall" and a.status == AlarmStatus.ACTIVE
+                        for a in self.alarms.values()
+                    )
+                if has_wall:
+                    self._check_wall_alarms()
+            except Exception as e:
+                print(f"[GameAlarm] wall 轮询异常: {e}")
 
     def _check_alarms(self, game_time: float):
         """检查所有提醒，触发到期的"""
@@ -454,26 +528,14 @@ class GameAlarmEngine:
                 if alarm.status != AlarmStatus.ACTIVE:
                     continue
 
-                if alarm.should_trigger(game_time):
+                now = time.monotonic() if alarm.time_base == "wall" else game_time
+                if alarm.should_trigger(now):
                     to_trigger.append(alarm)
-                elif alarm.is_expired(game_time):
+                elif alarm.is_expired(now):
                     to_expire.append(alarm)
 
         # 触发提醒
-        for alarm in to_trigger:
-            alarm.status = AlarmStatus.TRIGGERED
-            alarm.triggered_at = time.time()
-
-            remaining = alarm.remaining(game_time)
-            self.event_bus.publish(Event(
-                event_type=EventType.ALARM_TRIGGERED,
-                data={
-                    "alarm": self._alarm_to_dict(alarm),
-                    "remaining": remaining,
-                    "game_time": game_time,
-                },
-                source="game_alarm"
-            ))
+        self._fire_triggers(to_trigger)
 
         # 标记过期
         for alarm in to_expire:
@@ -501,8 +563,10 @@ class GameAlarmEngine:
             "game_time_start": alarm.game_time_start,
             "duration": alarm.duration,
             "game_time_end": alarm.game_time_end,
+            "time_base": alarm.time_base,
             "lead_time": alarm.lead_time,
             "status": alarm.status.value,
-            "remaining": alarm.remaining(self._current_game_time),
+            "remaining": alarm.remaining(
+                time.monotonic() if alarm.time_base == "wall" else self._current_game_time),
             "data": alarm.data,
         }

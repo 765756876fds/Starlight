@@ -169,7 +169,7 @@ def test_champ_cache_cleared_on_game_end():
 # ---------- listener：watchdog ----------
 
 def test_watchdog_reconnect(monkeypatch):
-    """零回调超阈值 → unhook + 重新 hook；重连次数 +1。"""
+    """零回调超阈值 → unhook + 重新 hook；重连成功后计数清零（上限=连续失败）。"""
     import app.combo.listener as L
 
     hooked = []
@@ -192,10 +192,10 @@ def test_watchdog_reconnect(monkeypatch):
     assert lst._hooked
     lst._last_cb_ts = 0.0      # 模拟长时间无回调
     deadline = time.time() + 2.0
-    while lst._reconnects < 1 and time.time() < deadline:
+    while len(hooked) < 1 and time.time() < deadline:
         time.sleep(0.05)
-    assert lst._reconnects == 1
     assert len(hooked) == 1    # 重连后新 hook 已注册
+    assert lst._reconnects == 0  # 重连成功 → 计数清零（上限=连续失败）
     lst.stop()
 
 
@@ -223,4 +223,87 @@ def test_watchdog_quiet_no_reconnect(monkeypatch):
     lst._last_cb_ts = time.monotonic()   # 近期有回调
     time.sleep(0.15)
     assert lst._reconnects == 0
+    lst.stop()
+
+
+def test_watchdog_success_resets_counter(monkeypatch):
+    """连续两次"掉线→重连成功"→ 计数清零，不累计（上限=连续失败语义）。
+
+    注：fake_unhook 会清空 hooked（模拟取消注册），所以断言用 hook_calls 计数
+    而非 hooked 累计数量。
+    """
+    import app.combo.listener as L
+
+    hooked = []
+    hook_calls = []
+
+    def fake_hook(cb):
+        def rm():
+            while hooked:
+                hooked.pop()
+            return True
+
+        hooked.append(cb)
+        hook_calls.append(1)
+        return rm
+
+    monkeypatch.setattr("keyboard.hook", fake_hook)
+    monkeypatch.setattr("keyboard.unhook", lambda rm: rm())
+    lst = ComboListener(lambda k: None)
+    lst._WATCH_IDLE_S = 0.05
+    lst._WATCH_INTERVAL = 0.02
+    lst.start()
+
+    # 第一次掉线 → 重连成功
+    lst._last_cb_ts = 0.0
+    deadline = time.time() + 2.0
+    while len(hook_calls) < 1 and time.time() < deadline:
+        time.sleep(0.05)
+    assert len(hook_calls) == 1
+    assert len(hooked) == 1
+    assert lst._reconnects == 0
+
+    # 第二次掉线 → 重连成功，计数仍为 0（每次成功清零）
+    lst._last_cb_ts = 0.0
+    deadline = time.time() + 2.0
+    while len(hook_calls) < 2 and time.time() < deadline:
+        time.sleep(0.05)
+    assert len(hook_calls) == 2
+    assert len(hooked) == 1   # unhook 清空后重新注册 1 个
+    assert lst._reconnects == 0
+    lst.stop()
+
+
+def test_watchdog_limit_is_consecutive_failures(monkeypatch):
+    """hook 连续失败 3 次 → 停止自动重连（上限=连续失败）。"""
+    import threading
+
+    lst = ComboListener(lambda k: None)
+    lst._WATCH_IDLE_S = 0.05
+    lst._WATCH_INTERVAL = 0.02
+
+    def fail_hook(cb):
+        raise RuntimeError("hook 失败")
+
+    monkeypatch.setattr("keyboard.hook", fail_hook)
+
+    # 绕过 start（start 的 hook 必失败），手动模拟 watchdog 循环前置状态
+    lst._started = True
+    lst._hooked = True
+    lst._last_cb_ts = 0.0
+    lst._remove_hook = lambda: True
+    lst._stop_watch = threading.Event()
+    lst._watch_thread = threading.Thread(
+        target=lst._watchdog, daemon=True, name="watchdog-test")
+    lst._watch_thread.start()
+
+    deadline = time.time() + 3.0
+    while lst._reconnects < 3 and time.time() < deadline:
+        time.sleep(0.05)
+    assert lst._reconnects == 3
+    # 达上限后 watchdog 在下次迭代 break 退出线程（轮询等待，避免竞态）
+    deadline = time.time() + 2.0
+    while lst._watch_thread.is_alive() and time.time() < deadline:
+        time.sleep(0.05)
+    assert not lst._watch_thread.is_alive()
     lst.stop()
