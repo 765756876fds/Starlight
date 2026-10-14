@@ -66,6 +66,7 @@ from app.core.event_log import EventLog
 from app.music.controller import MusicController
 from app.lol.runtime import LoLRuntime
 from app.voice.runtime import VoiceRuntime
+from app.core.path_resolve import find_llama_server
 from app.speech.tts import TTSController
 from app.speech.speech_judge import SpeechJudge
 from app.speech.speech_queue import SpeechQueue
@@ -149,10 +150,10 @@ class Application:
         model_path = asr_config.get("qwen3_asr_model", "")
         mmproj_path = asr_config.get("qwen3_asr_mmproj", "")
 
-        # llama-server 路径
-        llama_server = r"C:\Users\1\.lmstudio\extensions\backends\llama.cpp-win-x86_64-vulkan-avx2-2.41.0\llama-server.exe"
-        if not os.path.exists(llama_server):
-            print(f"[ASR] WARNING: llama-server 不存在: {llama_server}")
+        # llama-server 路径：配置 → 自动搜索（PATH / LM Studio 扩展目录）→ 降级
+        llama_server = find_llama_server(asr_config)
+        if not llama_server:
+            print("[ASR] WARNING: llama-server 未找到（设置 asr.llama_server，或安装 LM Studio 扩展）")
             print("[ASR] 请手动启动 ASR，或检查 llama-server 路径")
             return
 

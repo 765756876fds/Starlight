@@ -139,6 +139,7 @@ class JSMusicSource(MusicSource):
                 cwd=str(self._bridge_dir),
                 env=env,
                 text=True, encoding="utf-8", bufsize=1,
+                creationflags=subprocess.CREATE_NO_WINDOW,   # pythonw 启动时 node 不新建控制台窗口（范本 mpv.py:88/tts.py:501/main.py:177）
             )
         except Exception as e:
             print(f"[JSBridge] 启动失败: {e}")

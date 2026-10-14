@@ -65,7 +65,7 @@ class TTSController:
         self.volume_pct = config.get("volume", "+0%")
         self.output_dir = config.get("output_dir", "./data/tts")
         self.enabled = config.get("enabled", True)
-        self.mpv_path = config.get("mpv_path", r"D:\新建文件夹 (2)\mpv.exe")
+        self.mpv_path = config.get("mpv_path", "mpv")
 
         # Qwen（阿里云百炼）引擎配置
         self.qwen_api_key = self._resolve_qwen_key(config)
@@ -456,10 +456,29 @@ class TTSController:
                 pass
             return None
 
+    def _resolve_mpv_path(self) -> bool:
+        """解析 mpv：配置(isfile) → PATH(which) → 仅默认值时旧默认位置（迁移保护）。
+        照抄 music 链 mpv.py:_resolve_mpv_path 范本。
+        显式配置的路径不自动替换（尊重配置语义）。"""
+        if os.path.isfile(self.mpv_path):
+            return True
+        import shutil
+        found = shutil.which(self.mpv_path)
+        if found:
+            self.mpv_path = found
+            return True
+        if self.mpv_path == "mpv":      # 仅默认值：本机旧默认位置兜底（本机不改也能播）
+            legacy = r"D:\新建文件夹 (2)\mpv.exe"
+            if os.path.isfile(legacy):
+                self.mpv_path = legacy
+                return True
+        print(f"[TTS] mpv 不存在: {self.mpv_path}")
+        return False
+
+
     def _play_audio(self, filepath: str) -> bool:
         """启动 mpv 播放音频"""
-        if not os.path.exists(self.mpv_path):
-            print(f"[TTS] mpv 不存在: {self.mpv_path}")
+        if not self._resolve_mpv_path():
             return False
 
         if not os.path.exists(filepath):
