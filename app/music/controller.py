@@ -383,7 +383,8 @@ class MusicController:
             try:
                 if self.lx_client.play():
                     return
-            except:
+            except Exception as e:
+                print(f"[Music] 落雪 play 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         if self.queue.is_empty():
@@ -424,7 +425,8 @@ class MusicController:
             try:
                 if self.lx_client.pause():
                     return
-            except:
+            except Exception as e:
+                print(f"[Music] 落雪 pause 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         self.mpv.pause()
@@ -458,7 +460,8 @@ class MusicController:
             try:
                 if self.lx_client.toggle_play():
                     return
-            except:
+            except Exception as e:
+                print(f"[Music] 落雪 toggle 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         self.mpv.toggle_pause()
@@ -485,7 +488,8 @@ class MusicController:
             try:
                 if self.lx_client.next():
                     return
-            except:
+            except Exception as e:
+                print(f"[Music] 落雪 next 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         with self._lock:
@@ -522,7 +526,8 @@ class MusicController:
             try:
                 if self.lx_client.prev():
                     return
-            except:
+            except Exception as e:
+                print(f"[Music] 落雪 prev 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         with self._lock:

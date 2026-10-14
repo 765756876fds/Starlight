@@ -13,11 +13,12 @@ from app.music.source_manager import MusicSourceManager, MusicSource
 class SourceManageDialog(QDialog):
     """音源管理对话框"""
 
-    def __init__(self, parent=None, on_sources_changed=None):
+    def __init__(self, parent=None, on_sources_changed=None, manager=None):
         super().__init__(parent)
         self.setWindowTitle("音乐源管理")
         self.resize(600, 400)
-        self.manager = MusicSourceManager()
+        # 构造注入（默认从磁盘自建，向后兼容；测试/复用可传入同一实例）
+        self.manager = manager if manager is not None else MusicSourceManager()
         # 音源列表变化（导入/删除/启停）后回调，用于把变更同步进在线播放链
         self.on_sources_changed = on_sources_changed
         # 刷新期间置 True：setCheckState 触发的 itemChanged 不视为用户操作
