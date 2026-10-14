@@ -2,7 +2,7 @@
 from PySide6.QtCore import QThread, Qt, QTimer, QObject, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..theme.colors import Colors
@@ -106,6 +106,7 @@ class MusicPanel(QWidget):
         self.btn_toggle = QPushButton("⏯")
         self.btn_next = QPushButton("⏭")
         self.btn_mode = QPushButton("🔁 顺序")
+        self.btn_clear_queue = QPushButton("🗑 清空队列")
         self._modes = [
             ("sequential", "🔁 顺序"),
             ("shuffle", "🔀 随机"),
@@ -113,7 +114,8 @@ class MusicPanel(QWidget):
             ("repeat_one", "🔂 单曲循环"),
         ]
         self._mode_idx = 0
-        for b in (self.btn_prev, self.btn_toggle, self.btn_next, self.btn_mode):
+        for b in (self.btn_prev, self.btn_toggle, self.btn_next, self.btn_mode,
+                  self.btn_clear_queue):
             row.addWidget(b)
         row.addStretch()
         row.addWidget(QLabel("音量"))
@@ -159,6 +161,7 @@ class MusicPanel(QWidget):
             self.btn_toggle.clicked.connect(self._on_toggle)
             self.btn_next.clicked.connect(self._on_next)
             self.btn_mode.clicked.connect(self._on_toggle_mode)
+            self.btn_clear_queue.clicked.connect(self._on_clear_queue)
             self.slider_vol.valueChanged.connect(self._on_volume)
             self.slider_pos.sliderReleased.connect(self._on_seek)
             self.btn_search.clicked.connect(self._do_search)
@@ -290,6 +293,21 @@ class MusicPanel(QWidget):
         self.btn_mode.setText(label)
         if self._music:
             self._music.set_play_mode(mode)
+
+    def _on_clear_queue(self):
+        """清空队列：确认后停止播放 + 清队列（防误触）。"""
+        if self._music is None:
+            return
+        ret = QMessageBox.question(
+            self, "清空队列",
+            "确定清空队列并停止当前播放？\n（此操作不可撤销）",
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._music.clear_queue()
+        except Exception as e:
+            print(f"[MusicPanel] 清空队列失败: {e}")
 
     def _on_next(self):
         try: self._music.next()

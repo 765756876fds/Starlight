@@ -46,6 +46,7 @@ class CommandType:
     MUSIC_SET_PLAY_MODE = "music.set_play_mode"
     MUSIC_RESCAN = "music.rescan"
     MUSIC_CLEANUP = "music.cleanup"
+    MUSIC_CLEAR_QUEUE = "music.clear_queue"
 
     # ===== GameAlarm 命令 =====
     ALARM_CREATE_FLASH = "alarm.create_flash"

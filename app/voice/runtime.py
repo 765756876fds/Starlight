@@ -246,7 +246,8 @@ class VoiceRuntime:
                            CommandType.MUSIC_RESCAN,
                            CommandType.MUSIC_CLEANUP,
                            CommandType.MUSIC_HIGHLIGHT_MODE,
-                           CommandType.MUSIC_SET_PLAY_MODE):
+                           CommandType.MUSIC_SET_PLAY_MODE,
+                           CommandType.MUSIC_CLEAR_QUEUE):
             self.command_bus.execute(Command(
                 command_type=intent_type,
                 params=params,

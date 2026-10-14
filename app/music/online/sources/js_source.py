@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -49,6 +50,14 @@ def compare_versions(a, b):
 class JSMusicSource(MusicSource):
     name = "js_bridge"
     display_name = "JS 音源桥接"
+
+    # --- watchdog 状态（类属性默认：__new__ 构造的测试对象不初始化 __init__ 字段）---
+    _call_timeout_streak = 0
+    _auto_reload_count = 0
+    _auto_reload_window_ts = 0.0
+    _auto_reloading = False
+    _auto_reload_gave_up = False
+    _closed = False
 
     def __init__(self, mf_dir: str, lx_dir: str, bridge_dir: Optional[str] = None,
                  user_variables: Optional[dict] = None):
@@ -165,6 +174,9 @@ class JSMusicSource(MusicSource):
             if box:
                 box["result"] = msg
                 box["event"].set()
+        # for 循环正常退出 = node 进程退出 / stdout EOF → 触发自动恢复
+        print("[JSBridge] bridge 进程退出，尝试自动恢复")
+        self._maybe_auto_reload("node-exit")
 
     def _call(self, method: str, params: dict, timeout: float = 15.0):
         if self._proc is None:
@@ -183,11 +195,13 @@ class JSMusicSource(MusicSource):
             print(f"[JSBridge] TIMEOUT {method} {params.get('source')} 等了{timeout}s", flush=True)
             with self._lock:
                 self._pending.pop(rid, None)
+            self._note_call_timeout()
             return None
         msg = box["result"]
         if not msg or not msg.get("ok"):
             print(f"[JSBridge] FAIL {method} {params.get('source')} resp={msg}", flush=True)
             return None
+        self._call_timeout_streak = 0
         return msg.get("result")
 
     def list_sources(self) -> List[str]:
@@ -346,6 +360,41 @@ class JSMusicSource(MusicSource):
         ok = self._ready.wait(timeout=8.0)
         return ok and self._proc is not None
 
+    def _note_call_timeout(self):
+        """RPC 超时计数：连续 3 次超时（≈45s 无响应）→ 触发自动 reload 探测。
+        单次超时不动作（网络慢/插件请求久属正常）。"""
+        self._call_timeout_streak += 1
+        if self._call_timeout_streak >= 3:
+            self._call_timeout_streak = 0
+            self._maybe_auto_reload("call-timeout")
+
+    def _maybe_auto_reload(self, reason: str):
+        """自动恢复：node 退出（EOF 快速路径）或连续超时（卡死慢路径）→ reload 一次。
+        上限 3 次/5 分钟；超过 → 放弃自动重启（_auto_reload_gave_up）。"""
+        if self._closed:
+            return
+        if self._auto_reloading:
+            return
+        now = time.time()
+        if now - self._auto_reload_window_ts > 300:
+            self._auto_reload_window_ts = now
+            self._auto_reload_count = 0
+        if self._auto_reload_count >= 3:
+            if not self._auto_reload_gave_up:
+                self._auto_reload_gave_up = True
+                print(f"[JSBridge] 自动恢复失败 {self._auto_reload_count} 次，放弃自动重启（可手动 reload）")
+            return
+        self._auto_reloading = True
+        try:
+            ok = self.reload()
+            print(f"[JSBridge] 自动恢复({reason}) {'成功' if ok else '失败'}")
+            if ok:
+                self._auto_reload_gave_up = False
+        except Exception as e:
+            print(f"[JSBridge] 自动恢复异常: {e!r}")
+        finally:
+            self._auto_reloading = False
+
     def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
         if not keyword:
             return []
@@ -382,6 +431,7 @@ class JSMusicSource(MusicSource):
         return r.get("lyric")
 
     def close(self) -> None:
+        self._closed = True
         if self._proc:
             try:
                 self._proc.terminate()

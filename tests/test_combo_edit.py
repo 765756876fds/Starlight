@@ -103,6 +103,16 @@ def make_manager(tmp_path, key_sender=None):
     return m
 
 
+def _wait_until(pred, timeout=2.0):
+    """轮询等待条件成立（连招执行已移出调用线程，断言前需等待异步完成）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return pred()
+
+
 def test_manager_save_config_reload_effective(tmp_path):
     """保存后无需重启：新连招 trigger 立即能触发。"""
     sender = FakeSender()
@@ -115,10 +125,13 @@ def test_manager_save_config_reload_effective(tmp_path):
     assert m.save_config() is True
     # reload 后新配置生效
     m._handle_key("s")
+    assert _wait_until(lambda: len(sender.keys) == 1)
+    assert _wait_until(lambda: not m._executor.is_executing)  # T1 完全结束（_ignore_until 已设）
     assert sender.keys == ["e"]
     # 原有连招仍在（先过 grace 窗口再按 3）
     m._ignore_until = time.time() - 0.1
     m._handle_key("3")
+    assert _wait_until(lambda: len(sender.keys) == 4)
     assert sender.keys[-3:] == ["3", "w", "w"]
 
 

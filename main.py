@@ -332,8 +332,12 @@ class Application:
         self.scheduler.start()
 
         # 鍚姩闊充箰妯″潡
-        self.music.start()
-        self._set_module_status("music", "ok")
+        try:
+            _music_ok = self.music.start()
+        except Exception as e:
+            print(f"[Music] module start failed: {e!r}")
+            _music_ok = False
+        self._set_module_status("music", "ok" if _music_ok else "fail")
 
         # 鎵弿闊充箰搴擄紙鍚庡彴锛?
         threading.Thread(target=self._scan_music_library, daemon=True).start()

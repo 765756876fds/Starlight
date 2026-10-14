@@ -27,23 +27,47 @@ class MpvController:
         self._property_watchers: Dict[str, Any] = {}
         self._pipe_lock = threading.Lock()
 
-    def start(self):
-        """启动 mpv 进程"""
+    def start(self, taskkill: bool = True, pipe_timeout: float = 10.0,
+               prop_timeout: float = 1.0) -> bool:
+        """启动 mpv 进程；成功返回 True，失败返回 False（不抛异常）。
+        taskkill=True 时先清场（杀残留 mpv.exe，正常冷启动语义）；
+        taskkill=False 供自动重启路径（旧进程已被 stop_process 终止，
+        再杀全局面板会连带杀掉 TTS 播报进程——必须跳过）。
+        pipe_timeout/prop_timeout：自动重启路径传短超时（3.0/0.5），
+        因为重启在 controller._lock 内执行，持锁时间必须可控。"""
         if self._running:
-            return
+            return True
 
-        if not os.path.exists(self.mpv_path):
-            raise FileNotFoundError(f"mpv 可执行文件不存在: {self.mpv_path}")
+        if not self._resolve_mpv_path():
+            return False
 
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "mpv.exe"],
-                capture_output=True, timeout=5,
-            )
-            time.sleep(0.3)
-        except Exception:
-            pass
+        if taskkill:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "mpv.exe"],
+                    capture_output=True, timeout=5,
+                )
+                time.sleep(0.3)
+            except Exception:
+                pass
 
+        return self._launch(pipe_timeout=pipe_timeout, prop_timeout=prop_timeout)
+
+    def _resolve_mpv_path(self) -> bool:
+        """解析 mpv 可执行文件：先配置路径（isfile），再 PATH（shutil.which）。
+        旧的 os.path.exists("mpv") 只查当前目录相对路径，PATH 里有 mpv.exe 也会误报。"""
+        if os.path.isfile(self.mpv_path):
+            return True
+        import shutil
+        found = shutil.which(self.mpv_path)
+        if found:
+            self.mpv_path = found
+            return True
+        print(f"[mpv] 未找到 mpv 可执行文件: {self.mpv_path}")
+        return False
+
+    def _launch(self, pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
+        """Popen + 等待 IPC 管道就绪。任何一步失败 → 返回 False（不抛）。"""
         self.ipc_pipe = r"\\.\pipe\lol_music_mpv_" + str(os.getpid())
 
         print(f"[mpv] pipe name: {self.ipc_pipe!r}")
@@ -58,15 +82,23 @@ class MpvController:
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         ]
 
-        self._process = subprocess.Popen(
-            args,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
+        try:
+            self._process = subprocess.Popen(
+                args,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
 
-        self._wait_for_pipe(timeout=10.0)
+            self._wait_for_pipe(timeout=pipe_timeout)
+        except Exception as e:
+            print(f"[mpv] 启动失败: {e!r}")
+            self._process = None
+            self._pipe = None
+            self._running = False
+            return False
         self._running = True
-        self._init_properties()
+        self._init_properties(prop_timeout=prop_timeout)
         print(f"[mpv] 已启动, PID={self._process.pid}")
+        return True
 
     def _wait_for_pipe(self, timeout: float = 10.0):
         start = time.time()
@@ -92,11 +124,11 @@ class MpvController:
                 time.sleep(0.2)
         raise ConnectionError(f"无法连接到 mpv IPC 管道: {last_error}")
 
-    def _init_properties(self):
+    def _init_properties(self, prop_timeout: float = 1.0):
         properties = ["pause", "volume", "idle-active", "filename", "playback-time", "duration"]
         for prop in properties:
             try:
-                value = self.get_property(prop, timeout=1.0)
+                value = self.get_property(prop, timeout=prop_timeout)
                 if value is not None:
                     self._properties[prop] = value
             except Exception:

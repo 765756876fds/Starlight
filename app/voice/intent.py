@@ -96,6 +96,9 @@ class RuleBasedIntent:
         (r"(重新扫描|扫描音乐|更新音乐库)", CommandType.MUSIC_RESCAN, {}),
         # 清理失效歌曲
         (r"(清理音乐库|清理失效歌曲|清理坏歌|清除失效歌曲)", CommandType.MUSIC_CLEANUP, {}),
+        # 清空队列（整句锚定；"清空计时"等含"计时"的表述不匹配，不会吞 COOLDOWN）
+        (r"^(清空队列|清空播放列表|清除队列|清空列表|清空歌单)$",
+         CommandType.MUSIC_CLEAR_QUEUE, {}),
     ]
 
     # 搜索播放的"纯否定"query：意图是停止/取消，不是搜歌。

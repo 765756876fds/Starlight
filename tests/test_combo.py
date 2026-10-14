@@ -142,6 +142,16 @@ def make_manager(tmp_path, key_sender=None):
     return m
 
 
+def _wait_until(pred, timeout=2.0):
+    """轮询等待条件成立（连招执行已移出调用线程，断言前需等待异步完成）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return pred()
+
+
 def test_manager_disabled_ignores_key(tmp_path):
     m = make_manager(tmp_path, FakeSender())
     assert m.is_enabled() is False
@@ -174,6 +184,7 @@ def test_manager_full_flow_lee_sin(tmp_path):
     m.set_enabled(True)
     assert m.current_champion_name() == "盲僧"
     m._handle_key("3")
+    assert _wait_until(lambda: len(sender.keys) == 3)
     assert sender.keys == ["3", "w", "w"]
 
 
@@ -184,6 +195,7 @@ def test_manager_full_flow_thresh(tmp_path):
     m.set_enabled(True)
     m._ongoing_service._session = make_session(412)
     m._handle_key("a")
+    assert _wait_until(lambda: len(sender.keys) == 3)
     assert sender.keys == ["d", "w", "q"]
 
 
@@ -194,9 +206,10 @@ def test_manager_grace_window_blocks_self_trigger(tmp_path):
     m.set_window_gate(False)  # 隔离前台门控，只测 grace 窗口
     m.set_enabled(True)
     m._handle_key("3")  # 触发连招 3→W→W（W 非 trigger，发的键无风险）
-    assert sender.keys == ["3", "w", "w"]
-    assert time.time() < m._ignore_until  # grace 窗口已设置
+    assert _wait_until(lambda: len(sender.keys) == 3)
+    assert _wait_until(lambda: time.time() < m._ignore_until)  # grace 窗口已设置（异步线程设置）
     m._handle_key("3")  # 窗口内再按，应被忽略
+    time.sleep(0.3)     # 留出潜在异步执行的窗口
     assert len(sender.keys) == 3
 
 
@@ -207,9 +220,11 @@ def test_manager_no_self_loop_after_grace(tmp_path, monkeypatch):
     m.set_window_gate(False)  # 隔离前台门控，只测 grace 恢复
     m.set_enabled(True)
     m._handle_key("4")  # 4→W→W
-    assert sender.keys == ["4", "w", "w"]
+    assert _wait_until(lambda: len(sender.keys) == 3)
+    assert _wait_until(lambda: not m._executor.is_executing)  # 后台线程完全结束
     m._ignore_until = time.time() - 0.1  # 模拟窗口已过
     m._handle_key("4")
+    assert _wait_until(lambda: len(sender.keys) == 6)
     assert sender.keys == ["4", "w", "w", "4", "w", "w"]
 
 
@@ -283,6 +298,7 @@ def test_window_gate_lol_foreground_allows(tmp_path, monkeypatch):
     assert m.is_window_gate_enabled() is True  # 默认开
     monkeypatch.setattr("app.combo.manager.is_lol_foreground", lambda: True)
     m._handle_key("3")
+    assert _wait_until(lambda: len(sender.keys) == 3)
     assert sender.keys == ["3", "w", "w"]
 
 
@@ -307,6 +323,7 @@ def test_window_gate_failure_allows_with_log(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr("app.combo.manager.is_lol_foreground", boom)
     m._handle_key("3")
+    assert _wait_until(lambda: len(sender.keys) == 3)
     assert sender.keys == ["3", "w", "w"]  # 失败放行
     assert "前台检测失败，已放行" in capsys.readouterr().out
 
@@ -319,4 +336,78 @@ def test_window_gate_disabled_ignores_foreground(tmp_path, monkeypatch):
     m.set_window_gate(False)
     monkeypatch.setattr("app.combo.manager.is_lol_foreground", lambda: False)
     m._handle_key("3")
+    assert _wait_until(lambda: len(sender.keys) == 3)
     assert sender.keys == ["3", "w", "w"]
+
+
+# ---------- 修2：连招执行移出键盘钩子线程 ----------
+
+class SlowComboExecutor(ComboExecutor):
+    """key_sender 每键阻塞 1s 模拟长连招：_executing 全程由 CE.run 管理（3 步约 3s）。"""
+
+    def __init__(self):
+        def slow_send(key):
+            time.sleep(1.0)
+
+        super().__init__(key_sender=slow_send)
+        self.accepted = 0
+
+    def run(self, combo):
+        ok = super().run(combo)
+        if ok:
+            self.accepted += 1
+        return ok
+
+
+def test_handle_key_returns_immediately(tmp_path):
+    """回归：执行移线程后，钩子回调 <0.05s 返回（修2 前同步执行 1s 阻塞钩子）。"""
+    m = make_manager(tmp_path)
+    slow = SlowComboExecutor()
+    m._executor = slow
+    m.set_window_gate(False)  # 隔离前台门控
+    m.set_enabled(True)
+    m._resolve_self_champion()  # 预热英雄解析
+    t0 = time.time()
+    m._handle_key("3")
+    dt = time.time() - t0
+    assert dt < 0.05          # 钩子回调不阻塞
+    assert _wait_until(lambda: slow.accepted == 1, timeout=6.0)  # 连招在后台线程完整执行
+
+
+def test_concurrent_trigger_ignored(tmp_path):
+    """执行中再触发 → 第二次被 is_executing 挡下（只完整执行一次，不堆积）。"""
+    m = make_manager(tmp_path)
+    slow = SlowComboExecutor()
+    m._executor = slow
+    m.set_window_gate(False)
+    m.set_enabled(True)
+    m._resolve_self_champion()
+    m._handle_key("3")       # 触发 1（后台线程执行中）
+    time.sleep(0.15)         # 等后台线程进入执行态（_executing=True）
+    t0 = time.time()
+    m._handle_key("3")       # 触发 2 → 应被 _executing 挡下
+    assert time.time() - t0 < 0.05  # 挡下也要立即返回（不阻塞钩子）
+    assert _wait_until(lambda: slow.accepted == 1, timeout=6.0)  # 只完整执行一次
+
+
+def test_executor_exception_isolated(tmp_path):
+    """executor.run 执行中抛异常 → _executing 复位（finally）；
+    manager 线程内捕获打印，钩子回调无异常冒出。"""
+    class BoomSender:
+        def __call__(self, key):
+            raise RuntimeError("key_sender boom")
+
+    ex = ComboExecutor(key_sender=BoomSender())
+    combo = Combo(trigger="a", note="x", sequence=[ComboStep("d", 0)])
+    with pytest.raises(RuntimeError):
+        ex.run(combo)
+    assert ex.is_executing is False  # CE.run 的 finally 复位
+
+    m = make_manager(tmp_path)
+    m._executor = ComboExecutor(key_sender=BoomSender())
+    m.set_window_gate(False)
+    m.set_enabled(True)
+    m._resolve_self_champion()
+    m._handle_key("3")    # 不抛异常（线程内捕获）
+    time.sleep(0.3)
+    assert m._executor.is_executing is False

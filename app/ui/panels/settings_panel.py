@@ -31,6 +31,15 @@ from ..settings_store import (
 from ..widgets.toggle_button import ToggleButton
 from ...lol.data.lol_data_updater import update_all as _update_lol_data
 
+
+class NoWheelSlider(QSlider):
+    """滚轮悬停不改值：wheelEvent 忽略 → 事件冒泡给父 QScrollArea 滚动。
+    Qt 滚轮事件发给悬停控件（与键盘焦点无关），QSlider 默认消费 wheel 改值，
+    设置页滚动时路过滑块会被误触。"""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
 # ---------- TTS 音色常量表（按引擎） ----------
 
 # Qwen-Audio-TTS（qwen-audio-3.1-tts-flash）官方音色 28 个：(voice 参数, 中文描述)
@@ -721,7 +730,7 @@ class SettingsPanel(QWidget):
         lay.addLayout(vrow)
 
         # 语速滑块（qwen：±100 → 0.5~2.0；edge：-50~+50 → +N%）
-        self._rate_slider = QSlider(Qt.Horizontal)
+        self._rate_slider = NoWheelSlider(Qt.Horizontal)
         self._rate_slider.setValue(0)
         self.lbl_rate = QLabel("语速：")
         self.lbl_rate.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
@@ -729,7 +738,7 @@ class SettingsPanel(QWidget):
         lay.addWidget(self._rate_slider)
 
         # 音量滑块（qwen：0~100 int；edge：0~100 → +N%）
-        self._vol_slider = QSlider(Qt.Horizontal)
+        self._vol_slider = NoWheelSlider(Qt.Horizontal)
         self._vol_slider.setValue(0)
         self.lbl_vol = QLabel("音量：")
         self.lbl_vol.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")

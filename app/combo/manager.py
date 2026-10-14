@@ -208,11 +208,24 @@ class ComboManager:
         if combo is None:
             return
         print(f"[Combo] 触发 {champ.name} [{combo.trigger}] {combo.note}")
-        ok = self._executor.run(combo)
-        if ok:
-            # 执行结束后再放开窗口：覆盖"程序自己发的键"的延迟回调
-            self._ignore_until = time.time() + EXEC_GRACE_S
-            print(f"[Combo] 连招执行完毕（{len(combo.sequence)} 步）: {combo.summary}")
+        self._spawn_combo_exec(combo)
+
+    def _spawn_combo_exec(self, combo) -> None:
+        """连招执行移出键盘钩子线程（Windows 低级钩子回调 >300ms 会被静默移除）。
+        钩子回调只做识别 + 派发（<1ms 返回）；执行/延时/收尾在新 daemon 线程。
+        异常在线程内捕获，不影响钩子线程与后续按键。"""
+
+        def _run():
+            try:
+                ok = self._executor.run(combo)
+                if ok:
+                    # 执行结束后再放开窗口：覆盖"程序自己发的键"的延迟回调
+                    self._ignore_until = time.time() + EXEC_GRACE_S
+                    print(f"[Combo] 连招执行完毕（{len(combo.sequence)} 步）: {combo.summary}")
+            except Exception as e:
+                print(f"[Combo] 连招执行异常: {e}")
+
+        threading.Thread(target=_run, daemon=True, name="combo-exec").start()
 
     def _resolve_self_champion(self) -> Optional[ChampionCombos]:
         """从 Ongoing 服务取"我方玩家自己"的 champion_id → ChampionCombos。

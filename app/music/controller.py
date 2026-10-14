@@ -164,6 +164,18 @@ class MusicController:
         self._lock = threading.Lock()
         self._current_song: Optional[Dict[str, Any]] = None
 
+        # mpv 可用性（mpv 未安装/路径错/启动失败 → 模块降级运行，不崩主程序）
+        self._mpv_available = True
+        # mpv 自愈状态（崩溃/管道断自动重启）
+        self._mpv_fail_streak = 0          # get_property 连续失败计数
+        self._mpv_restart_count = 0        # 当前窗口内重启次数
+        self._mpv_restart_window_ts = 0.0  # 窗口起点
+        self._mpv_gave_up = False          # 超过上限后放弃自动恢复
+        # 播报 ducking（TTS 播报期间压低音乐音量）
+        self._duck_active = False
+        self._duck_original_volume: Optional[int] = None
+        self.duck_volume_pct = int(config.get("duck_volume_pct", 50))
+
         # Highlight Mode 状态
         self._highlight_mode: bool = False
         self._highlight_gen: int = 0  # 每首歌一个 token，旧 poller 失效
@@ -182,17 +194,32 @@ class MusicController:
         self.mpv.on_property_change("idle-active", self._on_idle_change)
         self.mpv.on_property_change("eof-reached", self._on_eof)
 
-    def start(self):
-        """启动音乐模块"""
+    def start(self) -> bool:
+        """启动音乐模块。mpv 不可用 → 降级运行（不抛异常），返回 False。"""
         if self._running:
-            return
+            return True
 
-        # 启动 mpv
-        self.mpv.start()
+        # 启动 mpv（失败不抛：mpv 未安装/路径错误 → 模块降级，不崩主程序）
+        try:
+            ok = bool(self.mpv.start())
+        except Exception as e:
+            print(f"[Music] mpv 启动异常: {e!r}")
+            ok = False
+        if not ok:
+            self._mpv_available = False
+            print("[Music] mpv 不可用，音乐模块降级运行（播放/音量控制禁用）")
+            self._running = True
+            self._subscribe_speech_events()
+            self.state_store.set(StateNamespace.MUSIC, "volume", self.default_volume)
+            self.state_store.set(StateNamespace.MUSIC, "playing", False)
+            self.state_store.set(StateNamespace.MUSIC, "current_song", None)
+            return False
+        self._mpv_available = True
         self.mpv.set_volume(self.default_volume)
 
         # 注册事件
         self._running = True
+        self._subscribe_speech_events()
 
         # 启动后台轮询：每0.8秒实时查mpv idle状态，播完自动切下一首。
         # 说明：mpv IPC 事件消息在 _send_command 响应循环中被跳过，事件回调
@@ -210,16 +237,37 @@ class MusicController:
         def _poll_idle():
             import time as _time
             while self._running:
+                if self._mpv_gave_up:
+                    _time.sleep(2.0)
+                    continue
+                # 1) 管道健康探测：get_property 连续失败 → 触发重启
                 try:
                     now_idle = bool(self.mpv.get_property("idle-active", timeout=0.5))
-                    # 刚从播放变成 idle，说明播完了
-                    if now_idle and not self._last_idle:
-                        _time.sleep(0.5)  # 等 mpv 稳定
-                        print("[Music] 检测到播放结束，自动切下一首")
-                        self._auto_next()
-                    self._last_idle = now_idle
+                    self._mpv_fail_streak = 0
                 except Exception as e:
                     print(f"[Music] idle poll error: {e!r}")
+                    self._mpv_fail_streak += 1
+                    if self._mpv_fail_streak >= 3:
+                        self._mpv_fail_streak = 0
+                        self._try_restart_mpv("pipe-fail")
+                    _time.sleep(0.8)
+                    continue
+                # 2) 进程存活探测：mpv 进程死亡 → 触发重启
+                try:
+                    alive = bool(self.mpv.is_running())
+                except Exception:
+                    alive = True
+                if not alive:
+                    print("[Music] mpv 进程已退出")
+                    self._try_restart_mpv("process-dead")
+                    _time.sleep(0.8)
+                    continue
+                # 3) 原逻辑：idle 上升沿 → 自动切歌
+                if now_idle and not self._last_idle:
+                    _time.sleep(0.5)  # 等 mpv 稳定
+                    print("[Music] 检测到播放结束，自动切下一首")
+                    self._auto_next()
+                self._last_idle = now_idle
                 _time.sleep(0.8)
 
         threading.Thread(target=_poll_idle, daemon=True, name="music-idle-poll").start()
@@ -230,6 +278,64 @@ class MusicController:
         self.state_store.set(StateNamespace.MUSIC, "current_song", None)
 
         print("[Music] 模块已启动")
+        return True
+
+    def _subscribe_speech_events(self):
+        """订阅 TTS 播报事件（播报期间压低音乐音量）。
+        在 start() 里订阅：与模块生命周期一致；测试不 start 则不产生全局订阅残留。"""
+        self.event_bus.subscribe(EventType.SPEECH_STARTED, self._on_speech_started)
+        self.event_bus.subscribe(EventType.SPEECH_FINISHED, self._on_speech_finished)
+
+    def _try_restart_mpv(self, reason: str):
+        """mpv 崩溃/管道断自愈：stop → start(taskkill=False) → 恢复当前歌。
+        窗口限制 3 次/5 分钟；超过则放弃（_mpv_gave_up），避免反复崩。
+        持锁执行：与 play/next 等操作串行，防止重启窗口内踩未建好的 pipe；
+        重启路径用短超时（pipe 3s + 属性 0.5s），持锁最坏 ~6s、正常 <1s。"""
+        with self._lock:
+            now = time.time()
+            if now - self._mpv_restart_window_ts > 300:
+                self._mpv_restart_window_ts = now
+                self._mpv_restart_count = 0
+            if self._mpv_restart_count >= 3:
+                if not self._mpv_gave_up:
+                    self._mpv_gave_up = True
+                    print("[Music] mpv 多次重启失败，放弃自动恢复（音乐模块停止自愈）")
+                return
+            self._mpv_restart_count += 1
+            print(f"[Music] mpv 异常({reason})，尝试自动重启 {self._mpv_restart_count}/3")
+            try:
+                self.mpv.stop_process()
+            except Exception:
+                pass
+            try:
+                ok = bool(self.mpv.start(taskkill=False, pipe_timeout=3.0, prop_timeout=0.5))
+            except Exception as e:
+                print(f"[Music] mpv 重启异常: {e!r}")
+                ok = False
+            if not ok:
+                self._mpv_available = False
+                print("[Music] mpv 重启失败，模块降级")
+                return
+            self._mpv_available = True
+            # 重置轮询基线：mpv 冷启动处于 idle，必须真实读取（失败保守取 True）
+            try:
+                self._last_idle = bool(self.mpv.get_property("idle-active", timeout=1.0))
+            except Exception:
+                self._last_idle = True
+            # 恢复当前歌曲（仅本地文件；在线 URL 交给 idle 上升沿自动切歌）
+            self._try_resume_after_restart()
+
+    def _try_resume_after_restart(self):
+        """重启后恢复播放：本地文件重新 loadfile（从头播）；
+        在线 URL 不恢复（源已断），把 _last_idle 置 False 产生上升沿自动切歌。"""
+        song = self._current_song
+        if not song:
+            return
+        path = song.get("path") or ""
+        if path.startswith(("http://", "https://")):
+            self._last_idle = False
+            return
+        self._play_song(song)
 
     def stop(self):
         """停止音乐模块"""
@@ -261,11 +367,15 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_SET_PLAY_MODE, self._cmd_set_play_mode)
         self.command_bus.register(CommandType.MUSIC_RESCAN, lambda c: self.rescan())
         self.command_bus.register(CommandType.MUSIC_CLEANUP, lambda c: self.cleanup_missing())
+        self.command_bus.register(CommandType.MUSIC_CLEAR_QUEUE, lambda c: self.clear_queue())
 
     # ===== 播放控制 =====
 
     def play(self):
         """播放"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         # 优先控制落雪
         if self.lx_connected:
             try:
@@ -304,6 +414,9 @@ class MusicController:
 
     def pause(self):
         """暂停"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         # 优先控制落雪
         if self.lx_connected:
             try:
@@ -322,6 +435,9 @@ class MusicController:
 
     def resume(self):
         """继续播放"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         self.mpv.play()
         # 实时同步状态
         try:
@@ -332,6 +448,9 @@ class MusicController:
 
     def toggle(self):
         """切换播放/暂停（直接让 mpv 处理，不依赖缓存状态）"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         # 优先控制落雪
         if self.lx_connected:
             try:
@@ -350,6 +469,9 @@ class MusicController:
 
     def next(self):
         """下一首"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         # 优先控制落雪
         if self.lx_connected:
             try:
@@ -384,6 +506,9 @@ class MusicController:
 
     def prev(self):
         """上一首"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         # 优先控制落雪
         if self.lx_connected:
             try:
@@ -400,6 +525,9 @@ class MusicController:
 
     def play_song(self, song: Dict[str, Any]):
         """播放指定歌曲"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         with self._lock:
             self._invalidate_highlight()
             # 如果队列是空的（语音首次播放本地歌曲），自动把整个本地库加进队列
@@ -417,6 +545,9 @@ class MusicController:
 
     def play_search_result(self, query: str, index: int = 0):
         """搜索并播放第 N 个结果，本地找不到自动走在线fallback"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return None
         results = self.search.search(query, limit=10)
         if results and 0 <= index < len(results):
             self.play_song(results[index])
@@ -717,6 +848,9 @@ class MusicController:
 
     def play_online(self, track) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return False
         if self.online_manager is None:
             return False
         result = self.online_manager.get_play_url(track)
@@ -778,17 +912,26 @@ class MusicController:
 
     def set_volume(self, volume: int):
         """设置音量"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         volume = max(0, min(100, volume))
         self.mpv.set_volume(volume)
         self.state_store.set(StateNamespace.MUSIC, "volume", volume)
 
     def volume_up(self, step: int = 5):
         """音量增加"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         current = self.mpv.get_volume()
         self.set_volume(current + step)
 
     def volume_down(self, step: int = 5):
         """音量减少"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         current = self.mpv.get_volume()
         self.set_volume(current - step)
 
@@ -800,10 +943,16 @@ class MusicController:
 
     def seek(self, seconds: float, mode: str = "relative"):
         """跳转"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         self.mpv.seek(seconds, mode)
 
     def jump_to_highlight(self):
         """跳到高潮部分（一次性）"""
+        if not self._mpv_available:
+            print("[Music] mpv 不可用，忽略操作")
+            return
         if not self._current_song:
             return
 
@@ -934,6 +1083,49 @@ class MusicController:
         self._highlight_end_time = None
         self._highlight_song_id = None
 
+    # ===== 播报 ducking =====
+
+    def _on_speech_started(self, event: Event):
+        """TTS 播报开始发声 → 音乐音量降到原值的 duck_volume_pct%。
+        仅在音乐真实播放时 duck；已 duck 或 mpv 不可用则跳过。"""
+        if not self._mpv_available:
+            return
+        if self._duck_active:
+            return
+        try:
+            idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
+            paused_now = bool(self.mpv.get_property("pause", timeout=0.5))
+            if idle_now or paused_now:
+                return
+        except Exception:
+            return
+        try:
+            orig = int(self.mpv.get_volume())
+        except Exception:
+            return
+        self._duck_original_volume = orig
+        ducked = max(0, min(100, int(orig * self.duck_volume_pct / 100)))
+        self.set_volume(ducked)
+        self._duck_active = True
+
+    def _on_speech_finished(self, event: Event):
+        """TTS 播报结束（completed/stopped 统一处理）→ 恢复音乐音量。
+        用户 duck 期间手动调过音量 → 不覆盖用户意图。"""
+        if not self._duck_active:
+            return
+        self._duck_active = False
+        orig = self._duck_original_volume
+        self._duck_original_volume = None
+        if orig is None:
+            return
+        ducked = max(0, min(100, int(orig * self.duck_volume_pct / 100)))
+        try:
+            current = int(self.mpv.get_volume())
+        except Exception:
+            current = None
+        if current is not None and current == ducked:
+            self.set_volume(orig)
+
     def _highlight_poll_loop(self, gen: int, song_id: int, end_time: float):
         """Highlight 段轮询线程：到达 end_time 自动 next"""
         stop = self._highlight_stop
@@ -990,8 +1182,20 @@ class MusicController:
         return self.queue.get_queue()
 
     def clear_queue(self):
-        """清空队列"""
-        self.queue.clear()
+        """清空队列：同时停止当前播放、失效 highlight、重置轮询基线。
+        旧行为只清队列数据 → 播完自动重载全库续播（清空无意义 + 状态错乱）。"""
+        with self._lock:
+            self._invalidate_highlight()
+            self._current_song = None
+            self.queue.clear()
+            try:
+                self.mpv.stop()  # mpv 回 idle，停止当前播放
+            except Exception:
+                pass
+            # 关键：与 mpv 实际状态（idle）对齐，防止下一轮轮询把"停止后 idle"
+            # 误判为"播完上升沿"→ 自动切歌 → 队列空 → 全库重载续播
+            self._last_idle = True
+            self._update_state(playing=False, current_song=None)
 
     def set_play_mode(self, mode: str):
         """设置播放模式"""
@@ -1081,6 +1285,8 @@ class MusicController:
 
     def is_playing(self) -> bool:
         """是否正在播放"""
+        if not self._mpv_available:
+            return False
         return not self.mpv.is_paused() and not self.mpv.is_idle()
 
 
