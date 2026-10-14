@@ -297,7 +297,10 @@ class ASRManager:
         优先使用当前引擎，失败时自动切换。
         """
         with self._lock:
-            if not self._active_engine:
+            # 无 active 引擎，或 active 引擎失联（服务中途挂掉/恢复）：
+            # 重新走加载链——单次探测（retry_seconds=0，不阻塞调用线程），
+            # 成功则继续转写；失败返回空串，下次调用再试（不永久失效）。
+            if not self._active_engine or not self._active_engine.is_available():
                 if not self._load_next_engine():
                     return ""
 

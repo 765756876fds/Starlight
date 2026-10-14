@@ -98,6 +98,12 @@ class RuleBasedIntent:
         (r"(清理音乐库|清理失效歌曲|清理坏歌|清除失效歌曲)", CommandType.MUSIC_CLEANUP, {}),
     ]
 
+    # 搜索播放的"纯否定"query：意图是停止/取消，不是搜歌。
+    # 仅在 query 完全等于这些词时跳过搜索规则（歌名如"不要说话"不受影响）。
+    SEARCH_NEGATION_WORDS = {
+        "停止", "停", "别", "不要", "不", "取消", "关", "关闭",
+    }
+
     # 游戏提醒规则
     ALARM_RULES = [
         # 闪现记录：必须出现明确的"记"动作才创建 USER_MEMORY。
@@ -126,7 +132,11 @@ class RuleBasedIntent:
          "alarm.list", {}),
         (r"(还有多久|还剩多久|还有多长时间|还有多少时间|什么时候提醒|几点提醒)",
          "alarm.remaining", {}),
-        (r"(取消|删掉|不要|取消掉)(刚才|之前|刚刚)?(那个|上一个|这个|那条)?(提醒|记录|计时)?",
+        # "取消/删掉"分支：保持宽匹配（口语"取消刚才那个"宾语可省略）
+        (r"(取消|删掉|取消掉)(刚才|之前|刚刚)?(那个|上一个|这个|那条)?(提醒|记录|计时)?",
+         "alarm.cancel_last", {}),
+        # "不要"分支：必须带宾语（提醒/记录/计时），避免"不要播放"等被吞成删提醒
+        (r"不要(刚才|之前|刚刚)?(那个|上一个|这个|那条)?(提醒|记录|计时)",
          "alarm.cancel_last", {}),
     ]
 
@@ -322,6 +332,9 @@ class RuleBasedIntent:
             match = re.match(pattern, text)
             if match:
                 query = match.group(1).strip()
+                # "停止播放"/"播放停止" → query="停止"：意图是停止，跳过搜歌（最终 unknown）
+                if query in cls.SEARCH_NEGATION_WORDS:
+                    continue
                 # 排除已经被其他规则匹配的
                 if query and not any(kw in query for kw in ["下一首", "暂停", "继续"]):
                     return Intent(

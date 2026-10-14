@@ -296,7 +296,7 @@ class Application:
         print("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
         self._set_module_status("asr", "loading")
         self._ensure_asr_running()
-        self.voice = VoiceRuntime(self.config_data)
+        self.voice = VoiceRuntime(self.config_data, tts_provider=lambda: self.tts)
         self._set_module_status("asr", "ok")
         self._set_module_status("intent", "ok")
 

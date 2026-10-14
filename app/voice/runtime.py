@@ -27,7 +27,7 @@ class VoiceRuntime:
     整合语音输入全流程。
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], tts_provider=None):
         self.config = config
         self.asr_config = config.get("asr", {})
         self.intent_config = config.get("intent", {})
@@ -35,6 +35,10 @@ class VoiceRuntime:
         # 子系统
         self.asr = ASRManager(self.asr_config)
         self.intent_router = IntentRouter(self.intent_config)
+
+        # TTS 状态提供者（回声抑制用；惰性调用，避免构造期依赖）
+        # 约定：返回带 is_playing() 方法的对象，或 None（不启用回声抑制）
+        self.tts_provider = tts_provider
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -132,6 +136,9 @@ class VoiceRuntime:
                     # 检测到语音
                     silence_duration = 0
                     if not in_speech:
+                        # 回声抑制：TTS 正在播放/生成，本段视为回声，丢弃不采集
+                        if not self._should_collect_speech():
+                            continue
                         in_speech = True
                         speech_count = 0
                     speech_frames.append(data)
@@ -160,6 +167,20 @@ class VoiceRuntime:
         audio.terminate()
         self._listening = False
 
+    def _should_collect_speech(self) -> bool:
+        """回声抑制闸门：TTS 正在生成/播放期间，麦克风新语音段不采集。
+
+        返回 False = 丢弃本段语音（不进入 ASR）。
+        在 VAD 上升沿调用（回声到达麦克风时 TTS 大概率仍在播）。
+        """
+        try:
+            tts = self.tts_provider() if self.tts_provider else None
+        except Exception:
+            tts = None
+        if tts is not None and tts.is_playing():
+            return False
+        return True
+
     def _calculate_volume(self, data: bytes) -> int:
         """计算音频音量（RMS）"""
         import struct
@@ -173,6 +194,9 @@ class VoiceRuntime:
     def _process_speech(self, audio_data: bytes, sample_rate: int):
         """处理一段语音"""
         if not self._asr_enabled:
+            return
+        # 防御：上升沿闸门通过但识别开始时 TTS 仍在播（长播报场景）→ 丢弃
+        if not self._should_collect_speech():
             return
 
         # ASR 识别
