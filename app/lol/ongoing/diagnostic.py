@@ -17,12 +17,14 @@ import time
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional
 
+from app.core.path_resolve import PROJECT_ROOT
+
 
 class ChampSelectDiagnostic:
     def __init__(
         self,
         lcu_request_raw: Callable[[str, str, Any], Any],
-        capture_dir: str = "runtime",
+        capture_dir: str = str(PROJECT_ROOT / "runtime"),
         interval: float = 0.5,
         ring_seconds: float = 120.0,
         on_event: Optional[Callable[[str, dict], None]] = None,

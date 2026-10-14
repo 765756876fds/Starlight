@@ -214,7 +214,7 @@ class Application:
         # 0. Event Log锛堟渶鍏堝惎鍔紝璁板綍鎵€鏈変簨浠讹級
         print("\n[0/5] 鍒濆鍖?Event Log...")
         self.event_log = EventLog(
-            log_dir=self.config.get("events.log_dir", "./data/events")
+            log_dir=self.config.get("events.log_dir", os.path.join(PROJECT_ROOT, "data", "events"))
         )
 
         # 1. 闊充箰妯″潡
@@ -568,9 +568,9 @@ class Application:
     def _register_player_query(self):
         """doc"""
         try:
-            db_path = "data/player.db"
+            db_path = os.path.join(PROJECT_ROOT, "data", "player.db")
             events_dir = self.config.get(
-                "events.log_dir", "./data/events"
+                "events.log_dir", os.path.join(PROJECT_ROOT, "data", "events")
             )
             def _snapshot_provider():
                 try:

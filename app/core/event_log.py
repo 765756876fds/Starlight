@@ -16,6 +16,8 @@ import json
 import uuid
 import threading
 from datetime import datetime, timedelta
+
+from app.core.path_resolve import PROJECT_ROOT
 from typing import Any, Dict, Optional
 
 from .event_bus import Event, EventBus, get_event_bus
@@ -58,7 +60,7 @@ class EventLog:
     订阅 EventBus 所有事件，追加写入按日期分的 JSONL 文件。
     """
 
-    def __init__(self, log_dir: str = "./data/events"):
+    def __init__(self, log_dir: str = str(PROJECT_ROOT / "data" / "events")):
         self.log_dir = log_dir
         self._lock = threading.Lock()
         self._current_date: Optional[str] = None
