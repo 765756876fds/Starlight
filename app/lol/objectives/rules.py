@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-DEFAULT_PATH = Path("data/lol_data/objectives.json")
+from app.core.path_resolve import PROJECT_ROOT
+
+DEFAULT_PATH = PROJECT_ROOT / "data" / "lol_data" / "objectives.json"
 
 
 @dataclass(frozen=True)

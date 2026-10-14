@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-_SPELLS_PATH = Path("data/lol_data/summoner_spells.json")
+from app.core.path_resolve import PROJECT_ROOT
+
+_SPELLS_PATH = PROJECT_ROOT / "data" / "lol_data" / "summoner_spells.json"
 
 
 @dataclass(frozen=True)

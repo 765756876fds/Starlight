@@ -1,10 +1,14 @@
 """路径解析工具：外部可执行文件查找链（配置 → 自动搜索 → 降级）。
 P0 路径自适应（2026-10-16）：llama-server 定位统一走这里；
-后续 P1（lol_data 项目根统一）也可复用本模块模式。
+P1（2026-10-16）：PROJECT_ROOT 单一来源，lol_data / music_sources 路径统一基于它。
 """
 import glob
 import os
 import shutil
+from pathlib import Path
+
+# 项目根（app/core/path_resolve.py → 上溯 2 层）。所有 data/ 路径的单一来源。
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def find_llama_server(asr_config: dict) -> str:

@@ -236,17 +236,15 @@ class Application:
             if _om_cfg.get("archive_source", False):
                 self.online_music_manager.register(ArchiveSource())
                 print("[Music] archive 音源已启用（online_music.archive_source=true）")
-            import os
-            custom_dir = os.path.join(".", "data", "music_sources")
+            custom_dir = os.path.join(PROJECT_ROOT, "data", "music_sources")
             try:
                 self.online_music_manager.load_custom_sources(custom_dir)
             except Exception as e:
                 print(f"[Music] 鑷畾涔夋簮鍔犺浇澶辫触: {e}")
             try:
-                from pathlib import Path as _P
                 from app.music.online.sources.js_source import JSMusicSource
-                _mf = str(_P("data/music_sources/musicfree").absolute())
-                _lx = str(_P("data/music_sources/lx").absolute())
+                _mf = os.path.join(PROJECT_ROOT, "data", "music_sources", "musicfree")
+                _lx = os.path.join(PROJECT_ROOT, "data", "music_sources", "lx")
                 self._js_source = JSMusicSource(_mf, _lx, user_variables=(self.config_data.get("online_music", {}).get("js_bridge", {}) or {}).get("user_variables") or {})
                 self.online_music_manager.register(self._js_source)
                 self._set_module_status("js", "ok" if self._js_source.available else "fail")

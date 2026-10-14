@@ -22,7 +22,9 @@ _BUILTIN: List[Champion] = [
     Champion(99, "Lux", "拉克丝", ("光辉", "光女")),
 ]
 
-DEFAULT_DATA = Path("data/lol_data/champions.json")
+from app.core.path_resolve import PROJECT_ROOT
+
+DEFAULT_DATA = PROJECT_ROOT / "data" / "lol_data" / "champions.json"
 
 # 俗称 / 常见 ASR 误听 → 官方中文名（key 必须是 champions.json 里的 name）
 _NAME_ALIASES: Dict[str, tuple] = {
