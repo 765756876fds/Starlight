@@ -9,10 +9,10 @@ from typing import List, Optional
 class MatchSummary:
     champion_id: int = 0
     champion_name: str = ""
-    win: bool = False
-    kills: int = 0
-    deaths: int = 0
-    assists: int = 0
+    win: Optional[bool] = None
+    kills: Optional[int] = None
+    deaths: Optional[int] = None
+    assists: Optional[int] = None
     duration_seconds: int = 0
     game_creation: int = 0  # epoch ms
 

@@ -414,10 +414,21 @@ def _card(snap, is_enemy: bool) -> QFrame:
     elif state == "NO_DATA":
         lay.addWidget(QLabel("<i>近期战绩：暂无对局记录</i>"))
     else:
-        wins = sum(1 for m in snap.recent_matches if m.win)
+        wins = sum(1 for m in snap.recent_matches if m.win is True)
+        losses = sum(1 for m in snap.recent_matches if m.win is False)
         total = len(snap.recent_matches)
-        kda = f"{snap.kda_ratio:.2f}"
-        lay.addWidget(QLabel(f"近{total}场: {wins}胜 / {total-wins}负  KDA={kda}"))
+        unknown = total - wins - losses
+        kda_parts = [
+            (m.kills + m.assists) / m.deaths
+            for m in snap.recent_matches
+            if m.kills is not None and m.deaths is not None
+            and m.assists is not None and m.deaths > 0
+        ]
+        kda_text = f"{sum(kda_parts) / len(kda_parts):.2f}" if kda_parts else "--"
+        line = f"近{total}场: {wins}胜 / {losses}负  KDA={kda_text}"
+        if unknown > 0:
+            line += f"（{unknown}场数据不全）"
+        lay.addWidget(QLabel(line))
         extras = []
         if getattr(snap, "main_position", None):
             extras.append(f"位置:{_zh_position(snap.main_position)}")

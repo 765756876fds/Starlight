@@ -103,7 +103,7 @@ class SgpMatchHistoryProvider:
             urllib.request.ProxyHandler({}),
             urllib.request.HTTPSHandler(context=ctx),
         )
-        with opener.open(req, timeout=15) as r:
+        with opener.open(req, timeout=8) as r:
             return json.load(r)
 
     def recent(self, puuid: str, start_index: int = 0, count: int = 20) -> MatchHistoryResult:

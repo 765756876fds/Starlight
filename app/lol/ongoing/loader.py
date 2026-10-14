@@ -216,8 +216,15 @@ class OngoingGameLoader:
         state = result.state
         # 只统计匹配/单双排/灵活排位（白名单，与 intelligence 同口径；自定义/人机/娱乐/未知全排除）
         records = [m for m in result.records if m.queue_id in _VALID_QUEUE_IDS][: self._recent_n]
+        excluded = sorted({m.queue_id for m in result.records if m.queue_id not in _VALID_QUEUE_IDS})
         if not records and result.records:
             state = NO_DATA  # 有记录但全是训练/娱乐模式，不参与统计
+            if excluded:
+                self._on_event("history.queue_filtered", {
+                    "puuid": puuid,
+                    "excluded_queues": excluded,
+                    "kept": len(records),
+                })
 
         wins = sum(1 for m in records if m.win)
         total = len(records)
@@ -290,10 +297,10 @@ class OngoingGameLoader:
         return MatchSummary(
             champion_id=m.champion_id,
             champion_name=m.champion_name,
-            win=bool(m.win) if m.win is not None else False,
-            kills=m.kills or 0,
-            deaths=m.deaths or 0,
-            assists=m.assists or 0,
+            win=m.win,
+            kills=m.kills,
+            deaths=m.deaths,
+            assists=m.assists,
             duration_seconds=m.game_duration,
             game_creation=m.game_creation,
         )

@@ -376,9 +376,23 @@ class CurrentGamePanel(QWidget):
                     # 请求失败：自动重试中，显示获取中而不是误导性的0/0/0
                     line2_transition = "战绩获取中…（自动重试）"
             elif hist_ready:
-                wins = sum(1 for m in snap_data.recent_matches if m.win)
+                wins = sum(1 for m in snap_data.recent_matches if m.win is True)
+                losses = sum(1 for m in snap_data.recent_matches if m.win is False)
                 total = len(snap_data.recent_matches)
-                line2_state = f"近{total}场 {wins}胜{total-wins}负 KDA {snap_data.kda_ratio:.2f}"
+                unknown = total - wins - losses
+                kda_parts = [
+                    (m.kills + m.assists) / m.deaths
+                    for m in snap_data.recent_matches
+                    if m.kills is not None and m.deaths is not None
+                    and m.assists is not None and m.deaths > 0
+                ]
+                if kda_parts:
+                    kda = sum(kda_parts) / len(kda_parts)
+                    line2_state = f"近{total}场 {wins}胜{losses}负 KDA {kda:.2f}"
+                else:
+                    line2_state = f"近{total}场 {wins}胜{losses}负 KDA --"
+                if unknown > 0:
+                    line2_state += f"（{unknown}场数据不全）"
             elif snap_data is None:
                 # history 尚未加载完成：实时 KDA 过渡（身份/玩家存在性不受影响）
                 line2_transition = f"战绩加载中… 实时 {k}/{d}/{a}"
