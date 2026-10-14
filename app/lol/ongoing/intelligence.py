@@ -18,13 +18,12 @@ from .champion_mastery import ChampionMasteryRecord
 
 
 def _is_valid_match(m: MatchRecord) -> bool:
-    """判断是否为有效比赛（只算匹配/单双排/灵活排位，其余全排除）"""
-    # 必须有胜负结果
-    if m.win is None:
-        return False
-    # 必须有 KDA 数据
-    if m.kills is None or m.deaths is None or m.assists is None:
-        return False
+    """判断是否为有效比赛（只算匹配/单双排/灵活排位，其余全排除）。
+
+    候选 A：不再要求 win/KDA 非 None——字段缺失场次进入统计但"中性剔除"
+    （win 缺失不计胜负、KDA 缺失不参与平均），保证显示窗口与称号判定
+    窗口一致（探针实测缺失率 0%，此处为防御）。
+    """
     # 白名单：非 {400,420,430,440,460,490} 一律排除（自定义/人机/大乱斗/娱乐/未知）
     if m.queue_id not in _VALID_QUEUE_IDS:
         return False
@@ -63,11 +62,12 @@ class PlayerIntelligenceResult:
     privacy: str = ""
 
     # 近期状态（来自 SGP 最近 20 场）
-    games: int = 0               # 有效比赛数（过滤 PVE 后）
+    games: int = 0               # 有效比赛数（queue 白名单后，含数据不全场次）
     raw_games: int = 0            # 原始总比赛数（未过滤）
     wins: int = 0
     losses: int = 0
     win_rate: float = 0.0
+    unknown_count: int = 0        # win 缺失场次数（不计胜负；KDA 缺失不计入此字段）
 
     # 总数据
     total_kills: int = 0
@@ -202,9 +202,13 @@ class PlayerIntelligenceService:
         result.games_10 = len(recent10)
         if recent10:
             w10 = sum(1 for m in recent10 if m.win)
-            result.win_rate_10 = w10 / len(recent10)
-            kda10_list = [_per_game_kda(m) for m in recent10]
-            result.average_kda_10 = sum(kda10_list) / len(kda10_list)
+            l10 = sum(1 for m in recent10 if m.win is False)
+            result.win_rate_10 = w10 / (w10 + l10) if (w10 + l10) else 0.0
+            kda10_list = [
+                _per_game_kda(m) for m in recent10
+                if m.kills is not None and m.deaths is not None and m.assists is not None
+            ]
+            result.average_kda_10 = sum(kda10_list) / len(kda10_list) if kda10_list else 0.0
             if recent10[0].win is not None:
                 first_win = recent10[0].win
                 n = 0
@@ -219,19 +223,30 @@ class PlayerIntelligenceService:
         champion_map: Dict[int, ChampionStat] = {}
 
         for m in valid_matches:
+            # 数据完整性：KDA 缺失场次不参与平均（不计入 unknown_count）
+            kda_complete = (
+                m.kills is not None
+                and m.deaths is not None
+                and m.assists is not None
+            )
+            # 胜负数据不全（win=None）：不计胜负，仅计数（显示"近N场 X胜Y负（N场数据不全）"自洽）
+            if m.win is None:
+                result.unknown_count += 1
+
             # 总击杀/死亡/助攻
             result.total_kills += m.kills or 0
             result.total_deaths += m.deaths or 0
             result.total_assists += m.assists or 0
 
-            # 胜负
+            # 胜负（win=None 不计胜负，已计入 unknown_count）
             if m.win:
                 result.wins += 1
-            else:
+            elif m.win is False:
                 result.losses += 1
 
-            # 逐场 KDA
-            kda_list.append(_per_game_kda(m))
+            # 逐场 KDA（缺失不参与平均）
+            if kda_complete:
+                kda_list.append(_per_game_kda(m))
 
             # 英雄统计
             cid = m.champion_id
@@ -244,17 +259,18 @@ class PlayerIntelligenceService:
             cs.games += 1
             if m.win:
                 cs.wins += 1
-            else:
+            elif m.win is False:
                 cs.losses += 1
             cs.total_kills += m.kills or 0
             cs.total_deaths += m.deaths or 0
             cs.total_assists += m.assists or 0
 
-        # 胜率
-        result.win_rate = result.wins / result.games
+        # 胜率（分母 = 有胜负结果的场次数，与显示"近N场 X胜Y负"同源）
+        decided = result.wins + result.losses
+        result.win_rate = result.wins / decided if decided else 0.0
 
-        # 平均 KDA（逐场平均值）
-        result.average_kda = sum(kda_list) / len(kda_list)
+        # 平均 KDA（逐场平均值，只统计 KDA 完整场次）
+        result.average_kda = sum(kda_list) / len(kda_list) if kda_list else 0.0
 
         # 英雄统计排序：场次 DESC, KDA DESC, champion_id ASC
         for cs in champion_map.values():

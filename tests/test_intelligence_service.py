@@ -94,10 +94,13 @@ def test_is_valid_match_queue_whitelist():
         assert _is_valid_match(rec(qid)) is False, f"queue {qid} 应排除"
 
 
-def test_is_valid_match_requires_result_data():
-    """胜负/KDA 缺失 → 无效（与队列无关）。"""
+def test_is_valid_match_only_queue_whitelist():
+    """候选 A：字段缺失不再过滤（中性剔除在统计层），queue 白名单仍生效。"""
     from app.lol.ongoing.intelligence import _is_valid_match
     from app.lol.ongoing.match_model import MatchRecord
 
-    assert _is_valid_match(MatchRecord(queue_id=420, win=None)) is False
-    assert _is_valid_match(MatchRecord(queue_id=420, win=True, kills=None, deaths=2, assists=8)) is False
+    # 白名单内：win=None / KDA 缺失 仍算有效场（统计层中性处理）
+    assert _is_valid_match(MatchRecord(queue_id=420, win=None)) is True
+    assert _is_valid_match(MatchRecord(queue_id=420, win=True, kills=None, deaths=2, assists=8)) is True
+    # 白名单外：仍排除
+    assert _is_valid_match(MatchRecord(queue_id=450, win=True, kills=5, deaths=2, assists=8)) is False

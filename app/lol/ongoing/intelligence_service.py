@@ -44,6 +44,9 @@ class PlayerIntelligenceCacheEntry:
     recent_raw_games: int = 0      # 原始查询数
     recent_win_rate: float = 0.0
     recent_average_kda: float = 0.0
+    recent_wins: int = 0           # 有胜负结果场次的胜数
+    recent_losses: int = 0         # 有胜负结果场次的负数
+    recent_unknown_count: int = 0  # win 缺失场次数（不计胜负）
     habitual_positions: List[str] = None  # ["UTILITY"] 等
 
     # B 行数据：近期英雄统计（analyze 产物，场次→KDA 排序）
@@ -139,11 +142,11 @@ class OngoingIntelligenceService:
             entry.mastery_top3 = []
             entry.queried_mastery = True
 
-        # 2. 查询最近20场
+        # 2. 查询最近50场（候选 A：窗口与 loader 对齐，显示/判定同源）
         sgp = self._ensure_sgp()
         if sgp:
             try:
-                res = sgp.recent(puuid, start_index=0, count=20)
+                res = sgp.recent(puuid, start_index=0, count=50)
                 if res.state == "AVAILABLE" and res.records:
                     # 用 PlayerIntelligenceService 分析
                     intel_result = self._intelligence.analyze(
@@ -161,6 +164,9 @@ class OngoingIntelligenceService:
                         entry.recent_games = intel_result.games
                         entry.recent_win_rate = intel_result.win_rate
                         entry.recent_average_kda = intel_result.average_kda
+                        entry.recent_wins = intel_result.wins
+                        entry.recent_losses = intel_result.losses
+                        entry.recent_unknown_count = intel_result.unknown_count
                         entry.habitual_positions = intel_result.habitual_positions
                         entry.champion_stats = intel_result.champion_stats
                         entry.streak = intel_result.streak

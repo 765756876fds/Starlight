@@ -14,11 +14,8 @@ from app.lol.data.champion_catalog import ChampionCatalog
 from app.core.event_bus import Event, get_event_bus
 from app.ui.theme.colors import Colors
 
-
-_POSITION_MAP = {
-    "TOP": "上路", "JUNGLE": "打野", "MIDDLE": "中路",
-    "BOTTOM": "下路", "UTILITY": "辅助",
-}
+_FONT_SZ = 14          # 卡片正文主字号（px）
+_FONT_SZ_STREAK = 13   # 连胜连败标记字号（比正文略小）
 
 _TIER_ZH = {
     "IRON": "黑铁", "BRONZE": "青铜", "SILVER": "白银", "GOLD": "黄金",
@@ -36,8 +33,8 @@ def _fmt_game_time(t: float) -> str:
 
 
 class PlayerCard(QFrame):
-    """单个玩家卡片组件"""
-    def __init__(self, is_ally=True, show_skill=False, parent=None):
+    """单个玩家卡片组件（4 行：名字 / 称号行 / 最近英雄 / 本局）"""
+    def __init__(self, is_ally=True, parent=None):
         super().__init__(parent)
         self.is_ally = is_ally
         # 默认边框色：己方蓝 / 敌方红；命中称号时边框随称号色（update_data 每帧动态）
@@ -57,115 +54,79 @@ class PlayerCard(QFrame):
 
         self.row1 = QHBoxLayout()
         self.lbl_name = QLabel("玩家名")
-        self.lbl_name.setStyleSheet("font-weight: bold; color: white;")
+        self.lbl_name.setStyleSheet(f"font-weight: bold; color: white; font-size: {_FONT_SZ}px;")
         self.lbl_streak = QLabel("")
-        self.lbl_streak.setStyleSheet("font-size: 11px;")
+        self.lbl_streak.setStyleSheet(f"font-size: {_FONT_SZ_STREAK}px;")
         self.row1.addWidget(self.lbl_name, 1)
         self.row1.addWidget(self.lbl_streak)
         layout.addLayout(self.row1)
 
-        self.lbl_line2 = QLabel("段位 · 位置 · 近20场")
-        self.lbl_line2.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
+        self.lbl_line2 = QLabel("称号 · 位置 · 近N场")
+        self.lbl_line2.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
         layout.addWidget(self.lbl_line2)
 
-        self.lbl_line3 = QLabel("KDA · 常用英雄")
-        self.lbl_line3.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
-        layout.addWidget(self.lbl_line3)
-
         self.lbl_recent = QLabel("最近: -")
-        self.lbl_recent.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
+        self.lbl_recent.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {_FONT_SZ}px;")
         layout.addWidget(self.lbl_recent)
 
-        # C 行（仅自己）：LCU 官方熟练度（全历史 mastery Top3）
-        self.lbl_skill = None
-        if show_skill:
-            self.lbl_skill = QLabel("绝活: -")
-            self.lbl_skill.setStyleSheet("color: #ffd700; font-size: 12px;")
-            layout.addWidget(self.lbl_skill)
-
         self.lbl_current = QLabel("本局: -")
-        self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
+        self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
         layout.addWidget(self.lbl_current)
 
-    def update_data(self, name, level, rank, position, winloss, kda, champions,
-                    is_mastery, streak_text="", champion_zh="",
-                    recent_top="", skill_top="", title_text="", title_color=""):
+    def update_data(self, name, level, line2_text, line2_color, is_mastery, streak_text="",
+                    champion_zh="", recent_top="", title_text="", title_color=""):
         self.lbl_name.setText(f"{name}  Lv.{level}")
-        self.lbl_name.setStyleSheet("font-weight: bold; color: white;")  # 每帧默认（整卡换色后恢复）
+        self.lbl_name.setStyleSheet(f"font-weight: bold; color: white; font-size: {_FONT_SZ}px;")  # 每帧默认（整卡换色后恢复）
         if streak_text:
             if "胜" in streak_text:
-                self.lbl_streak.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 11px; font-weight: bold;")
+                self.lbl_streak.setStyleSheet(
+                    f"color: {Colors.SUCCESS}; font-size: {_FONT_SZ_STREAK}px; font-weight: bold;")
             else:
-                self.lbl_streak.setStyleSheet(f"color: {Colors.DANGER}; font-size: 11px; font-weight: bold;")
+                self.lbl_streak.setStyleSheet(
+                    f"color: {Colors.DANGER}; font-size: {_FONT_SZ_STREAK}px; font-weight: bold;")
             self.lbl_streak.setText(streak_text)
         else:
             self.lbl_streak.setText("")
 
-        # line2 整行：称号（彩色，含段位）或原段位（灰） + 位置 · 胜负
-        line2_parts = []
-        if title_text:
-            line2_parts.append(title_text)
-        elif rank:
-            line2_parts.append(rank)
-        if position:
-            line2_parts.append(position)
-        if winloss:
-            line2_parts.append(winloss)
-        self.lbl_line2.setText(" · ".join(line2_parts) if line2_parts else "-")
-        if title_color:
+        # line2 整行：称号/段位 · 位置 · 近N场 X胜Y负 KDA Z
+        # 过渡态（line2_color=SECONDARY）灰字不加粗；称号行加粗；正常无称号主色不加粗
+        self.lbl_line2.setText(line2_text)
+        if line2_color == Colors.TEXT_SECONDARY:
             self.lbl_line2.setStyleSheet(
-                f"color: {title_color}; font-size: 12px; font-weight: bold;")
+                f"color: {line2_color}; font-size: {_FONT_SZ}px;")
+        elif line2_color:
+            self.lbl_line2.setStyleSheet(
+                f"color: {line2_color}; font-size: {_FONT_SZ}px; font-weight: bold;")
         else:
             self.lbl_line2.setStyleSheet(
-                f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
-
-        line3_parts = []
-        if kda:
-            line3_parts.append(kda)
-        if champions:
-            line3_parts.append(f"常用: {champions}")
-        self.lbl_line3.setText(" · ".join(line3_parts) if line3_parts else "-")
-        self.lbl_line3.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")  # 每帧默认
+                f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
 
         if recent_top:
             self.lbl_recent.setText(f"最近: {recent_top}")
         else:
             self.lbl_recent.setText("最近: -")
-        self.lbl_recent.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")  # 每帧默认
-
-        # C 行：仅自己显示；无数据隐藏整行（不留"暂无数据"空行）
-        if self.lbl_skill is not None:
-            if skill_top:
-                self.lbl_skill.setText(f"绝活: {skill_top}")
-                self.lbl_skill.setStyleSheet("color: #ffd700; font-size: 12px;")  # 每帧默认（显示时）
-                self.lbl_skill.show()
-            else:
-                self.lbl_skill.setText("")
-                self.lbl_skill.hide()
+        self.lbl_recent.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {_FONT_SZ}px;")  # 每帧默认
 
         if champion_zh:
             if is_mastery is True:
                 self.lbl_current.setText(f"本局: {champion_zh}  ✅ 是绝活")
-                self.lbl_current.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 12px;")
+                self.lbl_current.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: {_FONT_SZ}px;")
             elif is_mastery is False:
                 self.lbl_current.setText(f"本局: {champion_zh}  ❌ 非绝活")
-                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
+                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {_FONT_SZ}px;")
             else:
                 self.lbl_current.setText(f"本局: {champion_zh}  绝活: 未知")
-                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
+                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
         else:
             self.lbl_current.setText("本局: -")
 
         # 整卡换色：命中称号 → 所有文字用称号色（保留各 label 原字号/字重）+ 边框随称号色
         if title_color:
-            self.lbl_name.setStyleSheet(f"font-weight: bold; color: {title_color};")
-            self.lbl_streak.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {title_color};")
-            self.lbl_line2.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {title_color};")
-            self.lbl_line3.setStyleSheet(f"font-size: 12px; color: {title_color};")
-            self.lbl_recent.setStyleSheet(f"font-size: 12px; color: {title_color};")
-            if self.lbl_skill is not None:
-                self.lbl_skill.setStyleSheet(f"font-size: 12px; color: {title_color};")
-            self.lbl_current.setStyleSheet(f"font-size: 12px; color: {title_color};")
+            self.lbl_name.setStyleSheet(f"font-weight: bold; color: {title_color}; font-size: {_FONT_SZ}px;")
+            self.lbl_streak.setStyleSheet(f"font-size: {_FONT_SZ_STREAK}px; font-weight: bold; color: {title_color};")
+            self.lbl_line2.setStyleSheet(f"font-size: {_FONT_SZ}px; font-weight: bold; color: {title_color};")
+            self.lbl_recent.setStyleSheet(f"font-size: {_FONT_SZ}px; color: {title_color};")
+            self.lbl_current.setStyleSheet(f"font-size: {_FONT_SZ}px; color: {title_color};")
         # 边框：称号色 → 随称号色；无称号 → 己方蓝/敌方红
         border_c = title_color or self._border_default
         self.setStyleSheet(f"""
@@ -292,11 +253,11 @@ class CurrentGamePanel(QWidget):
             self._publish_intel_event("intel.sgp_provider_failed", {"error": str(e)})
             return None
 
-    def _get_or_create_card(self, team, idx, show_skill=False):
+    def _get_or_create_card(self, team, idx):
         cards = self.ally_cards if team == "ally" else self.enemy_cards
         layout = self.ally_layout if team == "ally" else self.enemy_layout
         while len(cards) <= idx:
-            card = PlayerCard(is_ally=(team == "ally"), show_skill=show_skill)
+            card = PlayerCard(is_ally=(team == "ally"))
             cards.append(card)
             layout.addWidget(card)
         return cards[idx]
@@ -380,37 +341,54 @@ class CurrentGamePanel(QWidget):
         d = getattr(player, "live_deaths", 0) or 0
         a = getattr(player, "live_assists", 0) or 0
 
-        winloss_text = ""
-        hist_ready = (snap_data is not None
-                      and getattr(snap_data, "data_state", None) == "AVAILABLE"
-                      and getattr(snap_data, "recent_matches", None))
-        if snap_data is not None and not hist_ready and getattr(snap_data, "data_state", None) != "AVAILABLE":
-            if getattr(snap_data, "data_state", None) == "NO_DATA":
-                # 请求成功但全是训练/娱乐模式（人机等）：确定的无匹配/排位战绩，不转圈
-                kda_text = "无匹配/排位战绩"
-            else:
-                # 请求失败：自动重试中，显示获取中而不是误导性的0/0/0
-                kda_text = "战绩获取中…（自动重试）"
-        elif hist_ready:
-            wins = sum(1 for m in snap_data.recent_matches if m.win)
-            total = len(snap_data.recent_matches)
-            kda_text = f"近{total}场 {wins}胜{total-wins}负 KDA {snap_data.kda_ratio:.2f}"
-            winloss_text = f"{wins}胜{total-wins}负"
-        elif snap_data is None:
-            # history 尚未加载完成：实时 KDA 过渡（身份/玩家存在性不受影响）
-            kda_text = f"战绩加载中… 实时 {k}/{d}/{a}"
+        line2_state = ""        # "近N场 X胜Y负 KDA Z"（intel/loader 就绪时）
+        line2_transition = ""   # 过渡态文案（未就绪时整个 line2 用它）
+        # B 行情报（intel）就绪判定：提前，供战绩显示与称号判定同源（候选 A）
+        puuid = getattr(player, "puuid", "") or ""
+        intel_entry = None
+        if puuid and self._intelligence is not None:
+            self._ensure_intel(puuid, getattr(player, "champion_id", 0) or 0)
+            intel_entry = self._intelligence.get_cached(puuid)
+        intel_ready = (intel_entry is not None
+                       and intel_entry.recent_status == "AVAILABLE"
+                       and intel_entry.recent_games >= 1)
+        if intel_ready:
+            wins = intel_entry.recent_wins
+            losses = intel_entry.recent_losses
+            total = intel_entry.recent_games
+            line2_state = f"近{total}场 {wins}胜{losses}负 KDA {intel_entry.recent_average_kda:.2f}"
+            if intel_entry.recent_unknown_count > 0:
+                line2_state += f"（{intel_entry.recent_unknown_count}场数据不全）"
         else:
-            kda_text = f"{k}/{d}/{a}"
-            if d > 0:
-                kda_text += f" (KDA {(k + a) / d:.2f})"
+            # intel 未就绪：回退 loader 显示（过渡态，称号此时也不评）
+            hist_ready = (snap_data is not None
+                          and getattr(snap_data, "data_state", None) == "AVAILABLE"
+                          and getattr(snap_data, "recent_matches", None))
+            if snap_data is not None and not hist_ready and getattr(snap_data, "data_state", None) != "AVAILABLE":
+                if getattr(snap_data, "data_state", None) == "NO_DATA":
+                    # 请求成功但全是训练/娱乐模式（人机等）：确定的无匹配/排位战绩，不转圈
+                    line2_transition = "无匹配/排位战绩"
+                else:
+                    # 请求失败：自动重试中，显示获取中而不是误导性的0/0/0
+                    line2_transition = "战绩获取中…（自动重试）"
+            elif hist_ready:
+                wins = sum(1 for m in snap_data.recent_matches if m.win)
+                total = len(snap_data.recent_matches)
+                line2_state = f"近{total}场 {wins}胜{total-wins}负 KDA {snap_data.kda_ratio:.2f}"
+            elif snap_data is None:
+                # history 尚未加载完成：实时 KDA 过渡（身份/玩家存在性不受影响）
+                line2_transition = f"战绩加载中… 实时 {k}/{d}/{a}"
             else:
-                kda_text += " (KDA --)"
+                line2_transition = f"{k}/{d}/{a}"
+                if d > 0:
+                    line2_transition += f" (KDA {(k + a) / d:.2f})"
+                else:
+                    line2_transition += " (KDA --)"
 
         is_mastery = None
         rank_text = ""
         title_text = ""
         title_color = ""
-        champions_text = ""
         streak_text = ""
 
         # 段位（历史）：只显示大段 + 小段（"翡翠 IV"）；LP/flex 详情不再显示（称号场景优先）
@@ -420,14 +398,9 @@ class CurrentGamePanel(QWidget):
             if getattr(snap_data, "ranked_division", None):
                 rank_text += f" {snap_data.ranked_division}"
 
-        # B 行（最近状态，所有人）+ C 行（LCU mastery，仅自己）：懒触发 + 缓存读
-        intel_entry = None
+        # B 行（最近状态，所有人）：懒触发 + 缓存读
         recent_top = ""
-        skill_top = ""
-        puuid = getattr(player, "puuid", "") or ""
         if puuid and self._intelligence is not None:
-            self._ensure_intel(puuid, getattr(player, "champion_id", 0) or 0)
-            intel_entry = self._intelligence.get_cached(puuid)
             if intel_entry is None:
                 with self._loading_lock:
                     loading_now = puuid in self._loading_puuids
@@ -440,23 +413,12 @@ class CurrentGamePanel(QWidget):
                         # SGP championName 为英文 slug（如 Thresh），统一映射中文称号
                         cc = self._catalog.get_by_id(c.champion_id) if self._catalog else None
                         cname_zh = cc.name_zh if cc and cc.name_zh else c.champion_name
-                        parts.append(f"{cname_zh} {c.games}场/{int(c.win_rate * 100)}%")
+                        parts.append(f"{cname_zh} {int(c.win_rate * 100)}%")
                     recent_top = " · ".join(parts)
                 else:
                     recent_top = "样本不足"
             else:
                 recent_top = "-"
-
-            if (is_self and intel_entry is not None
-                    and intel_entry.mastery_status == "AVAILABLE"
-                    and intel_entry.mastery_top3):
-                parts = []
-                for m in intel_entry.mastery_top3[:3]:
-                    c = self._catalog.get_by_id(m.champion_id) if self._catalog else None
-                    zh = c.name_zh if c and c.name_zh else f"#{m.champion_id}"
-                    pts = f"{m.champion_points // 1000}k" if m.champion_points >= 1000 else str(m.champion_points)
-                    parts.append(f"{zh} Lv{m.champion_level} {pts}")
-                skill_top = " · ".join(parts)
 
             # 修仙称号（替换段位行左部）：intel 就绪才评（无有效场次 → 不评，line2 回退原段位行）
             if intel_entry is not None and intel_entry.recent_status == "AVAILABLE":
@@ -466,15 +428,27 @@ class CurrentGamePanel(QWidget):
                     average_kda=intel_entry.recent_average_kda,
                     streak=intel_entry.streak,
                     utility_ratio=intel_entry.utility_ratio,
-                    tier=tier_raw,          # 有段位 → A 套 12 档；None → B 套 5 档（"造化/精进/…"）
-                    games_10=intel_entry.games_10,
-                    win_rate_10=intel_entry.win_rate_10,
-                    average_kda_10=intel_entry.average_kda_10,
-                    streak_10=intel_entry.streak_10,
+                    tier=tier_raw,          # 有段位 → "X境·"前缀；None → 纯称号（8 档同名）
                 )
-                if tr:
-                    title_text = tr.text
-                    title_color = tr.color
+                title_text = tr.text
+                title_color = tr.color
+
+        # line2 整行：称号/段位 · 位置 · 近N场 X胜Y负 KDA Z；过渡态灰字整体替换
+        if line2_transition:
+            line2_text = line2_transition
+            line2_color = Colors.TEXT_SECONDARY
+        else:
+            parts = []
+            if title_text:
+                parts.append(title_text)
+            elif rank_text:
+                parts.append(rank_text)
+            if pos_zh:
+                parts.append(pos_zh)
+            if line2_state:
+                parts.append(line2_state)
+            line2_text = " · ".join(parts) if parts else "-"
+            line2_color = title_color or Colors.TEXT_PRIMARY
 
         # 本局是否使用 loader 常用英雄（is_mastery 用于 lbl_current，保留旧逻辑）
         if snap_data is not None and getattr(snap_data, "top_champions", None):
@@ -496,16 +470,12 @@ class CurrentGamePanel(QWidget):
         card.update_data(
             name=name,
             level=level,
-            rank=rank_text,
-            position=pos_zh,
-            winloss=winloss_text,
-            kda=kda_text,
-            champions=champions_text,
+            line2_text=line2_text,
+            line2_color=line2_color,
             is_mastery=is_mastery,
             streak_text=streak_text,
             champion_zh=champ,
             recent_top=recent_top,
-            skill_top=skill_top,
             title_text=title_text,
             title_color=title_color,
         )
@@ -539,14 +509,14 @@ class CurrentGamePanel(QWidget):
         self.lbl_title.setText(f"当前对局  时间 {_fmt_game_time(game_time)}  玩家 {n}")
 
         for i, p in enumerate(session.my_team):
-            card = self._get_or_create_card("ally", i, show_skill=bool(getattr(p, "is_self", False)))
+            card = self._get_or_create_card("ally", i)
             card.show()
             self._fill_player_card(card, p)
         for i in range(len(session.my_team), len(self.ally_cards)):
             self.ally_cards[i].hide()
 
         for i, p in enumerate(session.their_team):
-            card = self._get_or_create_card("enemy", i, show_skill=bool(getattr(p, "is_self", False)))
+            card = self._get_or_create_card("enemy", i)
             card.show()
             self._fill_player_card(card, p)
         for i in range(len(session.their_team), len(self.enemy_cards)):
