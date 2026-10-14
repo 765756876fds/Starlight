@@ -101,6 +101,9 @@ data/tts_qwen_test/
 # JS music sources (user files)
 data/music_sources/
 
+# 插件更新备份（运行时产物，随更新自动重建；data/lol_data/*.json 等版本化数据仍跟踪）
+data/plugins_backup/
+
 
 app/music/online/js_bridge/node_modules/
 app/music/online/js_bridge/package-lock.json
@@ -152,6 +155,8 @@ data/assets/
 /python
 /_portaudio.pyd
 _trash/
+# 已清理的历史归档目录（防意外重建；原内容见 docs/history/LEGACY_SUMMARY.md，git 历史 db5937e 可追溯）
+/archive/
 
 # 运行时界面偏好（每台电脑不同，不跟踪）
 config/ui_prefs.json

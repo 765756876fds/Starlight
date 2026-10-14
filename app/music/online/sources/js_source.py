@@ -295,8 +295,9 @@ class JSMusicSource(MusicSource):
         if not target.exists():
             return {"ok": False, "error": f"missing {target.name}"}
         try:
-            # 1) 备份旧版到 _trash/plugin_backup/<本地名>.<旧版本>
-            backup_dir = mf_dir.parent / "_trash" / "plugin_backup"
+            # 1) 备份旧版到 data/plugins_backup/<本地名>.<旧版本>
+            #    项目根从本文件位置推导（js_source.py → app/music/online/sources → 上溯 4 级），不写死绝对路径。
+            backup_dir = Path(__file__).resolve().parents[4] / "data" / "plugins_backup"
             backup_dir.mkdir(parents=True, exist_ok=True)
             ver = entry.get("local_version") or "unknown"
             backup_path = backup_dir / f"{target.name}.{ver}"

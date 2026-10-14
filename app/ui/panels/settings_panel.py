@@ -566,7 +566,7 @@ class SettingsPanel(QWidget):
             "确认更新插件",
             f"将更新插件「{name}」\n"
             f"v{upd.get('local_version')} → v{upd.get('remote_version')}\n\n"
-            f"更新会替换本地插件文件（旧版备份到 _trash/plugin_backup/），"
+            f"更新会替换本地插件文件（旧版备份到 data/plugins_backup/），"
             f"并短暂中断在线搜索。\n确定继续？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
