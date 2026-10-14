@@ -158,3 +158,9 @@ config/ui_prefs.json
 
 # 排查产物文档（留档参考，不进版本控制）
 docs/debug/
+
+# AI 窗口交接备忘（工作文档，不进版本控制，避免 commit 噪音）
+docs/HANDOVER.md
+
+# 项目历史残骸（工作档案，不进版本控制）
+docs/history/
