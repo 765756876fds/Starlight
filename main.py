@@ -825,6 +825,7 @@ class Application:
                 recent_n=20,
                 snapshot_provider=_snap_for_ongoing,
                 gsm_provider=gsm,
+                deobfuscate_enabled=self.config.get("ongoing.deobfuscate_enabled", True),
             )
         except Exception as e:
             print(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")

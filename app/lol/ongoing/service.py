@@ -11,6 +11,7 @@ from .diagnostic import ChampSelectDiagnostic
 from .models import PlayerSnapshot
 from .session import CurrentGamePlayer, CurrentGameSession
 from .gsm_provider import merge_gsm_players
+from .deobfuscate import deobfuscate_puuid
 
 
 # liveclientdata 玩家对象没有 championId 字段（只有 championName / rawChampionName），
@@ -89,9 +90,11 @@ class OngoingGameService:
         poll_interval: float = 1.0,
         snapshot_provider=None,
         gsm_provider=None,
+        deobfuscate_enabled: bool = True,
     ):
         self._lcu = lcu
         self._gsm = gsm_provider  # 可选 GSM 补充身份源（None=不启用，纯 Gameflow 行为）
+        self._deobfuscate_enabled = deobfuscate_enabled
         self._snapshot_provider = snapshot_provider
         self._on_event = on_event or (lambda c, d: None)
         # loader 的 summoner/ranked/history 查询全部走独立直连 getter，
@@ -223,8 +226,23 @@ class OngoingGameService:
             # liveclientdata 无 puuid：身份归属由 gameflow 决定，
             # 实时 KDA/位置/等级按 (team, championId) 可关联字段合并进对应 cell
             self._merge_live_fields(session)
+        elif phase == "ChampSelect":
+            # 选人阶段提前显示（feature flag：deobfuscate_enabled）：
+            # gameflow 未就绪时，cs session 队友为 HIDDEN 混淆（summonerId=0/puuid=""/obfuscatedPuuid 有值），
+            # 用 deobfuscate_puuid() 本地 XOR 还原 → 写回 cell.puuid → 走现有 intel 链路查战绩。
+            # 合规边界：只处理 LCU 公开返回的 obfuscatedPuuid 字段，纯本地 XOR，无注入/内存/hook；
+            # 反解失败（返回空）保持原样（HIDDEN 无身份，UI 显示占位）。
+            # 反解包 try/except：任何异常绝不影响主流程（session 保持 None → 原 return 路径）。
+            if self._deobfuscate_enabled:
+                try:
+                    cs = self._champ_select_session
+                    if cs and me_puuid:
+                        session = self._deobfuscate_champ_select(cs, me_puuid)
+                except Exception:
+                    session = None
         elif phase != "ChampSelect":
-            # 回退：同局 ChampSelect 缓存（队友 HIDDEN 混淆时无 puuid，仅能补自己）
+            # 非 ChampSelect 阶段（GameStart/InProgress 等）：gameflow 未就绪时走同局
+            # ChampSelect 缓存兜底。（ChampSelect 阶段已由上方新分支处理）
             cs = self._champ_select_session
             if cs and me_puuid:
                 cs_puuids = set(
@@ -343,6 +361,53 @@ class OngoingGameService:
         self._on_event("ongoing.session_source",
                        {"source": "gameflow", "players": len(my_team) + len(their_team)})
         return {"myTeam": my_team, "theirTeam": their_team, "gameId": game_id}
+
+    def _deobfuscate_champ_select(self, cs: dict, me_puuid: Optional[str]) -> Optional[dict]:
+        """ChampSelect 阶段：cs session → 可加载 session（HIDDEN 成员反解 puuid）。
+
+        只对 nameVisibilityType=="HIDDEN" 且 obfuscatedPuuid 非空的 cell 做还原；
+        返回浅拷贝（不改 self._champ_select_session 缓存），反解失败保持原样。
+        自己不在 my_team 或总人数 < 5 → 返回 None（不构建），并发 champ_select_skip
+        事件留痕（排查"为什么没提前显示"时有据可查）。
+        """
+        def _resolve(cell: dict) -> dict:
+            if cell.get("puuid"):
+                return cell
+            if (cell.get("nameVisibilityType") == "HIDDEN"
+                    and cell.get("obfuscatedPuuid")):
+                real = deobfuscate_puuid(str(cell.get("obfuscatedPuuid")))
+                if real:
+                    nc = dict(cell)
+                    nc["puuid"] = real
+                    return nc
+            return cell
+
+        my_team = [_resolve(c) for c in (cs.get("myTeam") or [])]
+        their_team = [_resolve(c) for c in (cs.get("theirTeam") or [])]
+        my_puuids = {c.get("puuid") for c in my_team if c.get("puuid")}
+        resolved = sum(1 for c in my_team + their_team if c.get("puuid"))
+        total = len(my_team) + len(their_team)
+        if not me_puuid or me_puuid not in my_puuids:
+            self._on_event("ongoing.champ_select_skip", {
+                "reason": "me_puuid_not_in_resolved_team",
+                "resolved": resolved,
+                "total": total,
+            })
+            return None
+        if total < 5:
+            self._on_event("ongoing.champ_select_skip", {
+                "reason": "total_less_than_5",
+                "resolved": resolved,
+                "total": total,
+            })
+            return None
+        self._on_event("ongoing.session_source", {
+            "source": "champ_select_deobfuscated",
+            "players": total,
+            "resolved": resolved,
+        })
+        return {"myTeam": my_team, "theirTeam": their_team,
+                "gameId": cs.get("gameId") or 0}
 
     def _supplement_gsm(self, session: dict, phase: str,
                         me_puuid: Optional[str]) -> dict:
