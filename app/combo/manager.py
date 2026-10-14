@@ -78,6 +78,12 @@ class ComboManager:
         self._current_champion_name: Optional[str] = None
         self._ignore_until: float = 0.0
         self._log_lock = threading.Lock()  # 保护切换日志不重复刷屏
+        # 前台检测缓存（200ms，monotonic）：钩子回调里避免每次按键都调 win32/psutil
+        self._fg_cache: Optional[bool] = None
+        self._fg_cache_ts: float = 0.0
+        # 当前英雄解析缓存（5s，monotonic）：对局内 championId 固定，避免每次按键都查 ongoing
+        self._champ_cache: Optional[ChampionCombos] = None
+        self._champ_cache_ts: float = 0.0
 
     # ---------- 生命周期 ----------
 
@@ -101,6 +107,8 @@ class ComboManager:
     def set_window_gate(self, enabled: bool) -> bool:
         """仅 LoL 前台时触发（默认开，一期不持久化）。"""
         self._window_gate_enabled = bool(enabled)
+        self._fg_cache = None          # 门控变化，前台缓存立即失效
+        self._fg_cache_ts = 0.0
         print(f"[Combo] 仅 LoL 前台触发: {'开' if self._window_gate_enabled else '关'}")
         return self._window_gate_enabled
 
@@ -191,11 +199,19 @@ class ComboManager:
             return
         # 前台门控：开关开启时只认 LoL 游戏本体前台；检测失败放行（宁误触发不吞按键）
         if self._window_gate_enabled:
-            try:
-                if not is_lol_foreground():
-                    return  # 前台不是 League of Legends.exe
-            except Exception:
-                print("[Combo] 前台检测失败，已放行")
+            # 前台检测 200ms 缓存（monotonic）：钩子回调不做实时 win32/psutil 查询
+            if time.monotonic() - self._fg_cache_ts < 0.2:
+                fg = self._fg_cache
+            else:
+                try:
+                    fg = is_lol_foreground()
+                    self._fg_cache = fg
+                    self._fg_cache_ts = time.monotonic()
+                except Exception:
+                    print("[Combo] 前台检测失败，已放行")
+                    fg = True
+            if not fg:
+                return
         now = time.time()
         if now < self._ignore_until:
             return  # 自己发的键的延迟回调窗口
@@ -232,8 +248,17 @@ class ComboManager:
 
         只读访问 ongoing_service._session（CurrentGameSession.my_team 中
         is_self=True 的玩家）。对局结束 session 被清空 → 返回 None。
+        5s 缓存（monotonic）：对局内 championId 固定，命中即不查 ongoing（钩子回调轻量化）。
         """
         cid = self._read_self_champion_id()
+        # 缓存命中：英雄 id 非空且未变（_read_self_champion_id 是内存读，微秒级；
+        # 缓存避免的是 find_by_id 组合解析重活）。cid 为空/变化 → 立即失效，
+        # 保证"对局结束"第一时间清掉旧英雄，不残留 5s 假缓存。
+        if (self._champ_cache is not None
+                and cid is not None
+                and cid == self._current_champion_id
+                and time.monotonic() - self._champ_cache_ts < 5.0):
+            return self._champ_cache
         with self._log_lock:
             if cid != self._current_champion_id:
                 changed = True
@@ -250,8 +275,13 @@ class ComboManager:
             else:
                 print("[Combo] 对局结束，当前英雄已清空")
         if not cid:
+            self._champ_cache = None
+            self._champ_cache_ts = 0.0
             return None
-        return self.config.find_by_id(cid)
+        cc = self.config.find_by_id(cid)
+        self._champ_cache = cc
+        self._champ_cache_ts = time.monotonic()
+        return cc
 
     def _read_self_champion_id(self) -> Optional[int]:
         svc = self._ongoing_service

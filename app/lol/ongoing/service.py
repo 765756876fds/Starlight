@@ -286,8 +286,12 @@ class OngoingGameService:
                     now = time.monotonic()
                     rk = f"gid:{session.get('gameId')}" if session.get("gameId") else key
                     count, last_ts = self._retry_state.get(rk, [0, 0.0])
-                    if (count < 10 and now - last_ts > 60.0
-                            and self._loader.missing_history_count() > 0):
+                    # 重试条件 = 战绩缺失 + 名字缺失（summoner 曾失败但 history 成功时，
+                    # data_state=AVAILABLE 而 display_name 空——missing_names_count 兜住，
+                    # 重载时用 InProgress 的 gameflow session（summonerId 真实）→ by-id 补名）
+                    missing = (self._loader.missing_history_count()
+                               + self._loader.missing_names_count())
+                    if (count < 10 and now - last_ts > 60.0 and missing > 0):
                         self._retry_state[rk] = [count + 1, now]
                         self._force_reload = True  # retry：绕过 ERROR cache，真正重新请求 SGP
                         self._loading_in_progress = True  # 防重入（_load_in_thread finally 复位）

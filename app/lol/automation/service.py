@@ -203,6 +203,11 @@ class LoLAutomationService:
         cfg = self.config
         if not cfg.enabled:
             return
+        # 无任何功能开启：空转不做事不打印（关闭路径只改 flag 不停 worker，
+        # 此处是"全关"的静默出口，避免 ChampSelect 阶段每秒刷 poll 日志；
+        # 全关时 poll 根本到不了这里之后的分支，404 双保险无 pending 可清，无副作用）
+        if not (cfg.auto_queue or cfg.auto_accept or cfg.auto_ban or cfg.auto_pick):
+            return
 
         if not self._lcu.connected:
             self._set_state(AutomationState.CLIENT_DISCONNECTED)
@@ -258,7 +263,9 @@ class LoLAutomationService:
             if cfg.auto_queue:
                 self._queue.try_start(phase, cfg)
             if phase == "ChampSelect":
-                self._log("champ_select", f"ChampSelect poll (ban={cfg.auto_ban} pick={cfg.auto_pick})")
+                # 只有实际要操作时才打 poll 日志（ban/pick 全关时静默，防刷屏）
+                if cfg.auto_ban or cfg.auto_pick:
+                    self._log("champ_select", f"ChampSelect poll (ban={cfg.auto_ban} pick={cfg.auto_pick})")
                 self._champ_select.poll(cfg)
 
     def get_status_hint(self) -> str:

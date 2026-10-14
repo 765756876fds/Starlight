@@ -67,6 +67,20 @@ class OngoingGameLoader:
             if getattr(s, "data_state", "ERROR") == "ERROR"
         )
 
+    def missing_names_count(self) -> int:
+        """统计名字缺失（summoner 查询曾失败）的 AVAILABLE 快照，retry 时重查补名。
+
+        与 missing_history_count 互补：history 成功但 summoner 404 时，
+        data_state=AVAILABLE 而 display_name 为空——这类快照也要触发重载，
+        重载时用的是 InProgress 的 gameflow session（summonerId 真实）→
+        by-summonerId 拿到 gameName#tagLine 回填。
+        """
+        return sum(
+            1 for s in self._cache.all()
+            if getattr(s, "data_state", "ERROR") == "AVAILABLE"
+            and not getattr(s, "display_name", "")
+        )
+
     def get_cached(self, puuid: str) -> Optional[PlayerSnapshot]:
         return self._cache.get(puuid)
 
@@ -103,8 +117,13 @@ class OngoingGameLoader:
             if cached is not None:
                 st = getattr(cached, "data_state", "ERROR")
                 if not force and st in self._REUSABLE_STATES:
-                    self._on_event("history.cache_hit", {"puuid": p["puuid"], "state": st})
-                    snapshots.append(cached)
+                    if st == "AVAILABLE" and not cached.display_name:
+                        # 名字缺失（summoner 曾失败）：不当作可复用，重新请求重查 summoner
+                        self._on_event("history.name_missing", {"puuid": p["puuid"]})
+                        pending_puuid.append(p["puuid"])
+                    else:
+                        self._on_event("history.cache_hit", {"puuid": p["puuid"], "state": st})
+                        snapshots.append(cached)
                 else:
                     # ERROR 快照或 force 重试：不能当作有效缓存复用，必须重新请求
                     if st != "AVAILABLE":
@@ -165,10 +184,15 @@ class OngoingGameLoader:
     def _load_one(self, base: dict) -> Optional[PlayerSnapshot]:
         puuid = base["puuid"]
         summoner_id = base.get("summoner_id") or 0
+        summoner_failed = False
 
         # 1. summoner：by-puuid v2 → v1 → by summonerId
-        # 注意：腾讯服游戏内(InProgress) by-puuid 接口实测 404，且 snapshot 路径无 summonerId，
-        #       因此 retry 时不能因 summoner 查询失败就中断——必须用旧快照兜底继续，才能走到 history。
+        # 注意：腾讯服 LCU 服务端全局禁用 by-puuid 接口（自己+队友都 404，
+        #       实测 "Invalid URI format"）；InProgress/EndOfGame 阶段 gameflow
+        #       cell 的 summonerId 是真实的（选人 HIDDEN 阶段才为 0），
+        #       因此 by-summonerId 是队友名字（gameName#tagLine）的主通道。
+        #       查询失败不能中断——必须继续走 ranked/history（SGP 不依赖
+        #       LCU summoner 接口），名字缺失由 retry（missing_names_count）补。
         cached_old = self._cache.get(puuid)
         summoner = self._get(f"/lol-summoner/v2/summoners/by-puuid/{puuid}")
         if summoner is None:
@@ -184,8 +208,9 @@ class OngoingGameLoader:
             }
             self._on_event("summoner.fallback_cache", {"puuid": puuid})
         if summoner is None:
+            summoner_failed = True
             self._errors.append(f"summoner not found: {puuid}")
-            return None
+            summoner = {}
 
         # 2. ranked：按 puuid 查（不能用 current-ranked-stats，那是自己的）
         ranked = self._get(f"/lol-ranked/v1/ranked-stats/{puuid}")
@@ -234,13 +259,18 @@ class OngoingGameLoader:
         streak = self._streak(records)
         # 当前英雄 ID
         champ_id = base.get("champion_id", 0)
+        # 名字 = gameName#tagLine（腾讯服 Riot ID 格式，如"辅助之半步青铜#40396"；
+        # current-summoner 与 by-summonerId 响应均含这两个字段，displayName 恒空）
+        gn = (summoner.get("gameName") or summoner.get("displayName")
+              or summoner.get("internalName") or summoner.get("riotIdGameName")
+              or summoner.get("name") or "")
+        tl = summoner.get("tagLine") or ""
         
         snap = PlayerSnapshot(
             puuid=puuid,
             summoner_id=int(summoner.get("summonerId") or summoner_id or 0),
-            display_name=(summoner.get("displayName") or summoner.get("internalName") or 
-                          summoner.get("gameName") or summoner.get("riotIdGameName") or 
-                          summoner.get("name") or base["display_name"]),
+            display_name=(f"{gn}#{tl}" if (gn and tl)
+                          else (gn or base["display_name"])),
             current_champion_id=champ_id,
             summoner_level=int(summoner.get("summonerLevel") or 0),
             team=base["team"],
@@ -261,7 +291,8 @@ class OngoingGameLoader:
             total_matches=total,
             main_position=main_pos,
             loaded_at=time.monotonic(),
-            load_error=None if state == "AVAILABLE" else state,
+            load_error=("summoner_not_found" if summoner_failed
+                        else (None if state == "AVAILABLE" else state)),
             live_kills=base.get("live_kills", 0) or 0,
             live_deaths=base.get("live_deaths", 0) or 0,
             live_assists=base.get("live_assists", 0) or 0,

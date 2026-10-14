@@ -200,6 +200,14 @@ def merge_gsm_players(
         for m in gsm_team:
             pu = m.get("puuid") or ""
             if not pu or pu in existing:
+                # 已有玩家：腾讯服 gameflow 名字字段为空时，用 GSM summonerName 补名
+                # （尝试性兜底：只补名字，不改其他字段；GSM 成员字段名按迁移假设，
+                #   拿到就补，拿不到/字段名不符不阻塞主流程）
+                if pu:
+                    for c in cells:
+                        if (c.get("puuid") == pu
+                                and not (c.get("riotIdGameName") or c.get("name"))):
+                            c["riotIdGameName"] = m.get("summonerName") or ""
                 continue
             cells.append(_gsm_cell(m))
             existing.add(pu)

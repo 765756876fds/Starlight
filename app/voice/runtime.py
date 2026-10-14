@@ -8,6 +8,7 @@
 - Intent 意图解析
 - 命令执行（通过 CommandBus）
 """
+import queue
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -54,6 +55,16 @@ class VoiceRuntime:
         self._audio_stream = None
         self._mic_thread: Optional[threading.Thread] = None
 
+        # 采集/识别解耦（场景 6/25）：
+        # 采集线程（voice-mic）只读麦克风 + VAD → 语音段入有界队列；
+        # 识别线程（voice-asr）串行消费队列 → ASR → Intent → 命令执行。
+        # 有界队列满时丢最旧（用户最新指令优先）。
+        self._speech_queue: "queue.Queue" = queue.Queue(maxsize=8)
+        self._asr_thread: Optional[threading.Thread] = None
+        # 代际标记：stop 后立即 start 时，旧识别线程（若 transcribe 卡住未及时退出）
+        # 发现代际过期后自动退出 → 防止双消费者同时取队列。
+        self._asr_generation = 0
+
     def start(self):
         """启动语音运行时"""
         if self._running:
@@ -64,6 +75,32 @@ class VoiceRuntime:
         # 初始化 ASR（加载模型可能需要时间）
         print("[Voice] 正在加载 ASR 模型...")
         self.asr.initialize()
+
+        # 采集/识别解耦：识别线程随 VoiceRuntime 生命周期（start 创建、stop 退出），
+        # toggle_mic 只开关采集线程（识别线程常驻等待队列，无状态）。
+
+        # ① 旧识别线程若仍存活（stop 后立即 start 的窗口）：等它退出。
+        #    join 会阻塞本调用至多 1.0s（start 仅在启动链调用一次，可接受）；
+        #    若超时未退出（如 transcribe 卡到 30s 超时），由代际标记兜底：
+        #    旧线程下一轮循环发现 _asr_generation 过期 → 自动退出。
+        if self._asr_thread is not None and self._asr_thread.is_alive():
+            self._asr_thread.join(timeout=1.0)
+
+        # ② 清空队列：丢弃 stop 后残留段 / 上次未处理段，确保新会话干净。
+        #    （stop 排空后采集线程仍可能并发 put 一段在 sentinel 之后 → 此处清掉）
+        while not self._speech_queue.empty():
+            try:
+                self._speech_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # ③ 代际递增 + 创建新识别线程（捕获 my_gen；旧线程见代际过期自动退出）
+        self._asr_generation += 1
+        my_gen = self._asr_generation
+        self._asr_thread = threading.Thread(
+            target=self._asr_loop, args=(my_gen,), daemon=True, name="voice-asr"
+        )
+        self._asr_thread.start()
 
         # Intent 为纯规则实现，无状态，无需 initialize
 
@@ -77,6 +114,17 @@ class VoiceRuntime:
         """停止语音运行时"""
         self._running = False
         self._listening = False
+
+        # 排空队列 + put sentinel：让识别线程处理完当前段后退出。
+        # 采集线程可能仍在并发 put（stop 后新段落在 sentinel 之后）→
+        # 这些残留段由下次 start() 清空，不会被本会话处理。
+        while not self._speech_queue.empty():
+            try:
+                self._speech_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._speech_queue.put_nowait(None)  # sentinel
+
         self.asr.unload_all()
         print("[Voice] 运行时已停止")
 
@@ -152,7 +200,7 @@ class VoiceRuntime:
                         if silence_duration >= max_silence:
                             # 语音结束
                             if speech_count >= min_speech:
-                                self._process_speech(b"".join(speech_frames), sample_rate)
+                                self._enqueue_speech(b"".join(speech_frames), sample_rate)
                             in_speech = False
                             speech_frames = []
                             speech_count = 0
@@ -166,6 +214,42 @@ class VoiceRuntime:
         stream.close()
         audio.terminate()
         self._listening = False
+
+    def _enqueue_speech(self, audio_data: bytes, sample_rate: int):
+        """语音段入队（采集线程调用，永不阻塞）。
+
+        队列满时丢最旧一段（FIFO 最前）→ 语义 = 用户最新指令优先。
+        """
+        item = (audio_data, sample_rate)
+        try:
+            self._speech_queue.put_nowait(item)
+        except queue.Full:
+            try:
+                self._speech_queue.get_nowait()  # 丢最旧
+            except queue.Empty:
+                pass
+            self._speech_queue.put_nowait(item)
+
+    def _asr_loop(self, my_gen: int):
+        """识别线程：串行消费队列 → ASR → Intent → 命令执行。
+
+        - sentinel(None) → 退出（stop 流程）
+        - 代际过期（stop 后立即 start 的残留旧线程，join 超时未退时兜底）
+          → 下一轮循环自动退出，防止双消费者同时取队列（顺序乱 + 旧线程不退出）
+        - 识别异常 try/except 兜底打印后继续：故障隔离，采集线程不受影响
+        """
+        while self._running and self._asr_generation == my_gen:
+            try:
+                seg = self._speech_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if seg is None:
+                break
+            try:
+                self._process_speech(*seg)
+            except Exception as e:
+                print(f"[Voice] 识别线程异常: {e}")
+        print(f"[Voice] 识别线程 gen={my_gen} 退出")
 
     def _should_collect_speech(self) -> bool:
         """回声抑制闸门：TTS 正在生成/播放期间，麦克风新语音段不采集。
@@ -243,7 +327,6 @@ class VoiceRuntime:
         if intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
                            CommandType.MUSIC_PAUSE, CommandType.MUSIC_RESUME,
                            CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
-                           CommandType.MUSIC_RESCAN,
                            CommandType.MUSIC_CLEANUP,
                            CommandType.MUSIC_HIGHLIGHT_MODE,
                            CommandType.MUSIC_SET_PLAY_MODE,
@@ -276,10 +359,23 @@ class VoiceRuntime:
             ))
 
         elif intent_type == CommandType.MUSIC_SEARCH_PLAY:
+            # 长任务（在线搜索/JS 桥接，10s+）：异步执行，不阻塞识别线程
+            # （后续语音指令可立即处理）。
+            # 已知行为：长任务异步后，后续短命令可能先完成。
+            # 用户说话有间隔，实际并发概率低；若需严格保序，后续可引入命令队列。
             query = params.get("query", original_text)
-            self.command_bus.execute(Command(
+            self.command_bus.execute_async(Command(
                 command_type=CommandType.MUSIC_SEARCH_PLAY,
                 params={"query": query},
+                source="voice",
+            ))
+
+        elif intent_type == CommandType.MUSIC_RESCAN:
+            # 长任务（重新扫描音乐库，大库可能数分钟）：异步执行，不阻塞识别线程。
+            # 已知行为：长任务异步后，后续短命令可能先完成。
+            self.command_bus.execute_async(Command(
+                command_type=CommandType.MUSIC_RESCAN,
+                params=params,
                 source="voice",
             ))
 
@@ -339,7 +435,9 @@ class VoiceRuntime:
             ))
 
         elif intent_type == CommandType.PLAYER_QUERY:
-            self.command_bus.execute(Command(
+            # 长任务（查询对局/玩家信息，走网络）：异步执行，不阻塞识别线程。
+            # 已知行为：长任务异步后，后续短命令可能先完成。
+            self.command_bus.execute_async(Command(
                 command_type=CommandType.PLAYER_QUERY,
                 params=params,
                 source="voice",

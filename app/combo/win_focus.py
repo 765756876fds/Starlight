@@ -26,14 +26,11 @@ def is_lol_foreground() -> bool:
 
     user32 = ctypes.windll.user32
     hwnd = user32.GetForegroundWindow()
-    # [诊断] 逐环节打印，定位实机"LoL 前台被误判 False"的原因
-    print(f"[Combo][focus] hwnd={hwnd:#x}")
     if not hwnd:
         print("[Combo][focus] hwnd=0 → OSError（无前台窗口）")
         raise OSError("GetForegroundWindow 返回空句柄（无前台窗口）")
     pid = ctypes.c_ulong()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    print(f"[Combo][focus] pid={pid.value}")
     if not pid.value:
         print("[Combo][focus] pid=0 → OSError")
         raise OSError("GetWindowThreadProcessId 返回空 PID")
@@ -43,9 +40,7 @@ def is_lol_foreground() -> bool:
     try:
         proc = psutil.Process(pid.value)
         name = proc.name()
-        print(f"[Combo][focus] proc_name={name!r}")
         matched = name in _GAME_PROCESS_NAMES
-        print(f"[Combo][focus] match={matched} (target={_GAME_PROCESS_NAMES})")
         return matched
     except psutil.Error as e:
         print(f"[Combo][focus] psutil error={e!r} → OSError")
