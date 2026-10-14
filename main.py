@@ -248,7 +248,7 @@ class Application:
                 _lx = str(_P("data/music_sources/lx").absolute())
                 self._js_source = JSMusicSource(_mf, _lx, user_variables=(self.config_data.get("online_music", {}).get("js_bridge", {}) or {}).get("user_variables") or {})
                 self.online_music_manager.register(self._js_source)
-                self._set_module_status("js", "ok")
+                self._set_module_status("js", "ok" if self._js_source.available else "fail")
             except Exception as e:
                 print(f"[Music] JS bridge 鍒濆鍖栧け璐? {e}")
                 self._set_module_status("js", "fail")

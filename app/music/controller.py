@@ -141,6 +141,8 @@ class MusicController:
         self.scanner = MusicScanner(self.db, self.scan_dirs, self.extensions)
         self.search = MusicSearch(self.db)
         self.queue = PlayQueue()
+        self._missing_file_streak = 0   # 连续文件不可用计数（限次保护）
+        self._last_next_ts = 0.0        # next() 防抖时间戳（语音+UI 并发双触发合并）
         self.mpv = MpvController(self.mpv_path, self.mpv_ipc_pipe)
 
         # 落雪音乐客户端
@@ -472,6 +474,12 @@ class MusicController:
         if not self._mpv_available:
             print("[Music] mpv 不可用，忽略操作")
             return
+        # 防抖：语音 + UI 并发双触发（<300ms）只跳一首，避免一次跳两首
+        now = time.time()
+        if now - self._last_next_ts < 0.3:
+            print("[Music] next 防抖：300ms 内重复触发已忽略")
+            return
+        self._last_next_ts = now
         # 优先控制落雪
         if self.lx_connected:
             try:
@@ -675,9 +683,25 @@ class MusicController:
         filepath = song.get("path")
         if not filepath or not os.path.exists(filepath):
             print(f"[Music] 文件不存在: {filepath}")
+            self._missing_file_streak += 1
+            if self._missing_file_streak >= 3:
+                # 限次保护：连续 3 次文件不可用 → 放弃播放，避免无限空转
+                self._missing_file_streak = 0
+                print("[Music] 连续 3 次文件不可用，停止播放")
+                self.stop()
+                return
+            # 单曲循环 + 文件不存在 → 跳出循环，顺序切下一首（防卡死）
+            if self.queue.get_play_mode() == PlayMode.REPEAT_ONE:
+                print("[Music] 单曲循环文件不存在，顺序切下一首")
+                self.queue.skip_current()
+            # 防御性明确：本分支 return 前重置轮询状态（L673 已置过，
+            # 保留以防御未来该行被移动后回归）
+            self._last_idle = False
             return
 
         self.mpv.loadfile(filepath)
+        # 播放成功 → 重置连续失败计数
+        self._missing_file_streak = 0
         # 确保新歌曲开始播放（不继承之前的暂停状态）
         self.mpv.set_property("pause", False)
         try:

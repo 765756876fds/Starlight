@@ -25,8 +25,44 @@ class MusicDatabase:
         # RLock：close() 先调 checkpoint()（内部拿锁），再 with self._lock——
         # 顺序获取本不死锁，但用可重入锁防御未来"锁内再拿锁"的嵌套调用
         self._lock = threading.RLock()
-        self._connect()
-        self._init_tables()
+        try:
+            self._connect()
+            self._init_tables()
+        except sqlite3.DatabaseError as e:
+            # 数据库损坏：不直接删除（数据安全）→ 重命名保留现场 + 新建空库
+            print(f"[DB] 数据库打开失败（可能损坏）: {e!r}")
+            # 关键：sqlite3.connect 可能已持有损坏文件句柄（PRAGMA/CREATE 才失败），
+            # 必须先关闭连接再 rename，否则 Windows 下文件被占用必现 PermissionError
+            try:
+                if self._conn is not None:
+                    self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            self._recover_corrupt()
+            self._connect()
+            self._init_tables()
+
+    def _recover_corrupt(self) -> None:
+        """损坏 db 恢复：重命名 db.corrupt.<时间戳> 保留现场，新建空库。
+
+        WAL 模式在主 db 旁伴生 -wal / -shm 文件：Windows 下 sqlite3 连接
+        close() 会顺手清理无效伴生日志（实测）；其他平台未必。故循环仍
+        逐一检查 rename（跨平台兜底），保证旧 WAL 不残留干扰新库。
+        不直接删除损坏文件（便于用户事后恢复/排查）；重命名失败（文件
+        被锁）属极端场景，抛出让上层看到真实原因。
+        """
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        for suffix in ("", "-wal", "-shm"):
+            p = f"{self.db_path}{suffix}"
+            if os.path.exists(p):
+                backup = f"{p}.corrupt.{ts}"
+                try:
+                    os.rename(p, backup)
+                    print(f"[DB] 已备份: {backup}（请重新扫描音乐库）")
+                except Exception as e:
+                    raise RuntimeError(
+                        f"[DB] 备份损坏数据库文件失败（文件可能被占用）: {e!r}") from e
 
     def _connect(self):
         """连接数据库"""

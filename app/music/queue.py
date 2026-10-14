@@ -94,6 +94,24 @@ class PlayQueue:
                 return self._queue[next_index]
             return None
 
+    def skip_current(self) -> Optional[Dict[str, Any]]:
+        """跳过当前歌曲：顺序取下一首（REPEAT_ONE 下也不循环回当前）。
+
+        仅用于"单曲循环中当前文件不可用"的逃生路径；返回 None 表示队列到尾。
+        """
+        with self._lock:
+            if not self._queue:
+                return None
+            nxt = self._current_index + 1
+            if nxt >= len(self._queue):
+                if self._play_mode == PlayMode.REPEAT_ALL:
+                    nxt = 0
+                else:
+                    return None
+            self._current_index = nxt
+            self._add_history(nxt)
+            return self._queue[nxt]
+
     def prev(self) -> Optional[Dict[str, Any]]:
         """播放上一首，返回歌曲"""
         with self._lock:

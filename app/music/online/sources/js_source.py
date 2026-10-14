@@ -204,6 +204,14 @@ class JSMusicSource(MusicSource):
         self._call_timeout_streak = 0
         return msg.get("result")
 
+    @property
+    def available(self) -> bool:
+        """bridge 实际可用：node 进程存活且 ready 已就绪（构造成功 ≠ 可用）。"""
+        try:
+            return self._proc is not None and self._ready.is_set()
+        except Exception:
+            return False
+
     def list_sources(self) -> List[str]:
         return list(self._sources)
 
