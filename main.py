@@ -180,6 +180,7 @@ class Application:
             print("[ASR] llama-server 已启动，等待就绪...")
         except Exception as e:
             print(f"[ASR] 启动 llama-server 失败: {e}")
+            self.logger.error(f"[ASR] 启动 llama-server 失败: {e}")
             return
 
         # 等待 ASR 就绪（最多 60 秒）：轮询 /models 返回 200 才算就绪。
@@ -450,7 +451,7 @@ class Application:
                     source="alarm_feedback",
                 ))
             except Exception:
-                pass
+                self.logger.error("[Alarm] SPEECH_SAY 事件发布失败", exc_info=True)
 
         def on_create_flash(event):
             print(f"[P0CD DEBUG] on_create_flash called: event_type={event.event_type}, data={event.data}")
@@ -633,6 +634,7 @@ class Application:
             print("[Combo] ComboManager 已启动（默认关闭，需在自动化面板开启）")
         except Exception as e:
             print(f"[Combo] 注册失败: {e}")
+            self.logger.error(f"[Combo] 注册失败: {e}")
 
     def _register_cooldown(self):
         """doc"""
@@ -654,7 +656,7 @@ class Application:
                     item = SpeechItem(text=text, priority=PRIORITY_A, expire_at=_t.time()+30.0, event_id=event_id)
                     sq.enqueue(item)
                 except Exception:
-                    pass
+                    self.logger.error(f"[Cooldown] 语音入队失败: {text[:50]!r}", exc_info=True)
 
             def _on_event(code: str, data: dict):
                 # 绠€鍗曟棩蹇楋紱TTS 鐢?_speech_enqueue 璐熻矗
@@ -826,6 +828,7 @@ class Application:
             )
         except Exception as e:
             print(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
+            self.logger.error(f"[Ongoing] 注册失败: {e}")
 
     def run(self):
         """doc"""
@@ -842,7 +845,7 @@ class Application:
                 if app is not None:
                     app.quit()
             except Exception:
-                pass
+                self.logger.error("[Shutdown] Qt app.quit() 失败", exc_info=True)
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)

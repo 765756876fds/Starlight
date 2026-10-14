@@ -165,6 +165,10 @@ class CurrentGamePanel(QWidget):
                 print(f"[UI] 玩家情报服务已初始化（SGP 动态懒加载）")
             except Exception as e:
                 print(f"[UI] 玩家情报服务初始化失败: {e}")
+                self._publish_intel_event("intel.init_failed", {
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                })
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
