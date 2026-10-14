@@ -150,8 +150,15 @@ class LoLRuntime:
                 # 但仅当 LCU phase 明确离开游戏时才判结束——
                 # 加载界面/对局中 2999 暂时不可用是正常的，不算结束；
                 # phase 为 None（LCU 从未连上）也视为"仍在游戏"，不放行。
-                _phase = getattr(self, "_last_known_phase", None)
-                if _phase is not None and _phase not in _IN_GAME_PHASES:
+                # 实时取一次 phase（同停滞检测：不用可能过时的 _last_known_phase 缓存；
+                # 用原始请求而非 get_gameflow_phase()：后者在 LCU 断开时会返回缓存旧值）
+                _phase = None
+                try:
+                    _phase = self.lcu.get("/lol-gameflow/v1/gameflow-phase")
+                except Exception:
+                    _phase = None
+                # phase 拿不到（None/空/非 2xx）→ 视为"仍在游戏"，不放行
+                if _phase and _phase not in _IN_GAME_PHASES:
                     self._handle_game_end_detection()
             return
 
@@ -188,8 +195,15 @@ class LoLRuntime:
                     if self._game_time_stagnant_count >= self._max_stagnant_count:
                         # phase 守卫：None（LCU 从未连上）或仍在游戏阶段 → 不算结束，
                         # 保留计数继续累积，不 return，走正常流程（等 phase 离开或 game_time 恢复）
-                        _phase = getattr(self, "_last_known_phase", None)
-                        if _phase is not None and _phase not in _IN_GAME_PHASES:
+                        # 实时取一次 phase（不依赖可能过时的 _last_known_phase 缓存；
+                        # 用原始请求而非 get_gameflow_phase()：后者在 LCU 断开时会返回缓存旧值）
+                        _phase = None
+                        try:
+                            _phase = self.lcu.get("/lol-gameflow/v1/gameflow-phase")
+                        except Exception:
+                            _phase = None
+                        # phase 拿不到（None/空/非 2xx）→ 视为"仍在游戏"，不放行
+                        if _phase and _phase not in _IN_GAME_PHASES:
                             # 修 2 门槛：必须见过 game_time 递增（游戏真正开始计时过）
                             if self._game_time_ever_progressed:
                                 # 打印只打一次（fired 标志防刷屏）；_handle_game_end_detection 每轮照常调用，

@@ -82,7 +82,7 @@ class TestRuntimeGameEndGuard:
         """真结束场景：phase 已离开 + 曾递增 + game_time 连续 11 帧不变 → 仍触发（防改过头）"""
         runtime = self._create_runtime()
         runtime._game_active = True
-        runtime._last_known_phase = "EndOfGame"  # phase 离开集合（修 1 放行前提）
+        runtime.lcu.get.return_value = "EndOfGame"  # 实时 phase 离开集合（修 1 放行前提）
         runtime.live_api.is_available.return_value = True
         # 先跑 1 轮递增：game_time 100 → 101，置 ever_progressed=True（修 2 门槛）
         runtime.live_api.get_all_game_data.return_value = _make_all_data(100.0)
@@ -99,7 +99,7 @@ class TestRuntimeGameEndGuard:
         """is_available=False 但 phase=InProgress（加载/对局中）：不判结束"""
         runtime = self._create_runtime()
         runtime._game_active = True
-        runtime._last_known_phase = "InProgress"
+        runtime.lcu.get.return_value = "InProgress"
         runtime.live_api.is_available.return_value = False
 
         runtime._poll_game_data()
@@ -110,7 +110,7 @@ class TestRuntimeGameEndGuard:
         """is_available=False 且 phase=Unknown（LCU 未识别）：按仍在游戏中处理，不判结束"""
         runtime = self._create_runtime()
         runtime._game_active = True
-        runtime._last_known_phase = "Unknown"
+        runtime.lcu.get.return_value = "Unknown"
         runtime.live_api.is_available.return_value = False
 
         runtime._poll_game_data()
@@ -121,7 +121,7 @@ class TestRuntimeGameEndGuard:
         """is_available=False 且 phase=EndOfGame（真结束）：放行结束检测"""
         runtime = self._create_runtime()
         runtime._game_active = True
-        runtime._last_known_phase = "EndOfGame"
+        runtime.lcu.get.return_value = "EndOfGame"
         runtime.live_api.is_available.return_value = False
 
         runtime._poll_game_data()
