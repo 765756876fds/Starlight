@@ -1,5 +1,6 @@
 """lcu.py 线程安全测试（mock session）。"""
 import threading
+import time
 from unittest.mock import MagicMock
 
 from app.lol.lcu import LCUConnection as LCUClient
@@ -37,3 +38,22 @@ def test_concurrent_request_raw_no_exception():
     assert not errors, f"errors: {errors}"
     # 共 1000 次调用
     assert c._session.get.call_count == 1000
+
+
+def test_request_raw_lock_timeout_returns_within_1s():
+    """锁被占用 >1s 时 request_raw 应在 ~1s 内返回 (0, None)，不无限阻塞。"""
+    c = _make_client()
+    # 先占住请求锁，模拟后台慢请求持有中
+    assert c._request_lock.acquire(timeout=0.5)
+    try:
+        t0 = time.monotonic()
+        status, body = c.request_raw("GET", "/lol-gameflow/v1/gameflow-phase")
+        elapsed = time.monotonic() - t0
+        assert (status, body) == (0, None)
+        assert elapsed < 3.0      # 约 1s 返回，不是无限等
+    finally:
+        c._request_lock.release()
+    # 锁释放后请求应恢复正常路径
+    status, body = c.request_raw("GET", "/lol-gameflow/v1/gameflow-phase")
+    assert status == 200
+    assert body == {"ok": True}

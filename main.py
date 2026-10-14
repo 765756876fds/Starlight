@@ -946,12 +946,13 @@ class Application:
             cm = getattr(self, "cooldown_manager", None)
             def phase():
                 try:
-                    # 真实读取LCU游戏阶段，不是靠is_game_active硬判断
+                    # 读 runtime 缓存的 gameflow phase（_poll_lcu 每 1s 更新，后台线程写入）。
+                    # 原实现在 UI 线程发同步 LCU 请求，对局结束/LCU 重启窗口 read timeout=5s
+                    # 冻结 UI 线程 → Windows 标"（未响应）"。改读缓存后 UI 线程零 IO。
                     lol = getattr(self, "lol", None)
-                    if lol and hasattr(lol, "lcu") and lol.lcu:
-                        p = lol.lcu.get("/lol-gameflow/v1/gameflow-phase")
-                        if p == "InProgress":
-                            return "InProgress"
+                    if lol and hasattr(lol, "_last_known_phase"):
+                        # 语义不变：overlay 只认 InProgress；断连时缓存保留旧值（守卫依赖，不清）
+                        return "InProgress" if lol._last_known_phase == "InProgress" else "None"
                     return "None"
                 except Exception:
                     return "None"

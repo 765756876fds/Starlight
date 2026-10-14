@@ -374,34 +374,40 @@ class LCUConnection:
             return 0, None
 
         url = f"{self.base_url}{endpoint}"
+        # 锁等待限时 1s：任何调用方（含 UI 线程）最多被锁阻塞 1 秒，杜绝"未响应"级冻结。
+        # 超时视为"请求未发出"返回 (0, None)，不标记断连（连接本身健康，只是繁忙）。
+        if not self._request_lock.acquire(timeout=1.0):
+            print(f"[LCU] 请求锁等待超时（1s），放弃 {method} {endpoint}")
+            return 0, None
         try:
-            with self._request_lock:
-                if method.upper() == "GET":
-                    resp = self._session.get(url, timeout=5)
-                elif method.upper() == "POST":
-                    resp = self._session.post(url, json=data, timeout=5)
-                elif method.upper() == "PUT":
-                    resp = self._session.put(url, json=data, timeout=5)
-                elif method.upper() == "PATCH":
-                    resp = self._session.patch(url, json=data, timeout=5)
-                elif method.upper() == "DELETE":
-                    resp = self._session.delete(url, timeout=5)
-                else:
-                    return 0, None
+            if method.upper() == "GET":
+                resp = self._session.get(url, timeout=5)
+            elif method.upper() == "POST":
+                resp = self._session.post(url, json=data, timeout=5)
+            elif method.upper() == "PUT":
+                resp = self._session.put(url, json=data, timeout=5)
+            elif method.upper() == "PATCH":
+                resp = self._session.patch(url, json=data, timeout=5)
+            elif method.upper() == "DELETE":
+                resp = self._session.delete(url, timeout=5)
+            else:
+                return 0, None
 
-                body = None
-                if resp.content:
-                    try:
-                        body = resp.json()
-                    except json.JSONDecodeError:
-                        body = resp.text
-                status = resp.status_code
+            body = None
+            if resp.content:
+                try:
+                    body = resp.json()
+                except json.JSONDecodeError:
+                    body = resp.text
+            status = resp.status_code
             return status, body
         except Exception as e:
             print(f"[LCU] 请求失败 {method} {endpoint}: {e}")
             # 标记断开，让 _reconnect_loop() 重新 discovery 新端口
             self._disconnect()
             return 0, None
+        finally:
+            self._request_lock.release()
 
     def get(self, endpoint: str) -> Optional[Any]:
         """GET 请求"""
