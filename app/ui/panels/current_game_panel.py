@@ -468,14 +468,10 @@ class CurrentGamePanel(QWidget):
             line2_text = " · ".join(parts) if parts else "-"
             line2_color = title_color or Colors.TEXT_PRIMARY
 
-        # 本局是否使用 loader 常用英雄（is_mastery 用于 lbl_current，保留旧逻辑）
-        if snap_data is not None and getattr(snap_data, "top_champions", None):
-            top3_cids = []
-            for cname in snap_data.top_champions[:3]:
-                c = self._catalog.get_by_name(cname) if self._catalog else None
-                top3_cids.append(c.cid if c else None)
-            if getattr(player, "champion_id", 0):
-                is_mastery = player.champion_id in top3_cids
+        # 本局是否绝活：LCU Champion Mastery Top3 权威判定（生涯熟练度）
+        # intel_entry 已在 L352-355 提前算好；None/非 AVAILABLE 时字段保持 None（UI 显示“未知”）
+        if intel_entry is not None:
+            is_mastery = intel_entry.current_champion_is_mastery_top3
 
         # 连胜/连败
         if snap_data is not None:
