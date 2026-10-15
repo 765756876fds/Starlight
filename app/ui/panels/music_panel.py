@@ -48,6 +48,8 @@ class _ScanWorker(QObject):
 class MusicPanel(QWidget):
     # P1 候选旁路：后台线程 publish → 此 Signal 桥到主线程渲染
     _search_event = Signal(dict)
+    # 下载进度：后台线程 emit → 主线程渲染（跨线程安全）；pct None=无总量，-1=完成，-2=失败
+    _dl_signal = Signal(str, object)  # key, pct
 
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
@@ -57,6 +59,8 @@ class MusicPanel(QWidget):
         self._thread = None
         self._scan_thread = None
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
+        self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
+        self._dl_signal.connect(self._on_dl_progress)
 
         root = QVBoxLayout(self)
         tabs = self.tabs = QTabWidget()
@@ -231,6 +235,8 @@ class MusicPanel(QWidget):
             self.list_history.customContextMenuRequested.connect(self._on_history_context_menu)
             self.list_playlist_songs.setContextMenuPolicy(Qt.CustomContextMenu)
             self.list_playlist_songs.customContextMenuRequested.connect(self._on_playlist_songs_context_menu)
+            self.list_results.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.list_results.customContextMenuRequested.connect(self._on_online_context_menu)
             try:
                 self.slider_vol.setValue(int(music.get_volume() or 0))
             except Exception:
@@ -754,6 +760,19 @@ class MusicPanel(QWidget):
             act_rm = menu.addAction("从歌单内删除")
             act_rm.triggered.connect(
                 lambda: self._remove_song_from_playlist(playlist_song_id))
+        is_online = song.get("source_type", "local") != "local"
+        if is_online:
+            try:
+                downloaded = self._music is not None and bool(
+                    self._music.is_downloaded(song.get("title", ""), song.get("artist", "")))
+            except Exception:
+                downloaded = False
+            if downloaded:
+                act_del_dl = menu.addAction("删除本地下载")
+                act_del_dl.triggered.connect(lambda: self._delete_download(song))
+            else:
+                act_dl = menu.addAction("下载到本地")
+                act_dl.triggered.connect(lambda: self._on_download_song(song))
         is_local = song.get("source_type", "local") == "local"
         if is_local:
             path = song.get("path") or ""
@@ -807,8 +826,10 @@ class MusicPanel(QWidget):
         import os
         import subprocess
         try:
-            # 路径含空格/中文：整个 /select,"<path>" 作单参数，否则 explorer 拆 token 选不中
-            subprocess.Popen(["explorer", f"/select,\"{os.path.normpath(path)}\""])
+            # explorer 只吃 cmd shell 形态（subprocess list 模式标准 argv 解析会失效，
+            # /select 路径无效 → 打开"文档"默认位置）；% → %% 防 cmd 变量展开
+            p = os.path.normpath(path).replace("%", "%%")
+            subprocess.Popen(f'explorer /select,"{p}"', shell=True)
         except Exception as e:
             self.lbl_status.setText(f"打开文件夹失败: {e}")
 
@@ -838,6 +859,158 @@ class MusicPanel(QWidget):
             return
         if ok:
             self.lbl_status.setText("已删除本地文件")
+            self._refresh_local_list(self.edit_local.text().strip())
+            if self.tabs.currentIndex() == 3:
+                self._refresh_playlists()
+        else:
+            self.lbl_status.setText(f"删除失败: {err}")
+
+    def _on_online_context_menu(self, pos):
+        item = self.list_results.itemAt(pos)
+        if item is None:
+            return
+        idx = self.list_results.row(item)
+        if idx < 0 or idx >= len(self._tracks_by_row):
+            return
+        t = self._tracks_by_row[idx]
+        song = {
+            "title": t.title,
+            "artist": t.artist,
+            "source_type": "online",
+            "source_name": t.source_name,
+            "track_id": t.track_id,
+            "music_id": 0,
+            "id": 0,
+            "path": "",
+        }
+        menu = self._build_song_menu(song)
+        menu.exec_(self.list_results.mapToGlobal(pos))
+
+    def _on_download_song(self, song: dict):
+        """在线歌下载入队：行内标记 + 状态栏；进度经 _dl_signal 回主线程。"""
+        if self._music is None:
+            return
+        key = f"{song.get('title', '')}|{song.get('artist', '')}".strip('|')
+        base = None
+        widget = None
+        # 定位行内标记目标：在线 tab（按 _tracks_by_row 匹配）→ 歌单列表（按文本匹配）
+        try:
+            for i, t in enumerate(self._tracks_by_row):
+                if t.title == song.get("title") and t.artist == song.get("artist"):
+                    item = self.list_results.item(i)
+                    if item is not None:
+                        base = item.text()
+                        widget = "online"
+                    break
+        except Exception:
+            pass
+        if widget is None:
+            for i in range(self.list_playlist_songs.count()):
+                item = self.list_playlist_songs.item(i)
+                if item is not None and song.get("title") in item.text():
+                    base = item.text()
+                    widget = "playlist"
+                    break
+        self._dl_markers[key] = {"base": base, "widget": widget}
+
+        def on_progress(k, pct):
+            self._dl_signal.emit(k, pct)
+
+        def on_done(k, path):
+            self._dl_signal.emit(k, -1)
+            self.lbl_status.setText(f"已下载：{song.get('title', '')}")
+            self._refresh_local_list(self.edit_local.text().strip())
+            if self.tabs.currentIndex() == 3:
+                self._refresh_playlists()
+
+        def on_fail(k, reason):
+            self._dl_signal.emit(k, -2)
+            self.lbl_status.setText(f"下载失败：{reason}")
+
+        def on_exists(k):
+            self.lbl_status.setText("该歌已下载，跳过（不覆盖）")
+
+        self.lbl_status.setText(f"开始下载：{song.get('title', '')}")
+        self._music.download_song(song, {
+            "on_progress": on_progress,
+            "on_done": on_done,
+            "on_fail": on_fail,
+            "on_exists": on_exists,
+        })
+
+    def _on_dl_progress(self, key, pct):
+        """主线程：更新行内标记（跨线程 Signal 桥）。"""
+        if pct in (-1, -2):
+            self._restore_marker(key)
+            return
+        label = "下载中…" if pct is None else f"下载中 {pct}%"
+        m = self._dl_markers.get(key)
+        if not m or not m.get("base"):
+            return
+        try:
+            if m.get("widget") == "online":
+                for i in range(self.list_results.count()):
+                    item = self.list_results.item(i)
+                    if item is not None and item.text() == m["base"]:
+                        item.setText(f"{m['base']}（{label}）")
+                        return
+            elif m.get("widget") == "playlist":
+                for i in range(self.list_playlist_songs.count()):
+                    item = self.list_playlist_songs.item(i)
+                    if item is not None and item.text() == m["base"]:
+                        item.setText(f"{m['base']}（{label}）")
+                        return
+        except Exception:
+            pass
+
+    def _restore_marker(self, key):
+        """完成/失败：恢复行内原文本，移除标记。"""
+        m = self._dl_markers.get(key)
+        if not m or not m.get("base"):
+            self._dl_markers.pop(key, None)
+            return
+        try:
+            if m.get("widget") == "online":
+                for i in range(self.list_results.count()):
+                    item = self.list_results.item(i)
+                    if item is not None and m["base"] in item.text():
+                        item.setText(m["base"])
+                        break
+            elif m.get("widget") == "playlist":
+                for i in range(self.list_playlist_songs.count()):
+                    item = self.list_playlist_songs.item(i)
+                    if item is not None and m["base"] in item.text():
+                        item.setText(m["base"])
+                        break
+        except Exception:
+            pass
+        self._dl_markers.pop(key, None)
+
+    def _delete_download(self, song: dict):
+        """删除下载副本：二次确认默认取消 → controller 删文件+库；歌单条目保留（在线可重下）。"""
+        if self._music is None:
+            return
+        path = ""
+        try:
+            dl = getattr(self._music, "downloader", None)
+            if dl is not None:
+                path = dl.find_download_path(song.get("title", ""), song.get("artist", ""))
+        except Exception:
+            pass
+        ret = QMessageBox.warning(
+            self, "删除本地下载",
+            f"确定要删除下载的本地副本？\n{path}\n\n（歌单中的该歌保留，可重新下载）",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if ret != QMessageBox.StandardButton.Ok:
+            return
+        try:
+            ok, _p, err = self._music.remove_download(song)
+        except Exception as e:
+            self.lbl_status.setText(f"删除失败: {e}")
+            return
+        if ok:
+            self.lbl_status.setText("已删除本地下载")
             self._refresh_local_list(self.edit_local.text().strip())
             if self.tabs.currentIndex() == 3:
                 self._refresh_playlists()

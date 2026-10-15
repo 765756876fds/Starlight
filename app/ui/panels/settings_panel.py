@@ -301,8 +301,51 @@ class SettingsPanel(QWidget):
         btns.addStretch()
         lay.addLayout(btns)
         root.addWidget(box)
+
+        # 下载目录（在线歌下载到本地；默认 = 第一个音乐目录）
+        dl_box = QGroupBox("⬇️ 下载目录（在线歌下载）")
+        dl_lay = QVBoxLayout(dl_box)
+        dl_row = QHBoxLayout()
+        self.edit_download_dir = QLineEdit()
+        self.edit_download_dir.setPlaceholderText("默认 = 第一个音乐目录")
+        self.edit_download_dir.setText(self._load_download_dir())
+        btn_dl_browse = QPushButton("浏览…")
+        btn_dl_browse.clicked.connect(self._on_browse_download_dir)
+        btn_dl_save = QPushButton("保存")
+        btn_dl_save.clicked.connect(self._on_save_download_dir)
+        dl_row.addWidget(self.edit_download_dir, 1)
+        dl_row.addWidget(btn_dl_browse)
+        dl_row.addWidget(btn_dl_save)
+        dl_lay.addLayout(dl_row)
+        self.lbl_dl_status = QLabel("")
+        self.lbl_dl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        dl_lay.addWidget(self.lbl_dl_status)
+        root.addWidget(dl_box)
         self._dirs: list = load_music_dirs()
         self._render_dirs()
+
+    def _load_download_dir(self) -> str:
+        """读 settings.yaml music.download_dir（无 → 空，占位符提示默认）。"""
+        try:
+            import yaml
+            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            return cfg.get("music", {}).get("download_dir", "") or ""
+        except Exception:
+            return ""
+
+    def _on_browse_download_dir(self):
+        path = QFileDialog.getExistingDirectory(self, "选择下载目录")
+        if path:
+            self.edit_download_dir.setText(path)
+
+    def _on_save_download_dir(self):
+        path = self.edit_download_dir.text().strip()
+        if not path:
+            self.lbl_dl_status.setText("请输入下载目录")
+            return
+        ok = save_settings_yaml({"music": {"download_dir": path}})
+        self.lbl_dl_status.setText("已保存（下次启动生效）" if ok else "保存失败")
 
     # ---------- 🎛️ 内置插件（MusicFree/洛雪）----------
 

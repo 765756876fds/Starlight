@@ -129,12 +129,22 @@ class OnlineSourceManager:
         """某源最近一次搜索耗时（秒）；无记录返回 None（调用方用默认值兜底）。"""
         return self._latency.get(name)
 
-    def get_play_url(self, track: OnlineTrack) -> Optional[dict]:
+    @staticmethod
+    def _call_get_url(src, track, quality):
+        """源取播放 URL；不支持 quality 参数的源（demo/http/archive）TypeError 兜底。"""
+        if quality is None:
+            return src.get_play_url(track)
+        try:
+            return src.get_play_url(track, quality=quality)
+        except TypeError:
+            return src.get_play_url(track)
+
+    def get_play_url(self, track: OnlineTrack, quality: Optional[str] = None) -> Optional[dict]:
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         src = self._sources.get(track.source_name)
         if src is not None:
             try:
-                return self._normalize_play_result(src.get_play_url(track))
+                return self._normalize_play_result(self._call_get_url(src, track, quality))
             except Exception as e:
                 self._errors[track.source_name] = str(e)
                 return None
@@ -146,7 +156,7 @@ class OnlineSourceManager:
                 acc = getattr(s, "accepts", None)
                 if acc is None or not acc(track):
                     continue
-                r = self._normalize_play_result(s.get_play_url(track))
+                r = self._normalize_play_result(self._call_get_url(s, track, quality))
                 if r:
                     return r
             except Exception:
@@ -154,7 +164,7 @@ class OnlineSourceManager:
         # 仍 miss（未知 track / accepts 源也失败）：回退旧行为全遍历
         for s in self._sources.values():
             try:
-                r = self._normalize_play_result(s.get_play_url(track))
+                r = self._normalize_play_result(self._call_get_url(s, track, quality))
                 if r:
                     return r
             except Exception:

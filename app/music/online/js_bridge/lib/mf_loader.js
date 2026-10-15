@@ -139,10 +139,11 @@ async function callGetUrl(plugin, rawItem, quality) {
   if (typeof plugin.getMediaSource !== 'function') return null;
   const item = rawItem || { id: '' };
   const want = quality || 'high';
-  // 逐级回退：high → standard → low。MusicFree 插件标准音质键是
+  // 逐级回退：want → high → standard → low。MusicFree 插件标准音质键是
   // low/standard/high/super（'320k' 不是标准键，kg/wy 会 qualities['320k']
-  // 查不到直接 return null）；部分歌曲只有低档/VIP 限制，回退保证能播。
-  for (const q of [...new Set([want, 'standard', 'low'])]) {
+  // 查不到直接 return null）；super 失败补 high（避免直接跳 standard，下载/播放
+  // 都想要尽量高的音质）；部分歌曲只有低档/VIP 限制，回退保证能播。
+  for (const q of [...new Set([want, 'high', 'standard', 'low'])]) {
     try {
       const result = await plugin.getMediaSource(item, q);
       if (!result) continue;

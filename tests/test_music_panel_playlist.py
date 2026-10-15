@@ -242,12 +242,13 @@ def test_on_next_play_local_missing_path_no_insert(qapp):
 
 
 def test_open_song_folder_quotes_path(qapp):
-    """回归 Bug4：explorer 参数用 /select,"<path>" 单参数（路径含空格不拆）。"""
+    """回归 Bug4：explorer 只吃 cmd shell 形态（list 模式标准 argv 解析会失效
+    → 打开"文档"默认位置）；/select,"<path>" 整串 + shell=True。"""
     from app.ui.panels.music_panel import MusicPanel
     m = FakeMusic()
     panel = MusicPanel(music=m)
     with patch("subprocess.Popen") as popen:
         panel._open_song_folder("C:/x/a b.mp3")
-    args = popen.call_args.args[0]
-    assert args[0] == "explorer"
-    assert args[1] == '/select,"C:\\x\\a b.mp3"'
+    args, kw = popen.call_args
+    assert kw.get("shell") is True
+    assert args[0] == 'explorer /select,"C:\\x\\a b.mp3"'

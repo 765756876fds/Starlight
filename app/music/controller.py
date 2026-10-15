@@ -148,6 +148,8 @@ class MusicController:
         self.mpv_path = config.get("mpv_path", "mpv")
         self.mpv_ipc_pipe = config.get("mpv_ipc_pipe", "\\\\.\\pipe\\lol_music_mpv")
         self.default_volume = config.get("default_volume", 70)
+        # 下载目录：settings.yaml music.download_dir；缺省 = 第一个扫描目录
+        self.download_dir = config.get("download_dir") or (self.scan_dirs[0] if self.scan_dirs else ".")
 
         # 初始化子模块
         self.db = MusicDatabase(self.db_path)
@@ -168,6 +170,8 @@ class MusicController:
 
         # Online sources（延迟构造，可选）
         self.online_manager = None
+        # 下载器（online_manager 注入后创建，见 set_online_manager）
+        self.downloader = None
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -719,7 +723,7 @@ class MusicController:
             return []
 
     def play_playlist_item(self, item: dict) -> bool:
-        """歌单播放：本地按 music_id 找歌；在线按 歌名+歌手 重搜。失败返回 False。"""
+        """歌单播放：本地按 music_id 找歌；在线已下载优先播本地；否则在线重搜。失败返回 False。"""
         if not item:
             return False
         try:
@@ -730,6 +734,18 @@ class MusicController:
                     self.play_song(song)
                     return True
                 return False
+            # 在线歌：已下载 → 优先播本地副本（下载时已入 music 表，按 title+artist 定位）
+            if self.downloader is not None:
+                try:
+                    p = self.downloader.find_download_path(
+                        item.get("title", ""), item.get("artist", ""))
+                    if p and os.path.exists(p):
+                        row2 = self.db.get_song_by_path(p)
+                        if row2:
+                            self.play_song(row2)
+                            return True
+                except Exception as e:
+                    print(f"[Music] 已下载歌优先本地失败: {e}")
             q = " ".join(x for x in (item.get("title"), item.get("artist")) if x).strip()
             if not q:
                 return False
@@ -1155,6 +1171,54 @@ class MusicController:
 
     def set_online_manager(self, manager) -> None:
         self.online_manager = manager
+        # 下载器随在线源就绪创建（不阻塞 UI、独立线程池，不碰本对象 mpv）
+        if self.downloader is None:
+            try:
+                from app.music.downloader import DownloadManager
+                self.downloader = DownloadManager(
+                    manager, self.db, self.download_dir, max_workers=3)
+            except Exception as e:
+                print(f"[Music] 下载器初始化失败: {e}")
+
+    def download_song(self, song: Dict[str, Any], callbacks=None) -> bool:
+        """在线歌下载入队（薄代理）。callbacks: on_progress/on_done/on_fail/on_exists。"""
+        if self.downloader is None:
+            if callbacks and callbacks.get("on_fail"):
+                key = f"{song.get('title', '')}|{song.get('artist', '')}".strip('|')
+                callbacks["on_fail"](key, "下载服务未就绪")
+            return False
+        try:
+            return self.downloader.download(song, callbacks)
+        except Exception as e:
+            print(f"[Music] download_song error: {e}")
+            return False
+
+    def is_downloaded(self, title: str, artist: str) -> bool:
+        """下载目录里已有 歌名 - 歌手.* → 已下载。"""
+        if self.downloader is None:
+            return False
+        try:
+            return self.downloader.is_downloaded(title, artist)
+        except Exception:
+            return False
+
+    def remove_download(self, song: Dict[str, Any]) -> tuple:
+        """删除下载副本：删文件 + 从 music 表移除（历史保留）。返回 (ok, path, err)。"""
+        if self.downloader is None:
+            return False, "", "下载服务未就绪"
+        try:
+            ok, path, err = self.downloader.remove_download(
+                song.get("title", ""), song.get("artist", ""))
+        except Exception as e:
+            return False, "", str(e)
+        if ok and path:
+            try:
+                row = self.db.get_song_by_path(path)
+                if row:
+                    self.db.delete_song(row["id"])
+            except Exception as e:
+                print(f"[Music] 移除下载记录失败: {e}")
+        return ok, path, err
 
     def sync_custom_sources(self) -> int:
         """把 config/music_sources.json 中启用的自定义音源同步注册进 online_manager。

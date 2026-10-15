@@ -457,12 +457,12 @@ class JSMusicSource(MusicSource):
             return []
         return self._parse_tracks(result)
 
-    def get_play_url(self, track: OnlineTrack) -> Optional[dict]:
+    def get_play_url(self, track: OnlineTrack, quality: str = "high") -> Optional[dict]:
         print(f"[getUrl] -> {track.source_name} track_id={track.track_id}", flush=True)
         r = self._call("getUrl", {
             "source": track.source_name,
             "track_id": track.track_id,
-            "quality": "high",   # MusicFree 标准音质键（'320k' 非标准，kg/wy 会直接失败）
+            "quality": quality,   # MusicFree 标准音质键（'320k' 非标准，kg/wy 会直接失败）；下载可传 super/high
             "raw_item": track.extra.get("_raw"),
         })
         print(f"[getUrl] <- {track.source_name} raw={None if r is None else 'dict'}", flush=True)
