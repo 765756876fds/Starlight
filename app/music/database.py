@@ -149,6 +149,29 @@ class MusicDatabase:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_play_history_played_at ON play_history(played_at DESC)")
 
+        # 歌单（只存元数据，不缓存歌曲文件；URL 有时效，在线歌只存 source_name + track_id，播放时重搜）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                created_at REAL NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS playlist_songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                playlist_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                artist TEXT DEFAULT '',
+                source_type TEXT NOT NULL,
+                source_name TEXT DEFAULT '',
+                track_id TEXT DEFAULT '',
+                music_id INTEGER DEFAULT 0,
+                added_at REAL NOT NULL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_playlist_songs_playlist ON playlist_songs(playlist_id)")
+
         # FTS 触发器 - 自动同步
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS music_ai AFTER INSERT ON music BEGIN
@@ -465,6 +488,106 @@ class MusicDatabase:
         """清空播放历史。"""
         with self._lock:
             self._conn.execute("DELETE FROM play_history")
+            self._conn.commit()
+
+    # ---- 歌单 ----
+
+    def create_playlist(self, name: str) -> Optional[int]:
+        """新建歌单；名字已存在（UNIQUE 冲突）返回 None。"""
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    "INSERT INTO playlists (name, created_at) VALUES (?, ?)",
+                    (name, time.time()))
+                self._conn.commit()
+                return int(cur.lastrowid)
+            except sqlite3.IntegrityError:
+                return None
+
+    def delete_playlist(self, playlist_id: int):
+        """删除歌单：显式级联删 playlist_songs（不依赖 foreign_keys pragma）。"""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM playlist_songs WHERE playlist_id = ?", (playlist_id,))
+            self._conn.execute(
+                "DELETE FROM playlists WHERE id = ?", (playlist_id,))
+            self._conn.commit()
+
+    def rename_playlist(self, playlist_id: int, name: str) -> bool:
+        """重命名；名字已存在（UNIQUE 冲突）返回 False。"""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "UPDATE playlists SET name = ? WHERE id = ?", (name, playlist_id))
+                self._conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    def get_playlists(self) -> List[Dict[str, Any]]:
+        """全部歌单（按创建时间），附 song_count。"""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT p.*, (SELECT COUNT(*) FROM playlist_songs s"
+                " WHERE s.playlist_id = p.id) AS song_count"
+                " FROM playlists p ORDER BY p.created_at")
+            return [dict(r) for r in cursor.fetchall()]
+
+    def add_to_playlist(self, playlist_id: int, song: Dict[str, Any]) -> bool:
+        """加歌到歌单；同歌单内同歌去重（本地按 music_id、在线按 source_name+track_id），
+        重复返回 False。"""
+        with self._lock:
+            # 本地歌 dict 常无 source_type 键：缺失/空一律按 local（在线歌显式传 "online"）
+            st = song.get("source_type") or "local"
+            title = song.get("title") or ""
+            artist = song.get("artist") or ""
+            sn = song.get("source_name") or ""
+            tid = str(song.get("track_id") or "")
+            # 本地列表项原始 dict 常只带 "id"（无 music_id）：双键 fallback，防御直调
+            mid = int(song.get("music_id") or song.get("id") or 0)
+            if st == "local":
+                dup = self._conn.execute(
+                    "SELECT id FROM playlist_songs"
+                    " WHERE playlist_id = ? AND source_type = 'local' AND music_id = ?",
+                    (playlist_id, mid)).fetchone()
+            else:
+                dup = self._conn.execute(
+                    "SELECT id FROM playlist_songs"
+                    " WHERE playlist_id = ? AND source_type = 'online'"
+                    " AND source_name = ? AND track_id = ?",
+                    (playlist_id, sn, tid)).fetchone()
+            if dup:
+                return False
+            self._conn.execute(
+                "INSERT INTO playlist_songs"
+                " (playlist_id, title, artist, source_type, source_name,"
+                " track_id, music_id, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (playlist_id, title, artist, st, sn, tid, mid, time.time()))
+            self._conn.commit()
+            return True
+
+    def remove_from_playlist(self, playlist_id: int, song_id: int) -> bool:
+        """从歌单移除（song_id 为 playlist_songs.id）。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM playlist_songs WHERE id = ? AND playlist_id = ?",
+                (song_id, playlist_id))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def get_playlist_songs(self, playlist_id: int) -> List[Dict[str, Any]]:
+        """歌单内歌曲（按加入时间）。"""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT * FROM playlist_songs WHERE playlist_id = ? ORDER BY added_at",
+                (playlist_id,))
+            return [dict(r) for r in cursor.fetchall()]
+
+    def delete_playlist_songs_by_music_id(self, music_id: int):
+        """按 music_id 从所有歌单移除（删本地文件时同步清理引用）。"""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM playlist_songs WHERE music_id = ?", (music_id,))
             self._conn.commit()
 
     def close(self):

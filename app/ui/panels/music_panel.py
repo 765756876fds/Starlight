@@ -1,8 +1,9 @@
 """音乐面板（本地 + 在线）。"""
 from PySide6.QtCore import QThread, Qt, QTimer, QObject, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSlider,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..theme.colors import Colors
@@ -174,6 +175,31 @@ class MusicPanel(QWidget):
         hl2.addWidget(self.list_history)
         tabs.addTab(history, "历史")
 
+        # ---- 歌单 Tab ----
+        playlist = QWidget()
+        pl = QHBoxLayout(playlist)
+        pl_left = QVBoxLayout()
+        self.list_playlists = QListWidget()
+        pl_left.addWidget(self.list_playlists, 2)
+        pl_btns = QHBoxLayout()
+        self.btn_new_playlist = QPushButton("新建歌单")
+        self.btn_rename_playlist = QPushButton("重命名")
+        self.btn_del_playlist = QPushButton("删除歌单")
+        pl_btns.addWidget(self.btn_new_playlist)
+        pl_btns.addWidget(self.btn_rename_playlist)
+        pl_btns.addWidget(self.btn_del_playlist)
+        pl_left.addLayout(pl_btns)
+        pl.addLayout(pl_left, 2)
+        pl_right = QVBoxLayout()
+        self.list_playlist_songs = QListWidget()
+        pl_right.addWidget(self.list_playlist_songs, 1)
+        self.lbl_playlist_status = QLabel("未选择歌单")
+        self.lbl_playlist_status.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        pl_right.addWidget(self.lbl_playlist_status)
+        pl.addLayout(pl_right, 3)
+        tabs.addTab(playlist, "歌单")
+
         # 绑定
         if music is not None:
             self.btn_prev.clicked.connect(self._on_prev)
@@ -192,6 +218,19 @@ class MusicPanel(QWidget):
             self.edit_local.returnPressed.connect(self._do_local_search)
             self.btn_local_clear.clicked.connect(self._load_local_all)
             self.list_local.itemDoubleClicked.connect(self._on_local_play)
+            # 歌单 tab
+            self.list_playlists.currentItemChanged.connect(self._on_playlist_selected)
+            self.btn_new_playlist.clicked.connect(self._on_new_playlist)
+            self.btn_rename_playlist.clicked.connect(self._on_rename_playlist)
+            self.btn_del_playlist.clicked.connect(self._on_delete_playlist)
+            self.list_playlist_songs.itemDoubleClicked.connect(self._on_playlist_song_play)
+            # 右键菜单（QMenu parent=self 防 GC）
+            self.list_local.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.list_local.customContextMenuRequested.connect(self._on_local_context_menu)
+            self.list_history.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.list_history.customContextMenuRequested.connect(self._on_history_context_menu)
+            self.list_playlist_songs.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.list_playlist_songs.customContextMenuRequested.connect(self._on_playlist_songs_context_menu)
             try:
                 self.slider_vol.setValue(int(music.get_volume() or 0))
             except Exception:
@@ -424,9 +463,11 @@ class MusicPanel(QWidget):
             print(f"[MusicPanel] 候选渲染失败: {e}")
 
     def _on_tab_changed(self, index: int):
-        """切到历史 tab → 刷新历史（构造后不再重读数据库的补偿）。"""
+        """切到历史/歌单 tab → 刷新（构造后不再重读数据库的补偿）。"""
         if index == 2:
             self._refresh_history()
+        elif index == 3:
+            self._refresh_playlists()
 
     def _refresh_history(self):
         """渲染播放历史（最近在前）。"""
@@ -496,6 +537,344 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] clear_history error: {e}")
         self._refresh_history()
+
+    # ---- 歌单 ----
+
+    def _refresh_playlists(self):
+        """重载左侧歌单列表（保持当前选中）。"""
+        if self._music is None:
+            return
+        try:
+            pls = self._music.get_playlists()
+        except Exception as e:
+            print(f"[MusicPanel] get_playlists error: {e}")
+            pls = []
+        current_id = None
+        it = self.list_playlists.currentItem()
+        if it is not None:
+            d = it.data(Qt.UserRole)
+            if d:
+                current_id = d.get("id")
+        self.list_playlists.clear()
+        for p in pls:
+            item = QListWidgetItem(p.get("name", "?"))
+            item.setData(Qt.UserRole, p)
+            self.list_playlists.addItem(item)
+            if p.get("id") == current_id:
+                self.list_playlists.setCurrentItem(item)
+        if pls and self.list_playlists.currentItem() is None:
+            self.list_playlists.setCurrentRow(0)
+        self._refresh_playlist_songs()
+
+    def _refresh_playlist_songs(self):
+        """渲染选中歌单的歌（按加入时间）。"""
+        self.list_playlist_songs.clear()
+        it = self.list_playlists.currentItem()
+        if it is None:
+            self.lbl_playlist_status.setText("未选择歌单")
+            return
+        p = it.data(Qt.UserRole)
+        if not p:
+            self.lbl_playlist_status.setText("未选择歌单")
+            return
+        try:
+            rows = self._music.get_playlist_songs(p.get("id"))
+        except Exception as e:
+            print(f"[MusicPanel] get_playlist_songs error: {e}")
+            rows = []
+        for row in rows:
+            title = row.get("title", "?") or "?"
+            artist = row.get("artist", "") or ""
+            st = row.get("source_type", "") or ""
+            sn = row.get("source_name", "") or ""
+            src = "本地" if st == "local" else (sn or "在线")
+            item = QListWidgetItem(f"{title} - {artist} [{src}]")
+            item.setData(Qt.UserRole, row)
+            self.list_playlist_songs.addItem(item)
+        self.lbl_playlist_status.setText(f"{len(rows)} 首")
+
+    def _on_playlist_selected(self, current, previous):
+        """歌单列表选中变化 → 刷新右侧歌曲。"""
+        self._refresh_playlist_songs()
+
+    def _on_new_playlist(self):
+        if self._music is None:
+            return
+        name, ok = QInputDialog.getText(self, "新建歌单", "歌单名称：")
+        if not ok or not name.strip():
+            return
+        try:
+            pid = self._music.create_playlist(name.strip())
+        except Exception as e:
+            print(f"[MusicPanel] create_playlist error: {e}")
+            pid = None
+        if pid is None:
+            self.lbl_playlist_status.setText("歌单名已存在")
+            return
+        self._refresh_playlists()
+        self.lbl_playlist_status.setText("歌单已创建")
+
+    def _on_rename_playlist(self):
+        it = self.list_playlists.currentItem()
+        if it is None or self._music is None:
+            return
+        p = it.data(Qt.UserRole)
+        if not p:
+            return
+        name, ok = QInputDialog.getText(
+            self, "重命名歌单", "新名称：", text=p.get("name", ""))
+        if not ok or not name.strip() or name.strip() == p.get("name"):
+            return
+        try:
+            ok2 = self._music.rename_playlist(p.get("id"), name.strip())
+        except Exception as e:
+            print(f"[MusicPanel] rename_playlist error: {e}")
+            ok2 = False
+        if not ok2:
+            self.lbl_playlist_status.setText("歌单名已存在")
+            return
+        self._refresh_playlists()
+        self.lbl_playlist_status.setText("已重命名")
+
+    def _on_delete_playlist(self):
+        it = self.list_playlists.currentItem()
+        if it is None or self._music is None:
+            return
+        p = it.data(Qt.UserRole)
+        if not p:
+            return
+        n = self.list_playlist_songs.count()
+        ret = QMessageBox.question(
+            self, "删除歌单",
+            f"确定删除歌单「{p.get('name')}」？\n（{n} 首歌将一并移除，此操作不可逆）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._music.delete_playlist(p.get("id"))
+        except Exception as e:
+            print(f"[MusicPanel] delete_playlist error: {e}")
+        self._refresh_playlists()
+        self.lbl_playlist_status.setText("歌单已删除")
+
+    def _on_playlist_song_play(self, item: QListWidgetItem):
+        row = item.data(Qt.UserRole)
+        if not row or self._music is None:
+            return
+        ok = False
+        try:
+            ok = self._music.play_playlist_item(row)
+        except Exception as e:
+            print(f"[MusicPanel] playlist song play error: {e}")
+        if ok:
+            self.lbl_status.setText(f"正在播放：{row.get('title', '')}")
+        else:
+            self.lbl_status.setText("该歌已不可用")
+
+    # ---- 右键菜单 ----
+
+    @staticmethod
+    def _song_dict_from_row(row) -> dict:
+        """列表行 → 加入歌单/插队用的 song dict（在线歌不存 URL，只存源名+track_id）。
+        id 统一取 music_id（队列播放链路 song['id'] 是 music.id，历史/歌单行的 row.id 不是）。"""
+        st = row.get("source_type", "local")
+        mid = int(row.get("music_id") or row.get("id") or 0)
+        return {
+            "title": row.get("title", ""),
+            "artist": row.get("artist", ""),
+            "source_type": st,
+            "source_name": row.get("source_name", "") if st != "local" else "",
+            "track_id": row.get("track_id", "") if st != "local" else "",
+            "music_id": mid,
+            "id": mid,
+            "path": row.get("path") or "",
+            "filename": row.get("filename", ""),
+        }
+
+    def _populate_playlist_submenu(self, sub, song: dict):
+        """「添加到歌单 ▸」子菜单：列出全部歌单 + 新建。"""
+        try:
+            pls = self._music.get_playlists()
+        except Exception as e:
+            print(f"[MusicPanel] get_playlists error: {e}")
+            pls = []
+        for p in pls:
+            act = sub.addAction(p.get("name", "?"))
+            act.triggered.connect(
+                lambda _=False, pid=p.get("id"): self._add_to_playlist(pid, song))
+        if pls:
+            sub.addSeparator()
+        act_new = sub.addAction("新建歌单…")
+        act_new.triggered.connect(lambda: self._add_to_new_playlist(song))
+
+    def _add_to_playlist(self, playlist_id, song: dict):
+        if self._music is None:
+            return
+        # 统一规范化：本地列表项是 music 表原始 dict（无 source_type 键），
+        # 历史/歌单行是数据库行——都转成标准 song dict，保证 source_type/music_id 正确
+        song = self._song_dict_from_row(song)
+        try:
+            ok = self._music.add_to_playlist(playlist_id, song)
+        except Exception as e:
+            print(f"[MusicPanel] add_to_playlist error: {e}")
+            ok = False
+        if ok:
+            self.lbl_status.setText("已添加到歌单")
+        else:
+            self.lbl_status.setText("该歌已在歌单中")
+        if self.tabs.currentIndex() == 3:
+            self._refresh_playlists()
+
+    def _add_to_new_playlist(self, song: dict):
+        if self._music is None:
+            return
+        name, ok = QInputDialog.getText(self, "添加到新歌单", "歌单名称：")
+        if not ok or not name.strip():
+            return
+        try:
+            pid = self._music.create_playlist(name.strip())
+        except Exception as e:
+            print(f"[MusicPanel] create_playlist error: {e}")
+            pid = None
+        if pid is None:
+            self.lbl_status.setText("歌单名已存在")
+            return
+        self._add_to_playlist(pid, song)
+
+    def _build_song_menu(self, song: dict, playlist_song_id=None):
+        """通用右键菜单；parent=self 防 GC。song 须含 title/artist/source_type/
+        source_name/track_id/music_id（本地可带 path）。"""
+        menu = QMenu(self)
+        act_next = menu.addAction("下一首播放")
+        act_next.triggered.connect(lambda: self._on_next_play(song))
+        sub = menu.addMenu("添加到歌单 ▸")
+        self._populate_playlist_submenu(sub, song)
+        if playlist_song_id is not None:
+            act_rm = menu.addAction("从歌单内删除")
+            act_rm.triggered.connect(
+                lambda: self._remove_song_from_playlist(playlist_song_id))
+        is_local = song.get("source_type", "local") == "local"
+        if is_local:
+            path = song.get("path") or ""
+            if not path and int(song.get("music_id") or 0) > 0:
+                try:
+                    path = self._music.get_song_path(song["music_id"])
+                except Exception:
+                    path = ""
+            if path:
+                act_dir = menu.addAction("打开所在文件夹")
+                act_dir.triggered.connect(lambda: self._open_song_folder(path))
+            act_del = menu.addAction("删除本地文件")
+            act_del.triggered.connect(lambda: self._delete_local_file(song))
+        return menu
+
+    def _on_next_play(self, song: dict):
+        if self._music is None:
+            return
+        d = self._song_dict_from_row(song)
+        # 本地歌必须带磁盘路径才能入队播放（历史/歌单行无 path，按 music_id 补）
+        if d.get("source_type") == "local":
+            if not d.get("path"):
+                try:
+                    d["path"] = self._music.get_song_path(d.get("music_id") or 0)
+                except Exception:
+                    d["path"] = ""
+            if not d["path"]:
+                self.lbl_status.setText("该歌已不可用")
+                return
+        try:
+            self._music.add_next(d)
+        except Exception as e:
+            print(f"[MusicPanel] add_next error: {e}")
+            return
+        self.lbl_status.setText(f"已插到下一首：{song.get('title', '')}")
+
+    def _remove_song_from_playlist(self, playlist_song_id):
+        it = self.list_playlists.currentItem()
+        if it is None or self._music is None:
+            return
+        p = it.data(Qt.UserRole)
+        if not p:
+            return
+        try:
+            self._music.remove_from_playlist(p.get("id"), playlist_song_id)
+        except Exception as e:
+            print(f"[MusicPanel] remove_from_playlist error: {e}")
+        self._refresh_playlist_songs()
+
+    def _open_song_folder(self, path):
+        import os
+        import subprocess
+        try:
+            # 路径含空格/中文：整个 /select,"<path>" 作单参数，否则 explorer 拆 token 选不中
+            subprocess.Popen(["explorer", f"/select,\"{os.path.normpath(path)}\""])
+        except Exception as e:
+            self.lbl_status.setText(f"打开文件夹失败: {e}")
+
+    def _delete_local_file(self, song: dict):
+        """删除本地文件（不可逆）：二次确认默认取消 → controller 删磁盘+库。"""
+        music_id = int(song.get("music_id") or song.get("id") or 0)
+        path = song.get("path") or ""
+        if not path and music_id > 0:
+            try:
+                path = self._music.get_song_path(music_id)
+            except Exception:
+                path = ""
+        if not path:
+            self.lbl_status.setText("歌曲文件不存在")
+            return
+        ret = QMessageBox.warning(
+            self, "删除本地文件",
+            f"确定要删除文件？\n{path}\n\n此操作不可逆！",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if ret != QMessageBox.StandardButton.Ok:
+            return
+        try:
+            ok, err = self._music.delete_local_file(song)
+        except Exception as e:
+            self.lbl_status.setText(f"删除失败: {e}")
+            return
+        if ok:
+            self.lbl_status.setText("已删除本地文件")
+            self._refresh_local_list(self.edit_local.text().strip())
+            if self.tabs.currentIndex() == 3:
+                self._refresh_playlists()
+        else:
+            self.lbl_status.setText(f"删除失败: {err}")
+
+    def _on_local_context_menu(self, pos):
+        item = self.list_local.itemAt(pos)
+        if item is None:
+            return
+        s = item.data(Qt.UserRole)
+        if not s:
+            return
+        menu = self._build_song_menu(s)
+        menu.exec_(self.list_local.mapToGlobal(pos))
+
+    def _on_history_context_menu(self, pos):
+        item = self.list_history.itemAt(pos)
+        if item is None:
+            return
+        row = item.data(Qt.UserRole)
+        if not row:
+            return
+        song = self._song_dict_from_row(row)
+        menu = self._build_song_menu(song)
+        menu.exec_(self.list_history.mapToGlobal(pos))
+
+    def _on_playlist_songs_context_menu(self, pos):
+        item = self.list_playlist_songs.itemAt(pos)
+        if item is None:
+            return
+        row = item.data(Qt.UserRole)
+        if not row:
+            return
+        song = self._song_dict_from_row(row)
+        menu = self._build_song_menu(song, playlist_song_id=row.get("id"))
+        menu.exec_(self.list_playlist_songs.mapToGlobal(pos))
 
     def _on_error_event(self, event):
         """换源全部失败 -> 状态栏提示（不跳下一首）。"""

@@ -661,6 +661,125 @@ class MusicController:
             print(f"[Music] play_history_item error: {e}")
             return False
 
+    # ---- 歌单 ----
+
+    def create_playlist(self, name: str):
+        """新建歌单；重名返回 None。"""
+        try:
+            return self.db.create_playlist(name)
+        except Exception as e:
+            print(f"[Music] create_playlist error: {e}")
+            return None
+
+    def delete_playlist(self, playlist_id: int):
+        """删除歌单（级联删歌单内歌曲）。"""
+        try:
+            self.db.delete_playlist(playlist_id)
+        except Exception as e:
+            print(f"[Music] delete_playlist error: {e}")
+
+    def rename_playlist(self, playlist_id: int, name: str) -> bool:
+        """重命名歌单；重名返回 False。"""
+        try:
+            return self.db.rename_playlist(playlist_id, name)
+        except Exception as e:
+            print(f"[Music] rename_playlist error: {e}")
+            return False
+
+    def get_playlists(self) -> list:
+        """全部歌单（附 song_count）。"""
+        try:
+            return self.db.get_playlists()
+        except Exception as e:
+            print(f"[Music] get_playlists error: {e}")
+            return []
+
+    def add_to_playlist(self, playlist_id: int, song: dict) -> bool:
+        """加歌到歌单；同歌单内同歌去重（重复返回 False）。"""
+        try:
+            return self.db.add_to_playlist(playlist_id, song)
+        except Exception as e:
+            print(f"[Music] add_to_playlist error: {e}")
+            return False
+
+    def remove_from_playlist(self, playlist_id: int, song_id: int) -> bool:
+        """从歌单移除（song_id = playlist_songs.id）。"""
+        try:
+            return self.db.remove_from_playlist(playlist_id, song_id)
+        except Exception as e:
+            print(f"[Music] remove_from_playlist error: {e}")
+            return False
+
+    def get_playlist_songs(self, playlist_id: int) -> list:
+        """歌单内歌曲（按加入时间）。"""
+        try:
+            return self.db.get_playlist_songs(playlist_id)
+        except Exception as e:
+            print(f"[Music] get_playlist_songs error: {e}")
+            return []
+
+    def play_playlist_item(self, item: dict) -> bool:
+        """歌单播放：本地按 music_id 找歌；在线按 歌名+歌手 重搜。失败返回 False。"""
+        if not item:
+            return False
+        try:
+            music_id = int(item.get("music_id") or 0)
+            if music_id > 0:
+                song = self.db.get_song_by_id(music_id)
+                if song and song.get("path") and os.path.exists(song.get("path", "")):
+                    self.play_song(song)
+                    return True
+                return False
+            q = " ".join(x for x in (item.get("title"), item.get("artist")) if x).strip()
+            if not q:
+                return False
+            r = self.play_search_result(q, 0)
+            return r is not None
+        except Exception as e:
+            print(f"[Music] play_playlist_item error: {e}")
+            return False
+
+    def get_song_path(self, music_id: int) -> str:
+        """本地歌磁盘路径（文件不存在返回空串）。"""
+        try:
+            row = self.db.get_song_by_id(int(music_id))
+            if row and row.get("path") and os.path.exists(row["path"]):
+                return row["path"]
+        except Exception as e:
+            print(f"[Music] get_song_path error: {e}")
+        return ""
+
+    def add_next(self, song: dict):
+        """下一首播放：插到当前播放位置之后（无播放时插队首）。"""
+        try:
+            pos = self.queue.get_current_index() + 1
+            self.queue.add(song, position=pos)
+        except Exception as e:
+            print(f"[Music] add_next error: {e}")
+
+    def delete_local_file(self, song: dict) -> tuple:
+        """删除本地文件（不可逆）：删磁盘 + 从 music 表移除（FTS 同步）+ 从歌单移除（历史保留）。
+        返回 (ok, err_msg)。"""
+        music_id = int(song.get("music_id") or song.get("id") or 0)
+        if music_id <= 0:
+            return False, "无效歌曲"
+        try:
+            row = self.db.get_song_by_id(music_id)
+            if not row or not row.get("path"):
+                return False, "歌曲记录不存在"
+            path = row["path"]
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    return False, f"删除文件失败: {e!r}"
+            self.db.delete_song(music_id)
+            self.db.delete_playlist_songs_by_music_id(music_id)
+            return True, ""
+        except Exception as e:
+            print(f"[Music] delete_local_file error: {e}")
+            return False, f"删除失败: {e!r}"
+
     def _cancel_candidate_switch(self):
         """取消进行中的候选换源（用户操作优先）。"""
         self._candidate_switch_token += 1
@@ -811,6 +930,104 @@ class MusicController:
 
         return None
 
+    def _play_online_queue_item(self, song: Dict[str, Any]):
+        """队列在线歌播放：按 title+artist 重搜（不用存的 track_id——旧 track 会失效，
+        日志 raw=None 证实），候选逐个取 URL → loadfile。失败 → 延迟 next() 主动跳过：
+        轮询上升沿会被 _last_idle=now_idle 覆盖吞掉（_play_song 的 reset 在 auto_next 同步
+        返回后被 L295 覆盖），必须主动跳，不能等轮询。不发 MUSIC_TRACK_CHANGED
+        （rule_engine/speech_judge 语音订阅者），直接 record_song 记历史。"""
+        query = f"{song.get('title', '')} {song.get('artist', '')}".strip()
+        if not query:
+            print("[Music] 队列在线歌无 title，跳过")
+            self._schedule_skip_online(song)
+            return
+        try:
+            online_dict = self.online_manager.search_all(query, limit_per_source=5)
+            all_tracks = [t for tracks in online_dict.values() for t in tracks]
+            if not all_tracks:
+                print("[Music] 队列在线歌重搜无结果，跳过")
+                self._schedule_skip_online(song)
+                return
+            candidates = _pick_candidates(all_tracks, self.online_manager)
+            chosen, play_result = None, None
+            for cand in candidates:
+                play_result = self.online_manager.get_play_url(cand)
+                if play_result and play_result.get("url"):
+                    chosen = cand
+                    break
+            if chosen is None:
+                print("[Music] 队列在线歌重搜 URL 均失败，跳过")
+                self._schedule_skip_online(song)
+                return
+            url = play_result["url"]
+            print(f"[Music] 队列在线歌重搜播放: {chosen.title} - {chosen.artist} ({chosen.source_name})")
+            # http-header-fields 持久属性：每次无条件重设，避免 Referer 跨源残留
+            hdr = _pick_play_headers(play_result.get("headers"))
+            need_kw_header = ("kw" in chosen.source_name.lower()
+                              or "酷我" in chosen.source_name
+                              or "kuwo" in (url or "").lower())
+            try:
+                self.mpv.set_property("http-header-fields", "")
+                if hdr:
+                    fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
+                    self.mpv.set_property("http-header-fields", fields)
+                elif need_kw_header:
+                    self.mpv.set_property(
+                        "http-header-fields",
+                        "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
+                else:
+                    self.mpv.set_property(
+                        "http-header-fields",
+                        "User-Agent: Mozilla/5.0")
+            except Exception:
+                pass
+            self.mpv.loadfile(url)
+            self.mpv.set_property("pause", False)
+            try:
+                self.mpv._properties["pause"] = False
+            except Exception:
+                pass
+            online_song = {
+                "id": -1,
+                "title": chosen.title,
+                "artist": chosen.artist,
+                "album": chosen.album,
+                "duration": getattr(chosen, 'duration_seconds', 0) or 0,
+                "path": url,
+                "source": "online",
+                "source_name": chosen.source_name,
+                "track_id": chosen.track_id,
+            }
+            self._current_song = online_song
+            self._update_state(playing=True, current_song=online_song)
+            try:
+                self.history_recorder.record_song({
+                    "id": -1,
+                    "title": chosen.title,
+                    "artist": chosen.artist,
+                    "source": "online",
+                    "source_name": chosen.source_name,
+                    "track_id": chosen.track_id,
+                })
+            except Exception as e:
+                print(f"[Music] 记录播放历史失败: {e}")
+        except Exception as e:
+            print(f"[Music] 队列在线歌播放失败: {e}")
+            self._schedule_skip_online(song)
+
+    def _schedule_skip_online(self, song: Dict[str, Any]):
+        """延迟 next() 跳过队列在线歌（不依赖轮询上升沿——会被 _last_idle 覆盖吞掉）。"""
+        threading.Timer(0.2, lambda: self._do_skip_online(song)).start()
+
+    def _do_skip_online(self, song: Dict[str, Any]):
+        """跳队列在线歌：队列 current 仍是该 song 才跳（防覆盖用户切歌操作）。"""
+        try:
+            if self.queue.get_current() is not song:
+                return
+            self.next(_timeout=0.5)
+        except Exception as e:
+            print(f"[Music] 跳过队列在线歌 next() 异常: {e!r}")
+
     def _play_song(self, song: Dict[str, Any]):
         """实际播放歌曲"""
         if not song:
@@ -822,6 +1039,11 @@ class MusicController:
         #   自动切歌被再次触发，从而跳过坏文件继续播（否则 _last_idle 停留在 True，
         #   坏文件 loadfile 后永远没有上升沿，切歌卡死）。
         self._last_idle = False
+
+        # 在线歌（右键"下一首播放"入队）：重搜 URL 播放，本地路径不涉及
+        if song.get("source_type") == "online":
+            self._play_online_queue_item(song)
+            return
 
         filepath = song.get("path")
         if not filepath or not os.path.exists(filepath):
