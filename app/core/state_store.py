@@ -117,6 +117,7 @@ def get_state_store() -> StateStore:
 # 常用命名空间常量
 class StateNamespace:
     MUSIC = "music"
+    MOVIE = "movie"
     GAME = "game"
     ALARM = "alarm"
     VOICE = "voice"

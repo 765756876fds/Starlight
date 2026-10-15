@@ -193,7 +193,11 @@ def test_movie_play_mpv_start_fail():
 def test_music_track_changed_pauses_movie():
     """音乐换歌（MUSIC_TRACK_CHANGED）→ 电影暂停（保留进度，事件解耦）。"""
     ctrl, mmpv = _make_ctrl()
+    mmpv.is_running.return_value = False
+    mmpv.start.return_value = True
+    assert ctrl.play({"vod_name": "X", "first_url": "https://u/i.m3u8"})
     mmpv.is_running.return_value = True
+    mmpv.pause.reset_mock()
     get_event_bus().publish(Event(EventType.MUSIC_TRACK_CHANGED, {"title": "x"}))
     mmpv.pause.assert_called_once()
     assert mmpv.stop.call_count == 0   # 暂停不是停止
@@ -203,7 +207,11 @@ def test_music_track_changed_pauses_movie():
 def test_music_play_event_pauses_movie():
     """音乐继续播放（MUSIC_PLAY）→ 电影暂停（双向对称的另一半）。"""
     ctrl, mmpv = _make_ctrl()
+    mmpv.is_running.return_value = False
+    mmpv.start.return_value = True
+    assert ctrl.play({"vod_name": "X", "first_url": "https://u/i.m3u8"})
     mmpv.is_running.return_value = True
+    mmpv.pause.reset_mock()
     get_event_bus().publish(Event(EventType.MUSIC_PLAY, {}))
     mmpv.pause.assert_called_once()
     assert mmpv.stop.call_count == 0

@@ -18,6 +18,7 @@ import requests
 
 from ..core.config import get_config
 from ..core.event_bus import EventType, get_event_bus
+from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
 
 # 默认源：360资源（苹果 CMS 标准接口）
@@ -104,6 +105,48 @@ class MovieController:
         self._last_idle = True
         self._sub_searched = set()
         self._subscribe()
+        self._register_commands()
+
+    # ---- 语音命令注册（包2b：语音控制电影） ----
+    # 电影由 MoviePanel 自建（movie=None），不依赖 main.py 注入：
+    # 构造时自注册 MOVIE_* 命令 + 写播放态 → 语音链可路由到电影。
+
+    def _register_commands(self):
+        from ..core.command_bus import CommandType, get_command_bus
+        try:
+            bus = get_command_bus()
+            bus.register(CommandType.MOVIE_SEARCH_PLAY, self._cmd_search_play)
+            bus.register(CommandType.MOVIE_PAUSE, lambda c: self.pause())
+            bus.register(CommandType.MOVIE_RESUME, lambda c: self.resume())
+        except Exception as e:
+            print(f"[Movie] 注册语音命令失败: {e}")
+
+    def _cmd_search_play(self, command):
+        """语音"播放电影XX"：搜索 → 播 Top1（语音直达，不弹 UI 选集对话框）。"""
+        query = ((command.params or {}).get("query") or "").strip()
+        if not query:
+            return False
+        try:
+            items = self.search(query)
+        except Exception as e:
+            print(f"[Movie] 语音搜索异常: {e}")
+            return False
+        if not items:
+            print(f"[Movie] 语音未找到电影: {query}")
+            return False
+        return self.play(items[0])
+
+    def _write_state(self, playing=None, paused=None):
+        """写播放态到 state_store（语音"谁在播谁响应"路由用）。
+        playing=True 表示电影占着播放权（即使暂停）；paused 仅当 playing 时有意义。"""
+        try:
+            st = get_state_store()
+            if playing is not None:
+                st.set(StateNamespace.MOVIE, "playing", bool(playing))
+            if paused is not None:
+                st.set(StateNamespace.MOVIE, "paused", bool(paused))
+        except Exception as e:
+            print(f"[Movie] 写播放状态失败: {e}")
 
     # ---- 互斥：事件解耦（音乐 → 电影） ----
 
@@ -208,6 +251,7 @@ class MovieController:
         self._current = item
         self._current_index = idx
         self._last_idle = False  # 新播放开始，等播完再触发连播
+        self._write_state(playing=True, paused=False)
         return True
 
     # ---- 自动连播 ----
@@ -245,6 +289,7 @@ class MovieController:
             self._current = None
             self._current_index = None
             self._last_idle = True
+            self._write_state(playing=False, paused=False)
             return False
         name, url = eps[nxt]
         print(f"[Movie] 自动连播下一集: {name}")
@@ -265,6 +310,7 @@ class MovieController:
         self._current = None
         self._current_index = None
         self._last_idle = True
+        self._write_state(playing=False, paused=False)
 
     # ---- 播放控制（复用 mpv JSON IPC） ----
 
@@ -274,8 +320,10 @@ class MovieController:
             return
         self._pausing = True
         try:
-            if self.mpv.is_running():
+            if self._current is not None and self.mpv.is_running():
                 self.mpv.pause()
+                # 仍占播放权（playing=True），标记暂停态（语音"继续"可恢复）
+                self._write_state(paused=True)
         finally:
             self._pausing = False
 
@@ -284,6 +332,8 @@ class MovieController:
 
     def resume(self):
         self.mpv.play()
+        if self._current is not None:
+            self._write_state(playing=True, paused=False)
 
     def seek(self, seconds, mode="relative"):
         self.mpv.seek(seconds, mode)
@@ -318,6 +368,7 @@ class MovieController:
             self.mpv.stop_process()
         except Exception:
             pass
+        self._write_state(playing=False, paused=False)
 
     # ---- 字幕（Assrt） ----
 

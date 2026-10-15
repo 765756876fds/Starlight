@@ -318,19 +318,60 @@ class VoiceRuntime:
             (_t_asr-_t0)*1000, (_t_intent-_t_asr)*1000,
             (_t_cmd-_t_intent)*1000, (_t_cmd-_t0)*1000, intent.intent_type))
 
+    # ---- 包2b：谁在播谁响应（电影/音乐暂停继续路由） ----
+    # 路由读 state_store 的 MOVIE 播放态（movie_controller play/pause/stop 写入）。
+    # 读不到/异常 → 按音乐处理（现状零变化）。
+
+    def _movie_state(self):
+        """读电影播放态：(playing=在播占位, paused=暂停中)。"""
+        try:
+            playing = bool(self.state_store.get(StateNamespace.MOVIE, "playing", False))
+            paused = bool(self.state_store.get(StateNamespace.MOVIE, "paused", False))
+            return playing, paused
+        except Exception:
+            return False, False
+
+    def _route_pause_cmd(self):
+        """暂停路由：电影在播（未暂停）→ MOVIE_PAUSE；否则 MUSIC_PAUSE。
+        电影暂停中说"暂停" → 走音乐（音乐没播则 no-op，不报错）。"""
+        playing, paused = self._movie_state()
+        if playing and not paused:
+            return CommandType.MOVIE_PAUSE
+        return CommandType.MUSIC_PAUSE
+
+    def _route_resume_cmd(self):
+        """继续路由：电影在播（含暂停中）→ MOVIE_RESUME；否则 MUSIC_RESUME。"""
+        playing, _ = self._movie_state()
+        if playing:
+            return CommandType.MOVIE_RESUME
+        return CommandType.MUSIC_RESUME
+
     def _execute_intent(self, intent: Intent, original_text: str):
         """执行意图对应的命令"""
         intent_type = intent.intent_type
         params = intent.params
 
-        # 音乐命令
-        if intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
-                           CommandType.MUSIC_PAUSE, CommandType.MUSIC_RESUME,
-                           CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
-                           CommandType.MUSIC_CLEANUP,
-                           CommandType.MUSIC_HIGHLIGHT_MODE,
-                           CommandType.MUSIC_SET_PLAY_MODE,
-                           CommandType.MUSIC_CLEAR_QUEUE):
+        # 音乐命令（暂停/继续：谁在播谁响应——电影在播时路由给电影，包2b）
+        if intent_type == CommandType.MUSIC_PAUSE:
+            self.command_bus.execute(Command(
+                command_type=self._route_pause_cmd(),
+                params=params,
+                source="voice",
+            ))
+
+        elif intent_type == CommandType.MUSIC_RESUME:
+            self.command_bus.execute(Command(
+                command_type=self._route_resume_cmd(),
+                params=params,
+                source="voice",
+            ))
+
+        elif intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
+                             CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
+                             CommandType.MUSIC_CLEANUP,
+                             CommandType.MUSIC_HIGHLIGHT_MODE,
+                             CommandType.MUSIC_SET_PLAY_MODE,
+                             CommandType.MUSIC_CLEAR_QUEUE):
             self.command_bus.execute(Command(
                 command_type=intent_type,
                 params=params,
@@ -355,6 +396,15 @@ class VoiceRuntime:
             self.command_bus.execute(Command(
                 command_type=CommandType.MUSIC_VOLUME_DOWN,
                 params={"step": params.get("step", 5)},
+                source="voice",
+            ))
+
+        elif intent_type == CommandType.MOVIE_SEARCH_PLAY:
+            # 长任务（在线搜索）：异步执行，不阻塞识别线程（与 MUSIC_SEARCH_PLAY 同策略）
+            query = params.get("query", original_text)
+            self.command_bus.execute_async(Command(
+                command_type=CommandType.MOVIE_SEARCH_PLAY,
+                params={"query": query},
                 source="voice",
             ))
 

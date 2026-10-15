@@ -321,6 +321,22 @@ class RuleBasedIntent:
 
                 return Intent(intent_type, confidence=0.95, params=params)
 
+        # 电影搜索播放（包2b）：显式带"电影/影片/片子"才走电影；裸"播放XX"保持音乐。
+        # 必须在 search_patterns 之前：否则"播放电影流浪地球"会被 ^播放(.+)$ 截成音乐搜索。
+        movie_patterns = [
+            r"^(?:播放|放|看)(?:一部)?(电影|影片|片子)(.+)$",
+        ]
+        for pattern in movie_patterns:
+            match = re.match(pattern, text)
+            if match:
+                query = match.group(2).strip()
+                if query and query not in cls.SEARCH_NEGATION_WORDS:
+                    return Intent(
+                        CommandType.MOVIE_SEARCH_PLAY,
+                        confidence=0.9,
+                        params={"query": query},
+                    )
+
         # 搜索播放："播放XXX" / "来一首XXX" / "放点XXX"
         search_patterns = [
             r"^播放(.+)$",

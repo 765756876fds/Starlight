@@ -51,6 +51,11 @@ class CommandType:
     MUSIC_CLEANUP = "music.cleanup"
     MUSIC_CLEAR_QUEUE = "music.clear_queue"
 
+    # ===== 电影命令（包2b：语音控制电影） =====
+    MOVIE_SEARCH_PLAY = "movie.search_play"
+    MOVIE_PAUSE = "movie.pause"
+    MOVIE_RESUME = "movie.resume"
+
     # ===== GameAlarm 命令 =====
     ALARM_CREATE_FLASH = "alarm.create_flash"
     ALARM_CREATE_SPELL = "alarm.create_spell"
