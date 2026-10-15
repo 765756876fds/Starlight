@@ -134,6 +134,21 @@ class MusicDatabase:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_music_title ON music(title)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_music_genre ON music(genre)")
 
+        # 播放历史（只存元数据，不缓存歌曲文件）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS play_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                artist TEXT DEFAULT '',
+                source_type TEXT NOT NULL,
+                source_name TEXT DEFAULT '',
+                track_id TEXT DEFAULT '',
+                music_id INTEGER DEFAULT 0,
+                played_at REAL NOT NULL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_play_history_played_at ON play_history(played_at DESC)")
+
         # FTS 触发器 - 自动同步
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS music_ai AFTER INSERT ON music BEGIN
@@ -418,6 +433,39 @@ class MusicDatabase:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except Exception as e:
                 print(f"[DB] WAL checkpoint 失败: {e}")
+
+    def add_history(self, title: str, artist: str, source_type: str,
+                    source_name: str = "", track_id: str = "",
+                    music_id: int = 0, played_at: Optional[float] = None) -> int:
+        """写入一条播放历史（只存元数据，不缓存歌曲文件）；超过 200 条删最旧。"""
+        with self._lock:
+            now = played_at if played_at is not None else time.time()
+            cursor = self._conn.execute(
+                "INSERT INTO play_history "
+                "(title, artist, source_type, source_name, track_id, music_id, played_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (title, artist, source_type, source_name, track_id, int(music_id), now))
+            row_id = cursor.lastrowid
+            # 上限 200：删除最旧的超量行
+            self._conn.execute(
+                "DELETE FROM play_history WHERE id IN ("
+                "SELECT id FROM play_history ORDER BY played_at DESC LIMIT -1 OFFSET 200)")
+            self._conn.commit()
+            return int(row_id)
+
+    def get_history(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """播放历史（最近在前）。"""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT * FROM play_history ORDER BY played_at DESC LIMIT ?",
+                (int(limit),))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def clear_history(self):
+        """清空播放历史。"""
+        with self._lock:
+            self._conn.execute("DELETE FROM play_history")
+            self._conn.commit()
 
     def close(self):
         """关闭数据库连接（先 checkpoint 落盘）"""

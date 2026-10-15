@@ -60,6 +60,7 @@ class MusicPanel(QWidget):
         root = QVBoxLayout(self)
         tabs = self.tabs = QTabWidget()
         root.addWidget(tabs)
+        tabs.currentChanged.connect(self._on_tab_changed)
 
         # ---- 本地 Tab ----
         local = QWidget()
@@ -161,6 +162,18 @@ class MusicPanel(QWidget):
         ol.addWidget(self.lbl_status)
         tabs.addTab(online, "在线")
 
+        # ---- 历史 Tab ----
+        history = QWidget()
+        hl2 = QVBoxLayout(history)
+        hrow2 = QHBoxLayout()
+        self.btn_clear_history = QPushButton("清空历史")
+        hrow2.addWidget(self.btn_clear_history)
+        hrow2.addStretch()
+        hl2.addLayout(hrow2)
+        self.list_history = QListWidget()
+        hl2.addWidget(self.list_history)
+        tabs.addTab(history, "历史")
+
         # 绑定
         if music is not None:
             self.btn_prev.clicked.connect(self._on_prev)
@@ -173,6 +186,8 @@ class MusicPanel(QWidget):
             self.btn_search.clicked.connect(self._do_search)
             self.edit_kw.returnPressed.connect(self._do_search)
             self.list_results.itemDoubleClicked.connect(self._on_play)
+            self.list_history.itemDoubleClicked.connect(self._on_history_play)
+            self.btn_clear_history.clicked.connect(self._on_clear_history)
             self.btn_local_search.clicked.connect(self._do_local_search)
             self.edit_local.returnPressed.connect(self._do_local_search)
             self.btn_local_clear.clicked.connect(self._load_local_all)
@@ -188,6 +203,7 @@ class MusicPanel(QWidget):
                 pass
             # 初始加载全部
             self._load_local_all()
+            self._refresh_history()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
@@ -406,6 +422,80 @@ class MusicPanel(QWidget):
                 self.lbl_status.setText("未找到候选")
         except Exception as e:
             print(f"[MusicPanel] 候选渲染失败: {e}")
+
+    def _on_tab_changed(self, index: int):
+        """切到历史 tab → 刷新历史（构造后不再重读数据库的补偿）。"""
+        if index == 2:
+            self._refresh_history()
+
+    def _refresh_history(self):
+        """渲染播放历史（最近在前）。"""
+        if self._music is None:
+            return
+        try:
+            rows = self._music.get_history(limit=200)
+        except Exception as e:
+            print(f"[MusicPanel] get_history error: {e}")
+            rows = []
+        self.list_history.clear()
+        for row in rows:
+            title = row.get("title", "?") or "?"
+            artist = row.get("artist", "") or ""
+            st = row.get("source_type", "") or ""
+            sn = row.get("source_name", "") or ""
+            if st == "local":
+                src = "本地"
+            elif sn:
+                src = sn
+            else:
+                src = st or "在线"
+            rel = self._fmt_relative(float(row.get("played_at") or 0))
+            item = QListWidgetItem(f"{title} - {artist} [{src}] {rel}")
+            item.setData(Qt.UserRole, row)
+            self.list_history.addItem(item)
+
+    @staticmethod
+    def _fmt_relative(ts: float) -> str:
+        """相对时间：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前。"""
+        import time as _t
+        d = _t.time() - ts
+        if d < 60:
+            return "刚刚"
+        if d < 3600:
+            return f"{int(d // 60)} 分钟前"
+        if d < 86400:
+            return f"{int(d // 3600)} 小时前"
+        if d < 172800:
+            return "昨天"
+        return f"{int(d // 86400)} 天前"
+
+    def _on_history_play(self, item: QListWidgetItem):
+        row = item.data(Qt.UserRole)
+        if not row or self._music is None:
+            return
+        ok = False
+        try:
+            ok = self._music.play_history_item(row)
+        except Exception as e:
+            print(f"[MusicPanel] history play error: {e}")
+        if ok:
+            self.lbl_status.setText(f"正在播放：{row.get('title', '')}")
+        else:
+            self.lbl_status.setText("该歌已不可用")
+
+    def _on_clear_history(self):
+        if self._music is None:
+            return
+        ret = QMessageBox.question(
+            self, "清空播放历史", "确定清空全部播放历史？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ret != QMessageBox.Yes:
+            return
+        try:
+            self._music.clear_history()
+        except Exception as e:
+            print(f"[MusicPanel] clear_history error: {e}")
+        self._refresh_history()
 
     def _on_error_event(self, event):
         """换源全部失败 -> 状态栏提示（不跳下一首）。"""

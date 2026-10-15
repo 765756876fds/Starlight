@@ -12,6 +12,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from ..core.event_bus import EventBus, Event, EventType, get_event_bus
+from .history_recorder import HistoryRecorder
 from ..core.command_bus import CommandBus, Command, CommandType, get_command_bus
 from ..core.state_store import StateStore, StateNamespace, get_state_store
 
@@ -208,6 +209,8 @@ class MusicController:
         # UI「音源管理」导入的自定义 HTTP 源，sync_custom_sources() 维护的注册名单
         self._custom_http_sources: set = set()
 
+        # 播放历史记录器（独立模块；start() 时订阅 MUSIC_TRACK_CHANGED）
+        self.history_recorder = HistoryRecorder(self.db, self.event_bus)
         # 注册命令处理器
         self._register_commands()
 
@@ -217,6 +220,7 @@ class MusicController:
 
     def start(self) -> bool:
         """启动音乐模块。mpv 不可用 → 降级运行（不抛异常），返回 False。"""
+        self.history_recorder.start()
         if self._running:
             return True
 
@@ -621,6 +625,42 @@ class MusicController:
             self.queue.play_at(self.queue.size() - 1)
             self._play_song(song)
 
+    def get_history(self, limit: int = 200) -> list:
+        """播放历史（最近在前）。"""
+        try:
+            return self.db.get_history(limit=limit)
+        except Exception as e:
+            print(f"[Music] get_history error: {e}")
+            return []
+
+    def clear_history(self):
+        """清空播放历史。"""
+        try:
+            self.db.clear_history()
+        except Exception as e:
+            print(f"[Music] clear_history error: {e}")
+
+    def play_history_item(self, item: dict) -> bool:
+        """历史重播：本地按 music_id 找歌；在线按 歌名+歌手 重搜。失败返回 False。"""
+        if not item:
+            return False
+        try:
+            music_id = int(item.get("music_id") or 0)
+            if music_id > 0:
+                song = self.db.get_song_by_id(music_id)
+                if song and song.get("path") and os.path.exists(song.get("path", "")):
+                    self.play_song(song)
+                    return True
+                return False
+            q = " ".join(x for x in (item.get("title"), item.get("artist")) if x).strip()
+            if not q:
+                return False
+            r = self.play_search_result(q, 0)
+            return r is not None
+        except Exception as e:
+            print(f"[Music] play_history_item error: {e}")
+            return False
+
     def _cancel_candidate_switch(self):
         """取消进行中的候选换源（用户操作优先）。"""
         self._candidate_switch_token += 1
@@ -740,6 +780,8 @@ class MusicController:
                             "duration": getattr(chosen, 'duration_seconds', 0) or 0,
                             "path": play_url,
                             "source": "online",
+                            "source_name": chosen.source_name,
+                            "track_id": chosen.track_id,
                         }
                         self._current_song = online_song
                         self._update_state(
@@ -1130,6 +1172,19 @@ class MusicController:
                 "online": True,
             }
         )
+        # 记录播放历史（直接调用 record_song，不走 MUSIC_TRACK_CHANGED——
+        # 该事件另有 rule_engine/speech_judge 语音订阅者，不能因播放而误触）
+        try:
+            self.history_recorder.record_song({
+                "id": -1,
+                "title": track.title,
+                "artist": track.artist,
+                "source": "online",
+                "source_name": getattr(track, "source_name", "") or "",
+                "track_id": getattr(track, "track_id", "") or "",
+            })
+        except Exception as e:
+            print(f"[Music] 记录播放历史失败: {e}")
         return True
 
     def set_volume(self, volume: int):
