@@ -5,6 +5,8 @@
 支持增量扫描（根据文件修改时间判断是否需要更新）。
 """
 import os
+import shutil
+import subprocess
 import time
 import threading
 import logging
@@ -31,16 +33,23 @@ class MusicScanner:
 
     SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".ape"}
 
+    VERIFY_TIMEOUT = 8.0  # 可播验证：mpv 进程超时秒数
+
     def __init__(self, db: MusicDatabase, scan_dirs: List[str],
-                 extensions: Optional[Set[str]] = None):
+                 extensions: Optional[Set[str]] = None,
+                 mpv_path: Optional[str] = None):
         self.db = db
         self.scan_dirs = scan_dirs
         self.extensions = extensions or self.SUPPORTED_EXTENSIONS
+        self.mpv_path = mpv_path
+        # 可播验证可用性（mpv 不存在/启动失败 → 降级跳过验证，照常入库）
+        self._verify_mpv_ok = self._resolve_mpv_path()
         self._scanned_count = 0
         self._added_count = 0
         self._updated_count = 0
         self._skipped_count = 0
         self._error_count = 0
+        self._unplayable_count = 0
         self._highlight_running = False  # 防止重复启动worker
 
     def scan(self, full_rescan: bool = False) -> Dict[str, int]:
@@ -58,6 +67,7 @@ class MusicScanner:
         self._updated_count = 0
         self._skipped_count = 0
         self._error_count = 0
+        self._unplayable_count = 0
         self._highlight_running = False  # 防止重复启动worker
 
         all_files = self._collect_files()
@@ -82,6 +92,7 @@ class MusicScanner:
             "updated": self._updated_count,
             "skipped": self._skipped_count,
             "errors": self._error_count,
+            "unplayable": self._unplayable_count,
         }
 
     def _collect_files(self) -> List[str]:
@@ -116,6 +127,12 @@ class MusicScanner:
                 self._skipped_count += 1
                 return
 
+        # 可播验证：只对新增/变更文件（mpv 不可用时降级照常入库）
+        if self._verify_mpv_ok and not self._verify_playable(filepath):
+            self._unplayable_count += 1
+            print(f"[Scanner] 不可播文件已跳过入库: {filepath}")
+            return
+
         # 提取元数据
         song_data = self._extract_metadata(filepath)
         song_data["path"] = filepath
@@ -130,6 +147,53 @@ class MusicScanner:
         else:
             self.db.insert_song(song_data)
             self._added_count += 1
+
+    def _resolve_mpv_path(self) -> bool:
+        """解析可播验证用的 mpv 路径；不可用返回 False（降级跳过验证）。"""
+        if not self.mpv_path:
+            return False
+        if os.path.isfile(self.mpv_path):
+            return True
+        try:
+            found = shutil.which(self.mpv_path)
+            if found:
+                self.mpv_path = found
+                return True
+        except Exception:
+            pass
+        print(f"[Scanner] mpv 不存在: {self.mpv_path}，可播验证降级（照常入库）")
+        return False
+
+    def _verify_playable(self, filepath: str) -> bool:
+        """独立 mpv 进程试播验证（--frames=1，绝不碰 controller 的 mpv 实例）。
+
+        exit=0 → 可播；非 0 / 超时（VERIFY_TIMEOUT 秒，杀进程）→ 不可播；
+        验证本身异常 → 降级返回 True（照常入库，不因验证坏掉扫描）。
+        """
+        try:
+            proc = subprocess.Popen(
+                [self.mpv_path, "--no-config", "--no-video", "--vo=null",
+                 "--ao=null", "--frames=1", "--msg-level=all=error", "--", filepath],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                rc = proc.wait(timeout=self.VERIFY_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    pass
+                print(f"[Scanner] 可播验证超时({self.VERIFY_TIMEOUT}s)，判定不可播: {filepath}")
+                return False
+            if rc == 0:
+                return True
+            print(f"[Scanner] 可播验证失败 (mpv exit={rc}): {filepath}")
+            return False
+        except Exception as e:
+            print(f"[Scanner] 可播验证异常（降级照常入库）: {e!r}")
+            return True
 
     def _extract_metadata(self, filepath: str) -> Dict[str, Any]:
         """

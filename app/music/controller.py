@@ -151,7 +151,7 @@ class MusicController:
 
         # 初始化子模块
         self.db = MusicDatabase(self.db_path)
-        self.scanner = MusicScanner(self.db, self.scan_dirs, self.extensions)
+        self.scanner = MusicScanner(self.db, self.scan_dirs, self.extensions, self.mpv_path)
         self.search = MusicSearch(self.db)
         self.queue = PlayQueue()
         self._missing_file_streak = 0   # 连续文件不可用计数（限次保护）
