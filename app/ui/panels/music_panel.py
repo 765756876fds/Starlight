@@ -6,6 +6,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..theme.colors import Colors
+from ...core.event_bus import get_event_bus
+from ...music.online.events import ONLINE_SEARCH_DONE, ONLINE_ERROR
 
 
 class _SearchWorker(QObject):
@@ -43,6 +45,9 @@ class _ScanWorker(QObject):
 
 
 class MusicPanel(QWidget):
+    # P1 候选旁路：后台线程 publish → 此 Signal 桥到主线程渲染
+    _search_event = Signal(dict)
+
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
         self._music = music
@@ -50,9 +55,10 @@ class MusicPanel(QWidget):
         self._local_songs = []
         self._thread = None
         self._scan_thread = None
+        self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
 
         root = QVBoxLayout(self)
-        tabs = QTabWidget()
+        tabs = self.tabs = QTabWidget()
         root.addWidget(tabs)
 
         # ---- 本地 Tab ----
@@ -186,6 +192,14 @@ class MusicPanel(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(1000)
+
+        # P1 候选旁路：订阅 controller 推送的候选事件（Signal 桥到主线程）
+        self._search_event.connect(self._on_search_show)
+        try:
+            get_event_bus().subscribe(ONLINE_SEARCH_DONE, self._on_search_event)
+            get_event_bus().subscribe(ONLINE_ERROR, self._on_error_event)
+        except Exception as e:
+            print(f"[MusicPanel] 订阅候选事件失败: {e}")
 
     # ---- 本地 ----
     def _on_scan_local(self):
@@ -334,6 +348,7 @@ class MusicPanel(QWidget):
         self._thread.start()
 
     def _on_search_done(self, result: dict):
+        self._voice_generation = None   # 手动搜索 → 重置语音候选代际
         self.list_results.clear()
         self._tracks_by_row = []
         source_filter = self.cb_source.currentData()
@@ -353,9 +368,68 @@ class MusicPanel(QWidget):
     def _on_search_failed(self, err: str):
         self.lbl_status.setText(f"搜索失败: {err}")
 
+    def _on_search_event(self, event):
+        """后台线程 publish → Signal 桥到主线程（Qt 队列连接自动跨线程）。"""
+        try:
+            self._search_event.emit(dict(event.data or {}))
+        except Exception as e:
+            print(f"[MusicPanel] 候选事件桥接失败: {e}")
+
+    def _on_search_show(self, payload: dict):
+        """主线程：渲染语音候选到在线 tab（不改变当前播放）。"""
+        try:
+            gen = payload.get("generation")
+            display = payload.get("display") or []
+            if gen is None or not isinstance(display, list):
+                return
+            gen = int(gen)
+            if self._voice_generation is not None and gen <= self._voice_generation:
+                return
+            self._voice_generation = gen
+            try:
+                if hasattr(self, "tabs"):
+                    self.tabs.setCurrentIndex(1)
+            except Exception:
+                pass
+            self.list_results.clear()
+            self._tracks_by_row = []
+            for row in display:
+                src = row.get("source", "")
+                title = row.get("title", "")
+                artist = row.get("artist", "")
+                item = QListWidgetItem(f"[{src}] {title} - {artist}")
+                self.list_results.addItem(item)
+            n = len(display)
+            if n:
+                self.lbl_status.setText(f"共找到 {n} 首候选，双击播放")
+            else:
+                self.lbl_status.setText("未找到候选")
+        except Exception as e:
+            print(f"[MusicPanel] 候选渲染失败: {e}")
+
+    def _on_error_event(self, event):
+        """换源全部失败 -> 状态栏提示（不跳下一首）。"""
+        try:
+            msg = (event.data or {}).get("message", "在线播放失败")
+            self.lbl_status.setText(msg)
+        except Exception as e:
+            print(f"[MusicPanel] 错误事件处理失败: {e}")
+
     def _on_play(self, item: QListWidgetItem):
         row = self.list_results.row(item)
-        if row < 0 or row >= len(self._tracks_by_row):
+        if row < 0:
+            return
+        # P1 候选换源：语音候选列表（_voice_generation 非 None）→ 换源续播
+        if self._voice_generation is not None:
+            try:
+                if self._music.play_online_resume(self._voice_generation, row):
+                    self.lbl_status.setText("正在换源…")
+                    return
+            except Exception as e:
+                self.lbl_status.setText(f"换源失败: {e}")
+                return
+        # 手动搜索路径（原样）
+        if row >= len(self._tracks_by_row):
             return
         track = self._tracks_by_row[row]
         try:

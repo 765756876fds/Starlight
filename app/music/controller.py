@@ -21,6 +21,7 @@ from .mpv import MpvController
 from .queue import PlayQueue, PlayMode
 from .search import MusicSearch
 from .lx_client import LxMusicClient
+from .online.events import ONLINE_SEARCH_DONE, ONLINE_ERROR
 
 
 # mpv http-header-fields 用逗号分隔，值含逗号会破坏语法；只转发安全字段。
@@ -120,6 +121,17 @@ def _pick_best(all_tracks, manager):
     return cands[0] if cands else None
 
 
+def _cancel_switch_on_user_action(method):
+    """用户操作入口装饰器：先取消进行中的候选换源（用户优先）。"""
+    def wrapper(self, *args, **kwargs):
+        try:
+            self._cancel_candidate_switch()
+        except Exception:
+            pass
+        return method(self, *args, **kwargs)
+    return wrapper
+
+
 class MusicController:
     """
     音乐控制器
@@ -165,6 +177,12 @@ class MusicController:
         self._running = False
         self._lock = threading.Lock()
         self._current_song: Optional[Dict[str, Any]] = None
+        # P1 候选旁路：最近一次语音搜歌的候选（事件只带展示，track 本体留本对象）
+        self._candidate_generation: int = 0
+        self._active_candidates: list = []
+        # B 方案：换源取消令牌 + 抑制跳歌标记
+        self._candidate_switch_token: int = 0
+        self._candidate_switching: bool = False
 
         # mpv 可用性（mpv 未安装/路径错/启动失败 → 模块降级运行，不崩主程序）
         self._mpv_available = True
@@ -373,6 +391,7 @@ class MusicController:
 
     # ===== 播放控制 =====
 
+    @_cancel_switch_on_user_action
     def play(self):
         """播放"""
         if not self._mpv_available:
@@ -415,6 +434,7 @@ class MusicController:
                 self.mpv.play()
                 self._update_state(playing=True)
 
+    @_cancel_switch_on_user_action
     def pause(self):
         """暂停"""
         if not self._mpv_available:
@@ -437,6 +457,7 @@ class MusicController:
             pass
         self._update_state(playing=False)
 
+    @_cancel_switch_on_user_action
     def resume(self):
         """继续播放"""
         if not self._mpv_available:
@@ -450,6 +471,7 @@ class MusicController:
             pass
         self._update_state(playing=True)
 
+    @_cancel_switch_on_user_action
     def toggle(self):
         """切换播放/暂停（直接让 mpv 处理，不依赖缓存状态）"""
         if not self._mpv_available:
@@ -472,6 +494,7 @@ class MusicController:
         except Exception:
             pass
 
+    @_cancel_switch_on_user_action
     def next(self):
         """下一首"""
         if not self._mpv_available:
@@ -516,6 +539,7 @@ class MusicController:
                 if song:
                     self._play_song(song)
 
+    @_cancel_switch_on_user_action
     def prev(self):
         """上一首"""
         if not self._mpv_available:
@@ -536,6 +560,7 @@ class MusicController:
             if song:
                 self._play_song(song)
 
+    @_cancel_switch_on_user_action
     def play_song(self, song: Dict[str, Any]):
         """播放指定歌曲"""
         if not self._mpv_available:
@@ -556,6 +581,32 @@ class MusicController:
             self.queue.play_at(self.queue.size() - 1)
             self._play_song(song)
 
+    def _cancel_candidate_switch(self):
+        """取消进行中的候选换源（用户操作优先）。"""
+        self._candidate_switch_token += 1
+        self._candidate_switching = False
+
+    def _publish_candidates(self, query: str, candidates: list) -> None:
+        """P1 候选旁路：把候选推给 UI（事件只带展示 + 代际号）。
+
+        track 本体留 self._active_candidates，UI 点击时通过
+        play_online_resume(generation, idx) 回查——避免 OnlineTrack
+        dataclass 进 EventLog 触发 JSON 序列化错误。
+        """
+        self._candidate_generation += 1
+        gen = self._candidate_generation
+        self._active_candidates = list(candidates)
+        display = [
+            {"idx": i, "source": c.source_name, "title": c.title, "artist": c.artist}
+            for i, c in enumerate(candidates)
+        ]
+        self.event_bus.publish(Event(
+            event_type=ONLINE_SEARCH_DONE,
+            data={"query": query, "display": display, "generation": gen},
+            source="music",
+        ))
+
+    @_cancel_switch_on_user_action
     def play_search_result(self, query: str, index: int = 0):
         """搜索并播放第 N 个结果，本地找不到自动走在线fallback"""
         if not self._mpv_available:
@@ -584,6 +635,11 @@ class MusicController:
                     # failover：候选列表逐个试 get_play_url，第一个拿到 URL 的胜出
                     # （某源该歌 VIP/档位限制拿不到 URL 时，自动试下一个源）。
                     candidates = _pick_candidates(all_tracks, self.online_manager)
+                    # P1 候选旁路：推给 UI（自动播代码不动；异常不影响播放）
+                    try:
+                        self._publish_candidates(query, candidates)
+                    except Exception as _e:
+                        print(f"[Music] 候选推送失败（不影响播放）: {_e}")
                     _t_url_start = time.time()
                     chosen, play_result = None, None
                     for cand in candidates:
@@ -875,7 +931,99 @@ class MusicController:
             print(f"[Music] search_local error: {e}")
             return []
 
-    def play_online(self, track) -> bool:
+    def play_online_resume(self, generation: int, idx: int) -> bool:
+        """B 方案：候选换源重播（异步 + 按源分组 failover）。
+
+        立即返回 True（已接受请求）；实际换源在后台线程执行：
+        - 从点击候选的源开始，按列表首次出现顺序试其他源；
+        - 每源最多 2 条候选，最多 5 个源；
+        - 每条候选：取 URL -> loadfile -> 等 2s 检查是否真播起来；
+        - 成功 -> 从 0:00 重播（不保进度）；全部失败 -> 发 ONLINE_ERROR；
+        - 用户操作（_cancel_candidate_switch）可随时中断。
+        """
+        try:
+            if generation != self._candidate_generation:
+                return False
+            cands = self._active_candidates
+            if not cands or idx < 0 or idx >= len(cands):
+                return False
+
+
+            self._candidate_switch_token += 1
+            my_token = self._candidate_switch_token
+            self._candidate_switching = True
+
+            start_source = cands[idx].source_name
+            gen_snapshot = self._candidate_generation
+
+            def _try_switch():
+                try:
+                    src_order = []
+                    seen = set()
+                    for c in cands:
+                        if c.source_name not in seen:
+                            seen.add(c.source_name)
+                            src_order.append(c.source_name)
+                    if start_source in src_order:
+                        src_order.remove(start_source)
+                        src_order.insert(0, start_source)
+                    src_order = src_order[:5]
+
+                    import time as _t
+
+                    for src in src_order:
+                        if my_token != self._candidate_switch_token:
+                            print("[Music] 换源被用户操作取消")
+                            return
+                        src_cands = [c for c in cands if c.source_name == src][:2]
+                        for c in src_cands:
+                            if my_token != self._candidate_switch_token:
+                                return
+                            if gen_snapshot != self._candidate_generation:
+                                return
+                            ok = self.play_online(c, _before_load=lambda: my_token == self._candidate_switch_token)
+                            if not ok:
+                                continue
+                            if my_token != self._candidate_switch_token:
+                                return
+                            played = False
+                            for _ in range(4):
+                                _t.sleep(0.5)
+                                if my_token != self._candidate_switch_token:
+                                    return
+                                try:
+                                    idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
+                                except Exception:
+                                    idle_now = True
+                                if not idle_now:
+                                    played = True
+                                    break
+                            if played:
+                                if my_token != self._candidate_switch_token:
+                                    return
+                                print(f"[Music] 换源成功: {src}")
+                                return
+                    if my_token == self._candidate_switch_token:
+                        print("[Music] 该歌所有音源均无法播放")
+                        try:
+                            self.event_bus.publish(Event(
+                                event_type=ONLINE_ERROR,
+                                data={"message": "该歌所有音源均无法播放"},
+                                source="music",
+                            ))
+                        except Exception:
+                            pass
+                finally:
+                    if my_token == self._candidate_switch_token:
+                        self._candidate_switching = False
+
+            threading.Thread(target=_try_switch, daemon=True, name="music-resume-failover").start()
+            return True
+        except Exception as e:
+            print(f"[Music] play_online_resume error: {e}")
+            return False
+
+    def play_online(self, track, _before_load=None) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         if not self._mpv_available:
             print("[Music] mpv 不可用，忽略操作")
@@ -912,6 +1060,10 @@ class MusicController:
                         "User-Agent: Mozilla/5.0")
             except Exception:
                 pass
+            # 校验必须紧贴 loadfile：此前不得有释放 GIL 的操作，
+            # 确保"校验→loadfile"原子（用户取消后不会后发 loadfile 劫持播放）。
+            if _before_load is not None and not _before_load():
+                return False
             self.mpv.loadfile(url)
             print("[Music] mpv loadfile ok")
         except Exception as e:
@@ -970,6 +1122,7 @@ class MusicController:
 
     # ===== 跳转 =====
 
+    @_cancel_switch_on_user_action
     def seek(self, seconds: float, mode: str = "relative"):
         """跳转"""
         if not self._mpv_available:
@@ -977,6 +1130,7 @@ class MusicController:
             return
         self.mpv.seek(seconds, mode)
 
+    @_cancel_switch_on_user_action
     def jump_to_highlight(self):
         """跳到高潮部分（一次性）"""
         if not self._mpv_available:
@@ -1019,6 +1173,7 @@ class MusicController:
 
     # ===== Highlight Mode =====
 
+    @_cancel_switch_on_user_action
     def set_highlight_mode(self, enabled: bool):
         """开启或关闭高潮模式"""
         self._highlight_mode = enabled
@@ -1210,6 +1365,7 @@ class MusicController:
         """获取播放队列"""
         return self.queue.get_queue()
 
+    @_cancel_switch_on_user_action
     def clear_queue(self):
         """清空队列：同时停止当前播放、失效 highlight、重置轮询基线。
         旧行为只清队列数据 → 播完自动重载全库续播（清空无意义 + 状态错乱）。"""
@@ -1286,6 +1442,9 @@ class MusicController:
 
     def _auto_next(self):
         """自动播放下一首"""
+        if self._candidate_switching:
+            print("[Music] 换源中，跳过自动切歌")
+            return
         if not self._running:
             return
         # 守卫必须与 _poll_idle 同源（实时 get_property）。
