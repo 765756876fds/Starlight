@@ -170,9 +170,12 @@ class MusicScanner:
             except Exception as e:
                 print(f"[Scanner] mutagen 读取失败 {filepath}: {e}")
 
-        # 从文件名解析兜底
+        # 从文件名解析兜底（文件名为"歌名 - 歌手"，歌名在前）
+        parts = self._parse_name_parts(filepath)
         if not data["title"]:
-            data["title"] = self._parse_title_from_filename(filepath)
+            data["title"] = parts[0]
+        if not data["artist"] and len(parts) == 2:
+            data["artist"] = parts[1]
 
         return data
 
@@ -271,15 +274,16 @@ class MusicScanner:
         except (ValueError, TypeError):
             return None
 
-    def _parse_title_from_filename(self, filepath: str) -> str:
-        """从文件名解析标题"""
+    def _parse_name_parts(self, filepath: str) -> List[str]:
+        """从文件名解析"歌名 - 歌手"，返回 [歌名, 歌手]；无 " - " 时返回 [整名]"""
         filename = os.path.basename(filepath)
         name, _ = os.path.splitext(filename)
-        # 处理 "艺术家 - 标题" 格式
-        if " - " in name:
-            parts = name.split(" - ", 1)
-            return parts[1].strip()
-        return name.strip()
+        return [p.strip() for p in name.rsplit(" - ", 1)]
+
+    def _parse_title_from_filename(self, filepath: str) -> str:
+        """从文件名解析标题（文件名为"歌名 - 歌手"，歌名在前）"""
+        parts = self._parse_name_parts(filepath)
+        return parts[0]
 
     def start_highlight_background(self):
         """扫描完成后启动后台线程计算所有未处理歌曲的highlight"""
