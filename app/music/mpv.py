@@ -15,9 +15,12 @@ from typing import Any, Callable, Dict, List, Optional
 class MpvController:
     """mpv JSON IPC 控制器"""
 
-    def __init__(self, mpv_path: str, ipc_pipe: str = "\\\\.\\pipe\\lol_music_mpv"):
+    def __init__(self, mpv_path: str, ipc_pipe: str = "\\\\.\\pipe\\lol_music_mpv",
+                 video: bool = False, watch_later_dir: Optional[str] = None):
         self.mpv_path = mpv_path
         self.ipc_pipe = ipc_pipe
+        self.video = video
+        self.watch_later_dir = watch_later_dir
         self._process: Optional[subprocess.Popen] = None
         self._pipe = None
         self._running = False
@@ -35,7 +38,10 @@ class MpvController:
         再杀全局面板会连带杀掉 TTS 播报进程——必须跳过）。
         pipe_timeout/prop_timeout：自动重启路径传短超时（3.0/0.5），
         因为重启在 controller._lock 内执行，持锁时间必须可控。"""
-        if self._running:
+        # 进程真的活着才复用；窗口被用户关闭（进程自死，poll() 非 None）时
+        # _running 标志仍 True，但必须重新 launch——否则 start 被挡死、无法唤醒。
+        if (self._running and self._process is not None
+                and self._process.poll() is None):
             return True
 
         if not self._resolve_mpv_path():
@@ -68,14 +74,28 @@ class MpvController:
 
     def _launch(self, pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
         """Popen + 等待 IPC 管道就绪。任何一步失败 → 返回 False（不抛）。"""
-        self.ipc_pipe = r"\\.\pipe\lol_music_mpv_" + str(os.getpid())
+        # 旧 pipe 可能来自已自死的进程（窗口关闭路径），先清理再重开
+        if self._pipe:
+            try:
+                self._pipe.close()
+            except Exception:
+                pass
+            self._pipe = None
+        self.ipc_pipe = self.ipc_pipe + "_" + str(os.getpid())
 
         print(f"[mpv] pipe name: {self.ipc_pipe!r}")
-        args = [
-            self.mpv_path,
-            "--no-video",
+        args = [self.mpv_path]
+        if self.video:
+            args.append("--force-window=yes")
+            args.append("--osc=no")   # 电影：弃用英文自带 OSC，控制走应用面板
+            if self.watch_later_dir:
+                args.append("--save-position-on-quit")
+                args.append(f"--watch-later-directory={self.watch_later_dir}")
+        else:
+            args.append("--no-video")
+            args.append("--force-window=no")
+        args += [
             "--no-terminal",
-            "--force-window=no",
             f"--input-ipc-server={self.ipc_pipe}",
             "--idle=yes",
             "--tls-verify=no",

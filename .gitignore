@@ -126,6 +126,8 @@ data/tts_test/
 
 # Game asset caches (champion portraits, summoner spell icons, downloaded from Data Dragon)
 data/assets/
+# 电影链运行时产物（watch-later 断点目录 + 未来下载缓存；不进 git）
+data/movie/
 # 根目录一次性脚本（保留 tests/ 目录内的测试）
 /temp_*.py
 /probe_*.py

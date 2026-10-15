@@ -429,6 +429,12 @@ class MusicController:
         if self.lx_connected:
             try:
                 if self.lx_client.play():
+                    # 落雪播放同样算"音乐开始播放"→ 通知消费方（电影互斥暂停）
+                    self.event_bus.publish(Event(
+                        event_type=EventType.MUSIC_PLAY,
+                        data={},
+                        source="music",
+                    ))
                     return
             except Exception as e:
                 print(f"[Music] 落雪 play 失败，回落 mpv: {e}")
@@ -461,6 +467,12 @@ class MusicController:
             else:
                 self.mpv.play()
                 self._update_state(playing=True)
+                # 继续播放同一首歌 → 通知其他消费方（电影互斥暂停）；换歌路径由 TRACK_CHANGED 覆盖
+                self.event_bus.publish(Event(
+                    event_type=EventType.MUSIC_PLAY,
+                    data={},
+                    source="music",
+                ))
 
     @_cancel_switch_on_user_action
     def pause(self):
@@ -498,6 +510,12 @@ class MusicController:
         except Exception:
             pass
         self._update_state(playing=True)
+        # 继续播放 → 通知其他消费方（电影互斥暂停）
+        self.event_bus.publish(Event(
+            event_type=EventType.MUSIC_PLAY,
+            data={},
+            source="music",
+        ))
 
     @_cancel_switch_on_user_action
     def toggle(self):

@@ -28,6 +28,24 @@
 | 🔊 TTS 语音输出 | INTEGRATED | Edge TTS → mpv |
 | 🎯 Speech Judge | INTEGRATED | S/A/B/C/DROP 等级 + 频控 + 优先级播报队列 |
 | 🖥️ UI 控制台 / Overlay | IMPLEMENTED（未目视真测） | PySide6 主窗口 + 面板 + 托盘 + 对局内 Overlay |
+| 🎬 电影搜索播放 | IMPLEMENTED（基础版） | 苹果 CMS 搜索 → mpv 独立视频实例（窗口可关后自动唤醒，断点续播，与音乐互斥暂停） |
+
+### 电影播放（mpv）快捷键
+
+mpv 播放窗口已禁用自带英文控件（`--osc=no`），常用快捷键（mpv 默认键位）：
+
+| 键 | 功能 |
+|----|------|
+| `空格` | 播放/暂停 |
+| `←` / `→` | 后退 / 前进 5 秒 |
+| `↑` / `↓` | 前进 / 后退 60 秒 |
+| `[` / `]` | 减速 / 加速 10% |
+| `9` / `0` | 音量减 / 加 |
+| `m` | 静音 |
+| `f` | 全屏 / 退出全屏 |
+| `q` | 退出播放（关窗口，电影进入暂停待唤醒） |
+| `s` | 截图 |
+| `o` | 显示/隐藏 OSD 信息 |
 
 > 状态词：NOT_STARTED / SKELETON / IMPLEMENTED / INTEGRATED / REAL_TESTED / DONE。
 > "未真测"表示代码已实现但尚未在真实对局/选人中验证。

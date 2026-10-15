@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QLabel
 from app.ui.panels.automation_panel import AutomationPanel
 from app.ui.panels.cooldown_panel import CooldownPanel
 from app.ui.panels.current_game_panel import CurrentGamePanel
+from app.ui.panels.movie_panel import MoviePanel
 from app.ui.panels.music_panel import MusicPanel
 from app.ui.panels.ongoing_panel import OngoingPanel
 from app.ui.panels.settings_panel import SettingsPanel
@@ -64,6 +65,7 @@ class MainTabs(QWidget):
         _add(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息", "ongoing")
         # _add(lambda: CooldownPanel(cooldown_manager), "计时器")  # 隐藏计时器tab
         _add(lambda: MusicPanel(music), "音乐", "music")
+        _add(lambda: MoviePanel(movie=None, music=self._music), "电影", "movie")
         _add(lambda: SettingsPanel(
                 music=music, tts=tts, combo_manager=combo_manager,
                 equip_toggle=equip_toggle, overlay_toggle=overlay_toggle,
