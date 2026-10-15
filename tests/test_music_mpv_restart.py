@@ -24,6 +24,13 @@ def _make_ctrl(tmp_path, db_name="restart.db"):
     return ctrl, db
 
 
+def _wait_restart_done(ctrl, timeout=3.0):
+    """等待后台重启线程收尾（pending 清除）。"""
+    t0 = time.time()
+    while ctrl._mpv_restart_pending and time.time() - t0 < timeout:
+        time.sleep(0.05)
+
+
 class TestMpvRestart:
     def test_pipe_fail_streak_triggers_restart(self, tmp_path):
         """get_property 连续 3 次失败（管道断）→ _try_restart_mpv 触发重启。"""
@@ -87,6 +94,7 @@ class TestMpvRestart:
         ctrl.mpv.start.return_value = True
         ctrl.mpv.get_property.return_value = True
         ctrl._try_restart_mpv("test-resume-local")
+        _wait_restart_done(ctrl)
         assert ctrl._play_song.called, "本地歌曲应在重启后恢复播放"
         assert ctrl._mpv_restart_count == 1
         db.close()
@@ -103,6 +111,7 @@ class TestMpvRestart:
         ctrl.mpv.start.return_value = True
         ctrl.mpv.get_property.return_value = True
         ctrl._try_restart_mpv("test-resume-online")
+        _wait_restart_done(ctrl)
         assert ctrl._last_idle is False, "在线歌曲重启后应产生 idle 上升沿自动切歌"
         ctrl._play_song.assert_not_called()
         db.close()

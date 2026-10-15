@@ -148,6 +148,14 @@ class MpvController:
             start = time.time()
             resp = None
             while time.time() - start < timeout:
+                # Windows 命名管道有界读：PeekNamedPipe 探测可读字节数，
+                # 无数据则短眠轮询；mpv 不响应时到点强制返回 None，绝不无限阻塞。
+                avail = self._pipe_available()
+                if avail < 0:
+                    break
+                if avail <= 0:
+                    time.sleep(0.01)
+                    continue
                 line = self._pipe.readline()
                 if not line:
                     time.sleep(0.01)
@@ -165,6 +173,33 @@ class MpvController:
                     resp = msg
                     break
             return resp
+
+    def _pipe_available(self) -> int:
+        """探测命名管道当前可读字节数。
+
+        返回：
+          >0  有数据可读（readline 不会阻塞）
+          0   当前无数据（调用方短眠轮询）
+          -1  管道已断/失效（调用方立即返回）
+        无法探测（非 Windows 管道 / mock 测试环境）时乐观返回 1，
+        保持旧的阻塞 readline 语义。
+        """
+        try:
+            import ctypes
+            import msvcrt
+            fd = self._pipe.fileno()
+            if not isinstance(fd, int):
+                # mock/非真实管道（如测试环境）：乐观可读，保持旧语义
+                return 1
+            handle = msvcrt.get_osfhandle(fd)
+            total = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.PeekNamedPipe(
+                handle, None, 0, None, ctypes.byref(total), None)
+            if not ok:
+                return -1
+            return total.value
+        except Exception:
+            return 1
 
     def loadfile(self, filepath: str, mode: str = "replace"):
         print(f"[mpv] cmd loadfile: {filepath[:80]} (mode={mode})")

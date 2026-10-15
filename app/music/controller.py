@@ -191,6 +191,7 @@ class MusicController:
         self._mpv_restart_count = 0        # 当前窗口内重启次数
         self._mpv_restart_window_ts = 0.0  # 窗口起点
         self._mpv_gave_up = False          # 超过上限后放弃自动恢复
+        self._mpv_restart_pending = False  # 一次重启进行中（防重入 + UI 侧跳过）
         # 播报 ducking（TTS 播报期间压低音乐音量）
         self._duck_active = False
         self._duck_original_volume: Optional[int] = None
@@ -307,11 +308,13 @@ class MusicController:
         self.event_bus.subscribe(EventType.SPEECH_FINISHED, self._on_speech_finished)
 
     def _try_restart_mpv(self, reason: str):
-        """mpv 崩溃/管道断自愈：stop → start(taskkill=False) → 恢复当前歌。
-        窗口限制 3 次/5 分钟；超过则放弃（_mpv_gave_up），避免反复崩。
-        持锁执行：与 play/next 等操作串行，防止重启窗口内踩未建好的 pipe；
-        重启路径用短超时（pipe 3s + 属性 0.5s），持锁最坏 ~6s、正常 <1s。"""
+        """mpv 崩溃/管道断自愈：后台线程 stop → start(taskkill=False) → 恢复当前歌。
+        锁内只做防重入决策（<1ms），实际重启在 daemon 线程——重启耗时最坏 ~6s
+        不再持业务锁，UI 播放/切歌操作不被阻塞。
+        窗口限制 3 次/5 分钟；超过则放弃（_mpv_gave_up），避免反复崩。"""
         with self._lock:
+            if self._mpv_restart_pending:
+                return
             now = time.time()
             if now - self._mpv_restart_window_ts > 300:
                 self._mpv_restart_window_ts = now
@@ -323,6 +326,18 @@ class MusicController:
                 return
             self._mpv_restart_count += 1
             print(f"[Music] mpv 异常({reason})，尝试自动重启 {self._mpv_restart_count}/3")
+            self._mpv_restart_pending = True
+            restart_song = self._current_song
+        threading.Thread(
+            target=self._restart_mpv_worker,
+            args=(restart_song,),
+            daemon=True,
+            name="mpv-restart",
+        ).start()
+
+    def _restart_mpv_worker(self, restart_song: Optional[Dict[str, Any]]):
+        """后台执行实际重启；状态更新后持锁收尾清 pending。"""
+        try:
             try:
                 self.mpv.stop_process()
             except Exception:
@@ -333,29 +348,34 @@ class MusicController:
                 print(f"[Music] mpv 重启异常: {e!r}")
                 ok = False
             if not ok:
-                self._mpv_available = False
+                with self._lock:
+                    self._mpv_available = False
                 print("[Music] mpv 重启失败，模块降级")
                 return
-            self._mpv_available = True
+            with self._lock:
+                self._mpv_available = True
             # 重置轮询基线：mpv 冷启动处于 idle，必须真实读取（失败保守取 True）
             try:
                 self._last_idle = bool(self.mpv.get_property("idle-active", timeout=1.0))
             except Exception:
                 self._last_idle = True
-            # 恢复当前歌曲（仅本地文件；在线 URL 交给 idle 上升沿自动切歌）
-            self._try_resume_after_restart()
+            # 恢复当前歌曲（仅本地文件；在线 URL 交给 idle 上升沿自动切歌）。
+            # 用重启时点快照，避免重启完成时用户已切歌却恢复旧歌。
+            self._try_resume_after_restart(restart_song)
+        finally:
+            with self._lock:
+                self._mpv_restart_pending = False
 
-    def _try_resume_after_restart(self):
-        """重启后恢复播放：本地文件重新 loadfile（从头播）；
+    def _try_resume_after_restart(self, restart_song: Optional[Dict[str, Any]]):
+        """重启后恢复播放（用重启时点快照）：本地文件重新 loadfile（从头播）；
         在线 URL 不恢复（源已断），把 _last_idle 置 False 产生上升沿自动切歌。"""
-        song = self._current_song
-        if not song:
+        if not restart_song:
             return
-        path = song.get("path") or ""
+        path = restart_song.get("path") or ""
         if path.startswith(("http://", "https://")):
             self._last_idle = False
             return
-        self._play_song(song)
+        self._play_song(restart_song)
 
     def stop(self):
         """停止音乐模块"""
@@ -495,8 +515,11 @@ class MusicController:
             pass
 
     @_cancel_switch_on_user_action
-    def next(self):
-        """下一首"""
+    def next(self, _timeout: Optional[float] = None):
+        """下一首。
+
+        _timeout 非空时：业务锁忙则放弃本轮（自动跳过路径用，防无限等锁）。
+        """
         if not self._mpv_available:
             print("[Music] mpv 不可用，忽略操作")
             return
@@ -514,30 +537,44 @@ class MusicController:
             except Exception as e:
                 print(f"[Music] 落雪 next 失败，回落 mpv: {e}")
                 self.lx_connected = False
-        
+
+        if _timeout is not None:
+            if not self._lock.acquire(timeout=_timeout):
+                print("[Music] next：业务锁忙，放弃本轮")
+                return
+            try:
+                self._next_locked()
+            finally:
+                self._lock.release()
+            return
+
         with self._lock:
-            self._invalidate_highlight()
-            song = self.queue.next()
+            self._next_locked()
+
+    def _next_locked(self):
+        """next() 的锁内逻辑（持锁调用）。"""
+        self._invalidate_highlight()
+        song = self.queue.next()
+        if song:
+            self._play_song(song)
+        else:
+            # 队列空了，自动加载整个本地库再切
+            try:
+                all_songs = self.db.get_all_songs(limit=1000)
+                if all_songs:
+                    self.queue.add_all(all_songs)
+                    song = self.queue.next()
+            except Exception as e:
+                print(f"加载本地队列失败: {e}")
+            if not song:
+                songs = self.db.get_random_songs(10)
+                if songs:
+                    self.queue.add_all(songs)
+                    song = self.queue.next()
+            # 统一出口：无论 song 来自重载全库还是随机兜底，都必须播放
+            # （旧代码只在 random 分支内调 _play_song，全库重载路径 song 非空时漏播）
             if song:
                 self._play_song(song)
-            else:
-                # 队列空了，自动加载整个本地库再切
-                try:
-                    all_songs = self.db.get_all_songs(limit=1000)
-                    if all_songs:
-                        self.queue.add_all(all_songs)
-                        song = self.queue.next()
-                except Exception as e:
-                    print(f"加载本地队列失败: {e}")
-                if not song:
-                    songs = self.db.get_random_songs(10)
-                    if songs:
-                        self.queue.add_all(songs)
-                        song = self.queue.next()
-                # 统一出口：无论 song 来自重载全库还是随机兜底，都必须播放
-                # （旧代码只在 random 分支内调 _play_song，全库重载路径 song 非空时漏播）
-                if song:
-                    self._play_song(song)
 
     @_cancel_switch_on_user_action
     def prev(self):
@@ -567,6 +604,9 @@ class MusicController:
             print("[Music] mpv 不可用，忽略操作")
             return
         with self._lock:
+            if self._mpv_restart_pending:
+                print("[Music] mpv 重启中，忽略播放请求")
+                return
             self._invalidate_highlight()
             # 如果队列是空的（语音首次播放本地歌曲），自动把整个本地库加进队列
             if self.queue.size() == 0 and not song.get("online"):
@@ -842,7 +882,8 @@ class MusicController:
         if self._current_song is not song:
             return
         try:
-            self.next()
+            # 抢锁 0.5s：锁忙（UI/重启持锁）则放弃本轮，下轮 confirm/轮询再处理
+            self.next(_timeout=0.5)
         except Exception as e:
             print(f"[Music] 跳过坏文件时 next() 异常: {e!r}")
 
