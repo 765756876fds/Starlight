@@ -295,6 +295,42 @@ class MpvController:
     def get_filename(self) -> str:
         return str(self._properties.get("filename", ""))
 
+    def get_idle_active(self) -> bool:
+        """实时查询 idle-active（不读启动时缓存——音乐链教训：_properties 不随播放更新）。"""
+        try:
+            val = self.get_property("idle-active", timeout=1.0)
+            if val is not None:
+                self._properties["idle-active"] = bool(val)
+                return bool(val)
+        except Exception:
+            pass
+        return bool(self._properties.get("idle-active", False))
+
+    # ---- 字幕 ----
+
+    def sub_add(self, path_or_url: str, title: str = ""):
+        """加载外部字幕（本地路径或 http URL）。必须在 loadfile 之后调用
+        （idle 无文件态 sub-add 报 error running command——已实测）。"""
+        params = [path_or_url]
+        if title:
+            params.append("select")
+            params.append(title)
+        self._send_command("sub-add", params, timeout=5.0)
+
+    def get_track_list(self) -> list:
+        """实时 track-list（找字幕轨 id 用）。"""
+        try:
+            val = self.get_property("track-list", timeout=2.0)
+            if isinstance(val, list):
+                return val
+        except Exception:
+            pass
+        return []
+
+    def set_sid(self, sid: int):
+        """强制选中指定字幕轨（sub-add 后 selected 可能 False——已实测，必须显式选）。"""
+        self.set_property("sid", int(sid))
+
     def on_property_change(self, prop: str, callback: Callable[[Any], None]):
         self._property_watchers[prop] = callback
 

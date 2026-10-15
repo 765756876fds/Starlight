@@ -4,10 +4,15 @@
 - 与音乐链互斥：播电影前停音乐（直接调 music.stop()）；音乐开始播新歌时
   电影订阅 MUSIC_TRACK_CHANGED 事件自行停止（事件解耦，音乐链零改动）。
 - mpv 独立实例（video=True 出视频窗口，taskkill=False 不杀音乐实例）。
+- 剧集选集 + 自动连播（idle 上升沿检测）+ Assrt 字幕（搜索/下载/解压/加载）。
 """
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 import urllib.parse
+import zipfile
 
 import requests
 
@@ -18,7 +23,15 @@ from ..music.mpv import MpvController
 # 默认源：360资源（苹果 CMS 标准接口）
 DEFAULT_SOURCE_URL = "https://360zyzz.com/api.php/provide/vod/from/360m3u8/at/json"
 DEFAULT_IPC_PIPE = r"\\.\pipe\lol_movie_mpv"
+# Assrt 字幕 API（直连被重置，必须走代理——已实测）
+ASSRT_BASE = "https://api.assrt.net/v1/sub"
+PROXY = "http://127.0.0.1:7897"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+# 字幕假条目（网盘分享链接说明）：内容含这些 → 跳过
+_FAKE_SUB_MARKERS = (b"pan.baidu.com", b"\xe7\x99\xbe\xe5\xba\xa6\xe7\xbd\x91\xe7\x9b\x98")
+# 真字幕内容标记
+_REAL_SUB_MARKERS = (b"-->", b"[Script Info]")
 
 
 def parse_cms_response(text):
@@ -81,9 +94,15 @@ class MovieController:
         self.mpv = MpvController(mpv_bin, pipe, video=True, watch_later_dir=watch_dir)
         self._music = music
         self._current = None
+        self._current_index = None
         self._stopping = False
         self._pausing = False
         self._subscribed = False
+        # 自动连播（默认开——观影刚需；配置可关）
+        self._auto_next = bool(self._config.get("movie.auto_next", True))
+        # idle 上升沿检测：mpv --idle=yes 启动即 idle，初始 True 防首播误触发
+        self._last_idle = True
+        self._sub_searched = set()
         self._subscribe()
 
     # ---- 互斥：事件解耦（音乐 → 电影） ----
@@ -133,13 +152,43 @@ class MovieController:
             })
         return items
 
+    # ---- 选集 ----
+
+    def episodes(self, item):
+        """拆集：返回 [(name, url), ...]；单集/无 play_url → 空列表（调用方走直播）。"""
+        if not isinstance(item, dict):
+            return []
+        return split_play_url(item.get("play_url") or "")
+
+    @staticmethod
+    def is_multi_episode(item):
+        """剧集判据双保险：段数 > 1 为主 + remarks 含 全?\\d+集 辅助。"""
+        eps = split_play_url(item.get("play_url") or "") if isinstance(item, dict) else []
+        if len(eps) > 1:
+            return True
+        remarks = (item.get("vod_remarks") or "") if isinstance(item, dict) else ""
+        return bool(__import__("re").search(r"全?\d+集", remarks))
+
     # ---- 播放 ----
 
-    def play(self, item):
-        """播电影：先停音乐（互斥），再起视频 mpv 播第一条 URL。失败返回 False。"""
+    def play(self, item, index=None):
+        """播电影：先停音乐（互斥），再起视频 mpv 播指定集（默认第一条 URL）。
+        index=None → 取 first_url（现状不变）；index=N → 取第 N 集 URL。失败返回 False。"""
         if not isinstance(item, dict):
             return False
         url = item.get("first_url") or ""
+        idx = 0
+        eps = self.episodes(item)
+        if index is not None:
+            idx = index
+            if 0 <= idx < len(eps):
+                url = eps[idx][1]
+            else:
+                print(f"[Movie] 集数越界: index={index} 总集数={len(eps)}")
+                return False
+        elif eps:
+            idx = 0
+            url = eps[0][1]
         if not url:
             print(f"[Movie] 无可用播放地址: {item.get('vod_name')}")
             return False
@@ -157,6 +206,50 @@ class MovieController:
                 return False
         self.mpv.loadfile(url)
         self._current = item
+        self._current_index = idx
+        self._last_idle = False  # 新播放开始，等播完再触发连播
+        return True
+
+    # ---- 自动连播 ----
+
+    def set_auto_next(self, enabled: bool):
+        """连播开关（面板反映；关闭后播完不再切下一集）。"""
+        self._auto_next = bool(enabled)
+
+    def is_auto_next(self) -> bool:
+        return self._auto_next
+
+    def tick(self):
+        """供面板轮询调用（500ms）：检测 mpv idle 上升沿 → 播完自动下一集。
+        手动 stop（_current=None）/ 开关关 → 不连播；末集播完 → 停（不循环）。"""
+        if self._current is None or not self._auto_next:
+            self._last_idle = self.mpv.get_idle_active()
+            return
+        if not self.mpv.is_running():
+            return
+        now_idle = self.mpv.get_idle_active()
+        if now_idle and not self._last_idle:
+            # 播完一集（idle 上升沿）→ 连播下一集
+            self._advance_episode()
+        self._last_idle = now_idle
+
+    def _advance_episode(self):
+        """切到下一集；无下一集 → 末集停（不循环）。返回 True=已切，False=已停。"""
+        item = self._current
+        if item is None:
+            return False
+        eps = self.episodes(item)
+        nxt = (self._current_index or 0) + 1
+        if nxt >= len(eps):
+            print(f"[Movie] 末集播完，停止（不循环）: {item.get('vod_name')}")
+            self._current = None
+            self._current_index = None
+            self._last_idle = True
+            return False
+        name, url = eps[nxt]
+        print(f"[Movie] 自动连播下一集: {name}")
+        self.mpv.loadfile(url)
+        self._current_index = nxt
         return True
 
     def stop(self):
@@ -170,6 +263,8 @@ class MovieController:
         finally:
             self._stopping = False
         self._current = None
+        self._current_index = None
+        self._last_idle = True
 
     # ---- 播放控制（复用 mpv JSON IPC） ----
 
@@ -205,6 +300,10 @@ class MovieController:
     def current(self):
         return self._current
 
+    def current_item(self):
+        """当前播放条目（面板字幕按钮取片名用）。"""
+        return self._current
+
     def close(self):
         if self._subscribed:
             try:
@@ -219,6 +318,221 @@ class MovieController:
             self.mpv.stop_process()
         except Exception:
             pass
+
+    # ---- 字幕（Assrt） ----
+
+    def subtitle_token(self) -> str:
+        """Assrt Token（settings.yaml movie.assrt_token，永不 stage）。"""
+        return str(self._config.get("movie.assrt_token") or "").strip()
+
+    def subtitle_dir(self) -> str:
+        d = (self._config.get("movie.subtitle_dir")
+             or os.path.join(self._config.get("app.data_dir", "./data"),
+                             "movie", "subtitles"))
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+        return d
+
+    def search_subtitle(self, keyword, timeout=10.0):
+        """Assrt 搜索字幕。返回 [{id, native_name, lang_desc, subtype, vote_score}]；
+        无 Token → []；网络/解析失败 → []（不抛，UI 降级提示）。"""
+        token = self.subtitle_token()
+        if not token or not keyword or not keyword.strip():
+            return []
+        try:
+            headers = dict(UA, Authorization=f"Bearer {token}")
+            r = requests.get(f"{ASSRT_BASE}/search",
+                             params={"q": keyword.strip(), "cnt": 15, "pos": 0},
+                             headers=headers, timeout=timeout,
+                             proxies={"http": PROXY, "https": PROXY})
+            data = parse_cms_response(r.text)
+            if data.get("status") != 0:
+                return []
+            subs = ((data.get("sub") or {}).get("subs") or []) if isinstance(data.get("sub"), dict) else []
+            out = []
+            for s in subs:
+                lang = s.get("lang") or {}
+                out.append({
+                    "id": s.get("id"),
+                    "native_name": s.get("native_name") or "",
+                    "lang_desc": (lang.get("desc") or "") if isinstance(lang, dict) else "",
+                    "subtype": s.get("subtype") or "",
+                    "vote_score": s.get("vote_score") or 0,
+                })
+            return out
+        except Exception as e:
+            print(f"[Movie] 字幕搜索失败: {e}")
+            return []
+
+    def load_subtitle(self, sub_id, timeout=30.0):
+        """下载并加载字幕：detail → 下载 → 解压（ZIP/RAR/直接）→ 过滤假字幕 →
+        存 data/movie/subtitles/ → mpv.sub_add → 强制 sid 选中。
+        返回 (True, 字幕文件路径) 或 (False, 失败原因)。"""
+        token = self.subtitle_token()
+        if not token:
+            return False, "未配置字幕 Token"
+        try:
+            headers = dict(UA, Authorization=f"Bearer {token}")
+            proxies = {"http": PROXY, "https": PROXY}
+            r = requests.get(f"{ASSRT_BASE}/detail", params={"id": sub_id},
+                             headers=headers, timeout=timeout, proxies=proxies)
+            data = parse_cms_response(r.text)
+            if data.get("status") != 0:
+                return False, "字幕详情获取失败"
+            subs = ((data.get("sub") or {}).get("subs") or []) if isinstance(data.get("sub"), dict) else []
+            if not subs or not subs[0].get("url"):
+                return False, "该条目无下载地址"
+            url = subs[0]["url"]
+            dl = requests.get(url, headers=UA, timeout=timeout, proxies=proxies)
+            if dl.status_code != 200 or not dl.content:
+                return False, "字幕下载失败"
+            extracted = self._extract_subtitle(dl.content, subs[0].get("filename") or "")
+            if not extracted:
+                return False, "压缩包内无有效字幕（可能是网盘分享链接）"
+            # 取第一个有效字幕落盘
+            name, content = extracted[0]
+            safe = "".join(c for c in name if c.isalnum() or c in "._- ")[:60].strip() or "sub"
+            out_path = os.path.join(self.subtitle_dir(), f"{sub_id}_{safe}")
+            try:
+                with open(out_path, "wb") as f:
+                    f.write(content)
+            except Exception as e:
+                return False, f"字幕写入失败: {e}"
+            if not self.mpv.is_running():
+                return False, "播放器未运行，字幕已保存（下次播放时可用）"
+            self.mpv.sub_add(out_path)
+            self._force_select_sub()
+            return True, out_path
+        except Exception as e:
+            print(f"[Movie] 字幕加载失败: {e}")
+            return False, f"字幕加载失败: {e}"
+
+    def _extract_subtitle(self, data: bytes, filename_hint: str = ""):
+        """从下载字节提取字幕文件。返回 [(name, content), ...]（已过滤假字幕）。
+        PK → zipfile（GBK 文件名修复 cp437→gbk）；Rar! → Windows tar 解压；其他 → 直接判。
+        """
+        if not data:
+            return []
+        if data[:2] == b"PK":
+            return self._extract_zip(data)
+        if data[:4] == b"Rar!":
+            return self._extract_rar(data)
+        # 直接字幕文件（assrt 偶发）
+        if self._is_real_subtitle(data):
+            return [(filename_hint or "subtitle.srt", data)]
+        return []
+
+    @staticmethod
+    def _is_real_subtitle(content: bytes) -> bool:
+        """假字幕过滤：网盘链接说明（pan.baidu.com/百度网盘）→ 假；
+        含 srt 时间轴（-->）或 ass 头（[Script Info]）→ 真。"""
+        if not content:
+            return False
+        low = content[:2048]
+        if any(m in low for m in _FAKE_SUB_MARKERS):
+            return False
+        return any(m in low for m in _REAL_SUB_MARKERS)
+
+    @staticmethod
+    def _fix_zip_name(raw: str, flag_bits: int) -> str:
+        """zipfile 无 UTF-8 flag 时按 cp437 解码中文名 → 用 GBK 重解（已实测坑）。
+        UTF-8 flag 置位（0x800）→ 原名直接用。"""
+        if not (flag_bits & 0x800):
+            try:
+                return raw.encode("cp437").decode("gbk")
+            except Exception:
+                return raw
+        return raw
+
+    def _extract_zip(self, data: bytes):
+        """zipfile 解压：GBK 文件名修复 + 假字幕过滤。返回 [(name, bytes), ...]"""
+        out = []
+        try:
+            import io
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                for info in z.infolist():
+                    name = self._fix_zip_name(info.filename, info.flag_bits)
+                    if not name.lower().endswith((".srt", ".ass", ".vtt", ".txt")):
+                        continue
+                    try:
+                        content = z.read(info)
+                    except Exception:
+                        continue
+                    if self._is_real_subtitle(content):
+                        out.append((name, content))
+        except Exception as e:
+            print(f"[Movie] ZIP 解压失败: {e}")
+        return out
+
+    def _extract_rar(self, data: bytes):
+        """RAR 解压：Windows 自带 tar（libarchive 3.5.2 支持 RAR5——已实测）。
+        tar 缺失/失败/超时 → 返回 []（UI 提示换条目）。"""
+        tar = shutil.which("tar")
+        if not tar:
+            print("[Movie] 未找到 tar.exe，无法解压 RAR 字幕")
+            return []
+        tmp_rar = None
+        tmp_dir = None
+        try:
+            fd, tmp_rar = tempfile.mkstemp(suffix=".rar")
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            tmp_dir = tempfile.mkdtemp(prefix="movie_sub_")
+            subprocess.run([tar, "-xf", tmp_rar, "-C", tmp_dir],
+                           timeout=15, capture_output=True)
+            out = []
+            for root, _dirs, files in os.walk(tmp_dir):
+                for fn in files:
+                    if not fn.lower().endswith((".srt", ".ass", ".vtt")):
+                        continue
+                    try:
+                        with open(os.path.join(root, fn), "rb") as f:
+                            content = f.read()
+                    except Exception:
+                        continue
+                    if self._is_real_subtitle(content):
+                        out.append((fn, content))
+            return out
+        except subprocess.TimeoutExpired:
+            print("[Movie] RAR 解压超时")
+            return []
+        except Exception as e:
+            print(f"[Movie] RAR 解压失败: {e}")
+            return []
+        finally:
+            if tmp_rar:
+                try:
+                    os.remove(tmp_rar)
+                except Exception:
+                    pass
+            if tmp_dir:
+                try:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+    def _force_select_sub(self):
+        """sub-add 后 selected 可能 False（已实测）→ track-list 找最新字幕轨强制 sid。"""
+        try:
+            tracks = self.mpv.get_track_list()
+            sub_ids = [t.get("id") for t in tracks
+                       if t.get("type") == "sub" and t.get("id") is not None]
+            if sub_ids:
+                self.mpv.set_sid(max(sub_ids))
+        except Exception as e:
+            print(f"[Movie] 字幕选中失败: {e}")
+
+    def maybe_mark_sub_searched(self, item):
+        """记录某片已搜过字幕（自动搜去重用，每片一次）。"""
+        vid = (item or {}).get("vod_id")
+        if vid is not None:
+            self._sub_searched.add(vid)
+
+    def sub_searched(self, item) -> bool:
+        vid = (item or {}).get("vod_id")
+        return vid in self._sub_searched
 
     # ---- 播放控制扩展（面板按钮 → mpv 属性） ----
 

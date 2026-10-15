@@ -242,6 +242,7 @@ class SettingsPanel(QWidget):
         # Tab 1 音乐：音乐目录管理 + 内置插件
         self._build_music_group(tab_music)
         self._build_plugins_group(tab_music)
+        self._build_movie_group(tab_music)
         tab_music.addStretch(1)
         # Tab 2 语音：语音 TTS
         self._build_tts_group(tab_voice)
@@ -346,6 +347,63 @@ class SettingsPanel(QWidget):
             return
         ok = save_settings_yaml({"music": {"download_dir": path}})
         self.lbl_dl_status.setText("已保存（下次启动生效）" if ok else "保存失败")
+
+    # ---------- 🎬 电影（Assrt 字幕） ----------
+
+    def _build_movie_group(self, root: QVBoxLayout) -> None:
+        box = QGroupBox("🎬 电影（字幕）")
+        lay = QVBoxLayout(box)
+
+        row1 = QHBoxLayout()
+        self.edit_subtitle_token = QLineEdit()
+        self.edit_subtitle_token.setPlaceholderText("Assrt Token（api.assrt.net 注册获取）")
+        self.edit_subtitle_token.setText(self._load_movie_token())
+        btn_save = QPushButton("保存")
+        btn_save.clicked.connect(self._on_save_movie_settings)
+        row1.addWidget(QLabel("字幕 Token"))
+        row1.addWidget(self.edit_subtitle_token, 1)
+        row1.addWidget(btn_save)
+        lay.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.cb_auto_subtitle = QCheckBox("播放时自动搜一次字幕（每片一次）")
+        self.cb_auto_subtitle.setChecked(self._load_movie_auto_subtitle())
+        self.cb_auto_subtitle.toggled.connect(self._on_save_movie_settings)
+        row2.addWidget(self.cb_auto_subtitle)
+        row2.addStretch()
+        lay.addLayout(row2)
+
+        self.lbl_movie_status = QLabel("")
+        self.lbl_movie_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        lay.addWidget(self.lbl_movie_status)
+        root.addWidget(box)
+
+    def _load_movie_token(self) -> str:
+        """读 settings.yaml movie.assrt_token。"""
+        try:
+            import yaml
+            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            return cfg.get("movie", {}).get("assrt_token", "") or ""
+        except Exception:
+            return ""
+
+    def _load_movie_auto_subtitle(self) -> bool:
+        """读 settings.yaml movie.auto_subtitle（默认关）。"""
+        try:
+            import yaml
+            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            return bool(cfg.get("movie", {}).get("auto_subtitle", False))
+        except Exception:
+            return False
+
+    def _on_save_movie_settings(self):
+        ok = save_settings_yaml({"movie": {
+            "assrt_token": self.edit_subtitle_token.text().strip(),
+            "auto_subtitle": self.cb_auto_subtitle.isChecked(),
+        }})
+        self.lbl_movie_status.setText("已保存（下次启动生效）" if ok else "保存失败")
 
     # ---------- 🎛️ 内置插件（MusicFree/洛雪）----------
 

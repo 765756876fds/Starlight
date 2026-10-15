@@ -248,8 +248,14 @@ class _FakeMovie:
     def search(self, kw):
         return self.search_out
 
-    def play(self, item):
+    def play(self, item, index=None):
         return self.play_ok
+
+    def is_auto_next(self):
+        return True
+
+    def set_auto_next(self, enabled):
+        pass
 
     def toggle_pause(self):
         pass
