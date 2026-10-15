@@ -68,7 +68,7 @@ _EVT_ZH = {
 }
 
 _MONSTER_ZH = {
-    "DRAGON": "巨龙", "ELDER_DRAGON": "远古巨龙", "ELDER_DRAGON": "远古巨龙",
+    "DRAGON": "巨龙", "ELDER_DRAGON": "远古巨龙",
     "BARON_NASHOR": "纳什男爵", "BARON": "纳什男爵",
     "RIFTHERALD": "峡谷先锋", "HORDE": "虚空虫群", "ATAKHAN": "亚塔坎",
 }
@@ -94,6 +94,7 @@ def _runes_zh(p):
     if p.secondary_style: parts.append(_RUNE_TREE.get(p.secondary_style, str(p.secondary_style)))
     return "/".join(parts) if parts else "--"
 
+# 快照行 position（Riot 标准名 TOP/JUNGLE/MIDDLE/BOTTOM/UTILITY/NONE）——勿与 _POSITION_MAP 合并：键空间不同，TOP 值 "上路"（排位卡为 "上单"）
 _POS_ZH = {
     "TOP": "上路",
     "JUNGLE": "打野",
@@ -375,8 +376,7 @@ _TIER_MAP = {
     "CHALLENGER": "王者",
 }
 
-_DIVISION_MAP = {"I": "I", "II": "II", "III": "III", "IV": "IV"}
-
+# 排位卡 main_position（TOP/MID/ADC/BOT/SUPPORT/UTILITY/INVALID）——勿与 _POS_ZH 合并：键空间不同，TOP 值 "上单"（快照行为 "上路"）
 _POSITION_MAP = {
     "TOP": "上单", "JUNGLE": "打野", "MID": "中路",
     "ADC": "下路", "BOT": "下路", "SUPPORT": "辅助",
@@ -387,7 +387,7 @@ def _zh_tier(tier: str) -> str:
     return _TIER_MAP.get(tier.upper(), tier)
 
 def _zh_division(div: str) -> str:
-    return _DIVISION_MAP.get(div.upper(), div)
+    return div.upper()
 
 def _zh_position(pos: str) -> str:
     return _POSITION_MAP.get(pos.upper(), pos)
