@@ -197,18 +197,21 @@ def test_controller_controls_noop_when_not_running():
     ctrl.close()
 
 
-def test_panel_speed_cycle(qapp):
+def test_panel_speed_menu_apply(qapp):
     from app.ui.panels.movie_panel import MoviePanel
     ctrl = MagicMock()
     panel = MoviePanel(movie=ctrl)
     try:
+        # 包2c：倍速改为弹菜单选档（_apply_speed 是菜单 action 的共用入口；
+        # _on_speed 弹真实 QMenu 会阻塞，循环点击语义已废弃）
         assert panel.btn_speed.text() == "倍速 1x"
-        panel._on_speed()          # → 1.25
+        panel._apply_speed(1.25)
         assert panel.btn_speed.text() == "倍速 1.25x"
         ctrl.set_speed.assert_called_once_with(1.25)
-        panel._on_speed()          # → 1.5
+        panel._apply_speed(1.5)
         assert panel.btn_speed.text() == "倍速 1.5x"
         ctrl.set_speed.assert_called_with(1.5)
+        # 菜单 9 档 + 当前档高亮由 test_movie_speed 覆盖
     finally:
         panel._timer.stop()
 

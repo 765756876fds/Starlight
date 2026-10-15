@@ -231,5 +231,184 @@ class TestMovieControllerVoice(unittest.TestCase):
                 Command(CommandType.MOVIE_SEARCH_PLAY, {"query": "流浪地球"}, "test")))
 
 
+
+# ================= 包2c：语音选集（"播放电影XX第X集"直跳对应集） =================
+
+class TestVoiceMovieEpisodeIntent(unittest.TestCase):
+    """意图：集数解析（中文/阿拉伯数字），无集数播第一集（现状不变）。"""
+
+    def test_episode_arabic(self):
+        it = RuleBasedIntent.match("播放电影甄嬛传第5集")
+        self.assertEqual(it.intent_type, CommandType.MOVIE_SEARCH_PLAY)
+        self.assertEqual(it.params["query"], "甄嬛传")
+        self.assertEqual(it.params["episode"], 5)
+
+    def test_episode_chinese(self):
+        it = RuleBasedIntent.match("播放电影甄嬛传第五集")
+        self.assertEqual(it.params["query"], "甄嬛传")
+        self.assertEqual(it.params["episode"], 5)
+
+    def test_episode_no_prefix(self):
+        it = RuleBasedIntent.match("放电影甄嬛传5集")
+        self.assertEqual(it.params["query"], "甄嬛传")
+        self.assertEqual(it.params["episode"], 5)
+
+    def test_episode_hua(self):
+        it = RuleBasedIntent.match("看影片流浪地球2第10话")
+        self.assertEqual(it.params["query"], "流浪地球2")
+        self.assertEqual(it.params["episode"], 10)
+
+    def test_episode_chinese_tens(self):
+        it = RuleBasedIntent.match("播放电影琅琊榜第十一集")
+        self.assertEqual(it.params["query"], "琅琊榜")
+        self.assertEqual(it.params["episode"], 11)
+
+    def test_episode_digit_in_title_not_confused(self):
+        # "流浪地球2" 的 2 是片名一部分（结尾无 集/话/期），不能误当集数
+        it = RuleBasedIntent.match("播放电影流浪地球2")
+        self.assertEqual(it.params["query"], "流浪地球2")
+        self.assertNotIn("episode", it.params)
+
+    def test_episode_without_number_first(self):
+        it = RuleBasedIntent.match("播放电影甄嬛传")
+        self.assertEqual(it.params["query"], "甄嬛传")
+        self.assertNotIn("episode", it.params)
+
+    def test_bare_play_with_episode_stays_music(self):
+        # 裸"播放XX第5集"（无"电影/影片/片子"）仍音乐搜索，不误伤音乐链
+        it = RuleBasedIntent.match("播放甄嬛传第5集")
+        self.assertEqual(it.intent_type, CommandType.MUSIC_SEARCH_PLAY)
+
+    def test_cn_to_int_helper(self):
+        conv = RuleBasedIntent._cn_episode_to_int
+        self.assertEqual(conv("第五"), 5)
+        self.assertEqual(conv("25"), 25)
+        self.assertEqual(conv("十一"), 11)
+        self.assertEqual(conv("一百零五"), 105)
+        self.assertIsNone(conv(""))
+        self.assertIsNone(conv("abc"))
+
+
+class TestVoiceMovieEpisodeRouting(unittest.TestCase):
+    """路由：MOVIE_SEARCH_PLAY 带 episode → execute_async 透传。"""
+
+    def test_movie_search_play_episode_passthrough(self):
+        rt = _mk_rt(False, False)
+        rt._execute_intent(
+            Intent(CommandType.MOVIE_SEARCH_PLAY,
+                   params={"query": "甄嬛传", "episode": 5}),
+            "播放电影甄嬛传第5集",
+        )
+        rt.command_bus.execute_async.assert_called_once()
+        cmd = rt.command_bus.execute_async.call_args[0][0]
+        self.assertEqual(cmd.params["query"], "甄嬛传")
+        self.assertEqual(cmd.params["episode"], 5)
+
+    def test_movie_search_play_no_episode_passthrough(self):
+        rt = _mk_rt(False, False)
+        rt._execute_intent(
+            Intent(CommandType.MOVIE_SEARCH_PLAY, params={"query": "流浪地球"}),
+            "播放电影流浪地球",
+        )
+        cmd = rt.command_bus.execute_async.call_args[0][0]
+        self.assertEqual(cmd.params["query"], "流浪地球")
+        self.assertNotIn("episode", cmd.params)
+
+
+class TestMovieControllerEpisodeVoice(unittest.TestCase):
+    """控制器：语音选集直跳 / 越界提示 / 单集边界。"""
+
+    def setUp(self):
+        st = get_state_store()
+        for k in ("playing", "paused"):
+            st.delete(StateNamespace.MOVIE, k)
+
+    def tearDown(self):
+        st = get_state_store()
+        for k in ("playing", "paused"):
+            st.delete(StateNamespace.MOVIE, k)
+
+    def _mk_controller(self):
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = False
+        fake_mpv.start.return_value = True
+        with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
+            ctrl = MovieController(config={})
+        ctrl._fake_mpv = fake_mpv
+        return ctrl
+
+    @staticmethod
+    def _series_item(n=10):
+        parts = "#".join(
+            "第%02d集$http://x/%d.m3u8" % (i, i) for i in range(1, n + 1))
+        return {"vod_name": "甄嬛传", "first_url": "http://x/1.m3u8",
+                "play_url": parts}
+
+    @staticmethod
+    def _single_item():
+        return {"vod_name": "流浪地球", "first_url": "http://x/1.m3u8",
+                "play_url": "正片$http://x/1.m3u8"}
+
+    def test_episode_jumps_to_index(self):
+        ctrl = self._mk_controller()
+        item = self._series_item(10)
+        with patch.object(ctrl, "search", return_value=[item]),              patch.object(ctrl, "play", return_value=True) as p:
+            ok = ctrl._cmd_search_play(Command(
+                CommandType.MOVIE_SEARCH_PLAY,
+                {"query": "甄嬛传", "episode": 5}, "test"))
+        self.assertTrue(ok)
+        p.assert_called_once_with(item, index=4)  # 第5集 → index=4
+
+    def test_episode_out_of_range_rejected(self):
+        ctrl = self._mk_controller()
+        item = self._series_item(10)
+        with patch.object(ctrl, "search", return_value=[item]),              patch.object(ctrl, "play", return_value=True) as p:
+            ok = ctrl._cmd_search_play(Command(
+                CommandType.MOVIE_SEARCH_PLAY,
+                {"query": "甄嬛传", "episode": 99}, "test"))
+        self.assertFalse(ok)
+        p.assert_not_called()
+
+    def test_episode_zero_rejected(self):
+        ctrl = self._mk_controller()
+        item = self._series_item(10)
+        with patch.object(ctrl, "search", return_value=[item]),              patch.object(ctrl, "play", return_value=True) as p:
+            ok = ctrl._cmd_search_play(Command(
+                CommandType.MOVIE_SEARCH_PLAY,
+                {"query": "甄嬛传", "episode": 0}, "test"))
+        self.assertFalse(ok)
+        p.assert_not_called()
+
+    def test_single_movie_ep1_plays_default(self):
+        ctrl = self._mk_controller()
+        item = self._single_item()
+        with patch.object(ctrl, "search", return_value=[item]),              patch.object(ctrl, "play", return_value=True) as p:
+            ok = ctrl._cmd_search_play(Command(
+                CommandType.MOVIE_SEARCH_PLAY,
+                {"query": "流浪地球", "episode": 1}, "test"))
+        self.assertTrue(ok)
+        p.assert_called_once_with(item)  # 单集 + 第1集 = 默认播放路径
+
+    def test_single_movie_ep2_rejected(self):
+        ctrl = self._mk_controller()
+        item = self._single_item()
+        with patch.object(ctrl, "search", return_value=[item]),              patch.object(ctrl, "play", return_value=True) as p:
+            ok = ctrl._cmd_search_play(Command(
+                CommandType.MOVIE_SEARCH_PLAY,
+                {"query": "流浪地球", "episode": 2}, "test"))
+        self.assertFalse(ok)
+        p.assert_not_called()
+
+    def test_no_episode_plays_top1(self):
+        ctrl = self._mk_controller()
+        item = self._series_item(10)
+        with patch.object(ctrl, "search", return_value=[item]),              patch.object(ctrl, "play", return_value=True) as p:
+            ok = ctrl._cmd_search_play(Command(
+                CommandType.MOVIE_SEARCH_PLAY,
+                {"query": "甄嬛传"}, "test"))
+        self.assertTrue(ok)
+        p.assert_called_once_with(item)  # 无集数 → 播第一集（现状不变）
+
+
 if __name__ == "__main__":
     unittest.main()

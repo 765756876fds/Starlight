@@ -88,6 +88,7 @@ class MpvController:
         if self.video:
             args.append("--force-window=yes")
             args.append("--osc=no")   # 电影：弃用英文自带 OSC，控制走应用面板
+            args.append("--hls-bitrate=max")  # 包2c：HLS 强制最高码率（仅视频实例，音乐不加）
             if self.watch_later_dir:
                 args.append("--save-position-on-quit")
                 args.append(f"--watch-later-directory={self.watch_later_dir}")
@@ -262,6 +263,16 @@ class MpvController:
         if resp and "data" in resp:
             return resp["data"]
         return None
+
+    def get_video_params(self) -> dict:
+        """实时查 video-params（w/h/编码等）；未运行或失败 → {}（面板显示分辨率用）。"""
+        if not self.is_running():
+            return {}
+        try:
+            val = self.get_property("video-params", timeout=1.0)
+            return val if isinstance(val, dict) else {}
+        except Exception:
+            return {}
 
     def get_current_time(self) -> float:
         return float(self._properties.get("playback-time", 0))

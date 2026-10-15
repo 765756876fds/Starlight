@@ -122,10 +122,13 @@ class MovieController:
             print(f"[Movie] 注册语音命令失败: {e}")
 
     def _cmd_search_play(self, command):
-        """语音"播放电影XX"：搜索 → 播 Top1（语音直达，不弹 UI 选集对话框）。"""
+        """语音"播放电影XX"：搜索 → 播 Top1（语音直达，不弹 UI 选集对话框）。
+        包2c：params["episode"] 直跳对应集（"播放电影甄嬛传第5集"→第5集）；
+        无集数 → 播第一集（现状不变）；集数越界 → 提示 + False（不崩）。"""
         query = ((command.params or {}).get("query") or "").strip()
         if not query:
             return False
+        episode = (command.params or {}).get("episode")
         try:
             items = self.search(query)
         except Exception as e:
@@ -134,7 +137,20 @@ class MovieController:
         if not items:
             print(f"[Movie] 语音未找到电影: {query}")
             return False
-        return self.play(items[0])
+        item = items[0]
+        if episode is not None:
+            ep = int(episode)
+            eps = self.episodes(item)
+            if len(eps) <= 1:
+                if ep == 1:
+                    return self.play(item)
+                print(f"[Movie] 该片只有 1 集，没有第 {ep} 集")
+                return False
+            if ep < 1 or ep > len(eps):
+                print(f"[Movie] 该剧只有 {len(eps)} 集，没有第 {ep} 集")
+                return False
+            return self.play(item, index=ep - 1)
+        return self.play(item)
 
     def _write_state(self, playing=None, paused=None):
         """写播放态到 state_store（语音"谁在播谁响应"路由用）。
@@ -606,3 +622,15 @@ class MovieController:
                 self.mpv.set_property("mute", not bool(cur))
             except Exception:
                 self.mpv.set_property("mute", True)
+
+    def get_resolution(self) -> str:
+        """当前视频分辨率 "WxH"（video-params 实时查）；未播放/未知 → ""（面板状态栏显示）。"""
+        try:
+            params = self.mpv.get_video_params()
+            w = params.get("w")
+            h = params.get("h")
+            if w and h:
+                return f"{w}x{h}"
+        except Exception:
+            pass
+        return ""

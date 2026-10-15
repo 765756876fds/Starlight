@@ -107,6 +107,32 @@ class RuleBasedIntent:
         "停止", "停", "别", "不要", "不", "取消", "关", "关闭",
     }
 
+    @staticmethod
+    def _cn_episode_to_int(s):
+        """语音集数：中文/阿拉伯数字 → int（"第五集"→5、"25集"→25）；不支持返回 None。"""
+        if not s:
+            return None
+        if s.startswith("第"):
+            s = s[1:]
+        if s.isdigit():
+            return int(s)
+        digits = {"零": 0, "一": 1, "两": 2, "二": 2, "三": 3, "四": 4,
+                  "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        total = 0
+        n = 0
+        for ch in s:
+            if ch in digits:
+                n = digits[ch]
+            elif ch == "十":
+                total += (n or 1) * 10
+                n = 0
+            elif ch == "百":
+                total += (n or 1) * 100
+                n = 0
+            else:
+                return None
+        return total + n if (total or n) else None
+
     # 游戏提醒规则
     ALARM_RULES = [
         # 闪现记录：必须出现明确的"记"动作才创建 USER_MEMORY。
@@ -323,7 +349,10 @@ class RuleBasedIntent:
 
         # 电影搜索播放（包2b）：显式带"电影/影片/片子"才走电影；裸"播放XX"保持音乐。
         # 必须在 search_patterns 之前：否则"播放电影流浪地球"会被 ^播放(.+)$ 截成音乐搜索。
+        # 包2c：第一条带集数（"第X集/第X话/X集"，中文+阿拉伯数字）→ params["episode"] 直跳；
+        # 第二条无集数 → 播第一集（现状不变）。
         movie_patterns = [
+            r"^(?:播放|放|看)(?:一部)?(电影|影片|片子)(.+?)(?:第)?([0-9零一二两三四五六七八九十百]+)(?:集|话|期)$",
             r"^(?:播放|放|看)(?:一部)?(电影|影片|片子)(.+)$",
         ]
         for pattern in movie_patterns:
@@ -331,10 +360,15 @@ class RuleBasedIntent:
             if match:
                 query = match.group(2).strip()
                 if query and query not in cls.SEARCH_NEGATION_WORDS:
+                    params = {"query": query}
+                    if len(match.groups()) > 2 and match.group(3):
+                        episode = cls._cn_episode_to_int(match.group(3))
+                        if episode is not None:
+                            params["episode"] = episode
                     return Intent(
                         CommandType.MOVIE_SEARCH_PLAY,
                         confidence=0.9,
-                        params={"query": query},
+                        params=params,
                     )
 
         # 搜索播放："播放XXX" / "来一首XXX" / "放点XXX"

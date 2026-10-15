@@ -402,9 +402,12 @@ class VoiceRuntime:
         elif intent_type == CommandType.MOVIE_SEARCH_PLAY:
             # 长任务（在线搜索）：异步执行，不阻塞识别线程（与 MUSIC_SEARCH_PLAY 同策略）
             query = params.get("query", original_text)
+            cmd_params = {"query": query}
+            if params.get("episode") is not None:
+                cmd_params["episode"] = params["episode"]
             self.command_bus.execute_async(Command(
                 command_type=CommandType.MOVIE_SEARCH_PLAY,
-                params={"query": query},
+                params=cmd_params,
                 source="voice",
             ))
 

@@ -1,10 +1,59 @@
 """电影面板：搜索 + 结果列表 + 播放控制（暂停/继续/进度条/全屏/倍速/音量/静音）
 + 剧集选集 + 自动连播 + Assrt 字幕。"""
-from PySide6.QtCore import QObject, QThread, Qt, QTimer, Signal
+from pathlib import Path
+import html as _html_mod
+import re
+import urllib.request
+
+from PySide6.QtCore import QObject, QSize, QThread, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget,
+    QListView, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea,
+    QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
+
+# ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
+_POSTER_DIR = Path("data/movie/posters")
+_POSTER_DIR.mkdir(parents=True, exist_ok=True)
+_POSTER_SIZE = (140, 210)  # 竖版 2:3（对齐爱奇艺 PC 海报墙）
+_posters_cache: dict = {}
+
+
+def _strip_html(text):
+    """轻量剥 HTML 标签（vod_content 是富文本简介）+ 反转义。"""
+    if not text:
+        return ""
+    s = re.sub(r"<[^>]+>", "", str(text))
+    s = _html_mod.unescape(s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _make_poster_placeholder(name):
+    """灰底占位图（下载失败/无海报时显示片名）。"""
+    pix = QPixmap(*_POSTER_SIZE)
+    pix.fill(QColor(60, 62, 70))
+    p = QPainter(pix)
+    p.setPen(QColor(210, 210, 210))
+    p.setFont(QFont("Microsoft YaHei", 11))
+    p.drawText(pix.rect(), Qt.AlignCenter | Qt.TextWordWrap, (name or "无海报")[:12])
+    p.end()
+    return pix
+
+
+def _get_poster(vod_id):
+    """内存 → 磁盘缓存命中返回 QPixmap；未下载返回 None（调用方放占位 + 异步下载）。"""
+    if not vod_id:
+        return None
+    if vod_id in _posters_cache:
+        return _posters_cache[vod_id]
+    path = _POSTER_DIR / f"{vod_id}.jpg"
+    if path.exists():
+        pix = QPixmap(str(path))
+        if not pix.isNull():
+            _posters_cache[vod_id] = pix
+            return pix
+    return None
 
 from ..theme.colors import Colors
 from ...movie.movie_controller import MovieController
@@ -27,6 +76,29 @@ class _SearchWorker(QObject):
             self.failed.emit(str(e))
 
 
+class _PosterBatchWorker(QObject):
+    """串行下载整批海报到磁盘缓存；逐张 done(vod_id, 本地路径)（失败=""）。"""
+
+    done = Signal(str, str)
+
+    def __init__(self, jobs):
+        super().__init__()
+        self._jobs = jobs  # [(vod_id, url)]
+
+    def run(self):
+        for vod_id, url in self._jobs:
+            path = _POSTER_DIR / f"{vod_id}.jpg"
+            try:
+                if not path.exists():
+                    urllib.request.urlretrieve(url, path)
+                if path.exists():
+                    self.done.emit(str(vod_id), str(path))
+                    continue
+            except Exception as e:
+                print(f"[Movie] 海报下载失败 {vod_id}: {e}")
+            self.done.emit(str(vod_id), "")
+
+
 class MoviePanel(QWidget):
     def __init__(self, movie=None, music=None, parent=None):
         super().__init__(parent)
@@ -46,6 +118,11 @@ class MoviePanel(QWidget):
         search_row.addWidget(self.edit_kw)
         search_row.addWidget(self.btn_search)
         search_row.addWidget(self.btn_clear)
+        self.btn_view = QPushButton("海报")
+        self.btn_view.setCheckable(True)
+        self.btn_view.setChecked(True)
+        self.btn_view.setToolTip("列表/海报 视图切换（默认海报墙，对齐爱奇艺/B站）")
+        search_row.addWidget(self.btn_view)
         root.addLayout(search_row)
 
         # 状态
@@ -53,9 +130,21 @@ class MoviePanel(QWidget):
         self.lbl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         root.addWidget(self.lbl_status)
 
-        # 结果列表
+        # 结果区：列表/海报 双视图（QStackedWidget，默认海报墙）
+        self.stack_results = QStackedWidget()
         self.list_results = QListWidget()
-        root.addWidget(self.list_results, 1)
+        self.list_posters = QListWidget()
+        self.list_posters.setViewMode(QListWidget.IconMode)
+        self.list_posters.setIconSize(QSize(*_POSTER_SIZE))
+        self.list_posters.setGridSize(QSize(170, 250))
+        self.list_posters.setResizeMode(QListView.Adjust)
+        self.list_posters.setSpacing(10)
+        self.list_posters.setWordWrap(True)
+        self.stack_results.addWidget(self.list_results)
+        self.stack_results.addWidget(self.list_posters)
+        root.addWidget(self.stack_results, 1)
+        self._poster_mode = True
+        self.stack_results.setCurrentWidget(self.list_posters)  # 默认海报墙
 
         # 当前播放
         self.lbl_now = QLabel("未播放")
@@ -68,8 +157,13 @@ class MoviePanel(QWidget):
         self.slider_pos.setEnabled(False)
         self.lbl_time = QLabel("0:00 / 0:00")
         self.lbl_time.setAlignment(Qt.AlignCenter)
+        self.lbl_res = QLabel("")
+        self.lbl_res.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        time_row = QHBoxLayout()
+        time_row.addWidget(self.lbl_time, 1)
+        time_row.addWidget(self.lbl_res)
         root.addWidget(self.slider_pos)
-        root.addWidget(self.lbl_time)
+        root.addLayout(time_row)
 
         # 播放控制
         row = QHBoxLayout()
@@ -107,15 +201,19 @@ class MoviePanel(QWidget):
         row2.addWidget(self.btn_shortcut)
         root.addLayout(row2)
 
-        # 倍速档位（循环切换）
-        self._speed_steps = [0.5, 1.0, 1.25, 1.5, 2.0]
-        self._speed_idx = 1
+        # 倍速档位（B站/爱奇艺标准 9 档；点按钮弹菜单选档，非循环点击）
+        self._speed_steps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+        self._speed_idx = 2  # 1.0x 为默认档
 
         # 信号
         self.btn_search.clicked.connect(self._do_search)
         self.btn_clear.clicked.connect(self._do_clear)
         self.edit_kw.returnPressed.connect(self._do_search)
         self.list_results.itemDoubleClicked.connect(self._on_item_activated)
+        self.list_results.itemClicked.connect(self._on_item_clicked)
+        self.list_posters.itemClicked.connect(self._on_item_clicked)
+        self.list_posters.itemDoubleClicked.connect(self._on_item_activated)
+        self.btn_view.clicked.connect(self._on_toggle_view)
         self.btn_toggle.clicked.connect(self._on_toggle)
         self.btn_stop.clicked.connect(self._on_stop)
         self.slider_pos.sliderReleased.connect(self._on_seek)
@@ -132,6 +230,13 @@ class MoviePanel(QWidget):
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+
+        # 单击开详情（300ms 延迟防双击误触：双击先触发一次单击，让位给播放）
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(300)
+        self._click_timer.timeout.connect(self._on_click_timeout)
+        self._pending_click_item = None
 
         # 软件退出钩子：杀掉电影 mpv（main.py 不感知 movie，单点收口）
         try:
@@ -169,25 +274,60 @@ class MoviePanel(QWidget):
     def _do_clear(self):
         self.edit_kw.clear()
         self.list_results.clear()
+        self.list_posters.clear()
         self._items_by_row = []
         self.lbl_status.setText("")
 
     def _on_search_done(self, result: list):
         self.list_results.clear()
+        self.list_posters.clear()
         self._items_by_row = []
+        poster_jobs = []
         for it in result:
             name = it.get("vod_name", "") or ""
             remarks = it.get("vod_remarks", "") or ""
+            # 列表视图
             label = f"{name}  [{remarks}]" if remarks else name
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, it)
+            item.setToolTip(self._poster_tip(it))
             self.list_results.addItem(item)
+            # 海报视图（竖版 2:3，占位先行，下载后替换）
+            pit = QListWidgetItem()
+            pit.setData(Qt.UserRole, it)
+            pit.setToolTip(self._poster_tip(it))
+            pit.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            self.list_posters.addItem(pit)
             self._items_by_row.append(it)
+            vod_id = str(it.get("vod_id", ""))
+            pic = it.get("vod_pic") or ""
+            pix = _get_poster(vod_id)
+            if pix is not None:
+                pit.setIcon(QIcon(pix))
+            else:
+                pit.setIcon(QIcon(_make_poster_placeholder(name)))
+                if pic:
+                    poster_jobs.append((vod_id, pic))
+        if poster_jobs:
+            self._start_poster_jobs(poster_jobs)
         n = len(result)
         if n == 0:
             self.lbl_status.setText("无结果")
         else:
             self.lbl_status.setText(f"找到 {n} 部")
+
+    @staticmethod
+    def _poster_tip(it):
+        """悬停 tooltip：片名 / 评分 / 年份 / 备注。"""
+        parts = [it.get("vod_name") or ""]
+        score = it.get("vod_score") or ""
+        if score:
+            parts.append(f"评分 {score}")
+        if it.get("vod_year"):
+            parts.append(str(it["vod_year"]))
+        if it.get("vod_remarks"):
+            parts.append(str(it["vod_remarks"]))
+        return "  ".join(p for p in parts if p)
 
     def _on_search_failed(self, err: str):
         self.lbl_status.setText(f"搜索失败: {err}")
@@ -195,6 +335,8 @@ class MoviePanel(QWidget):
     # ---- 播放 ----
 
     def _on_item_activated(self, item):
+        # 双击 → 直接播放（先取消单击详情定时器，防双击误触详情页）
+        self._click_timer.stop()
         it = item.data(Qt.UserRole)
         if not isinstance(it, dict):
             return
@@ -205,6 +347,58 @@ class MoviePanel(QWidget):
             self._play_item(it, index=None)
         except Exception as e:
             self.lbl_status.setText(f"播放失败: {e}")
+
+    def _on_item_clicked(self, item):
+        """单击 → 300ms 后开详情页（双击先触发单击，用 timer 让位）。"""
+        self._pending_click_item = item
+        self._click_timer.start()
+
+    def _on_click_timeout(self):
+        item = self._pending_click_item
+        self._pending_click_item = None
+        if item is not None:
+            self._show_detail(item)
+
+    def _show_detail(self, item):
+        it = item.data(Qt.UserRole)
+        if not isinstance(it, dict):
+            return
+        dlg = _MovieDetailDialog(it, self)
+        dlg.exec()
+
+    def _on_toggle_view(self):
+        self._poster_mode = not self._poster_mode
+        if self._poster_mode:
+            self.stack_results.setCurrentWidget(self.list_posters)
+            self.btn_view.setText("海报")
+            self.btn_view.setChecked(True)
+        else:
+            self.stack_results.setCurrentWidget(self.list_results)
+            self.btn_view.setText("列表")
+            self.btn_view.setChecked(False)
+
+    def _start_poster_jobs(self, jobs):
+        self._poster_thread = QThread()
+        self._poster_worker = _PosterBatchWorker(jobs)
+        self._poster_worker.moveToThread(self._poster_thread)
+        self._poster_thread.started.connect(self._poster_worker.run)
+        self._poster_worker.done.connect(self._on_poster_done)
+        self._poster_worker.done.connect(self._poster_thread.quit)
+        self._poster_thread.start()
+
+    def _on_poster_done(self, vod_id, path):
+        if not path:
+            return
+        pix = QPixmap(path)
+        if pix.isNull():
+            return
+        _posters_cache[vod_id] = pix
+        for i in range(self.list_posters.count()):
+            it = self.list_posters.item(i)
+            data = it.data(Qt.UserRole)
+            if isinstance(data, dict) and str(data.get("vod_id", "")) == vod_id:
+                it.setIcon(QIcon(pix))
+                break
 
     def _play_item(self, it, index=None):
         """统一播放入口：控制器播放 + 状态刷新 + 自动字幕（配置开时每片一次）。"""
@@ -294,10 +488,30 @@ class MoviePanel(QWidget):
             self.lbl_status.setText(f"全屏失败: {e}")
 
     def _on_speed(self):
-        self._speed_idx = (self._speed_idx + 1) % len(self._speed_steps)
-        rate = self._speed_steps[self._speed_idx]
-        label = f"{rate:g}x" if rate != int(rate) else f"{int(rate)}x"
-        self.btn_speed.setText(f"倍速 {label}")
+        """点倍速 → 弹菜单选档（当前档勾选高亮）；对齐 B站/爱奇艺交互。"""
+        menu = QMenu(self)
+        for i, rate in enumerate(self._speed_steps):
+            label = self._speed_label(rate)
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(i == self._speed_idx)
+            act.triggered.connect(
+                lambda _checked=False, r=rate, idx=i: self._apply_speed(r, idx))
+        menu.exec_(self.btn_speed.mapToGlobal(self.btn_speed.rect().bottomLeft()))
+
+    @staticmethod
+    def _speed_label(rate):
+        return f"{rate:g}x" if rate != int(rate) else f"{int(rate)}x"
+
+    def _apply_speed(self, rate, idx=None):
+        """应用倍速档位（菜单 action 与测试共用入口）。"""
+        if idx is None:
+            try:
+                idx = self._speed_steps.index(rate)
+            except ValueError:
+                idx = self._speed_idx
+        self._speed_idx = idx
+        self.btn_speed.setText(f"倍速 {self._speed_label(rate)}")
         try:
             self._movie.set_speed(rate)
         except Exception as e:
@@ -374,7 +588,14 @@ class MoviePanel(QWidget):
                 except Exception:
                     pass
             if not self._movie.is_playing():
+                self.lbl_res.setText("")
                 return
+            try:
+                res = self._movie.get_resolution()
+            except Exception:
+                res = ""
+            if res and res != self.lbl_res.text():
+                self.lbl_res.setText(res)
             pos = self._movie.get_position()
             dur = self._movie.get_duration()
             if dur > 0:
@@ -514,3 +735,69 @@ class _SubtitleDialog(QDialog):
             self.lbl_state.setText(f"字幕已加载: {msg}")
         else:
             self.lbl_state.setText(str(msg) or "字幕加载失败")
+
+
+class _MovieDetailDialog(QDialog):
+    """详情页：大图 + 评分/导演/演员/简介 + 播放按钮（对齐爱奇艺点击进详情）。"""
+
+    def __init__(self, it, panel, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{(it.get('vod_name') or '')[:24]} - 详情")
+        self.resize(540, 660)
+        self._panel = panel
+        self._it = it
+
+        root = QVBoxLayout(self)
+
+        vod_id = str(it.get("vod_id", ""))
+        pix = _get_poster(vod_id)
+        if pix is None:
+            pix = _make_poster_placeholder(it.get("vod_name") or "")
+        self.lbl_pic = QLabel()
+        self.lbl_pic.setAlignment(Qt.AlignCenter)
+        self.lbl_pic.setPixmap(
+            pix.scaled(180, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        root.addWidget(self.lbl_pic)
+
+        lines = [it.get("vod_name") or ""]
+        meta = " / ".join(x for x in (
+            str(it.get("vod_year") or ""),
+            str(it.get("vod_remarks") or ""),
+            ("评分 " + str(it.get("vod_score"))) if it.get("vod_score") else "",
+        ) if x)
+        if meta:
+            lines.append(meta)
+        if it.get("vod_director"):
+            lines.append("导演: " + str(it["vod_director"]))
+        if it.get("vod_actor"):
+            lines.append("演员: " + str(it["vod_actor"]))
+        content = _strip_html(it.get("vod_content") or "")
+        if content:
+            lines.append("")
+            lines.append(content)
+        self.lbl_info = QLabel("\n".join(lines))
+        self.lbl_info.setWordWrap(True)
+        self.lbl_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.lbl_info)
+        root.addWidget(scroll, 1)
+
+        self.btn_play = QPushButton("播放")
+        self.btn_play.clicked.connect(self._on_play)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(self.btn_play)
+        row.addStretch()
+        root.addLayout(row)
+
+    def _on_play(self):
+        it = self._it
+        self.accept()
+        try:
+            if MovieController.is_multi_episode(it):
+                self._panel._show_episode_dialog(it)
+            else:
+                self._panel._play_item(it, index=None)
+        except Exception as e:
+            self._panel.lbl_status.setText(f"播放失败: {e}")
