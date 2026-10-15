@@ -7,8 +7,11 @@
 
 Command -> 执行器 -> 产生 Event
 """
+import logging
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -151,10 +154,17 @@ class CommandBus:
             raise
 
     def execute_async(self, command: Command):
-        """异步执行命令"""
+        """异步执行命令（子线程异常被捕获记录，不静默死）"""
+
+        def _run():
+            try:
+                self.execute(command)
+            except Exception as e:
+                print(f"[CommandBus] 异步命令执行异常 {command.command_type}: {e}")
+                logger.error("异步命令执行异常 %s: %s", command.command_type, e)
+
         thread = threading.Thread(
-            target=self.execute,
-            args=(command,),
+            target=_run,
             daemon=True,
             name=f"cmd-{command.command_type}"
         )

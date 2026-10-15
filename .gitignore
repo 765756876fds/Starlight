@@ -169,3 +169,6 @@ docs/HANDOVER.md
 
 # 项目历史残骸（工作档案，不进版本控制）
 docs/history/
+
+# 用户自定义音源注册表（运行期状态，程序自动改写，不跟踪）
+config/music_sources.json

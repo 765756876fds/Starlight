@@ -102,7 +102,7 @@ class MusicSourceManager:
         try:
             data = json.loads(content)
             source = MusicSource.from_dict(data)
-        except:
+        except Exception:
             # 如果是JS文件，提取头部信息
             source = MusicSource()
             # 提取@name

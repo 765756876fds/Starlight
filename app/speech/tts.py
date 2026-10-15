@@ -248,7 +248,7 @@ class TTSController:
             if self._play_process:
                 try:
                     self._play_process.terminate()
-                except:
+                except Exception:
                     pass
             self._cleanup_file(output_file)
             self._current_file = None
@@ -259,7 +259,7 @@ class TTSController:
             if self._play_process:
                 try:
                     self._play_process.terminate()
-                except:
+                except Exception:
                     pass
             self._cleanup_file(output_file)
             self._current_file = None

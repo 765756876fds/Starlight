@@ -7,6 +7,7 @@
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -132,6 +133,9 @@ class EventBus:
         self._event_history: List[Event] = []
         self._max_history = 1000
         self._running = True
+        self._async_executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="eventbus"
+        )
 
     def subscribe(self, event_type: str, handler: Callable[[Event], None]):
         """订阅特定事件类型"""
@@ -156,6 +160,10 @@ class EventBus:
         发布事件（同步分发）
         异常被捕获并记录，不影响其他订阅者
         """
+        if not self._running:
+            logger.warning("EventBus 已关闭，丢弃事件 %s", event.event_type)
+            return
+
         # 记录历史
         with self._lock:
             self._event_history.append(event)
@@ -195,14 +203,14 @@ class EventBus:
                     logger.error("发布 SYSTEM_ERROR 失败（源事件 %s）", event.event_type, exc_info=True)
 
     def publish_async(self, event: Event):
-        """异步发布事件（在新线程中分发）"""
-        thread = threading.Thread(
-            target=self.publish,
-            args=(event,),
-            daemon=True,
-            name=f"event-{event.event_type}"
-        )
-        thread.start()
+        """异步发布事件（有界线程池 ≤4；池关闭竞态降级同步发布，事件不丢）"""
+        if not self._running:
+            logger.warning("EventBus 已关闭，丢弃异步事件 %s", event.event_type)
+            return
+        try:
+            self._async_executor.submit(self.publish, event)
+        except RuntimeError:
+            self.publish(event)  # shutdown 竞态兜底
 
     def get_history(self, event_type: Optional[str] = None, limit: int = 100) -> List[Event]:
         """获取事件历史"""
@@ -220,6 +228,7 @@ class EventBus:
     def shutdown(self):
         """关闭事件总线"""
         self._running = False
+        self._async_executor.shutdown(wait=False, cancel_futures=True)
         with self._lock:
             self._subscribers.clear()
             self._wildcard_subscribers.clear()

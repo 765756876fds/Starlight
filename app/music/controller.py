@@ -1584,11 +1584,6 @@ class MusicController:
         print(f"[Music] manual highlight {song.get('title')}: {pos:.1f}-{end:.1f}s")
         return True
 
-    def set_play_mode(self, mode: str):
-        """设置播放模式（sequential/shuffle/repeat_one）"""
-        self.queue.set_play_mode(mode)
-        self.state_store.set(StateNamespace.MUSIC, "play_mode", mode)
-
     def get_play_mode(self) -> str:
         return self.queue.get_play_mode()
 

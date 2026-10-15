@@ -31,7 +31,7 @@ class LxMusicClient:
             # 尝试解析JSON，失败就返回文本
             try:
                 return resp.json()
-            except:
+            except Exception:
                 return {"raw": resp.text}
         except Exception as e:
             print(f"[落雪API] POST {path} 失败: {e}")
@@ -42,7 +42,7 @@ class LxMusicClient:
         try:
             resp = requests.get(f"{self.base_url}/api/player/status", timeout=2)
             return resp.status_code == 200
-        except:
+        except Exception:
             return False
 
     # ============ 播放控制 ============
