@@ -1,20 +1,21 @@
-"""电影内嵌播放窗口（S0 骨架 + S1 最小内嵌 + S2 overlay 控制层）。
+"""电影内嵌播放窗口（S0-S8）。
 
 架构：Qt 顶层播放窗口 + VideoContainer（WA_NativeWindow，mpv --wid 渲染目标）
 + ControlOverlay 独立顶层窗口（Qt::Tool | Frameless，owner = 播放窗口——S7
 去 StaysOnTop：owned window 天然浮在 mpv 之上、播放窗口被盖时跟随一起被盖，
 z-order 原型实证：SetWindowPos 调兄弟 z-order 无效，独立顶层窗口是可靠解）。
+EpisodeSidebar（S4，同 owned 模式）右缘选集。
 
 职责边界（硬约束）：播放窗口只做"呈现 + 发控制指令"，业务全在 MovieController
-（唯一控制器——搜索/互斥/连播/字幕/状态写入）。本文件零业务复制。
+（唯一控制器——搜索/互斥/连播/字幕/状态写入/崩溃恢复）。本文件零业务复制。
 
-S2：overlay 填 B站式底部控制条——⏯ ⏹ 进度条(拖动预览/松手 seek) 时间
-倍速菜单(9 档当前档高亮) 音量滑块/静音 全屏；焦点管理 WS_EX_NOACTIVATE
-（点击控件不抢 mpv 焦点，mpv 空格暂停仍生效——S2 核心）；overlay 常显
-（鼠标浮现/隐藏 S3 做）；宽度跟随窗口（resizeEvent 重定位 + 重设宽）。
+控制条（S2 起，S6/S7 对标 B站）：两行布局——进度条上行（拖动预览/松手 seek）、
+按钮下行（播放/下一集/时间/音量/倍速/字幕/全屏，Feather/Lucide 线性图标）；
+鼠标浮现/静止 3s 隐藏（S3）；宽度跟随窗口（resizeEvent 重定位 + 重设宽）。
+键盘焦点在 Qt 侧捕获（S5：容器 StrongFocus、控件操作后焦点归还容器；
+NOACTIVATE 方案 S2 实测桌面不显示，已整体弃用）。
+mpv 崩溃恢复（S8）：窗口 _tick 轮询检测。
 """
-import ctypes
-
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
@@ -37,10 +38,6 @@ _OVERLAY_HIDE_DELAY_MS = 3000
 _SIDEBAR_EDGE_PX = 60
 _SIDEBAR_W = 150
 _SIDEBAR_HIDE_DELAY_MS = 3000
-
-# 焦点管理（S5 启用）：点击不激活（WS_EX_NOACTIVATE）——点 overlay 按钮不抢 mpv 焦点
-_GWL_EXSTYLE = -20
-_WS_EX_NOACTIVATE = 0x08000000
 
 
 def _fmt(sec: float) -> str:
@@ -84,9 +81,6 @@ class VideoContainer(QWidget):
         if self._win_id is None:
             self._win_id = int(self.winId()) & 0xFFFFFFFF
         return self._win_id
-
-    def reset_native_id(self):
-        self._win_id = None
 
     def mouseMoveEvent(self, event):
         # 画面区鼠标活动（穿透后事件直达容器）→ 浮现 + 重置隐藏计时 + 右缘侧栏
@@ -304,51 +298,19 @@ class ControlOverlay(QWidget):
                 pass
         return _restore
 
-    # ---- 焦点管理（S5 启用；本批只修 ctypes bug，不主动调用） ----
-
-    def apply_focus_no_activate(self) -> bool:
-        """给 overlay 顶层窗口设 WS_EX_NOACTIVATE：点击控件不激活窗口、
-        不抢 mpv 焦点（mpv 空格暂停仍生效）。S5 启用（当前 show 不再自动调）。
-        win32 特有；offscreen/失败返回 False 并打日志（不静默——S2 修复）。"""
-        try:
-            user32 = ctypes.windll.user32
-            # S2 修复：设 argtypes 防 64 位 HWND 被 c_int 截断（句柄错 → 静默失败）
-            user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            user32.GetWindowLongPtrW.restype = ctypes.c_void_p
-            user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int,
-                                                 ctypes.c_void_p]
-            user32.SetWindowLongPtrW.restype = ctypes.c_void_p
-            hwnd = ctypes.c_void_p(int(self.winId()))
-            ex = user32.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE)
-            if not ex:
-                print(f"[Overlay] GetWindowLongPtrW 失败 hwnd={int(self.winId())}")
-                return False
-            new_ex = int(ex) | _WS_EX_NOACTIVATE
-            if not user32.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE, ctypes.c_void_p(new_ex)):
-                print(f"[Overlay] SetWindowLongPtrW 失败 hwnd={int(self.winId())}")
-                return False
-            return True
-        except Exception as e:
-            print(f"[Overlay] apply_focus_no_activate 异常: {e}")
-            return False
-
-    def showEvent(self, event):
-        # S2 修复：不再自动设 NOACTIVATE（撤出本批，S5 恢复）——普通显示路径
-        super().showEvent(event)
-
     # ---- S3：overlay 鼠标跟踪（独立顶层窗口，鼠标在其上时播放窗口收不到事件） ----
 
     def enterEvent(self, event):
         # 鼠标进入控制条 → 通知窗口"hover 中"（停止隐藏计时，防操作中消失）
         try:
-            self._window._on_overlay_hover(True)
+            self._window.notify_overlay_hover(True)
         except Exception:
             pass
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         try:
-            self._window._on_overlay_hover(False)
+            self._window.notify_overlay_hover(False)
         except Exception:
             pass
         super().leaveEvent(event)
@@ -356,7 +318,7 @@ class ControlOverlay(QWidget):
     def mouseMoveEvent(self, event):
         # overlay 上活动 = 仍在操作 → 通知窗口浮现 + 重置隐藏计时
         try:
-            self._window._show_overlay()
+            self._window.notify_mouse_activity()
         except Exception:
             pass
         super().mouseMoveEvent(event)
@@ -537,14 +499,14 @@ class EpisodeSidebar(QWidget):
 
     def enterEvent(self, event):
         try:
-            self._window._on_sidebar_hover(True)
+            self._window.notify_sidebar_hover(True)
         except Exception:
             pass
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         try:
-            self._window._on_sidebar_hover(False)
+            self._window.notify_sidebar_hover(False)
         except Exception:
             pass
         super().leaveEvent(event)
@@ -894,6 +856,14 @@ class VideoPlayerWindow(QWidget):
             return
         if x >= self.width() - _SIDEBAR_EDGE_PX:
             self._show_sidebar()
+
+    def notify_overlay_hover(self, hovering: bool):
+        """控制条 hover 状态（公开接口——overlay 跨类不摸私有方法）。"""
+        self._on_overlay_hover(hovering)
+
+    def notify_sidebar_hover(self, hovering: bool):
+        """侧栏 hover 状态（公开接口——sidebar 跨类不摸私有方法）。"""
+        self._on_sidebar_hover(hovering)
 
     def switch_episode(self, index):
         """点集数 → 复用 play 链切集（穿透/overlay/title/高亮全走 play）。"""

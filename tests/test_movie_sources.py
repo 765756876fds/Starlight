@@ -91,6 +91,42 @@ def test_user_removed_default_not_revived(tmp_path):
     assert len(names) == 8
 
 
+# ---------- _save 防覆盖写（P1） ----------
+
+def test_save_aborts_when_yaml_corrupt(tmp_path):
+    """文件存在但 yaml 损坏（_read_yaml 返回 {}）→ 写操作中止，不覆盖原文。"""
+    p = str(tmp_path / "settings.yaml")
+    corrupt = "app: {oops: [unterminated\n  music:\n    volume: 50\n"
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(corrupt)
+    m = MovieSourceManager(config_path=p)
+    # 构造时读失败（_sources 回退默认、_active 为空）——任何写操作都必须中止
+    m.add_source("新源", "https://new/api.php/provide/vod/")
+    m.set_active("量子资源")
+    m.remove_source("量子资源")
+    with open(p, encoding="utf-8") as f:
+        assert f.read() == corrupt  # 原损坏内容原样保留（没被写回）
+
+
+def test_save_aborts_when_yaml_empty(tmp_path):
+    """文件存在但 0 字节（读出来 {}）→ 保守中止，不写回。"""
+    p = str(tmp_path / "settings.yaml")
+    open(p, "wb").close()
+    m = MovieSourceManager(config_path=p)
+    m.set_active("量子资源")
+    assert open(p, "rb").read() == b""  # 空文件未被写
+
+
+def test_save_writes_when_file_absent(tmp_path):
+    """文件不存在（新配置）→ 正常写回（防覆盖写不拦截首建）。"""
+    p = str(tmp_path / "settings.yaml")
+    m = MovieSourceManager(config_path=p)
+    m.set_active("量子资源")
+    import yaml as _yaml
+    data = _yaml.safe_load(open(p, encoding="utf-8"))
+    assert data["movie"]["active_source"] == "量子资源"
+
+
 # ---------- 三合一测源 ----------
 
 def _resp(status=200, text="{}"):

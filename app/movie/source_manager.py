@@ -94,9 +94,17 @@ class MovieSourceManager:
         return {}
 
     def _save(self):
-        """写回 movie.sources + active_source（保留 settings.yaml 其他节）。"""
+        """写回 movie.sources + active_source（保留 settings.yaml 其他节）。
+
+        防覆盖写（P1）：文件已存在但读取失败（损坏/权限/空文件——_read_yaml
+        此时返回 {}）→ 中止不写回，绝不把残缺配置（仅 movie 节）覆盖到用户配置。
+        """
         with self._lock:
+            exists = os.path.exists(self._config_path)
             data = self._read_yaml()
+            if exists and not data:
+                print("[MovieSource] 现有配置读取失败，已中止保存（防覆盖写）")
+                return
             m = data.setdefault("movie", {})
             if not isinstance(m, dict):
                 m = {}

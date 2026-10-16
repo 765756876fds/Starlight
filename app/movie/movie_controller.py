@@ -8,6 +8,7 @@
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -76,6 +77,14 @@ def first_play_url(vod_play_url):
     """取第一条 (name, url)；无则 None。"""
     parts = split_play_url(vod_play_url)
     return parts[0] if parts else None
+
+
+def episode_eps(item):
+    """取 item 的分集列表（非 dict / 无 play_url → 空列表）——episodes
+    与 is_multi_episode 共用，消重复取数逻辑。"""
+    if not isinstance(item, dict):
+        return []
+    return split_play_url(item.get("play_url") or "")
 
 
 class MovieController:
@@ -288,18 +297,15 @@ class MovieController:
 
     def episodes(self, item):
         """拆集：返回 [(name, url), ...]；单集/无 play_url → 空列表（调用方走直播）。"""
-        if not isinstance(item, dict):
-            return []
-        return split_play_url(item.get("play_url") or "")
+        return episode_eps(item)
 
     @staticmethod
     def is_multi_episode(item):
         """剧集判据双保险：段数 > 1 为主 + remarks 含 全?\\d+集 辅助。"""
-        eps = split_play_url(item.get("play_url") or "") if isinstance(item, dict) else []
-        if len(eps) > 1:
+        if len(episode_eps(item)) > 1:
             return True
         remarks = (item.get("vod_remarks") or "") if isinstance(item, dict) else ""
-        return bool(__import__("re").search(r"全?\d+集", remarks))
+        return bool(re.search(r"全?\d+集", remarks))
 
     # ---- 内嵌播放（S0+S1） ----
 
