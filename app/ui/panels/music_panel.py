@@ -45,6 +45,41 @@ class _ScanWorker(QObject):
             self.failed.emit(str(e))
 
 
+class _RankListsWorker(QObject):
+    """后台拉全插件榜单分组（bridge 串行遍历各插件，可能数秒，不能卡 UI）。"""
+    done = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, music):
+        super().__init__()
+        self._music = music
+
+    def run(self):
+        try:
+            self.done.emit(self._music.get_top_lists() or {})
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class _RankDetailWorker(QObject):
+    """后台拉单榜单歌曲（→ OnlineTrack 列表，复用播放链）。"""
+    done = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, music, source, list_id):
+        super().__init__()
+        self._music = music
+        self._source = source
+        self._list_id = list_id
+
+    def run(self):
+        try:
+            r = self._music.get_top_list_detail(self._source, self._list_id)
+            self.done.emit(r or {"tracks": [], "is_end": True})
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class MusicPanel(QWidget):
     # P1 候选旁路：后台线程 publish → 此 Signal 桥到主线程渲染
     _search_event = Signal(dict)
@@ -61,6 +96,16 @@ class MusicPanel(QWidget):
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
+        # 榜单 tab 状态
+        self._rank_groups = {}          # 插件名 -> [分组{title, lists}]
+        self._rank_tracks = []          # 当前榜单歌曲（OnlineTrack 列表）
+        # 榜单 QThread 生命周期：线程对象只持一个引用，运行中绝不覆盖
+        #（否则旧运行中线程被 GC 销毁 → "QThread: Destroyed while thread is still running"）。
+        self._rank_thread = None
+        self._rank_detail_thread = None
+        # 最新请求补偿：线程运行中来了新请求 → 记待处理（覆盖旧），旧线程 done/failed 后自动补加载
+        self._pending_rank_lists = False
+        self._pending_rank_detail = None   # {source, list_id, title} 或 None
 
         root = QVBoxLayout(self)
         tabs = self.tabs = QTabWidget()
@@ -204,6 +249,31 @@ class MusicPanel(QWidget):
         pl.addLayout(pl_right, 3)
         tabs.addTab(playlist, "歌单")
 
+        # ---- 榜单 Tab（左：平台 + 榜单列表；右：榜单歌曲）----
+        rank = QWidget()
+        rl = QHBoxLayout(rank)
+        rl_left = QVBoxLayout()
+        lbl_src = QLabel("平台")
+        lbl_src.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        rl_left.addWidget(lbl_src)
+        self.list_rank_sources = QListWidget()
+        rl_left.addWidget(self.list_rank_sources, 1)
+        lbl_lst = QLabel("榜单")
+        lbl_lst.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        rl_left.addWidget(lbl_lst)
+        self.list_rank_lists = QListWidget()
+        rl_left.addWidget(self.list_rank_lists, 1)
+        rl.addLayout(rl_left, 2)
+        rl_right = QVBoxLayout()
+        self.list_rank_songs = QListWidget()
+        rl_right.addWidget(self.list_rank_songs, 1)
+        self.lbl_rank_status = QLabel("加载榜单中…")
+        self.lbl_rank_status.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        rl_right.addWidget(self.lbl_rank_status)
+        rl.addLayout(rl_right, 3)
+        tabs.addTab(rank, "榜单")
+
         # 绑定
         if music is not None:
             self.btn_prev.clicked.connect(self._on_prev)
@@ -228,6 +298,10 @@ class MusicPanel(QWidget):
             self.btn_rename_playlist.clicked.connect(self._on_rename_playlist)
             self.btn_del_playlist.clicked.connect(self._on_delete_playlist)
             self.list_playlist_songs.itemDoubleClicked.connect(self._on_playlist_song_play)
+            # 榜单 tab
+            self.list_rank_sources.currentItemChanged.connect(self._on_rank_source_selected)
+            self.list_rank_lists.currentItemChanged.connect(self._on_rank_list_selected)
+            self.list_rank_songs.itemDoubleClicked.connect(self._on_rank_song_play)
             # 右键菜单（QMenu parent=self 防 GC）
             self.list_local.setContextMenuPolicy(Qt.CustomContextMenu)
             self.list_local.customContextMenuRequested.connect(self._on_local_context_menu)
@@ -397,6 +471,10 @@ class MusicPanel(QWidget):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
+        # 防重入：旧搜索线程仍在运行 → 忽略本次（低频场景简单忽略即可，
+        # 覆盖运行中线程引用同样会触发 QThread: Destroyed while running）。
+        if self._thread is not None and self._thread.isRunning():
+            return
         self.lbl_status.setText("搜索中...")
         self._thread = QThread()
         self._worker = _SearchWorker(self._music, kw)
@@ -469,11 +547,13 @@ class MusicPanel(QWidget):
             print(f"[MusicPanel] 候选渲染失败: {e}")
 
     def _on_tab_changed(self, index: int):
-        """切到历史/歌单 tab → 刷新（构造后不再重读数据库的补偿）。"""
+        """切到历史/歌单/榜单 tab → 刷新（构造后不再重读数据库的补偿）。"""
         if index == 2:
             self._refresh_history()
         elif index == 3:
             self._refresh_playlists()
+        elif index == 4:
+            self._load_top_lists()
 
     def _refresh_history(self):
         """渲染播放历史（最近在前）。"""
@@ -677,6 +757,167 @@ class MusicPanel(QWidget):
             self.lbl_status.setText(f"正在播放：{row.get('title', '')}")
         else:
             self.lbl_status.setText("该歌已不可用")
+
+    # ---- 榜单 ----
+
+    def _load_top_lists(self):
+        """切到榜单 tab → 后台拉全部插件榜单分组（防 UI 卡；失败降级提示不崩）。
+
+        防重入：上一轮分组线程仍在运行 → 记待处理（done/failed 后自动补拉），
+        绝不新建线程覆盖运行中引用（QThread 崩溃修复）。
+        """
+        if self._music is None:
+            return
+        if self._rank_thread is not None and self._rank_thread.isRunning():
+            self._pending_rank_lists = True
+            return
+        self._pending_rank_lists = False
+        self.lbl_rank_status.setText("加载榜单中…")
+        self._rank_groups = {}
+        self.list_rank_sources.clear()
+        self.list_rank_lists.clear()
+        self.list_rank_songs.clear()
+        self._rank_tracks = []
+        try:
+            self._rank_thread = QThread()
+            self._rank_worker = _RankListsWorker(self._music)
+            self._rank_worker.moveToThread(self._rank_thread)
+            self._rank_thread.started.connect(self._rank_worker.run)
+            self._rank_worker.done.connect(self._on_rank_lists_done)
+            self._rank_worker.failed.connect(self._on_rank_lists_failed)
+            self._rank_worker.done.connect(self._rank_thread.quit)
+            self._rank_worker.failed.connect(self._rank_thread.quit)
+            self._rank_thread.start()
+        except Exception as e:
+            self.lbl_rank_status.setText(f"榜单加载失败: {e}")
+
+    def _on_rank_lists_done(self, groups: dict):
+        self._rank_groups = groups or {}
+        plugins = list(self._rank_groups.keys())
+        self.list_rank_sources.clear()
+        self.list_rank_lists.clear()
+        self.list_rank_songs.clear()
+        self._rank_tracks = []
+        for p in plugins:
+            item = QListWidgetItem(p)
+            item.setData(Qt.UserRole, p)
+            self.list_rank_sources.addItem(item)
+        if not plugins:
+            self.lbl_rank_status.setText("暂无平台提供榜单（插件无榜单能力或加载失败）")
+        else:
+            self.list_rank_sources.setCurrentRow(0)
+        # 最新请求补偿：运行期间又有切 tab → 自动补拉一轮
+        if self._pending_rank_lists:
+            self._pending_rank_lists = False
+            self._load_top_lists()
+
+    def _on_rank_lists_failed(self, err: str):
+        self.lbl_rank_status.setText(f"榜单加载失败: {err}")
+        if self._pending_rank_lists:
+            self._pending_rank_lists = False
+            self._load_top_lists()
+
+    def _on_rank_source_selected(self, current, previous):
+        """平台选中变化 → 下方榜单列表（该平台全部分组的榜单）。"""
+        if current is None:
+            return
+        plugin = current.data(Qt.UserRole)
+        groups = self._rank_groups.get(plugin) or []
+        self.list_rank_lists.clear()
+        self.list_rank_songs.clear()
+        self._rank_tracks = []
+        for g in groups:
+            gtitle = (g.get("title") or "").strip()
+            for lst in g.get("lists", []):
+                ltitle = (lst.get("title") or "").strip()
+                label = f"{gtitle} · {ltitle}" if gtitle and ltitle and gtitle != ltitle else (ltitle or gtitle or "?")
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, {
+                    "source": plugin,
+                    "list_id": lst.get("id", ""),
+                    "title": ltitle or gtitle or "?",
+                })
+                self.list_rank_lists.addItem(item)
+        if self.list_rank_lists.count():
+            self.list_rank_lists.setCurrentRow(0)
+        else:
+            self.lbl_rank_status.setText("该平台无榜单")
+
+    def _on_rank_list_selected(self, current, previous):
+        """榜单选中变化 → 后台拉该榜单歌曲。"""
+        if current is None:
+            return
+        meta = current.data(Qt.UserRole)
+        if not meta or not meta.get("list_id"):
+            return
+        self._load_rank_detail(meta["source"], meta["list_id"], meta.get("title", ""))
+
+    def _load_rank_detail(self, source: str, list_id: str, title: str):
+        if self._music is None:
+            return
+        # 防重入：上一轮详情线程仍在运行 → 记最新请求（覆盖旧的），
+        # 旧线程 done/failed 后自动补加载。绝不覆盖运行中线程引用（崩溃修复）。
+        if self._rank_detail_thread is not None and self._rank_detail_thread.isRunning():
+            self._pending_rank_detail = {"source": source, "list_id": list_id, "title": title}
+            self.lbl_rank_status.setText(f"加载「{title}」…")
+            return
+        self._pending_rank_detail = None
+        self.lbl_rank_status.setText(f"加载「{title}」…")
+        self.list_rank_songs.clear()
+        self._rank_tracks = []
+        try:
+            self._rank_detail_thread = QThread()
+            self._rank_detail_worker = _RankDetailWorker(self._music, source, list_id)
+            self._rank_detail_worker.moveToThread(self._rank_detail_thread)
+            self._rank_detail_thread.started.connect(self._rank_detail_worker.run)
+            self._rank_detail_worker.done.connect(self._on_rank_detail_done)
+            self._rank_detail_worker.failed.connect(self._on_rank_detail_failed)
+            self._rank_detail_worker.done.connect(self._rank_detail_thread.quit)
+            self._rank_detail_worker.failed.connect(self._rank_detail_thread.quit)
+            self._rank_detail_thread.start()
+        except Exception as e:
+            self.lbl_rank_status.setText(f"榜单详情加载失败: {e}")
+
+    def _on_rank_detail_done(self, payload: dict):
+        tracks = (payload or {}).get("tracks") or []
+        self._rank_tracks = tracks
+        self.list_rank_songs.clear()
+        for i, t in enumerate(tracks, 1):
+            text = f"{i:>2}. {t.title}"
+            if t.artist:
+                text += f" - {t.artist}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, t)
+            self.list_rank_songs.addItem(item)
+        n = len(tracks)
+        self.lbl_rank_status.setText(f"共 {n} 首，双击播放" if n else "榜单无歌曲")
+        # 最新请求补偿：加载期间用户又点了其他榜单 → 自动加载最新的
+        if self._pending_rank_detail:
+            req = self._pending_rank_detail
+            self._pending_rank_detail = None
+            self._load_rank_detail(req["source"], req["list_id"], req["title"])
+
+    def _on_rank_detail_failed(self, err: str):
+        self.lbl_rank_status.setText(f"榜单详情加载失败: {err}")
+        if self._pending_rank_detail:
+            req = self._pending_rank_detail
+            self._pending_rank_detail = None
+            self._load_rank_detail(req["source"], req["list_id"], req["title"])
+
+    def _on_rank_song_play(self, item: QListWidgetItem):
+        track = item.data(Qt.UserRole)
+        if not track or self._music is None:
+            return
+        try:
+            ok = self._music.play_online(track)
+        except Exception as e:
+            ok = False
+            self.lbl_rank_status.setText(f"播放失败: {e}")
+            return
+        if ok:
+            self.lbl_rank_status.setText(f"正在播放：{track.title}")
+        else:
+            self.lbl_rank_status.setText("该曲目无法播放")
 
     # ---- 右键菜单 ----
 

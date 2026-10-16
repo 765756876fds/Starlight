@@ -1295,6 +1295,26 @@ class MusicController:
             return []
         return self.online_manager.list_sources()
 
+    def get_top_lists(self) -> dict:
+        """各源榜单分组（源自报能力）：{源或插件名: [分组]}。失败 → {} 不抛。"""
+        if self.online_manager is None:
+            return {}
+        try:
+            return self.online_manager.get_top_lists()
+        except Exception as e:
+            print(f"[Music] get_top_lists fail: {e}")
+            return {}
+
+    def get_top_list_detail(self, source: str, list_id: str, page: int = 1):
+        """单榜单详情：{is_end, tracks: [OnlineTrack]}。失败 → None。"""
+        if self.online_manager is None:
+            return None
+        try:
+            return self.online_manager.get_top_list_detail(source, list_id, page)
+        except Exception as e:
+            print(f"[Music] get_top_list_detail fail: {e}")
+            return None
+
     def search_local(self, keyword: str, limit: int = 200) -> list:
         """搜索本地库，返回 [{id, path, title, artist, album}, ...]"""
         try:

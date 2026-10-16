@@ -61,6 +61,8 @@ function load(filePath) {
     search: mod.search,
     getMediaSource: mod.getMediaSource,
     getLyric: mod.getLyric,
+    getTopLists: mod.getTopLists,
+    getTopListDetail: mod.getTopListDetail,
     raw: mod,
   };
 }
@@ -174,4 +176,45 @@ async function callGetLyric(plugin, rawItem) {
   return null;
 }
 
-module.exports = { load, loadFromSource, fetchText, fetchUpdateMeta, callSearch, callGetUrl, callGetLyric };
+// 榜单列表：插件自报能力（无 getTopLists → 返回 null，调用方跳过该插件）。
+// MusicFree 标准：getTopLists() → [{title, data: [toplistItem]}]；
+// toplistItem: {id, title, artwork/coverImg, ...}。规范化成 Python 友好结构。
+async function callGetTopLists(plugin) {
+  if (typeof plugin.getTopLists !== 'function') return null;
+  const result = await plugin.getTopLists();
+  const groups = Array.isArray(result) ? result : [];
+  const out = [];
+  for (const g of groups) {
+    const lists = Array.isArray(g && g.data) ? g.data.map((it) => ({
+      id: String((it && it.id !== undefined && it.id !== null) ? it.id : ''),
+      title: (it && (it.title || it.name)) || '',
+      cover_img: (it && (it.artwork || it.coverImg)) || '',
+    })).filter((it) => it.id !== '') : [];
+    if (lists.length) out.push({ title: (g && g.title) || '', lists });
+  }
+  return out;
+}
+
+// 榜单详情：MusicFree 标准 getTopListDetail(top, page) → {musicList, isEnd}。
+// musicItem 与搜索条目同构 → 复用 callSearch 的规范化形状，Python 侧直接 _parse_tracks。
+async function callGetTopListDetail(plugin, topListItem, page) {
+  if (typeof plugin.getTopListDetail !== 'function') return null;
+  const top = topListItem || { id: '' };
+  const result = await plugin.getTopListDetail(top, page || 1);
+  if (!result) return null;
+  const items = (result && result.musicList) || (Array.isArray(result) ? result : []);
+  return {
+    is_end: !!(result && result.isEnd),
+    tracks: items.map((item) => ({
+      source_name: plugin.name,
+      track_id: String(item.id || item.songmid || item.hash || ''),
+      title: item.title || '',
+      artist: item.artist || '',
+      album: item.album || '',
+      duration_seconds: item.duration ? Math.floor(Number(item.duration) / 1000) : 0,
+      extra: { _raw: item },
+    })),
+  };
+}
+
+module.exports = { load, loadFromSource, fetchText, fetchUpdateMeta, callSearch, callGetUrl, callGetLyric, callGetTopLists, callGetTopListDetail };

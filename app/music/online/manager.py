@@ -189,6 +189,43 @@ class OnlineSourceManager:
         except Exception:
             return None
 
+    def get_top_lists(self) -> Dict[str, list]:
+        """聚合各源榜单分组（源自报能力，无该方法/失败自动跳过）。
+
+        返回 {源名或插件名: [分组]}——js_bridge 内部按插件名分组返回；
+        自定义源若实现 get_top_lists 同样聚合。失败记录 _errors 不抛。
+        """
+        out: Dict[str, list] = {}
+        for name, src in self._sources.items():
+            fn = getattr(src, "get_top_lists", None)
+            if not callable(fn):
+                continue
+            try:
+                r = fn()
+                if r:
+                    out.update(r)
+            except Exception as e:
+                self._errors[name] = str(e)
+        return out
+
+    def get_top_list_detail(self, source: str, list_id: str,
+                            page: int = 1) -> Optional[dict]:
+        """单榜单详情：路由到实现 get_top_list_detail 的源（js_bridge 按插件名）。
+
+        返回 {is_end: bool, tracks: [OnlineTrack]}；无能力/失败 → None。
+        """
+        for name, src in self._sources.items():
+            fn = getattr(src, "get_top_list_detail", None)
+            if not callable(fn):
+                continue
+            try:
+                r = fn(source, list_id, page)
+                if r is not None:
+                    return r
+            except Exception as e:
+                self._errors[name] = str(e)
+        return None
+
     def status(self) -> dict:
         return {
             "sources": list(self._sources.keys()),

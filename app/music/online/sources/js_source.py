@@ -248,6 +248,44 @@ class JSMusicSource(MusicSource):
         print(f"[search_plugin] parsed {len(out)} 条", flush=True)
         return out
 
+    # ---------- 榜单（插件自报能力，bridge 层 getTopLists/getTopListDetail）----------
+
+    def get_top_lists(self) -> dict:
+        """拉全部插件的榜单分组（插件自报：无 getTopLists 的插件自动跳过）。
+
+        返回 {插件名: [分组]}，分组 = {title, lists: [{id, title, cover_img}]}。
+        一个插件可能贡献多个分组（如酷我官方/华语/欧美），UI 展平展示。
+        """
+        result = self._call("getTopLists", {}, timeout=20.0)
+        if not result:
+            return {}
+        out: dict = {}
+        for r in result:
+            src = r.get("source")
+            groups = r.get("groups") or []
+            if src and groups:
+                out[src] = groups
+        print(f"[getTopLists] {len(out)} 个插件提供榜单", flush=True)
+        return out
+
+    def get_top_list_detail(self, source: str, list_id: str,
+                            page: int = 1) -> Optional[dict]:
+        """单榜单歌曲：bridge 返回与搜索同构的 tracks → 复用 _parse_tracks。
+
+        返回 {is_end: bool, tracks: [OnlineTrack]}；无榜单能力/失败 → None。
+        """
+        if not source or not list_id:
+            return None
+        result = self._call("getTopListDetail", {
+            "source": source,
+            "list_id": str(list_id),
+            "page": int(page),
+        }, timeout=20.0)
+        if not result:
+            return None
+        tracks = self._parse_tracks(result.get("tracks") or [])
+        return {"is_end": bool(result.get("is_end")), "tracks": tracks}
+
     # ---------- 插件检查更新 / 更新 ----------
 
     def check_updates(self, timeout: float = 25.0) -> List[dict]:

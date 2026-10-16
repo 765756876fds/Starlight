@@ -106,6 +106,31 @@ async function dispatch(method, params) {
         return await p.getLyric(source, raw_item || {});
       }
     }
+    case 'getTopLists': {
+      // 插件自报榜单能力：能提供的返回分组，不能的跳过（不硬编码哪个平台能做）。
+      const seen = new Set();
+      const out = [];
+      for (const p of sources.values()) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        if (p.type !== 'musicfree' || typeof p.getTopLists !== 'function') continue;
+        try {
+          const groups = await mfLoader.callGetTopLists(p);
+          if (groups && groups.length) out.push({ source: p.name, groups });
+        } catch (e) {
+          console.error(`[bridge] getTopLists ${p.name} fail: ${e.message}`);
+        }
+      }
+      return out;
+    }
+    case 'getTopListDetail': {
+      const { source, list_id, page } = params;
+      const p = sources.get(source);
+      if (!p) throw new Error(`unknown source ${source}`);
+      if (p.type !== 'musicfree') throw new Error(`source ${source} not musicfree`);
+      const r = await mfLoader.callGetTopListDetail(p, { id: list_id }, page || 1);
+      return r || { is_end: true, tracks: [] };
+    }
     case 'checkUpdates': {
       // 遍历 MusicFree 插件（按对象去重，忽略别名 key）→ 拉更新源取远端版本
       const seen = new Set();
