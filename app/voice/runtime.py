@@ -21,6 +21,52 @@ from .asr import ASRManager
 from .intent import IntentRouter, Intent
 
 
+def fold_duplicated_text(text: str) -> str:
+    """折叠 ASR 输出中的重复拼接（含省略变体）。
+
+    背景：播放声进麦克风导致 ASR 段变长/污染，llama-server 输出同一句
+    重复 N 遍拼接（如 '播放电影X。播放X。播放电影X。' 4 遍）。
+    这里只做轻量去重（不动 VAD 阈值/静音——会误杀电影在播时说话）。
+
+    规则：按 。！？；切句；后续句与已保留句满足任一 → 丢弃（保留最先出现的完整版）：
+      - 完全相同
+      - 一方包含另一方
+      - 共同前缀 >= 1 字 且 短者是长者按序子序列（省略变体重复，如 '播放X。' ⊂ '播放电影X。'）
+
+    正常不同指令不受影响（'播放A。播放B。' 各自保留）。
+    """
+    import re
+    parts = [p.strip() for p in re.findall(r"[^。！？；]+[。！？；]?", text)]
+    if len(parts) <= 1:
+        return text
+
+    def _subseq(a, b):
+        it = iter(b)
+        return all(c in it for c in a)
+
+    kept = []
+    for p in parts:
+        dup = False
+        for k in kept:
+            if p == k or p in k or k in p:
+                dup = True
+                break
+            i = 0
+            while i < len(p) and i < len(k) and p[i] == k[i]:
+                i += 1
+            if i >= 1:
+                if len(p) < len(k) and _subseq(p, k):
+                    dup = True
+                    break
+                if len(k) < len(p) and _subseq(k, p):
+                    dup = True
+                    break
+        if not dup:
+            kept.append(p)
+    out = "".join(kept)
+    return out if out.strip() else text
+
+
 class VoiceRuntime:
     """
     语音运行时
@@ -289,6 +335,9 @@ class VoiceRuntime:
         _t_asr = time.monotonic()
         if not text or not text.strip():
             return
+
+        # 轻量去重：ASR 重复拼接（播放声污染场景）→ 只保留一段
+        text = fold_duplicated_text(text)
 
         print(f"[Voice] 识别: {text}")
 

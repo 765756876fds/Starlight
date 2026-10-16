@@ -80,8 +80,11 @@ class MovieController:
     """搜索 + 播放控制 + 与音乐互斥（事件解耦）。"""
 
     def __init__(self, source_url=None, mpv_path=None, ipc_pipe=None,
-                 music=None, config=None, source_manager=None):
+                 music=None, config=None, source_manager=None,
+                 voice_feedback=None):
         self._config = config or get_config()
+        # P1：语音搜电影结果 → UI 反馈回调（MoviePanel 注入；None 时只 print 兜底）
+        self._voice_feedback = voice_feedback
         self.source_url = source_url or self._config.get("movie.source_url") or DEFAULT_SOURCE_URL
         # 多源（包2c后续）：构造注入 manager（测试/复用）；显式 source_url → 单源兼容；否则自建
         if source_manager is not None:
@@ -143,10 +146,11 @@ class MovieController:
         try:
             items = self.search(query)
         except Exception as e:
-            print(f"[Movie] 语音搜索异常: {e}")
+            self._notify_voice(f"语音搜索失败：{e}")
             return False
         if not items:
-            print(f"[Movie] 语音未找到电影: {query}")
+            # P1：UI 反馈（面板状态栏显示"未找到：XX"）
+            self._notify_voice(f"未找到：{query}")
             return False
         item = items[0]
         if episode is not None:
@@ -154,14 +158,28 @@ class MovieController:
             eps = self.episodes(item)
             if len(eps) <= 1:
                 if ep == 1:
+                    self._notify_voice(f"开始播放：{item.get('vod_name') or ''}")
                     return self.play(item)
-                print(f"[Movie] 该片只有 1 集，没有第 {ep} 集")
+                self._notify_voice(f"该片只有 1 集，没有第 {ep} 集")
                 return False
             if ep < 1 or ep > len(eps):
-                print(f"[Movie] 该剧只有 {len(eps)} 集，没有第 {ep} 集")
+                self._notify_voice(f"该剧只有 {len(eps)} 集，没有第 {ep} 集")
                 return False
+            self._notify_voice(f"开始播放：{item.get('vod_name') or ''} 第{ep}集")
             return self.play(item, index=ep - 1)
+        self._notify_voice(f"开始播放：{item.get('vod_name') or ''}")
         return self.play(item)
+
+    def _notify_voice(self, msg: str):
+        """语音命令结果 → UI 反馈（回调优先；无回调只 print 兜底）。"""
+        cb = getattr(self, "_voice_feedback", None)
+        if callable(cb):
+            try:
+                cb(msg)
+                return
+            except Exception as e:
+                print(f"[Movie] 语音反馈回调异常: {e}")
+        print(f"[Movie] 语音反馈: {msg}")
 
     def _write_state(self, playing=None, paused=None):
         """写播放态到 state_store（语音"谁在播谁响应"路由用）。
@@ -247,6 +265,7 @@ class MovieController:
                 "vod_id": v.get("vod_id"),
                 "vod_name": v.get("vod_name", "") or "",
                 "vod_remarks": v.get("vod_remarks", "") or "",
+                "vod_pic": v.get("vod_pic") or "",  # P0-1：海报墙依赖（实测 CMS 有值、直连可下）
                 "play_url": pu,
                 "first_name": first[0] if first else "",
                 "first_url": first[1] if first else "",

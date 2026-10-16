@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from app.voice.intent import RuleBasedIntent, Intent
-from app.voice.runtime import VoiceRuntime
+from app.voice.runtime import VoiceRuntime, fold_duplicated_text
 from app.core.command_bus import CommandType, Command, get_command_bus
 from app.core.state_store import StateNamespace, get_state_store
 from app.movie.movie_controller import MovieController
@@ -408,6 +408,145 @@ class TestMovieControllerEpisodeVoice(unittest.TestCase):
                 {"query": "甄嬛传"}, "test"))
         self.assertTrue(ok)
         p.assert_called_once_with(item)  # 无集数 → 播第一集（现状不变）
+
+
+# ================= P1：语音搜电影失败 UI 反馈（voice_feedback 回调） =================
+
+class TestVoiceFeedback(unittest.TestCase):
+    """各失败/成功分支 → _voice_feedback 回调（面板状态栏显示）。"""
+
+    def setUp(self):
+        st = get_state_store()
+        for k in ("playing", "paused"):
+            st.delete(StateNamespace.MOVIE, k)
+
+    def tearDown(self):
+        st = get_state_store()
+        for k in ("playing", "paused"):
+            st.delete(StateNamespace.MOVIE, k)
+
+    def _mk_ctrl_with_feedback(self):
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = False
+        fake_mpv.start.return_value = True
+        msgs = []
+        with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
+            ctrl = MovieController(config={}, voice_feedback=msgs.append)
+        return ctrl, fake_mpv, msgs
+
+    @staticmethod
+    def _cmd(query, episode=None):
+        params = {"query": query}
+        if episode is not None:
+            params["episode"] = episode
+        return Command(CommandType.MOVIE_SEARCH_PLAY, params, "test")
+
+    def test_not_found_notifies(self):
+        ctrl, _, msgs = self._mk_ctrl_with_feedback()
+        with patch.object(ctrl, "search", return_value=[]):
+            ok = ctrl._cmd_search_play(self._cmd("不存在的电影"))
+        self.assertFalse(ok)
+        self.assertEqual(msgs, ["未找到：不存在的电影"])
+
+    def test_search_exception_notifies(self):
+        ctrl, _, msgs = self._mk_ctrl_with_feedback()
+        with patch.object(ctrl, "search", side_effect=RuntimeError("boom")):
+            ok = ctrl._cmd_search_play(self._cmd("流浪地球"))
+        self.assertFalse(ok)
+        self.assertIn("语音搜索失败", msgs[0])
+
+    def test_single_movie_ep2_notifies(self):
+        ctrl, _, msgs = self._mk_ctrl_with_feedback()
+        item = {"vod_name": "流浪地球", "first_url": "http://x/1.m3u8",
+                "play_url": "正片$http://x/1.m3u8"}
+        with patch.object(ctrl, "search", return_value=[item]):
+            ok = ctrl._cmd_search_play(self._cmd("流浪地球", episode=2))
+        self.assertFalse(ok)
+        self.assertEqual(msgs, ["该片只有 1 集，没有第 2 集"])
+
+    def test_episode_oob_notifies(self):
+        ctrl, _, msgs = self._mk_ctrl_with_feedback()
+        item = {"vod_name": "甄嬛传", "first_url": "http://x/1.m3u8",
+                "play_url": "第01集$http://x/1.m3u8#第02集$http://x/2.m3u8"}
+        with patch.object(ctrl, "search", return_value=[item]), \
+             patch.object(ctrl, "play", return_value=True):
+            ok = ctrl._cmd_search_play(self._cmd("甄嬛传", episode=11))
+        self.assertFalse(ok)
+        self.assertEqual(msgs, ["该剧只有 2 集，没有第 11 集"])
+
+    def test_play_success_notifies(self):
+        ctrl, _, msgs = self._mk_ctrl_with_feedback()
+        item = {"vod_name": "流浪地球", "first_url": "http://x/1.m3u8",
+                "play_url": "正片$http://x/1.m3u8"}
+        with patch.object(ctrl, "search", return_value=[item]), \
+             patch.object(ctrl, "play", return_value=True) as p:
+            ok = ctrl._cmd_search_play(self._cmd("流浪地球"))
+        self.assertTrue(ok)
+        p.assert_called_once_with(item)
+        self.assertEqual(msgs, ["开始播放：流浪地球"])
+
+    def test_no_feedback_fallback_print(self):
+        """无回调注入 → 不崩（print 兜底路径）。"""
+        ctrl = MovieController(config={})
+        ctrl._voice_feedback = None
+        with patch.object(ctrl, "search", return_value=[]):
+            self.assertFalse(ctrl._cmd_search_play(self._cmd("不存在")))
+        ctrl.close()
+
+
+# ================= 问题1：ASR 重复文本折叠（轻量去重，不动 VAD） =================
+
+class TestFoldDuplicatedText(unittest.TestCase):
+    """fold_duplicated_text：播放声污染导致的 ASR 重复拼接 → 折叠成一段。"""
+
+    def test_user_case(self):
+        self.assertEqual(fold_duplicated_text(
+            "播放电影X。播放X。播放电影X。"), "播放电影X。")
+
+    def test_pause_case(self):
+        self.assertEqual(fold_duplicated_text(
+            "暂停播放。暂停。暂停。暂停。暂停。"), "暂停播放。")
+
+    def test_real_log_case(self):
+        t = "播放电影《甄嬛传》第五集。播放《甄嬛传》。播放电影《甄嬛传》第五集。播放电影《甄嬛传》第五集。"
+        self.assertEqual(fold_duplicated_text(t), "播放电影《甄嬛传》第五集。")
+
+    def test_identical_repeat(self):
+        self.assertEqual(fold_duplicated_text("播放电影X。播放电影X。"), "播放电影X。")
+
+    def test_different_commands_kept(self):
+        self.assertEqual(fold_duplicated_text("播放A。播放B。"), "播放A。播放B。")
+
+    def test_single_segment_unchanged(self):
+        self.assertEqual(fold_duplicated_text("播放电影X。"), "播放电影X。")
+
+    def test_no_punct_single(self):
+        self.assertEqual(fold_duplicated_text("播放"), "播放")
+
+    def test_empty(self):
+        self.assertEqual(fold_duplicated_text(""), "")
+
+    def test_keeps_punctuation_style(self):
+        self.assertEqual(fold_duplicated_text("下一曲！下一曲！"), "下一曲！")
+
+    def test_process_speech_uses_fold(self):
+        """_process_speech：ASR 返回重复拼接 → 发布折叠后的文本。"""
+        from app.voice.runtime import VoiceRuntime
+        rt = VoiceRuntime.__new__(VoiceRuntime)
+        rt._asr_enabled = True
+        rt.asr = MagicMock()
+        rt.asr.transcribe.return_value = "播放电影X。播放X。播放电影X。"
+        rt.tts_provider = None
+        rt.event_bus = MagicMock()
+        rt.intent_router = MagicMock()
+        rt.intent_router.parse.return_value = MagicMock()
+        rt._execute_intent = MagicMock()
+        rt._should_collect_speech = MagicMock(return_value=True)
+        rt._process_speech(b"audio", 16000)
+        # 第一次 publish = VOICE_TEXT_RECEIVED（text 已折叠）；第二次 = VOICE_INTENT_PARSED
+        published = rt.event_bus.publish.call_args_list[0][0][0]
+        self.assertEqual(published.data["text"], "播放电影X。")
+        self.assertEqual(rt.intent_router.parse.call_args[0][0], "播放电影X。")
 
 
 if __name__ == "__main__":

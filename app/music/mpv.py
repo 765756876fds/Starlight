@@ -19,6 +19,7 @@ class MpvController:
                  video: bool = False, watch_later_dir: Optional[str] = None):
         self.mpv_path = mpv_path
         self.ipc_pipe = ipc_pipe
+        self._base_ipc_pipe = ipc_pipe  # P0-2：每次 launch 从 base 重建（不追加累积）
         self.video = video
         self.watch_later_dir = watch_later_dir
         self._process: Optional[subprocess.Popen] = None
@@ -48,14 +49,10 @@ class MpvController:
             return False
 
         if taskkill:
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/IM", "mpv.exe"],
-                    capture_output=True, timeout=5,
-                )
-                time.sleep(0.3)
-            except Exception:
-                pass
+            # P0-3：不再全局 taskkill（电影/音乐双实例共存，全局杀会杀掉对方实例）。
+            # 改为精确终止本实例上次启动的进程（对齐 stop_process 的 terminate/kill）。
+            self._kill_own_process()
+            time.sleep(0.3)
 
         return self._launch(pipe_timeout=pipe_timeout, prop_timeout=prop_timeout)
 
@@ -81,7 +78,7 @@ class MpvController:
             except Exception:
                 pass
             self._pipe = None
-        self.ipc_pipe = self.ipc_pipe + "_" + str(os.getpid())
+        self.ipc_pipe = self._base_ipc_pipe + "_" + str(os.getpid())
 
         print(f"[mpv] pipe name: {self.ipc_pipe!r}")
         args = [self.mpv_path]
@@ -349,6 +346,26 @@ class MpvController:
         if not self._running or not self._process:
             return False
         return self._process.poll() is None
+
+    def _kill_own_process(self):
+        """精确终止本实例启动的进程（不碰其他 mpv.exe——电影/音乐双实例各管各的）。
+
+        start(taskkill=True) 的旧语义是 taskkill /F /IM mpv.exe 全局清场；
+        电影+音乐共用 mpv.exe 名后，全局杀会连带杀掉正在播的另一链实例。
+        这里只 terminate/kill self._process 记录的 PID（与 stop_process 对齐）。
+        """
+        if self._process is None:
+            return
+        try:
+            if self._process.poll() is None:
+                self._process.terminate()
+                self._process.wait(timeout=3)
+        except Exception:
+            try:
+                self._process.kill()
+            except Exception:
+                pass
+        self._process = None
 
     def stop_process(self):
         self._running = False

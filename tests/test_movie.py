@@ -109,7 +109,22 @@ def test_search_network_error_fallback():
         out = ctrl.search("流浪地球")
         assert out == []
         assert "单源" in ctrl.last_search_error  # 单源兼容：失败原因带源名
-        ctrl.close()
+
+
+def test_search_items_include_vod_pic():
+    """P0-1：search 精选 items 含 vod_pic（海报墙数据源；实测 CMS 有值、直连可下）。"""
+    fake_resp = MagicMock()
+    fake_resp.text = ('{"code":1,"total":2,"list":['
+                      '{"vod_id":1,"vod_name":"A","vod_pic":"https://p/1.jpg",'
+                      '"vod_play_url":"正片$https://a/i.m3u8"},'
+                      '{"vod_id":2,"vod_name":"B","vod_pic":"",'
+                      '"vod_play_url":"正片$https://b/i.m3u8"}]}')
+    with patch("app.movie.movie_controller.requests.get", return_value=fake_resp):
+        ctrl, _ = _make_ctrl()
+        items = ctrl.search("A")
+    assert items[0]["vod_pic"] == "https://p/1.jpg"
+    assert items[1]["vod_pic"] == ""
+    ctrl.close()
 
 
 # ---------- mpv 参数化（音乐链零变化） ----------

@@ -105,6 +105,11 @@ class MoviePanel(QWidget):
     def __init__(self, movie=None, music=None, parent=None):
         super().__init__(parent)
         self._movie = movie if movie is not None else MovieController(music=music)
+        # P1：语音搜电影结果 → 状态栏（controller 构造自注册 MOVIE_* 命令，回调在面板侧）
+        try:
+            self._movie._voice_feedback = self._on_voice_feedback
+        except Exception:
+            pass
         self._thread = None
         self._items_by_row = []
 
@@ -396,6 +401,11 @@ class MoviePanel(QWidget):
             self.stack_results.setCurrentWidget(self.list_results)
             self.btn_view.setText("列表")
             self.btn_view.setChecked(False)
+
+    def _on_voice_feedback(self, msg):
+        """语音搜电影结果反馈 → 状态栏（未找到/只有1集/越界/开始播放）。"""
+        if msg:
+            self.lbl_status.setText(str(msg))
 
     def _current_source_name(self):
         """当前源名（管理器读不到时返回 None，不打扰 UI）。"""

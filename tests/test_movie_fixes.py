@@ -352,3 +352,77 @@ def test_lx_play_publishes_music_play(tmp_path):
         assert got[0].event_type == EventType.MUSIC_PLAY
     finally:
         bus.unsubscribe(EventType.MUSIC_PLAY, handler)
+
+
+# ---------- P0-2：pipe 名不累积（base 重建） ----------
+
+def test_pipe_name_not_accumulating():
+    """连续 launch（窗口关闭后重启）→ ipc_pipe 每次从 base 重建，不追加累积。
+
+    旧 bug：self.ipc_pipe = self.ipc_pipe + "_" + pid → 9584 → 9584_9584 → ...
+    修复后：每次 = base + "_" + pid（同进程内不变，多实例各自独立）。
+    """
+    import os
+    mpv, m_popen = _launched_mpv(video=True)
+    first = mpv.ipc_pipe
+    assert first.endswith("_" + str(os.getpid()))
+    # 模拟窗口关闭 → 重启
+    mpv._process.poll.return_value = 1
+    with patch("app.music.mpv.subprocess.Popen") as m_popen2, \
+         patch("app.music.mpv.os.path.exists", return_value=True), \
+         patch("app.music.mpv.open", create=True) as m_open2:
+        m_open2.return_value = MagicMock()
+        assert mpv.start(taskkill=False, pipe_timeout=1.0, prop_timeout=0.3)
+    second = mpv.ipc_pipe
+    assert second == first  # 不追加累积
+    assert second.count("_") == first.count("_")
+
+
+def test_music_and_movie_pipe_names_distinct():
+    """音乐 + 电影双实例（不同 base pipe 名）→ 各带各自 base+pid 后缀，互不相同。"""
+    import os
+    pid = str(os.getpid())
+    with patch("app.music.mpv.subprocess.Popen") as m_popen, \
+         patch("app.music.mpv.os.path.exists", return_value=True), \
+         patch("app.music.mpv.open", create=True) as m_open:
+        m_open.return_value = MagicMock()
+        m1 = MpvController(sys.executable, ipc_pipe=r"\\.\pipe\music_mpv")
+        assert m1.start(taskkill=False, pipe_timeout=1.0, prop_timeout=0.3)
+        m2 = MpvController(sys.executable, ipc_pipe=r"\\.\pipe\movie_mpv", video=True)
+        assert m2.start(taskkill=False, pipe_timeout=1.0, prop_timeout=0.3)
+    assert m1.ipc_pipe == r"\\.\pipe\music_mpv_" + pid
+    assert m2.ipc_pipe == r"\\.\pipe\movie_mpv_" + pid
+    assert m1.ipc_pipe != m2.ipc_pipe
+
+
+# ---------- P0-3：taskkill 精确杀（不全局杀 mpv.exe） ----------
+
+def test_start_taskkill_no_global_kill():
+    """电影 start(taskkill=True) 不再 taskkill /IM mpv.exe（音乐实例不被误杀）。"""
+    with patch("app.music.mpv.subprocess.run") as m_run, \
+         patch("app.music.mpv.subprocess.Popen") as m_popen, \
+         patch("app.music.mpv.os.path.exists", return_value=True), \
+         patch("app.music.mpv.open", create=True) as m_open:
+        m_open.return_value = MagicMock()
+        mpv = MpvController(sys.executable, video=True)
+        assert mpv.start(taskkill=True, pipe_timeout=1.0, prop_timeout=0.3)
+    for call in m_run.call_args_list:
+        args = call.args[0] if call.args else []
+        assert "taskkill" not in args, f"全局 taskkill 仍被调用: {args}"
+
+
+def test_kill_own_process_terminates_only_own():
+    """_kill_own_process：只 terminate 自己 _process 的 PID（对齐 stop_process）。"""
+    mpv, m_popen = _launched_mpv()
+    proc = mpv._process
+    proc.poll.return_value = None  # 本实例进程存活
+    mpv._kill_own_process()
+    proc.terminate.assert_called_once()
+    assert mpv._process is None
+
+
+def test_kill_own_process_noop_when_none():
+    """无历史进程（首次启动）→ 什么都不做，不崩。"""
+    mpv = MpvController(sys.executable)
+    mpv._kill_own_process()  # _process None → no-op
+    assert mpv._process is None
