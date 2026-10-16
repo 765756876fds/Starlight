@@ -65,6 +65,14 @@ class VideoContainer(QWidget):
         self._win_id = None
         self._window = parent              # 播放窗口（转发鼠标活动）
         self.setMouseTracking(True)        # 无按键移动也收 mouseMoveEvent
+        # S5：点击画面 → 焦点到容器（--wid 嵌入后键盘焦点在 Qt 侧；容器聚焦
+        # 后按键沿父链冒泡到播放窗口 keyPressEvent —— 键盘控制可用）
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def mousePressEvent(self, event):
+        # S5：点画面收焦点（键盘事件到 Qt，不发 mpv——mpv 收不到 --wid 子窗口键盘）
+        self.setFocus()
+        super().mousePressEvent(event)
 
     def native_id(self):
         """容器 HWND（uint32——win32 句柄 32 位，负值 mpv 拒收）。
@@ -179,6 +187,26 @@ class ControlOverlay(QWidget):
         self.btn_fullscreen.setToolTip("全屏")
         self.btn_fullscreen.clicked.connect(window.request_fullscreen)
         lay.addWidget(self.btn_fullscreen)
+
+        # S5：任何控件操作后焦点归还容器——防"点了按钮后键盘失效"
+        # （--wid 嵌入键盘在 Qt 侧；overlay 独立顶层点击不天然给容器焦点，
+        # 不用 NOACTIVATE——S2 教训：NOACTIVATE 组合桌面不显示）
+        self._restore_focus = self._make_restore_focus(window)
+        for w in (self.btn_toggle, self.btn_stop, self.btn_speed,
+                  self.btn_mute, self.btn_fullscreen):
+            w.clicked.connect(self._restore_focus)
+        self.slider_pos.sliderReleased.connect(self._restore_focus)
+        self.slider_vol.sliderReleased.connect(self._restore_focus)
+
+    @staticmethod
+    def _make_restore_focus(window):
+        """返回"焦点还给容器"的调用（防跨类私有依赖；失败静默）。"""
+        def _restore():
+            try:
+                window.container.setFocus()
+            except Exception:
+                pass
+        return _restore
 
     # ---- 焦点管理（S5 启用；本批只修 ctypes bug，不主动调用） ----
 
@@ -774,14 +802,51 @@ class VideoPlayerWindow(QWidget):
         event.ignore()  # 不销毁窗口：winId 保留，下次播放直接复用
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        key = event.key()
+        # Esc：全屏退全屏 / 非全屏关窗（已有）
+        if key == Qt.Key_Escape:
             if self._fullscreen:
                 self.showNormal()
             else:
                 self.close()
             event.accept()
             return
+        # S5：--wid 嵌入后键盘焦点在 Qt 播放窗口（mpv 子窗口收不到键盘——
+        # mpv 官方承认的结构性缺陷）→ Qt 侧捕获快捷键 → 转发 mpv 命令。
+        # 走既有全链（overlay 按钮 click / 滑块 setValue / controller 方法），
+        # 不复制业务；全部 try/except 兜底——键盘异常不崩播放。
+        try:
+            if key == Qt.Key_Space:
+                self.overlay.btn_toggle.click()          # 播放/暂停
+            elif key == Qt.Key_Left:
+                self._movie.seek(-5)                     # 快退 5s
+            elif key == Qt.Key_Right:
+                self._movie.seek(5)                      # 快进 5s
+            elif key == Qt.Key_Up:
+                self._step_volume(5)                     # 音量 +5
+            elif key == Qt.Key_Down:
+                self._step_volume(-5)                    # 音量 -5
+            elif key == Qt.Key_F:
+                self.request_fullscreen() if not self._fullscreen \
+                    else self.showNormal()               # 全屏切换
+            elif key == Qt.Key_M:
+                self.overlay.btn_mute.click()            # 静音切换
+            else:
+                super().keyPressEvent(event)
+                return
+            event.accept()
+            return
+        except Exception:
+            pass
         super().keyPressEvent(event)
+
+    def _step_volume(self, delta):
+        """音量 ±5（读 overlay 滑块现值，clamp 0-100；setValue 走 _on_volume 全链）。"""
+        try:
+            v = max(0, min(100, self.overlay.slider_vol.value() + delta))
+            self.overlay.slider_vol.setValue(v)
+        except Exception:
+            pass
 
     def showFullScreen(self):
         self._fullscreen = True
