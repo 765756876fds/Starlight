@@ -16,8 +16,9 @@ import ctypes
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMenu, QPushButton,
-                               QSlider, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
+                               QListWidgetItem, QMenu, QPushButton, QSlider,
+                               QVBoxLayout, QWidget)
 
 # 倍速档位（对齐 B站/爱奇艺标准 9 档；与 movie_panel 同源值）
 _SPEED_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
@@ -27,6 +28,11 @@ _OVERLAY_H = 52
 
 # S3：鼠标静止 3s 隐藏控制条（B站式观影沉浸；hover 控制条不隐藏）
 _OVERLAY_HIDE_DELAY_MS = 3000
+
+# S4：选集侧栏——右缘触发宽度 / 侧栏宽 / 静止 3s 隐藏
+_SIDEBAR_EDGE_PX = 60
+_SIDEBAR_W = 150
+_SIDEBAR_HIDE_DELAY_MS = 3000
 
 # 焦点管理（S5 启用）：点击不激活（WS_EX_NOACTIVATE）——点 overlay 按钮不抢 mpv 焦点
 _GWL_EXSTYLE = -20
@@ -71,9 +77,13 @@ class VideoContainer(QWidget):
         self._win_id = None
 
     def mouseMoveEvent(self, event):
-        # 画面区鼠标活动（穿透后事件直达容器）→ 浮现 + 重置隐藏计时
+        # 画面区鼠标活动（穿透后事件直达容器）→ 浮现 + 重置隐藏计时 + 右缘侧栏
         if self._window is not None:
             self._window.notify_mouse_activity()
+            try:
+                self._window.notify_mouse_position(event.position().x())
+            except Exception:
+                pass
         self.unsetCursor()                 # 容器 cursor 复原（防继承差异）
         super().mouseMoveEvent(event)
 
@@ -318,6 +328,100 @@ class ControlOverlay(QWidget):
                 self.lbl_time.setText(f"{_fmt(pos)} / 0:00")
 
 
+class EpisodeSidebar(QWidget):
+    """右侧选集侧栏（S4，对齐 B站）：独立顶层（同 overlay 模式——
+    Qt::Tool | Frameless | StaysOnTop，原型验证 z-order 可行不被 mpv 盖）。
+
+    贴播放窗口右缘纵向列出分集（第1集/第2集…，QListWidget 自带滚动——
+    剧集几十集可滚）；当前集高亮；点击切集只发指令（复用窗口 play 链）。
+    单集（电影）不显示。浮现/隐藏由窗口侧控制（右缘鼠标触发 + 3s 静止隐藏 +
+    hover 不隐藏）——本类只渲染/交互/通知 hover 状态。
+    """
+
+    def __init__(self, window):
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self._window = window
+        self.setAttribute(Qt.WA_NativeWindow)
+        self.setFixedWidth(_SIDEBAR_W)
+        self.setStyleSheet(
+            "background:rgba(24,24,24,225); border:1px solid #555;"
+            " color:#eee; font-size:12px;")
+        self._episodes = []          # [(name, url), ...]
+        self._current = 0
+
+        self._list = QListWidget()
+        self._list.setStyleSheet(
+            "QListWidget{background:transparent;border:none;}"
+            "QListWidget::item{padding:6px 10px;}"
+            "QListWidget::item:selected{background:#3a6ea5;color:#fff;}")
+        self._list.itemClicked.connect(self._on_click)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._list)
+
+        # hover 跟踪（独立顶层窗口：鼠标在其上时播放窗口收不到事件）
+        self.setMouseTracking(True)
+
+    # ---- 数据 ----
+
+    def episode_count(self) -> int:
+        return len(self._episodes)
+
+    def set_episodes(self, episodes, current=0):
+        """episodes: [(name, url), ...]（split_play_url 结果）。<=1 集 → 隐藏
+        （单集电影无选集）；否则重建列表 + 当前集高亮。不自动 show（由鼠标
+        右缘触发），隐藏状态由窗口 manage。"""
+        self._episodes = list(episodes or [])
+        self._current = max(0, int(current or 0))
+        self._rebuild()
+        if len(self._episodes) <= 1:
+            self.hide()
+
+    def _rebuild(self):
+        self._list.clear()
+        for i in range(len(self._episodes)):
+            item = QListWidgetItem(f"第{i + 1}集")
+            item.setData(Qt.UserRole, i)
+            if i == self._current:
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+            self._list.addItem(item)
+        if self._episodes:
+            self._list.setCurrentRow(self._current)   # 当前集高亮（选中态）
+
+    def set_current(self, index):
+        """切集后高亮更新（不重建列表）。"""
+        self._current = max(0, int(index or 0))
+        if self._episodes:
+            self._list.setCurrentRow(self._current)
+
+    # ---- 交互 ----
+
+    def _on_click(self, item):
+        try:
+            idx = int(item.data(Qt.UserRole))
+            self._window.switch_episode(idx)   # 只发指令（复用窗口 play 链）
+        except Exception as e:
+            print(f"[选集侧栏] 切集异常: {e}")
+
+    # ---- hover 通知（独立顶层：播放窗口收不到侧栏上的鼠标事件） ----
+
+    def enterEvent(self, event):
+        try:
+            self._window._on_sidebar_hover(True)
+        except Exception:
+            pass
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        try:
+            self._window._on_sidebar_hover(False)
+        except Exception:
+            pass
+        super().leaveEvent(event)
+
+
 class VideoPlayerWindow(QWidget):
     """内嵌播放窗口：容器嵌 mpv 画面 + overlay 控制层（独立顶层，不被盖）。
     关窗 = 停播 + 隐藏（不销毁，winId 保留——下次播放直接复用窗口/内嵌目标）。
@@ -334,6 +438,7 @@ class VideoPlayerWindow(QWidget):
         self._fullscreen = False
         self._playing = False
         self._title_base = title
+        self._current_item = None        # S4：当前播放 item（切集复用）
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -343,6 +448,14 @@ class VideoPlayerWindow(QWidget):
         # 独立顶层 overlay（S2 底部控制条）
         self.overlay = ControlOverlay(self)
         self.overlay.hide()
+
+        # S4：右侧选集侧栏（独立顶层；单集隐藏；右缘鼠标触发 + 3s 静止隐藏）
+        self.sidebar = EpisodeSidebar(self)
+        self.sidebar.hide()
+        self._sidebar_hover = False
+        self._sidebar_hide_timer = QTimer(self)
+        self._sidebar_hide_timer.setSingleShot(True)
+        self._sidebar_hide_timer.timeout.connect(self._on_sidebar_hide_timeout)
 
         # 进度/连播轮询（embed 模式唯一驱动——面板轮询让位，见 movie_panel）
         self._timer = QTimer(self)
@@ -361,13 +474,21 @@ class VideoPlayerWindow(QWidget):
     # ---- 播放入口 ----
 
     def play(self, item, index=None):
-        """注入容器 winId → 控制器播放 → 接管轮询/overlay。"""
+        """注入容器 winId → 控制器播放 → 接管轮询/overlay/侧栏。"""
         self._movie.set_embed_wid(self.container.native_id())
         ok = self._movie.play(item, index=index)
         if ok:
             name = (item.get("vod_name") or "")[:20]
             self.setWindowTitle(f"{name} - {self._title_base}")
             self._playing = True
+            self._current_item = item           # S4：切集复用
+            # S4：剧集列表（split_play_url 拆解；单集 → 侧栏隐藏）
+            try:
+                from app.movie.movie_controller import split_play_url
+                eps = split_play_url(item.get("play_url") or "")
+            except Exception:
+                eps = []
+            self.sidebar.set_episodes(eps, index or 0)
             self._apply_mpv_mouse_passthrough()   # S3：mpv 子窗口鼠标穿透（幂等）
             self._show_overlay()          # S3：浮现 + 启动 3s 隐藏计时
             self._timer.start()
@@ -513,13 +634,17 @@ class VideoPlayerWindow(QWidget):
             pass
 
     def _on_stopped(self):
-        """停播（播完/停止/异常）：停轮询 + 隐藏 overlay + 通知面板。"""
+        """停播（播完/停止/异常）：停轮询 + 隐藏 overlay/侧栏 + 通知面板。"""
         self._playing = False
         self._timer.stop()
         self._hide_timer.stop()
         self._overlay_hover = False
         self.overlay.hide()
         self.unsetCursor()
+        self._current_item = None
+        self._sidebar_hide_timer.stop()
+        self._sidebar_hover = False
+        self.sidebar.hide()
         try:
             self.stopped.emit()
         except Exception:
@@ -538,6 +663,53 @@ class VideoPlayerWindow(QWidget):
         """公开接口：鼠标活动（画面区容器/窗口/overlay）→ 浮现 + 重置 3s 隐藏计时。
         容器（VideoContainer）事件转发入口——跨类只走公开方法，不碰私有。"""
         self._show_overlay()
+
+    # ---- S4：选集侧栏（右缘触发 / 3s 静止隐藏 / hover 不隐藏 / 切集） ----
+
+    def notify_mouse_position(self, x):
+        """公开接口：画面区鼠标 x 坐标（容器事件转发）——右缘区域 → 侧栏浮现。
+        单集或未播放不触发。"""
+        if not self._playing or self.sidebar.episode_count() <= 1:
+            return
+        if x >= self.width() - _SIDEBAR_EDGE_PX:
+            self._show_sidebar()
+
+    def switch_episode(self, index):
+        """点集数 → 复用 play 链切集（穿透/overlay/title/高亮全走 play）。"""
+        if self._current_item is None:
+            return
+        self.play(self._current_item, index=index)
+
+    def _show_sidebar(self):
+        """右缘鼠标 → 侧栏滑出 + 重置 3s 隐藏计时。"""
+        if not self._playing or self.sidebar.episode_count() <= 1:
+            return
+        self._position_sidebar()
+        self.sidebar.show()
+        self._sidebar_hide_timer.start(_SIDEBAR_HIDE_DELAY_MS)
+
+    def _on_sidebar_hide_timeout(self):
+        """3s 无活动（或移出右缘后）→ 隐藏侧栏；hover（正在操作）不隐藏。"""
+        if self._sidebar_hover:
+            return
+        self.sidebar.hide()
+
+    def _on_sidebar_hover(self, hovering):
+        """侧栏 hover 状态（独立顶层，播放窗口收不到其上的鼠标事件）：
+        hover 中停计时；离开后重新计时。"""
+        self._sidebar_hover = hovering
+        if hovering:
+            self._sidebar_hide_timer.stop()
+        elif self.sidebar.isVisible():
+            self._sidebar_hide_timer.start(_SIDEBAR_HIDE_DELAY_MS)
+
+    def _position_sidebar(self):
+        """贴播放窗口右缘（底部让开 overlay 控制条）。"""
+        geo = self.geometry()
+        h = max(100, geo.height() - _OVERLAY_H - 24)
+        self.sidebar.resize(_SIDEBAR_W, h)
+        self.sidebar.move(geo.x() + geo.width() - _SIDEBAR_W, geo.y())
+        self.sidebar.raise_()
 
     def _on_hide_timeout(self):
         """3s 静止 → 隐藏控制条 + 指针（B站：指针与控制条同步隐）；
@@ -562,6 +734,10 @@ class VideoPlayerWindow(QWidget):
 
     def mouseMoveEvent(self, event):
         self._show_overlay()
+        try:
+            self.notify_mouse_position(event.position().x())   # S4：右缘 → 侧栏
+        except Exception:
+            pass
         super().mouseMoveEvent(event)
 
     def enterEvent(self, event):
@@ -611,11 +787,13 @@ class VideoPlayerWindow(QWidget):
         self._fullscreen = True
         super().showFullScreen()
         self._position_overlay()
+        self._position_sidebar()
 
     def showNormal(self):
         self._fullscreen = False
         super().showNormal()
         self._position_overlay()
+        self._position_sidebar()
 
     # ---- overlay 定位（跟随窗口 move/resize/全屏；宽度跟随容器） ----
 
@@ -632,8 +810,12 @@ class VideoPlayerWindow(QWidget):
 
     def moveEvent(self, event):
         self._position_overlay()
+        if self.sidebar.isVisible():
+            self._position_sidebar()
         super().moveEvent(event)
 
     def resizeEvent(self, event):
         self._position_overlay()
+        if self.sidebar.isVisible():
+            self._position_sidebar()
         super().resizeEvent(event)
