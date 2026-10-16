@@ -1,7 +1,8 @@
 """电影内嵌播放窗口（S0 骨架 + S1 最小内嵌 + S2 overlay 控制层）。
 
 架构：Qt 顶层播放窗口 + VideoContainer（WA_NativeWindow，mpv --wid 渲染目标）
-+ 独立 ControlOverlay 顶层窗口（Qt::Tool | StaysOnTop，天然浮在 mpv 之上——
++ ControlOverlay 独立顶层窗口（Qt::Tool | Frameless，owner = 播放窗口——S7
+去 StaysOnTop：owned window 天然浮在 mpv 之上、播放窗口被盖时跟随一起被盖，
 z-order 原型实证：SetWindowPos 调兄弟 z-order 无效，独立顶层窗口是可靠解）。
 
 职责边界（硬约束）：播放窗口只做"呈现 + 发控制指令"，业务全在 MovieController
@@ -15,16 +16,19 @@ S2：overlay 填 B站式底部控制条——⏯ ⏹ 进度条(拖动预览/松�
 import ctypes
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMenu, QPushButton, QSlider,
                                QVBoxLayout, QWidget)
 
+from app.ui.widgets.video_icons import icon as _icon
+
 # 倍速档位（对齐 B站/爱奇艺标准 9 档；与 movie_panel 同源值）
 _SPEED_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
-# overlay 固定高度（对齐 S1 控制条 52；禁依赖未 show 时 height()=480 撑成灰块）
-_OVERLAY_H = 52
+# overlay 固定高度（S7 两行布局：进度条行 + 按钮行 ≈ 72；禁依赖未 show 时
+# height()=480 撑成灰块）
+_OVERLAY_H = 72
 
 # S3：鼠标静止 3s 隐藏控制条（B站式观影沉浸；hover 控制条不隐藏）
 _OVERLAY_HIDE_DELAY_MS = 3000
@@ -104,13 +108,20 @@ class VideoContainer(QWidget):
 
 
 class ControlOverlay(QWidget):
-    """独立顶层控制层（Qt::Tool | Frameless | StaysOnTop）——B站式底部控制条。
+    """独立顶层控制层（Qt::Tool | Frameless，owner = 播放窗口）——B站式底部控制条。
     只发控制指令给 movie_controller（mpv IPC），零业务复制。
-    S2 布局：⏯ 暂停/继续 · ⏹ 停止 · 进度条(拖动预览/松手 seek) · 时间 ·
-    倍速(弹菜单 9 档当前档高亮) · 音量滑块 · 静音 · 全屏。"""
+    S6 布局（对齐 B站）：播放/暂停(SVG) · 下一集(SVG) · 进度条(拖动预览/松手 seek)
+    · 时间 · 音量滑块+静音(SVG 三态) · 倍速(弹菜单 9 档当前档高亮) · 字幕(SVG，
+    弹 Assrt 对话框) · 全屏(SVG，进入/退出切换)。停止按钮已取消（用户：停止=关窗）。
+    S7：去永久置顶（owner 跟随播放窗口——被盖一起盖）；渐变透明背景；两行布局
+    （进度条独立一行在上、按钮行在下，对齐 B站）。"""
 
     def __init__(self, window):
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # S7：去 WindowStaysOnTopHint（= WS_EX_TOPMOST 全局永久置顶——别的软件盖住
+        # 视频窗口时 overlay 仍浮在最上，用户实机反馈）。改 Qt parent = 播放窗口 →
+        # Windows owned window 关系（owner = 播放窗口）：浮在 owner 及其子窗口
+        # （容器/mpv）之上，但播放窗口被其他应用盖住时 overlay 跟随一起被盖。
+        super().__init__(window, Qt.Tool | Qt.FramelessWindowHint)
         self._window = window
         self._movie = window._movie
         self.setAttribute(Qt.WA_NativeWindow)
@@ -118,85 +129,170 @@ class ControlOverlay(QWidget):
         # 与 NOACTIVATE 组合导致工具窗口在桌面不显示——回到 S1 已验证显示路径）。
         # 焦点管理（NOACTIVATE）整体推到 S5；本批接受"点 overlay 会抢 mpv 焦点"。
         self.setFixedHeight(_OVERLAY_H)
-        self.setStyleSheet("background:rgba(28,28,28,210); border:1px solid #555;"
-                           " color:#eee; font-size:12px;")
+        # S7：透明背景（B站式：底部深、往上渐变透明，无边框——去"黑框"）。
+        # 注：QSS background 在 WA_TranslucentBackground 顶层窗口上不渲染（实锤
+        # 对照 alpha=0）——渐变在 paintEvent 手绘（透明窗口标准做法）；QSS 顶层
+        # 显式 background:transparent 防实心填充残留。
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet(
+            "background:transparent;"
+            " color:#eee; font-size:12px;"
+            " QPushButton{background:transparent;border:none;color:#ddd;"
+            " border-radius:4px;}"
+            " QPushButton:hover{background:rgba(255,255,255,0.15);color:#fff;}"
+            " QSlider::groove:horizontal{height:3px;background:rgba(255,255,255,0.35);}"
+            " QSlider::sub-page:horizontal{background:rgba(250,180,70,0.9);}"
+            " QSlider::handle:horizontal{width:10px;margin:-4px 0;"
+            " background:#fff;border-radius:5px;}")
         self._speed_idx = 2          # 1.0x 默认档
         self._paused = False
         self._muted = False
         self._dragging = False
+        self._vol_state = "high"     # S6：音量图标三态（high/low/muted）
+        self._play_state = "play"    # S6：播放/暂停图标态
         # S3 鼠标浮现/隐藏：overlay 是独立顶层窗口——鼠标在 overlay 上时播放窗口
         # 收不到 mouseMoveEvent，overlay 自行跟踪并通知窗口（防操作中消失）。
         self.setMouseTracking(True)
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 6, 10, 6)
-        lay.setSpacing(8)
+        # S7 两行布局（对齐 B站）：行1 = 进度条独立一行（横跨整行）；行2 = 按钮行。
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 4, 10, 4)
+        lay.setSpacing(4)
 
-        # ⏯ 暂停/继续
-        self.btn_toggle = QPushButton("⏸")
-        self.btn_toggle.setFixedWidth(44)
-        self.btn_toggle.setToolTip("暂停/继续")
-        self.btn_toggle.clicked.connect(self._on_toggle)
-        lay.addWidget(self.btn_toggle)
-
-        # ⏹ 停止（停播 + 关窗）
-        self.btn_stop = QPushButton("⏹")
-        self.btn_stop.setFixedWidth(40)
-        self.btn_stop.setToolTip("停止播放")
-        self.btn_stop.clicked.connect(window.request_close)
-        lay.addWidget(self.btn_stop)
+        # ---- 行1：进度条（独立一行，横跨整行，对齐 B站） ----
+        self.row_progress = QWidget(self)
+        row1 = QHBoxLayout(self.row_progress)
+        row1.setContentsMargins(0, 0, 0, 0)
+        row1.setSpacing(0)
 
         # 进度条（拖动预览，松手才 seek）
         self.slider_pos = QSlider(Qt.Horizontal)
         self.slider_pos.setRange(0, 1000)
-        self.slider_pos.setFixedWidth(260)
         self.slider_pos.sliderPressed.connect(self._on_slider_pressed)
         self.slider_pos.sliderReleased.connect(self._on_slider_released)
         self.slider_pos.valueChanged.connect(self._on_slider_value)
-        lay.addWidget(self.slider_pos, 1)
+        row1.addWidget(self.slider_pos, 1)
+        lay.addWidget(self.row_progress)
+
+        # ---- 行2：按钮行（对齐 B站：播放 · 下一集 · 时间 · 音量 · 倍速 · 字幕 · 全屏） ----
+        self.row_buttons = QWidget(self)
+        row2 = QHBoxLayout(self.row_buttons)
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.setSpacing(6)
+
+        # 播放/暂停（S6 SVG 图标切换）
+        self.btn_toggle = QPushButton()
+        self.btn_toggle.setFixedSize(34, 34)
+        self.btn_toggle.setToolTip("暂停/继续")
+        self.btn_toggle.setIcon(_icon("play"))
+        self.btn_toggle.clicked.connect(self._on_toggle)
+        row2.addWidget(self.btn_toggle)
+
+        # 下一集（S6 新增；数据在窗口 _current_item，复用 play 链）
+        self.btn_next = QPushButton()
+        self.btn_next.setFixedSize(34, 34)
+        self.btn_next.setToolTip("下一集")
+        self.btn_next.setIcon(_icon("skip_forward"))
+        self.btn_next.clicked.connect(window.play_next)
+        row2.addWidget(self.btn_next)
 
         # 时间
         self.lbl_time = QLabel("0:00 / 0:00")
-        lay.addWidget(self.lbl_time)
+        row2.addWidget(self.lbl_time)
 
-        # 倍速（弹菜单 9 档）
-        self.btn_speed = QPushButton("倍速 1x")
-        self.btn_speed.setToolTip("倍速（9 档）")
-        self.btn_speed.clicked.connect(self._on_speed)
-        lay.addWidget(self.btn_speed)
+        # 弹性空隙：时间与右侧按钮组分隔（对齐 B站）
+        row2.addStretch()
 
-        # 音量滑块
+        # 音量滑块 + 静音（S6 SVG 三态：高/低/静音）
         self.slider_vol = QSlider(Qt.Horizontal)
         self.slider_vol.setRange(0, 100)
         self.slider_vol.setValue(70)
-        self.slider_vol.setFixedWidth(90)
+        self.slider_vol.setFixedWidth(80)
         self.slider_vol.setToolTip("音量")
         self.slider_vol.valueChanged.connect(self._on_volume)
-        lay.addWidget(self.slider_vol)
+        row2.addWidget(self.slider_vol)
 
-        # 静音
-        self.btn_mute = QPushButton("🔊")
-        self.btn_mute.setFixedWidth(36)
+        self.btn_mute = QPushButton()
+        self.btn_mute.setFixedSize(30, 30)
         self.btn_mute.setToolTip("静音")
+        self.btn_mute.setIcon(_icon("volume_high"))
         self.btn_mute.clicked.connect(self._on_mute)
-        lay.addWidget(self.btn_mute)
+        row2.addWidget(self.btn_mute)
 
-        # 全屏（S2 只触发；浮现/隐藏 S3）
-        self.btn_fullscreen = QPushButton("⛶")
-        self.btn_fullscreen.setFixedWidth(36)
+        # 倍速（弹菜单 9 档；B站同款文字按钮）
+        self.btn_speed = QPushButton("倍速 1x")
+        self.btn_speed.setToolTip("倍速（9 档）")
+        self.btn_speed.clicked.connect(self._on_speed)
+        row2.addWidget(self.btn_speed)
+
+        # 字幕（S6 新增：弹 Assrt 字幕对话框——复用面板 _SubtitleDialog）
+        self.btn_subtitle = QPushButton()
+        self.btn_subtitle.setFixedSize(30, 30)
+        self.btn_subtitle.setToolTip("字幕")
+        self.btn_subtitle.setIcon(_icon("captions"))
+        self.btn_subtitle.clicked.connect(window.request_subtitle)
+        row2.addWidget(self.btn_subtitle)
+
+        # 全屏（S6 SVG：进入/退出切换）
+        self.btn_fullscreen = QPushButton()
+        self.btn_fullscreen.setFixedSize(30, 30)
         self.btn_fullscreen.setToolTip("全屏")
+        self.btn_fullscreen.setIcon(_icon("maximize"))
         self.btn_fullscreen.clicked.connect(window.request_fullscreen)
-        lay.addWidget(self.btn_fullscreen)
+        row2.addWidget(self.btn_fullscreen)
+
+        lay.addWidget(self.row_buttons)
 
         # S5：任何控件操作后焦点归还容器——防"点了按钮后键盘失效"
         # （--wid 嵌入键盘在 Qt 侧；overlay 独立顶层点击不天然给容器焦点，
         # 不用 NOACTIVATE——S2 教训：NOACTIVATE 组合桌面不显示）
         self._restore_focus = self._make_restore_focus(window)
-        for w in (self.btn_toggle, self.btn_stop, self.btn_speed,
-                  self.btn_mute, self.btn_fullscreen):
+        for w in (self.btn_toggle, self.btn_next, self.btn_speed,
+                  self.btn_mute, self.btn_subtitle, self.btn_fullscreen):
             w.clicked.connect(self._restore_focus)
         self.slider_pos.sliderReleased.connect(self._restore_focus)
         self.slider_vol.sliderReleased.connect(self._restore_focus)
+
+    # ---- S7：B站式渐变透明背景（QSS 在透明顶层窗口不渲染，手绘渐变） ----
+
+    def paintEvent(self, event):
+        """背景：底部深 rgba(24,24,24,235) → 顶部完全透明（视频透出，去黑框）。
+        WA_TranslucentBackground 下 QSS background 不渲染（实锤对照 alpha=0），
+        必须 paintEvent 手绘；children（按钮/滑块）绘制在本层之上。"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        grad = QLinearGradient(0, self.height(), 0, 0)
+        grad.setColorAt(0.0, QColor(24, 24, 24, 235))
+        grad.setColorAt(0.5, QColor(24, 24, 24, 170))
+        grad.setColorAt(1.0, QColor(24, 24, 24, 0))
+        painter.fillRect(self.rect(), grad)
+        painter.end()
+
+    # ---- S6：状态图标切换（线性 SVG；按钮文本为空，icon 承载状态） ----
+
+    def set_play_icon(self, paused: bool):
+        """播放/暂停图标切换（键盘/按钮共用入口）。"""
+        self._play_state = "pause" if paused else "play"
+        self.btn_toggle.setIcon(_icon(self._play_state))
+
+    def set_volume_icon(self):
+        """音量三态图标：静音 → volume_muted；否则按滑块值 high/low。"""
+        if self._muted:
+            self._vol_state = "muted"
+        else:
+            self._vol_state = "low" if self.slider_vol.value() <= 20 else "high"
+        self.btn_mute.setIcon(_icon({
+            "muted": "volume_muted", "low": "volume_low",
+            "high": "volume_high"}[self._vol_state]))
+
+    def set_fullscreen_icon(self, fullscreen: bool):
+        """全屏进入/退出图标切换。"""
+        self.btn_fullscreen.setIcon(_icon("minimize" if fullscreen else "maximize"))
+
+    def set_next_enabled(self, enabled: bool):
+        """最后一集 → 下一集禁用（无操作）。"""
+        self.btn_next.setEnabled(enabled)
+        self.btn_next.setToolTip("下一集" if enabled else "已是最后一集")
 
     @staticmethod
     def _make_restore_focus(window):
@@ -269,7 +365,7 @@ class ControlOverlay(QWidget):
 
     def _on_toggle(self):
         self._paused = not self._paused
-        self.btn_toggle.setText("▶" if self._paused else "⏸")
+        self.set_play_icon(self._paused)      # S6：SVG 图标切换（按钮文本为空）
         try:
             self._movie.toggle_pause()
         except Exception:
@@ -335,10 +431,11 @@ class ControlOverlay(QWidget):
             self._movie.set_volume(value)
         except Exception:
             pass
+        self.set_volume_icon()      # S6：音量三态图标（高/低/静音）
 
     def _on_mute(self):
         self._muted = not self._muted
-        self.btn_mute.setText("🔇" if self._muted else "🔊")
+        self.set_volume_icon()      # S6：静音图标切换（按钮文本为空）
         try:
             self._movie.toggle_mute()
         except Exception:
@@ -358,7 +455,8 @@ class ControlOverlay(QWidget):
 
 class EpisodeSidebar(QWidget):
     """右侧选集侧栏（S4，对齐 B站）：独立顶层（同 overlay 模式——
-    Qt::Tool | Frameless | StaysOnTop，原型验证 z-order 可行不被 mpv 盖）。
+    Qt::Tool | Frameless，owner = 播放窗口；S7 去永久置顶——被盖跟随播放窗口，
+    但仍浮在 mpv 画面之上，原型验证 z-order 可行）。
 
     贴播放窗口右缘纵向列出分集（第1集/第2集…，QListWidget 自带滚动——
     剧集几十集可滚）；当前集高亮；点击切集只发指令（复用窗口 play 链）。
@@ -367,7 +465,9 @@ class EpisodeSidebar(QWidget):
     """
 
     def __init__(self, window):
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # S7：去 WindowStaysOnTopHint（同 overlay——全局永久置顶的根因），
+        # Qt parent = 播放窗口 → owned window：浮在 mpv 之上、被盖跟随播放窗口。
+        super().__init__(window, Qt.Tool | Qt.FramelessWindowHint)
         self._window = window
         self.setAttribute(Qt.WA_NativeWindow)
         self.setFixedWidth(_SIDEBAR_W)
@@ -467,6 +567,7 @@ class VideoPlayerWindow(QWidget):
         self._playing = False
         self._title_base = title
         self._current_item = None        # S4：当前播放 item（切集复用）
+        self._current_index = 0          # S6：当前集索引（下一集定位）
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -517,6 +618,10 @@ class VideoPlayerWindow(QWidget):
             except Exception:
                 eps = []
             self.sidebar.set_episodes(eps, index or 0)
+            self._current_index = index or 0    # S6：下一集定位
+            # S6：下一集按钮状态（最后一集禁用）
+            self.overlay.set_next_enabled(self._current_index + 1 < self.sidebar.episode_count())
+            self.overlay.set_play_icon(False)   # S6：新片播放态（图标同步）
             self._apply_mpv_mouse_passthrough()   # S3：mpv 子窗口鼠标穿透（幂等）
             self._show_overlay()          # S3：浮现 + 启动 3s 隐藏计时
             self._timer.start()
@@ -538,6 +643,25 @@ class VideoPlayerWindow(QWidget):
 
     def request_close(self):
         self.close()
+
+    def play_next(self):
+        """下一集：复用 play 链切集（index+1）；最后一集无操作。"""
+        if self._current_item is None:
+            return
+        if self._current_index + 1 >= self.sidebar.episode_count():
+            return
+        self.play(self._current_item, index=self._current_index + 1)
+
+    def request_subtitle(self):
+        """字幕按钮：弹 Assrt 字幕对话框（复用面板 _SubtitleDialog——搜索框
+        预填当前片名 + 结果列表双击加载，发指令给 controller）。"""
+        try:
+            from app.ui.panels.movie_panel import _SubtitleDialog
+            kw = (self._current_item or {}).get("vod_name") or ""
+            dlg = _SubtitleDialog(self._movie, kw, self)
+            dlg.exec()
+        except Exception as e:
+            print(f"[播放窗口] 字幕对话框异常: {e}")
 
     def raise_topmost(self):
         """z-order 置顶（Windows API，只动 z-order 不碰前台锁）。
@@ -851,12 +975,14 @@ class VideoPlayerWindow(QWidget):
     def showFullScreen(self):
         self._fullscreen = True
         super().showFullScreen()
+        self.overlay.set_fullscreen_icon(True)   # S6：进入全屏图标
         self._position_overlay()
         self._position_sidebar()
 
     def showNormal(self):
         self._fullscreen = False
         super().showNormal()
+        self.overlay.set_fullscreen_icon(False)  # S6：退出全屏图标
         self._position_overlay()
         self._position_sidebar()
 

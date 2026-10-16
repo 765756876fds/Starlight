@@ -226,8 +226,10 @@ class TestVideoPlayerWindow:
         w = VideoPlayerWindow(ctl)
         try:
             assert w.container is not None
-            assert w.overlay.windowFlags() & Qt.WindowStaysOnTopHint  # 独立顶层：不被 mpv 盖
+            # S7：去永久置顶（owner = 播放窗口——被盖跟随；仍浮在 mpv 之上）
             assert w.overlay.windowFlags() & Qt.Tool
+            assert not (w.overlay.windowFlags() & Qt.WindowStaysOnTopHint)
+            assert w.overlay.parent() is w
             assert isinstance(w.container.native_id(), int)
             assert w.container.native_id() == w.container.native_id()  # 缓存
         finally:
@@ -693,15 +695,16 @@ class TestVoiceFeedbackWindow:
             panel._timer.stop()
 
     def test_overlay_buttons_have_chinese_tooltips(self, qapp):
-        """控制条按钮中文 tooltip（静音/全屏——确认语义；用户可悬停辨识）。"""
+        """控制条按钮中文 tooltip（S6 布局：播放/下一集/倍速/静音/字幕/全屏）。"""
         from app.ui.widgets.video_player_window import VideoPlayerWindow
         ctl = _FakeCtl()
         w = VideoPlayerWindow(ctl)
         try:
             assert w.overlay.btn_toggle.toolTip() == "暂停/继续"
-            assert w.overlay.btn_stop.toolTip() == "停止播放"
+            assert w.overlay.btn_next.toolTip() == "下一集"
             assert w.overlay.btn_speed.toolTip() == "倍速（9 档）"
             assert w.overlay.btn_mute.toolTip() == "静音"
+            assert w.overlay.btn_subtitle.toolTip() == "字幕"
             assert w.overlay.btn_fullscreen.toolTip() == "全屏"
         finally:
             w._timer.stop()

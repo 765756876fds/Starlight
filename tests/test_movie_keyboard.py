@@ -85,17 +85,17 @@ def _key(w, key):
 
 class TestKeyboardShortcuts:
     def test_space_toggles_pause(self):
-        """空格 → overlay 按钮全链（状态翻转 + toggle_pause 被调）。"""
+        """空格 → overlay 按钮全链（SVG 图标态切换 + toggle_pause 被调）。"""
         w, ctl = _mk_window()
         try:
-            w.overlay.btn_toggle.setText("⏸")      # 假定播放中
             w.overlay._paused = False
+            w.overlay.set_play_icon(False)
             _key(w, Qt.Key_Space)
             assert ctl.toggles == 1
-            assert w.overlay.btn_toggle.text() == "▶"
+            assert w.overlay._play_state == "pause"
             _key(w, Qt.Key_Space)
             assert ctl.toggles == 2
-            assert w.overlay.btn_toggle.text() == "⏸"
+            assert w.overlay._play_state == "play"
         finally:
             w._timer.stop()
             w._hide_timer.stop()
@@ -143,17 +143,17 @@ class TestKeyboardShortcuts:
             w._timer.stop()
 
     def test_m_toggles_mute(self):
-        """M → 静音切换（按钮全链：toggle_mute 被调 + 图标翻转）。"""
+        """M → 静音切换（按钮全链：toggle_mute 被调 + 图标态翻转）。"""
         w, ctl = _mk_window()
         try:
-            w.overlay.btn_mute.setText("🔊")
             w.overlay._muted = False
+            w.overlay.set_volume_icon()
             _key(w, Qt.Key_M)
             assert ctl.mutes == 1
-            assert w.overlay.btn_mute.text() == "🔇"
+            assert w.overlay._vol_state == "muted"
             _key(w, Qt.Key_M)
             assert ctl.mutes == 2
-            assert w.overlay.btn_mute.text() == "🔊"
+            assert w.overlay._vol_state == "high"
         finally:
             w._timer.stop()
 

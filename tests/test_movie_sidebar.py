@@ -74,13 +74,15 @@ def _episode_item(play_url, count):
 
 class TestEpisodeSidebar:
     def test_sidebar_flags(self):
-        """侧栏独立顶层：Qt.Tool | Frameless | StaysOnTop（不被 mpv 盖，同 overlay 模式）。"""
+        """侧栏独立顶层：Qt.Tool | Frameless，owner = 播放窗口（S7 去永久置顶——
+        被盖跟随播放窗口，但仍浮在 mpv 之上，同 overlay 模式）。"""
         w, _ = _mk_window()
         try:
             sb = w.sidebar
             assert sb.windowFlags() & Qt.Tool
             assert sb.windowFlags() & Qt.FramelessWindowHint
-            assert sb.windowFlags() & Qt.WindowStaysOnTopHint
+            assert not (sb.windowFlags() & Qt.WindowStaysOnTopHint)
+            assert sb.parent() is w
         finally:
             w._timer.stop()
 

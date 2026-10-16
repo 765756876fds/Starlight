@@ -24,6 +24,7 @@ class _FakeCtl:
         self.mutes = 0
         self.toggles = 0
         self.stopped = 0
+        self.plays = []              # S6：play(item, index) 调用记录
         self.pos = 60.0
         self.dur = 120.0
         self.playing = True
@@ -32,6 +33,7 @@ class _FakeCtl:
         pass
 
     def play(self, item, index=None):
+        self.plays.append((item, index))
         return True
 
     def is_playing(self):
@@ -84,20 +86,26 @@ def _mk_window():
 
 class TestOverlayStructure:
     def test_controls_present(self):
-        """S2 控制条控件齐全：⏯ ⏹ 进度条 时间 倍速 音量 静音 全屏。"""
+        """S6 控制条控件齐全（B站布局）：播放/暂停 · 下一集 · 进度条 · 时间 ·
+        音量 · 倍速 · 字幕 · 全屏；停止已取消（用户：停止=关窗）。"""
         w, _ = _mk_window()
         try:
             ov = w.overlay
             assert ov.btn_toggle is not None
-            assert ov.btn_stop is not None
+            assert ov.btn_next is not None
             assert ov.slider_pos is not None
             assert ov.lbl_time is not None
             assert ov.btn_speed is not None
             assert ov.slider_vol is not None
             assert ov.btn_mute is not None
+            assert ov.btn_subtitle is not None
             assert ov.btn_fullscreen is not None
+            assert not hasattr(ov, "btn_stop")          # 停止按钮已取消
             assert ov.windowFlags() & Qt.Tool
-            assert ov.windowFlags() & Qt.WindowStaysOnTopHint  # 独立顶层不被 mpv 盖
+            assert ov.windowFlags() & Qt.FramelessWindowHint
+            # S7：去永久置顶（owner = 播放窗口，被盖跟随）——不再全局 TOPMOST
+            assert not (ov.windowFlags() & Qt.WindowStaysOnTopHint)
+            assert ov.parent() is w                      # owner 关系（跟随播放窗口）
         finally:
             w._timer.stop()
 
@@ -166,29 +174,37 @@ class TestPlaybackControls:
         w, ctl = _mk_window()
         try:
             ov = w.overlay
-            assert ov.btn_toggle.text() == "⏸"
+            assert ov._play_state == "play"              # S6：SVG 图标态
             ov.btn_toggle.click()
             assert ctl.toggles == 1
             assert ov._paused is True
-            assert ov.btn_toggle.text() == "▶"
+            assert ov._play_state == "pause"
             ov.btn_toggle.click()
             assert ctl.toggles == 2
             assert ov._paused is False
-            assert ov.btn_toggle.text() == "⏸"
+            assert ov._play_state == "play"
         finally:
             w._timer.stop()
 
-    def test_stop_button_closes_window_and_stops(self):
+    def test_next_button_switches_episode(self):
+        """下一集：play(item, index+1)；最后一集禁用 + 无操作。"""
         w, ctl = _mk_window()
-        w.show()
         try:
-            w.play({"vod_name": "X", "first_url": "u"})
-            w.overlay.btn_stop.click()
-            assert ctl.stopped == 1                    # 关窗 = 停播
-            assert w.isVisible() is False
-            assert w.overlay.isVisible() is False
+            item = {"vod_name": "剧", "play_url":
+                    "第1集$u1#第2集$u2#第3集$u3"}
+            w.play(item, index=0)
+            assert w.overlay.btn_next.isEnabled() is True
+            w.overlay.btn_next.click()
+            assert ctl.plays[-1] == (item, 1)            # index+1
+            # 最后一集 → 禁用 + 无操作
+            w.play(item, index=2)
+            assert w.overlay.btn_next.isEnabled() is False
+            n = len(ctl.plays)
+            w.overlay.btn_next.click()
+            assert len(ctl.plays) == n
         finally:
             w._timer.stop()
+            w._sidebar_hide_timer.stop()
 
 
 class TestSpeed:
@@ -243,15 +259,18 @@ class TestVolumeMute:
         w, ctl = _mk_window()
         try:
             ov = w.overlay
-            assert ov.btn_mute.text() == "🔊"
+            assert ov._vol_state == "high"              # S6：SVG 三态图标
             ov.btn_mute.click()
             assert ctl.mutes == 1
             assert ov._muted is True
-            assert ov.btn_mute.text() == "🔇"
+            assert ov._vol_state == "muted"
             ov.btn_mute.click()
             assert ctl.mutes == 2
             assert ov._muted is False
-            assert ov.btn_mute.text() == "🔊"
+            assert ov._vol_state == "high"
+            # 低音量 → volume_low 态
+            ov.slider_vol.setValue(5)
+            assert ov._vol_state == "low"
         finally:
             w._timer.stop()
 
@@ -363,18 +382,20 @@ class TestFocusManagement:
 
 
 class TestFixedHeightAndFlags:
-    def test_overlay_fixed_height_52(self):
-        """overlay 固定高 52（未 show 即 52；不随窗口 resize 变——S2 修复防 480 灰块）。"""
+    def test_overlay_fixed_height(self):
+        """overlay 固定高 _OVERLAY_H（S7 两行布局 = 72；未 show 即 72；不随窗口
+        resize 变——S2 修复防 480 灰块）。"""
+        from app.ui.widgets.video_player_window import _OVERLAY_H
         w, _ = _mk_window()
         try:
-            assert w.overlay.height() == 52
+            assert w.overlay.height() == _OVERLAY_H
             w.show()
             w.resize(1200, 800)
             w._position_overlay()
-            assert w.overlay.height() == 52             # 定位后仍 52
+            assert w.overlay.height() == _OVERLAY_H      # 定位后仍 _OVERLAY_H
             w.resize(700, 400)
             w._position_overlay()
-            assert w.overlay.height() == 52
+            assert w.overlay.height() == _OVERLAY_H
         finally:
             w._timer.stop()
 
@@ -392,6 +413,7 @@ class TestFixedHeightAndFlags:
 class TestOverlayPosition:
     def test_overlay_follows_window_resize(self):
         """窗口 resize → overlay 重定位到底部居中 + 宽度跟随。"""
+        from app.ui.widgets.video_player_window import _OVERLAY_H
         w, _ = _mk_window()
         w.show()
         try:
@@ -400,7 +422,7 @@ class TestOverlayPosition:
             ov = w.overlay
             geo, ovg = w.geometry(), ov.geometry()
             assert ovg.width() == min(geo.width() - 40, 1100)  # 宽度跟随（留边）
-            assert ovg.height() == 52                    # 固定高（S2 修复）
+            assert ovg.height() == _OVERLAY_H            # 固定高（S7 两行）
             # 底部居中：overlay 底缘贴窗口底缘（± 边距容差）
             assert abs((ovg.y() + ovg.height()) - (geo.y() + geo.height() - 24)) <= 2
             center_x = ovg.x() + ovg.width() / 2
