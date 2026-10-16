@@ -31,12 +31,14 @@ class MpvController:
         self._property_watchers: Dict[str, Any] = {}
         self._pipe_lock = threading.Lock()
 
-    def start(self, taskkill: bool = True, pipe_timeout: float = 10.0,
-               prop_timeout: float = 1.0) -> bool:
+    def start(self, taskkill: bool = True, wid: Optional[int] = None,
+              pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
         """启动 mpv 进程；成功返回 True，失败返回 False（不抛异常）。
         taskkill=True 时先清场（杀残留 mpv.exe，正常冷启动语义）；
         taskkill=False 供自动重启路径（旧进程已被 stop_process 终止，
         再杀全局面板会连带杀掉 TTS 播报进程——必须跳过）。
+        wid：内嵌模式传目标窗口 HWND（uint32）→ --wid 参数；None 不传
+        （音乐链/独立窗口零影响——验收硬指标）。
         pipe_timeout/prop_timeout：自动重启路径传短超时（3.0/0.5），
         因为重启在 controller._lock 内执行，持锁时间必须可控。"""
         # 进程真的活着才复用；窗口被用户关闭（进程自死，poll() 非 None）时
@@ -54,7 +56,7 @@ class MpvController:
             self._kill_own_process()
             time.sleep(0.3)
 
-        return self._launch(pipe_timeout=pipe_timeout, prop_timeout=prop_timeout)
+        return self._launch(wid=wid, pipe_timeout=pipe_timeout, prop_timeout=prop_timeout)
 
     def _resolve_mpv_path(self) -> bool:
         """解析 mpv 可执行文件：先配置路径（isfile），再 PATH（shutil.which）。
@@ -69,7 +71,8 @@ class MpvController:
         print(f"[mpv] 未找到 mpv 可执行文件: {self.mpv_path}")
         return False
 
-    def _launch(self, pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
+    def _launch(self, wid: Optional[int] = None,
+                pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
         """Popen + 等待 IPC 管道就绪。任何一步失败 → 返回 False（不抛）。"""
         # 旧 pipe 可能来自已自死的进程（窗口关闭路径），先清理再重开
         if self._pipe:
@@ -86,6 +89,9 @@ class MpvController:
             args.append("--force-window=yes")
             args.append("--osc=no")   # 电影：弃用英文自带 OSC，控制走应用面板
             args.append("--hls-bitrate=max")  # 包2c：HLS 强制最高码率（仅视频实例，音乐不加）
+            if wid is not None:
+                # 内嵌：渲染到 Qt 容器 HWND（win32 句柄 32 位，负值 mpv 拒收 → 转 uint32）
+                args.append("--wid=%d" % (int(wid) & 0xFFFFFFFF))
             if self.watch_later_dir:
                 args.append("--save-position-on-quit")
                 args.append(f"--watch-later-directory={self.watch_later_dir}")

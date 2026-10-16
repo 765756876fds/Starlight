@@ -266,6 +266,21 @@ class MoviePanel(QWidget):
         except Exception:
             pass
 
+        # 内嵌播放（S0+S1）：懒建隐藏播放窗口，winId 立即注入控制器——
+        # 任何播放路径（UI/语音/选集）都走 --wid 内嵌；embed 关则不建（独立窗口现状）。
+        self._embed_playing = False
+        self._video_win = None
+        try:
+            if self._movie.embed_enabled():
+                from ..widgets.video_player_window import VideoPlayerWindow
+                self._video_win = VideoPlayerWindow(self._movie)
+                self._video_win.stopped.connect(self._on_video_stopped)
+                self._movie.set_embed_wid(self._video_win.container.native_id())
+        except Exception as e:
+            print(f"[Movie] 内嵌播放窗口初始化失败（回退独立窗口）: {e}")
+            self._video_win = None
+            self._embed_playing = False
+
     def _on_app_quit(self):
         try:
             self._movie.close()
@@ -403,9 +418,19 @@ class MoviePanel(QWidget):
             self.btn_view.setChecked(False)
 
     def _on_voice_feedback(self, msg):
-        """语音搜电影结果反馈 → 状态栏（未找到/只有1集/越界/开始播放）。"""
+        """语音搜电影结果反馈 → 状态栏（未找到/只有1集/越界/开始播放）。
+        内嵌模式："开始播放" → 播放窗口接管（mpv 已用注入 winId 内嵌，show 即显示画面）。"""
         if msg:
             self.lbl_status.setText(str(msg))
+            if str(msg).startswith("开始播放") and self._video_win is not None:
+                try:
+                    self._video_win.show()
+                    self._video_win.raise_()
+                    self._video_win.activateWindow()
+                    self._video_win.attach_current()
+                    self._embed_playing = True
+                except Exception:
+                    pass
 
     def _current_source_name(self):
         """当前源名（管理器读不到时返回 None，不打扰 UI）。"""
@@ -457,8 +482,23 @@ class MoviePanel(QWidget):
                 break
 
     def _play_item(self, it, index=None):
-        """统一播放入口：控制器播放 + 状态刷新 + 自动字幕（配置开时每片一次）。"""
+        """统一播放入口：控制器播放 + 状态刷新 + 自动字幕（配置开时每片一次）。
+        内嵌模式 → 播放窗口接管（呈现 + 轮询 + 控制）；非 embed → 现状面板直控。"""
         try:
+            if self._video_win is not None:
+                self._video_win.show()
+                self._video_win.raise_()
+                self._video_win.activateWindow()
+                ok = self._video_win.play(it, index=index)
+                if ok:
+                    name = it.get("vod_name", "") or ""
+                    self.lbl_now.setText(f"播放中: {name}")
+                    self.lbl_status.setText("")
+                    self._embed_playing = True
+                    self._maybe_auto_subtitle(it)
+                else:
+                    self.lbl_status.setText("无法播放：无可用地址")
+                return
             ok = self._movie.play(it, index=index)
             if ok:
                 name = it.get("vod_name", "") or ""
@@ -470,6 +510,14 @@ class MoviePanel(QWidget):
                 self.lbl_status.setText("无法播放：无可用地址")
         except Exception as e:
             self.lbl_status.setText(f"播放失败: {e}")
+
+    def _on_video_stopped(self):
+        """播放窗口停播（关窗/播完/异常）：面板清 embed 播放状态（现状控制行让位）。"""
+        self._embed_playing = False
+        self.lbl_now.setText("未播放")
+        self.slider_pos.setEnabled(False)
+        self.slider_pos.setValue(0)
+        self.lbl_time.setText("0:00 / 0:00")
 
     def _show_episode_dialog(self, it):
         """多集 → 选集对话框（第01集…，点选即播）。"""
@@ -637,6 +685,9 @@ class MoviePanel(QWidget):
 
     def _tick(self):
         try:
+            # 内嵌播放中：面板轮询让位（连播/进度由播放窗口唯一驱动，防双 tick）
+            if self._embed_playing:
+                return
             # 自动连播检测：先于播放状态刷新（播完一集 idle 上升沿 → 下一集）
             if hasattr(self._movie, "tick"):
                 try:

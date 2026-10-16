@@ -113,6 +113,10 @@ class MovieController:
         self._stopping = False
         self._pausing = False
         self._subscribed = False
+        # 内嵌播放（S0+S1）：settings movie.embed（默认 true，永不 stage）。
+        # true + 播放窗口注入 winId → mpv --wid 内嵌；false/无窗口 → 独立窗口（现状回退）。
+        self._embed = bool(self._config.get("movie.embed", True))
+        self._embed_wid = None
         # 自动连播（默认开——观影刚需；配置可关）
         self._auto_next = bool(self._config.get("movie.auto_next", True))
         # idle 上升沿检测：mpv --idle=yes 启动即 idle，初始 True 防首播误触发
@@ -289,11 +293,26 @@ class MovieController:
         remarks = (item.get("vod_remarks") or "") if isinstance(item, dict) else ""
         return bool(__import__("re").search(r"全?\d+集", remarks))
 
+    # ---- 内嵌播放（S0+S1） ----
+
+    def embed_enabled(self) -> bool:
+        """movie.embed 开关（true=内嵌优先；false=独立窗口现状）。"""
+        return bool(self._embed)
+
+    def set_embed_wid(self, wid):
+        """播放窗口把容器 winId 注入（uint32 HWND）；None 清除（回退独立窗口）。"""
+        self._embed_wid = wid
+
+    def get_embed_wid(self):
+        return self._embed_wid
+
     # ---- 播放 ----
 
     def play(self, item, index=None):
         """播电影：先停音乐（互斥），再起视频 mpv 播指定集（默认第一条 URL）。
-        index=None → 取 first_url（现状不变）；index=N → 取第 N 集 URL。失败返回 False。"""
+        index=None → 取 first_url（现状不变）；index=N → 取第 N 集 URL。失败返回 False。
+        内嵌：embed 开且有播放窗口注入 winId → mpv --wid 渲染进 Qt 容器；
+        否则（embed 关 / 窗口未建）→ 独立 mpv 窗口（现状，安全回退）。"""
         if not isinstance(item, dict):
             return False
         url = item.get("first_url") or ""
@@ -319,9 +338,13 @@ class MovieController:
                 music.pause()
             except Exception as e:
                 print(f"[Movie] 暂停音乐失败: {e}")
+        # 内嵌 wid：embed 开且窗口已注入 → 传 --wid；否则 None（独立窗口，现状）
+        wid = self._embed_wid if (self._embed and self._embed_wid) else None
+        if wid is not None:
+            print(f"[Movie] 内嵌播放 wid={wid}")
         # 独立视频实例：taskkill=False 不杀音乐实例；video=True 出视频窗口
         if not self.mpv.is_running():
-            if not self.mpv.start(taskkill=False):
+            if not self.mpv.start(taskkill=False, wid=wid):
                 print("[Movie] mpv 启动失败")
                 return False
         self.mpv.loadfile(url)

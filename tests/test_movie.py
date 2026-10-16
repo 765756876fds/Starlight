@@ -183,7 +183,8 @@ def test_movie_play_pauses_music():
     ok = ctrl.play({"vod_name": "X", "first_url": "https://u/i.m3u8"})
     assert ok is True
     assert music.paused == 1
-    mmpv.start.assert_called_once_with(taskkill=False)
+    # 内嵌 S1：wid 参数化——无播放窗口注入时显式 wid=None（独立窗口现状，语义零变化）
+    mmpv.start.assert_called_once_with(taskkill=False, wid=None)
     mmpv.loadfile.assert_called_once_with("https://u/i.m3u8")
     ctrl.close()
 
