@@ -373,10 +373,32 @@ class SettingsPanel(QWidget):
         row2.addStretch()
         lay.addLayout(row2)
 
+        row3 = QHBoxLayout()
+        btn_sources = QPushButton("电影源管理（多源 / 测源 / 增删 / 设当前）")
+        btn_sources.clicked.connect(self._on_movie_sources)
+        row3.addWidget(btn_sources)
+        row3.addStretch()
+        lay.addLayout(row3)
+
         self.lbl_movie_status = QLabel("")
         self.lbl_movie_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
         lay.addWidget(self.lbl_movie_status)
         root.addWidget(box)
+
+    def _on_movie_sources(self):
+        """打开电影源管理对话框（多源/测源/增删/设当前）。"""
+        try:
+            from ..dialogs.movie_source_dialog import MovieSourceDialog
+            dlg = MovieSourceDialog(self)
+            dlg.exec()
+        except Exception as e:
+            from app.ui.theme.colors import Colors  # noqa: F401
+            print(f"[Settings] 打开电影源管理失败: {e}")
+            try:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "提示", f"打开电影源管理失败: {e}")
+            except Exception:
+                pass
 
     def _load_movie_token(self) -> str:
         """读 settings.yaml movie.assrt_token。"""

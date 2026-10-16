@@ -20,6 +20,7 @@ from ..core.config import get_config
 from ..core.event_bus import EventType, get_event_bus
 from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
+from .source_manager import MovieSourceManager, _SingleSourceManager
 
 # 默认源：360资源（苹果 CMS 标准接口）
 DEFAULT_SOURCE_URL = "https://360zyzz.com/api.php/provide/vod/from/360m3u8/at/json"
@@ -79,9 +80,19 @@ class MovieController:
     """搜索 + 播放控制 + 与音乐互斥（事件解耦）。"""
 
     def __init__(self, source_url=None, mpv_path=None, ipc_pipe=None,
-                 music=None, config=None):
+                 music=None, config=None, source_manager=None):
         self._config = config or get_config()
         self.source_url = source_url or self._config.get("movie.source_url") or DEFAULT_SOURCE_URL
+        # 多源（包2c后续）：构造注入 manager（测试/复用）；显式 source_url → 单源兼容；否则自建
+        if source_manager is not None:
+            self._source_manager = source_manager
+        elif source_url:
+            self._source_manager = _SingleSourceManager(source_url)
+        else:
+            self._source_manager = MovieSourceManager()
+        # 搜索策略 C 的状态：上次命中的源名（面板提示"已从 XX 源找到"）/ 全部失败原因
+        self.last_search_source = None
+        self.last_search_error = ""
         mpv_bin = mpv_path or self._config.get("music.mpv_path") or "mpv"
         pipe = ipc_pipe or self._config.get("movie.mpv_ipc_pipe") or DEFAULT_IPC_PIPE
         # 断点续播目录（仅电影实例；音乐链不加——用户明确不要）
@@ -190,12 +201,43 @@ class MovieController:
     # ---- 搜索 ----
 
     def search(self, keyword, timeout=10.0):
-        """苹果 CMS 搜索。返回 [{vod_id, vod_name, vod_remarks, play_url,
-        first_name, first_url}]；无结果返回 []；网络/解析失败抛异常（UI 层降级提示）。"""
+        """苹果 CMS 多源搜索（策略 C：当前源挂了自动换，最多试 3 个启用源）。
+
+        返回 [{vod_id, vod_name, vod_remarks, play_url, first_name, first_url, _source}]；
+        命中 → last_search_source=源名；全部失败 → [] + last_search_error（面板提示）。
+        不自动改 active_source（本次临时换，用户选的源保留）。"""
         if not keyword or not keyword.strip():
             return []
+        sources = self._source_manager.get_enabled_sources()
+        if not sources:
+            self.last_search_error = "无可用源"
+            return []
+        active = self._source_manager.get_active_name()
+        # 当前源优先，其余按序（最多试 3 个）
+        ordered = ([s for s in sources if s.get("name") == active]
+                   + [s for s in sources if s.get("name") != active])[:3]
+        errors = []
+        for src in ordered:
+            try:
+                items = self._search_one(src["url"], keyword, timeout)
+            except Exception as e:
+                errors.append(f"{src['name']}: {type(e).__name__}")
+                continue
+            if items:
+                for it in items:
+                    it["_source"] = src["name"]
+                self.last_search_source = src["name"]
+                self.last_search_error = ""
+                return items
+            errors.append(f"{src['name']}: 无结果")
+        self.last_search_source = None
+        self.last_search_error = "；".join(errors) or "无可用源"
+        return []
+
+    def _search_one(self, url, keyword, timeout):
+        """单源搜索（策略 C 的单个源执行）。网络失败抛异常（上层换下一个源）。"""
         params = {"ac": "videolist", "wd": keyword.strip()}
-        r = requests.get(self.source_url, params=params, timeout=timeout, headers=UA)
+        r = requests.get(url, params=params, timeout=timeout, headers=UA)
         data = parse_cms_response(r.text)
         items = []
         for v in data.get("list", []) or []:

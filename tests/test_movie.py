@@ -101,12 +101,14 @@ def test_search_blank_kw():
     ctrl.close()
 
 
-def test_search_network_error_raises():
+def test_search_network_error_fallback():
+    """多源策略 C：网络失败不再抛异常——换源/降级返回 [] + last_search_error。"""
     with patch("app.movie.movie_controller.requests.get",
                side_effect=Exception("timeout")):
         ctrl, _ = _make_ctrl()
-        with pytest.raises(Exception):
-            ctrl.search("流浪地球")
+        out = ctrl.search("流浪地球")
+        assert out == []
+        assert "单源" in ctrl.last_search_error  # 单源兼容：失败原因带源名
         ctrl.close()
 
 

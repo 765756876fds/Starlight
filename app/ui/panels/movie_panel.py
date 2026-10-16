@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from ..dialogs.movie_source_dialog import MovieSourceDialog
+
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
 _POSTER_DIR = Path("data/movie/posters")
 _POSTER_DIR.mkdir(parents=True, exist_ok=True)
@@ -123,12 +125,20 @@ class MoviePanel(QWidget):
         self.btn_view.setChecked(True)
         self.btn_view.setToolTip("列表/海报 视图切换（默认海报墙，对齐爱奇艺/B站）")
         search_row.addWidget(self.btn_view)
+        self.btn_source = QPushButton("源")
+        self.btn_source.setToolTip("电影源管理（多源 / 测源 / 增删 / 设当前）")
+        search_row.addWidget(self.btn_source)
         root.addLayout(search_row)
 
-        # 状态
+        # 状态行：搜索状态 + 当前源
+        status_row = QHBoxLayout()
         self.lbl_status = QLabel("")
         self.lbl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
-        root.addWidget(self.lbl_status)
+        self.lbl_source = QLabel("")
+        self.lbl_source.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        status_row.addWidget(self.lbl_status, 1)
+        status_row.addWidget(self.lbl_source)
+        root.addLayout(status_row)
 
         # 结果区：列表/海报 双视图（QStackedWidget，默认海报墙）
         self.stack_results = QStackedWidget()
@@ -214,6 +224,7 @@ class MoviePanel(QWidget):
         self.list_posters.itemClicked.connect(self._on_item_clicked)
         self.list_posters.itemDoubleClicked.connect(self._on_item_activated)
         self.btn_view.clicked.connect(self._on_toggle_view)
+        self.btn_source.clicked.connect(self._on_source_manage)
         self.btn_toggle.clicked.connect(self._on_toggle)
         self.btn_stop.clicked.connect(self._on_stop)
         self.slider_pos.sliderReleased.connect(self._on_seek)
@@ -237,6 +248,9 @@ class MoviePanel(QWidget):
         self._click_timer.setInterval(300)
         self._click_timer.timeout.connect(self._on_click_timeout)
         self._pending_click_item = None
+
+        # 当前源显示（源管理变更后刷新）
+        self._refresh_source_label()
 
         # 软件退出钩子：杀掉电影 mpv（main.py 不感知 movie，单点收口）
         try:
@@ -312,9 +326,15 @@ class MoviePanel(QWidget):
             self._start_poster_jobs(poster_jobs)
         n = len(result)
         if n == 0:
-            self.lbl_status.setText("无结果")
+            err = getattr(self._movie, "last_search_error", "") or ""
+            self.lbl_status.setText(f"搜索失败: {err}" if err else "无结果")
         else:
-            self.lbl_status.setText(f"找到 {n} 部")
+            src = getattr(self._movie, "last_search_source", None)
+            active = self._current_source_name()
+            if src and src != active:
+                self.lbl_status.setText(f"已从 {src} 找到 {n} 部")
+            else:
+                self.lbl_status.setText(f"找到 {n} 部")
 
     @staticmethod
     def _poster_tip(it):
@@ -376,6 +396,32 @@ class MoviePanel(QWidget):
             self.stack_results.setCurrentWidget(self.list_results)
             self.btn_view.setText("列表")
             self.btn_view.setChecked(False)
+
+    def _current_source_name(self):
+        """当前源名（管理器读不到时返回 None，不打扰 UI）。"""
+        try:
+            return self._movie._source_manager.get_active_name()
+        except Exception:
+            return None
+
+    def _refresh_source_label(self):
+        """状态栏显示当前源名（如"当前源：量子资源"）。"""
+        try:
+            name = self._current_source_name()
+            self.lbl_source.setText(f"当前源：{name}" if name else "")
+        except Exception:
+            self.lbl_source.setText("")
+
+    def _on_source_manage(self):
+        """"源"按钮 → 源管理对话框（增删/测源/设当前；变更后刷新状态栏）。"""
+        try:
+            mgr = self._movie._source_manager
+        except Exception:
+            mgr = None
+        dlg = MovieSourceDialog(self, manager=mgr,
+                                on_sources_changed=self._refresh_source_label)
+        dlg.exec()
+        self._refresh_source_label()
 
     def _start_poster_jobs(self, jobs):
         self._poster_thread = QThread()
