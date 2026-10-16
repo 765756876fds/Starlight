@@ -15,6 +15,7 @@ S2：overlay 填 B站式底部控制条——⏯ ⏹ 进度条(拖动预览/松�
 import ctypes
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMenu, QPushButton,
                                QSlider, QVBoxLayout, QWidget)
 
@@ -23,6 +24,9 @@ _SPEED_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
 # overlay 固定高度（对齐 S1 控制条 52；禁依赖未 show 时 height()=480 撑成灰块）
 _OVERLAY_H = 52
+
+# S3：鼠标静止 3s 隐藏控制条（B站式观影沉浸；hover 控制条不隐藏）
+_OVERLAY_HIDE_DELAY_MS = 3000
 
 # 焦点管理（S5 启用）：点击不激活（WS_EX_NOACTIVATE）——点 overlay 按钮不抢 mpv 焦点
 _GWL_EXSTYLE = -20
@@ -39,7 +43,13 @@ def _speed_label(rate) -> str:
 
 
 class VideoContainer(QWidget):
-    """mpv --wid 渲染目标：WA_NativeWindow 黑底容器（占满播放窗口）。"""
+    """mpv --wid 渲染目标：WA_NativeWindow 黑底容器（占满播放窗口）。
+
+    S3 事件黑洞修复：容器占满客户区 → 穿透后画面区鼠标事件到容器（Qt 鼠标
+    事件不冒泡，窗口收不到）→ 开 mouseTracking + 转发给窗口公开接口
+    notify_mouse_activity()（浮现 + 重置 3s 隐藏计时）；cursor 跟随窗口
+    （未显式设置则继承），移动时自身 unsetCursor 复原（防继承差异）。
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,6 +57,8 @@ class VideoContainer(QWidget):
         self.setAttribute(Qt.WA_DontCreateNativeAncestors)
         self.setStyleSheet("background:#000;")
         self._win_id = None
+        self._window = parent              # 播放窗口（转发鼠标活动）
+        self.setMouseTracking(True)        # 无按键移动也收 mouseMoveEvent
 
     def native_id(self):
         """容器 HWND（uint32——win32 句柄 32 位，负值 mpv 拒收）。
@@ -57,6 +69,20 @@ class VideoContainer(QWidget):
 
     def reset_native_id(self):
         self._win_id = None
+
+    def mouseMoveEvent(self, event):
+        # 画面区鼠标活动（穿透后事件直达容器）→ 浮现 + 重置隐藏计时
+        if self._window is not None:
+            self._window.notify_mouse_activity()
+        self.unsetCursor()                 # 容器 cursor 复原（防继承差异）
+        super().mouseMoveEvent(event)
+
+    def enterEvent(self, event):
+        # 鼠标进入画面区 → 浮现（移入立即显示，不启动立即隐藏计时）
+        if self._window is not None:
+            self._window.notify_mouse_activity()
+        self.unsetCursor()
+        super().enterEvent(event)
 
 
 class ControlOverlay(QWidget):
@@ -80,6 +106,9 @@ class ControlOverlay(QWidget):
         self._paused = False
         self._muted = False
         self._dragging = False
+        # S3 鼠标浮现/隐藏：overlay 是独立顶层窗口——鼠标在 overlay 上时播放窗口
+        # 收不到 mouseMoveEvent，overlay 自行跟踪并通知窗口（防操作中消失）。
+        self.setMouseTracking(True)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 6, 10, 6)
@@ -172,6 +201,31 @@ class ControlOverlay(QWidget):
     def showEvent(self, event):
         # S2 修复：不再自动设 NOACTIVATE（撤出本批，S5 恢复）——普通显示路径
         super().showEvent(event)
+
+    # ---- S3：overlay 鼠标跟踪（独立顶层窗口，鼠标在其上时播放窗口收不到事件） ----
+
+    def enterEvent(self, event):
+        # 鼠标进入控制条 → 通知窗口"hover 中"（停止隐藏计时，防操作中消失）
+        try:
+            self._window._on_overlay_hover(True)
+        except Exception:
+            pass
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        try:
+            self._window._on_overlay_hover(False)
+        except Exception:
+            pass
+        super().leaveEvent(event)
+
+    def mouseMoveEvent(self, event):
+        # overlay 上活动 = 仍在操作 → 通知窗口浮现 + 重置隐藏计时
+        try:
+            self._window._show_overlay()
+        except Exception:
+            pass
+        super().mouseMoveEvent(event)
 
     # ---- 控制转发（只发指令，不复制业务） ----
 
@@ -283,7 +337,7 @@ class VideoPlayerWindow(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.container = VideoContainer()
+        self.container = VideoContainer(self)
         lay.addWidget(self.container)
 
         # 独立顶层 overlay（S2 底部控制条）
@@ -295,6 +349,15 @@ class VideoPlayerWindow(QWidget):
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
 
+        # S3 鼠标浮现/隐藏：窗口级鼠标跟踪 + 3s 静止隐藏定时器（B站式）
+        self.setMouseTracking(True)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._on_hide_timeout)
+        self._overlay_hover = False      # 鼠标在 overlay 上（操作中不隐藏）
+        # S3 穿透（--wid 路线确认）：mpv 子窗口设 WS_EX_TRANSPARENT 鼠标穿透 →
+        # 画面区域事件直达 Qt（不用轮询兜底）。play/attach 时 _apply_mpv_mouse_passthrough。
+
     # ---- 播放入口 ----
 
     def play(self, item, index=None):
@@ -305,7 +368,8 @@ class VideoPlayerWindow(QWidget):
             name = (item.get("vod_name") or "")[:20]
             self.setWindowTitle(f"{name} - {self._title_base}")
             self._playing = True
-            self.overlay.show()
+            self._apply_mpv_mouse_passthrough()   # S3：mpv 子窗口鼠标穿透（幂等）
+            self._show_overlay()          # S3：浮现 + 启动 3s 隐藏计时
             self._timer.start()
             self._position_overlay()
         return ok
@@ -316,7 +380,8 @@ class VideoPlayerWindow(QWidget):
         if not self._movie.is_playing():
             return
         self._playing = True
-        self.overlay.show()
+        self._apply_mpv_mouse_passthrough()   # S3：mpv 子窗口鼠标穿透（幂等）
+        self._show_overlay()              # S3：浮现 + 启动 3s 隐藏计时
         self._timer.start()
         self._position_overlay()
 
@@ -329,7 +394,10 @@ class VideoPlayerWindow(QWidget):
         """z-order 置顶（Windows API，只动 z-order 不碰前台锁）。
 
         P0 卡死修复删掉 Qt raise_() 后窗口被宿主盖住（有声音、看不到）——
-        直接 SetWindowPos(HWND_TOPMOST) + SWP_NOACTIVATE：
+        原 SetWindowPos(HWND_TOPMOST) + SWP_NOACTIVATE 置顶。实机发现
+        HWND_TOPMOST = 全局永久置顶（Alt+Tab 切走仍被盖，压着一切软件）→
+        改 HWND_TOP（同级置顶）：显示时浮在宿主主窗口之上、可正常切走。
+        函数名保留 raise_topmost（调用点不动；实际语义 = 同级置顶）。
         不激活（不抢焦点、不触发跨进程激活死锁）；异步调用由面板 singleShot 排队
         （宿主喘息后置顶）。失败打日志不静默；offscreen/非 win32 异常兜底。
         """
@@ -341,18 +409,74 @@ class VideoPlayerWindow(QWidget):
                 ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
                 ctypes.c_int, ctypes.c_int, ctypes.c_uint]
             user32.SetWindowPos.restype = ctypes.c_int
-            HWND_TOPMOST = ctypes.c_void_p(-1)
+            HWND_TOP = ctypes.c_void_p(0)      # 同级置顶（非 TOPMOST 全局永久）
             SWP_NOMOVE = 0x0002
             SWP_NOSIZE = 0x0001
             SWP_NOACTIVATE = 0x0010
             hwnd = ctypes.c_void_p(int(self.winId()))
             ok = user32.SetWindowPos(
-                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                hwnd, HWND_TOP, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
             if not ok:
                 print(f"[播放窗口] SetWindowPos 置顶失败 hwnd={int(self.winId())}")
         except Exception as e:
             print(f"[播放窗口] SetWindowPos 置顶异常: {e}")
+
+    def _apply_mpv_mouse_passthrough(self):
+        """mpv 子窗口鼠标穿透（S3 实锤：--wid 子窗口吃鼠标事件 → WS_EX_TRANSPARENT）。
+
+        EnumChildWindows 找容器下 mpv 子窗口（类名 mpv）→ SetWindowLongPtrW
+        设 WS_EX_TRANSPARENT（0x20）→ Windows 命中测试跳过该子窗口 → 画面区域
+        鼠标事件直达 Qt（悬浮控制条/hover/全屏恢复纯事件驱动，无轮询兜底）。
+        幂等（连播/重播重设，保险）；失败打日志不崩；offscreen/非 win32 兜底。
+        """
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # 64 位 HWND——argtypes 必须 c_void_p（c_int 截断静默失败，之前踩过）
+            user32.EnumChildWindows.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            user32.EnumChildWindows.restype = ctypes.c_int
+            user32.GetClassNameW.argtypes = [
+                ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+            user32.GetClassNameW.restype = ctypes.c_int
+            user32.GetWindowLongPtrW.argtypes = [
+                ctypes.c_void_p, ctypes.c_int]
+            user32.GetWindowLongPtrW.restype = ctypes.c_void_p
+            user32.SetWindowLongPtrW.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+            user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+
+            WS_EX_TRANSPARENT = 0x20
+            GWL_EXSTYLE = -20
+            children = []
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def _enum_cb(hwnd, _):
+                buf = ctypes.create_unicode_buffer(256)
+                n = user32.GetClassNameW(hwnd, buf, 256)
+                if n and buf.value == "mpv":
+                    children.append(hwnd)
+                return True
+
+            user32.EnumChildWindows(
+                ctypes.c_void_p(int(self.container.winId())),
+                _enum_cb, None)
+            if not children:
+                print("[播放窗口] 未找到 mpv 子窗口（穿透未设——鼠标事件可能被吃）")
+                return
+            for hwnd in children:
+                ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+                # c_void_p 无 __int__（int() 会当 bytes 解析崩溃）→ 必须用 .value
+                if isinstance(ex, int):
+                    ex_int = ex
+                else:
+                    ex_val = getattr(ex, "value", None)
+                    ex_int = int(ex_val) if ex_val is not None else 0
+                user32.SetWindowLongPtrW(
+                    hwnd, GWL_EXSTYLE, ctypes.c_void_p(ex_int | WS_EX_TRANSPARENT))
+        except Exception as e:
+            print(f"[播放窗口] mpv 鼠标穿透异常: {e}")
 
     def request_fullscreen(self):
         """全屏按钮：Qt 窗口全屏（mpv --wid 内嵌无独立窗口，set_fullscreen 无效）。
@@ -392,11 +516,73 @@ class VideoPlayerWindow(QWidget):
         """停播（播完/停止/异常）：停轮询 + 隐藏 overlay + 通知面板。"""
         self._playing = False
         self._timer.stop()
+        self._hide_timer.stop()
+        self._overlay_hover = False
         self.overlay.hide()
+        self.unsetCursor()
         try:
             self.stopped.emit()
         except Exception:
             pass
+
+    # ---- S3：鼠标浮现/隐藏（B站式：移入浮现，静止 3s 隐藏，hover 不隐藏） ----
+    # 画面区域鼠标事件直达 Qt（mpv 子窗口 WS_EX_TRANSPARENT 穿透）→ 纯事件驱动。
+
+    def _show_overlay(self):
+        """鼠标活动 → 浮现控制条 + 重置隐藏定时器；指针恢复（全屏/窗口模式统一）。"""
+        self.overlay.show()
+        self.unsetCursor()
+        self._hide_timer.start(_OVERLAY_HIDE_DELAY_MS)
+
+    def notify_mouse_activity(self):
+        """公开接口：鼠标活动（画面区容器/窗口/overlay）→ 浮现 + 重置 3s 隐藏计时。
+        容器（VideoContainer）事件转发入口——跨类只走公开方法，不碰私有。"""
+        self._show_overlay()
+
+    def _on_hide_timeout(self):
+        """3s 静止 → 隐藏控制条 + 指针（B站：指针与控制条同步隐）；
+        hover（正在操作）不隐藏。"""
+        if self._overlay_hover:
+            return
+        self.overlay.hide()
+        self.setCursor(Qt.BlankCursor)      # 窗口模式也隐指针（S3 修）
+
+    def _on_overlay_hover(self, hovering):
+        """overlay hover 状态（控制条上操作防消失）：hover 中停计时；离开后
+        鼠标若仍在窗口内 → 重新计时。"""
+        self._overlay_hover = hovering
+        if hovering:
+            self._hide_timer.stop()
+        elif self.overlay.isVisible():
+            try:
+                if self.geometry().contains(QCursor.pos()):
+                    self._hide_timer.start(_OVERLAY_HIDE_DELAY_MS)
+            except Exception:
+                pass
+
+    def mouseMoveEvent(self, event):
+        self._show_overlay()
+        super().mouseMoveEvent(event)
+
+    def enterEvent(self, event):
+        # 移入窗口 → 浮现 + 重置计时（不立即隐藏）
+        self._show_overlay()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        # 移出窗口：鼠标在 overlay 上（hover）→ 停计时保持；否则立即隐藏
+        self._hide_timer.stop()
+        if self.overlay.isVisible():
+            try:
+                if self.overlay.geometry().contains(QCursor.pos()):
+                    self._overlay_hover = True
+                else:
+                    self.overlay.hide()
+                    if self._fullscreen:
+                        self.setCursor(Qt.BlankCursor)
+            except Exception:
+                self.overlay.hide()
+        super().leaveEvent(event)
 
     # ---- 窗口事件：关窗=停播（隐藏保留 winId）/ Esc ----
 

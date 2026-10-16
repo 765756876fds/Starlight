@@ -419,3 +419,290 @@ class TestOverlayPosition:
             assert w.overlay.width() == 1100
         finally:
             w._timer.stop()
+
+
+class TestOverlayShowHide:
+    """S3：全屏进出 + 鼠标浮现/隐藏（B站式）——窗口级鼠标跟踪 + 3s 静止隐藏定时器。"""
+
+    @staticmethod
+    def _mk_mouse_move(pos):
+        from PySide6.QtCore import QEvent, QPoint
+        from PySide6.QtGui import QMouseEvent
+        return QMouseEvent(QEvent.MouseMove, QPoint(*pos), Qt.NoButton,
+                           Qt.NoButton, Qt.NoModifier)
+
+    def test_mouse_move_shows_overlay_and_starts_timer(self):
+        """鼠标移入窗口移动 → overlay 浮现 + 3s 隐藏定时器启动。"""
+        w, _ = _mk_window()
+        try:
+            w.overlay.hide()
+            w.mouseMoveEvent(self._mk_mouse_move((100, 100)))
+            assert w.overlay.isVisible() is True
+            assert w._hide_timer.isActive() is True
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_hide_timeout_hides_overlay(self):
+        """3s 静止超时 → 控制条隐藏（直接触发超时回调模拟）。"""
+        w, _ = _mk_window()
+        try:
+            w._show_overlay()
+            assert w.overlay.isVisible() is True
+            w._on_hide_timeout()
+            assert w.overlay.isVisible() is False
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_hover_prevents_hide(self):
+        """鼠标 hover overlay（操作中）→ 停计时 + 超时不隐藏。"""
+        w, _ = _mk_window()
+        try:
+            w._show_overlay()
+            w._on_overlay_hover(True)
+            assert w._hide_timer.isActive() is False
+            w._on_hide_timeout()
+            assert w.overlay.isVisible() is True
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_leave_event_hides_overlay(self):
+        """鼠标移出窗口 → 立即隐藏 + 停计时（overlay 已远离鼠标位置）。"""
+        from PySide6.QtCore import QEvent
+        w, _ = _mk_window()
+        try:
+            w._show_overlay()
+            w.overlay.move(9999, 9999)          # overlay 远离真实鼠标位置
+            w.leaveEvent(QEvent(QEvent.Leave))
+            assert w.overlay.isVisible() is False
+            assert w._hide_timer.isActive() is False
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_non_fullscreen_show_hide_works(self):
+        """非全屏窗口模式同样生效：隐藏时控制条 + 指针一起隐（S3 修），浮现恢复。"""
+        w, _ = _mk_window()
+        try:
+            assert w._fullscreen is False
+            w._show_overlay()
+            assert w.overlay.isVisible() is True
+            w._on_hide_timeout()
+            assert w.overlay.isVisible() is False
+            assert w.cursor().shape() == Qt.BlankCursor   # 窗口模式也隐指针（S3 修）
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_hide_sets_blank_cursor_window_mode(self):
+        """S3 修：窗口模式静止超时 → 指针也隐藏（B站：控制条 + 指针同步隐）。"""
+        w, _ = _mk_window()
+        try:
+            w._fullscreen = False
+            w._show_overlay()
+            w._on_hide_timeout()
+            assert w.cursor().shape() == Qt.BlankCursor
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_passthrough_sets_transparent_on_mpv_child(self, monkeypatch):
+        """S3 穿透：EnumChildWindows 找到 mpv 子窗口 → SetWindowLongPtrW
+        设 WS_EX_TRANSPARENT（exstyle | 0x20）。"""
+        import ctypes
+        from app.ui.widgets.video_player_window import VideoPlayerWindow
+        ctl = _FakeCtl()
+        w = VideoPlayerWindow(ctl)
+        try:
+            user32 = ctypes.windll.user32
+            enum_hwnds = []
+            set_calls = []
+
+            def fake_enum(hwnd, cb, _):
+                enum_hwnds.append(hwnd)
+                cb(ctypes.c_void_p(0x1234), None)   # 模拟枚举到一个 mpv 子窗口
+                return 1
+
+            monkeypatch.setattr(user32, "EnumChildWindows", fake_enum)
+            monkeypatch.setattr(
+                user32, "GetClassNameW",
+                lambda h, buf, n: (setattr(buf, "value", "mpv"), 3)[1])
+            monkeypatch.setattr(
+                user32, "GetWindowLongPtrW",
+                lambda h, idx: ctypes.c_void_p(0x4))
+            monkeypatch.setattr(
+                user32, "SetWindowLongPtrW",
+                lambda h, idx, v: set_calls.append((h, idx, v)))
+            w._apply_mpv_mouse_passthrough()
+            assert len(enum_hwnds) == 1                       # 枚举容器子窗口
+            assert len(set_calls) == 1                        # 命中 mpv 子窗口
+            assert set_calls[0][1] == -20                     # GWL_EXSTYLE
+            assert set_calls[0][2].value == 0x4 | 0x20        # ex | WS_EX_TRANSPARENT
+        finally:
+            w._timer.stop()
+
+    def test_passthrough_argtypes_and_no_child_graceful(self, monkeypatch):
+        """穿透：argtypes 全 c_void_p（64 位防截断）；无 mpv 子窗口 → 打日志不崩。"""
+        import ctypes
+        from app.ui.widgets.video_player_window import VideoPlayerWindow
+        ctl = _FakeCtl()
+        w = VideoPlayerWindow(ctl)
+        try:
+            user32 = ctypes.windll.user32
+            monkeypatch.setattr(user32, "EnumChildWindows",
+                                lambda hwnd, cb, _: 0)        # 无子窗口
+            w._apply_mpv_mouse_passthrough()                  # 不抛异常
+            assert user32.EnumChildWindows.argtypes == [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            assert user32.GetWindowLongPtrW.argtypes == [
+                ctypes.c_void_p, ctypes.c_int]
+            assert user32.SetWindowLongPtrW.argtypes == [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        finally:
+            w._timer.stop()
+
+    def test_fullscreen_hide_sets_blank_cursor(self):
+        """全屏沉浸：隐藏时指针也隐藏（BlankCursor）；浮现恢复（ArrowCursor）。"""
+        w, _ = _mk_window()
+        try:
+            w._fullscreen = True                 # 直接置标志（offscreen 不真全屏）
+            w._show_overlay()
+            w._on_hide_timeout()
+            assert w.cursor().shape() == Qt.BlankCursor
+            w._show_overlay()
+            assert w.cursor().shape() == Qt.ArrowCursor
+        finally:
+            w._fullscreen = False
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_overlay_mouse_move_notifies_window(self):
+        """overlay（独立顶层，鼠标在其上时播放窗口收不到事件）活动 →
+        通知窗口浮现 + 重置隐藏计时。"""
+        w, _ = _mk_window()
+        try:
+            w.overlay.hide()
+            w._hide_timer.stop()
+            w.overlay.mouseMoveEvent(self._mk_mouse_move((5, 5)))
+            assert w.overlay.isVisible() is True
+            assert w._hide_timer.isActive() is True
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_overlay_enter_leave_toggles_hover(self):
+        """overlay enter → hover=True（停计时）；leave → hover=False。"""
+        from PySide6.QtCore import QEvent, QPointF
+        from PySide6.QtGui import QEnterEvent
+        w, _ = _mk_window()
+        try:
+            w._show_overlay()
+            enter = QEnterEvent(QPointF(5, 5), QPointF(5, 5), QPointF(5, 5))
+            w.overlay.enterEvent(enter)
+            assert w._overlay_hover is True
+            assert w._hide_timer.isActive() is False
+            w.overlay.leaveEvent(QEvent(QEvent.Leave))
+            assert w._overlay_hover is False
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_container_mouse_tracking_enabled(self):
+        """容器开 mouseTracking：画面区无按键移动也收 mouseMoveEvent（穿透后事件到容器）。"""
+        w, _ = _mk_window()
+        try:
+            assert w.container.hasMouseTracking() is True
+        finally:
+            w._timer.stop()
+
+    def test_container_mouse_move_forwards_to_window(self):
+        """容器 mouseMove（穿透后画面区事件）→ 转发窗口公开接口 → overlay 浮现 +
+        重置 3s 隐藏计时；容器自身 cursor 复原。"""
+        w, _ = _mk_window()
+        try:
+            w.overlay.hide()
+            w._hide_timer.stop()
+            w.setCursor(Qt.BlankCursor)            # 隐藏态（窗口指针隐）
+            w.container.mouseMoveEvent(self._mk_mouse_move((50, 50)))
+            assert w.overlay.isVisible() is True
+            assert w._hide_timer.isActive() is True
+            assert w.container.cursor().shape() == Qt.ArrowCursor  # 容器复原
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_container_enter_forwards_to_window(self):
+        """容器 enter（鼠标进入画面区）→ 转发窗口 → overlay 浮现。"""
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QEnterEvent
+        w, _ = _mk_window()
+        try:
+            w.overlay.hide()
+            w._hide_timer.stop()
+            w.container.enterEvent(
+                QEnterEvent(QPointF(50, 50), QPointF(50, 50), QPointF(50, 50)))
+            assert w.overlay.isVisible() is True
+            assert w._hide_timer.isActive() is True
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_play_shows_overlay_and_starts_timer(self):
+        """播放入口（attach_current）→ 浮现 + 启动隐藏计时（B站：开播短暂浮现）。"""
+        w, _ = _mk_window()
+        try:
+            w.attach_current()
+            assert w.overlay.isVisible() is True
+            assert w._hide_timer.isActive() is True
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_fullscreen_button_enters_fullscreen(self, monkeypatch):
+        """全屏按钮 → showFullScreen（_fullscreen 标志置位；mock 避免 offscreen
+        真全屏切换导致 Qt 清理崩溃——功能断言等价）。"""
+        from app.ui.widgets import video_player_window as vp
+        monkeypatch.setattr(vp.VideoPlayerWindow, "showFullScreen",
+                            lambda self: setattr(self, "_fullscreen", True))
+        w, _ = _mk_window()
+        try:
+            w.overlay.btn_fullscreen.click()
+            assert w._fullscreen is True
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_esc_exits_fullscreen(self, monkeypatch):
+        """Esc：全屏时退全屏（keyPressEvent 分支；非全屏关窗 S1 已测）。"""
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
+        from app.ui.widgets import video_player_window as vp
+        monkeypatch.setattr(vp.VideoPlayerWindow, "showNormal",
+                            lambda self: setattr(self, "_fullscreen", False))
+        w, _ = _mk_window()
+        try:
+            w._fullscreen = True
+            ev = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+            w.keyPressEvent(ev)
+            assert w._fullscreen is False
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()
+
+    def test_stop_clears_hide_state(self):
+        """停播 → 停隐藏计时 + 清 hover + 隐藏 overlay + 恢复指针。"""
+        w, _ = _mk_window()
+        try:
+            w._fullscreen = True
+            w._show_overlay()
+            w._on_overlay_hover(True)
+            w._on_stopped()
+            assert w._playing is False
+            assert w._overlay_hover is False
+            assert w.overlay.isVisible() is False
+            assert w._hide_timer.isActive() is False
+        finally:
+            w._timer.stop()
+            w._hide_timer.stop()

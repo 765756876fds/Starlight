@@ -556,12 +556,14 @@ class TestPanelEmbedDeferred:
 
 
 class TestTopmostRestore:
-    """宿主盖窗口修复：SetWindowPos(HWND_TOPMOST) 异步置顶（替代 Qt raise_，
+    """宿主盖窗口修复：SetWindowPos 异步置顶（替代 Qt raise_，
     只动 z-order 不碰前台锁——不触发跨进程激活死锁）。"""
 
     def test_raise_topmost_calls_setwindowpos(self, qapp):
-        """raise_topmost → SetWindowPos(hwnd, HWND_TOPMOST=-1,
-        SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE=0x13)。"""
+        """raise_topmost → SetWindowPos(hwnd, HWND_TOP=0,
+        SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE=0x13)。
+        HWND_TOP（同级置顶）非 HWND_TOPMOST（全局永久置顶——实机发现压着
+        一切软件、Alt+Tab 切不走）。"""
         from app.ui.widgets.video_player_window import VideoPlayerWindow
         ctl = _FakeCtl()
         w = VideoPlayerWindow(ctl)
@@ -570,8 +572,8 @@ class TestTopmostRestore:
                 w.raise_topmost()
             assert swp.call_count == 1
             args = swp.call_args.args
-            # c_void_p(-1).value 无符号 64 位 = 2^64-1（HWND_TOPMOST）
-            assert args[1].value == (1 << 64) - 1            # HWND_TOPMOST
+            # c_void_p(0) = NULL 指针 → value None（等价 HWND_TOP=0）
+            assert args[1].value is None                     # HWND_TOP
             assert args[6] == 0x0002 | 0x0001 | 0x0010       # NOMOVE|NOSIZE|NOACTIVATE
             assert args[2:6] == (0, 0, 0, 0)                 # 只动 z-order
         finally:
