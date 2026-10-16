@@ -568,11 +568,21 @@ class VideoPlayerWindow(QWidget):
         self._title_base = title
         self._current_item = None        # S4：当前播放 item（切集复用）
         self._current_index = 0          # S6：当前集索引（下一集定位）
+        # S8：mpv 崩溃自愈状态（恢复中 tick 只轮询恢复结果，不走正常进度刷新）
+        self._recovering = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.container = VideoContainer(self)
         lay.addWidget(self.container)
+
+        # S8：崩溃恢复提示（mpv 崩后容器上无子窗口，label 可见；恢复成功/收尾隐藏）
+        self._recover_label = QLabel(self)
+        self._recover_label.setAlignment(Qt.AlignCenter)
+        self._recover_label.setStyleSheet(
+            "color:#e8e8e8;font-size:16px;background:rgba(20,20,20,150);"
+            "border-radius:8px;padding:10px 18px;")
+        self._recover_label.hide()
 
         # 独立顶层 overlay（S2 底部控制条）
         self.overlay = ControlOverlay(self)
@@ -770,7 +780,16 @@ class VideoPlayerWindow(QWidget):
             # 连播检测先行：播完一集 idle 上升沿 → 下一集（is_playing 恢复 True）。
             # 若先查 is_playing，播完瞬间会误判"停播"直接收尾，连播永远起不来。
             self._movie.tick()
+            # S8 崩溃自愈状态机：
+            if self._recovering:
+                self._recover_poll()
+                return
             if not self._movie.is_playing():
+                # S8：mpv 崩溃（进程死 + 仍有播放上下文）→ 触发自愈；
+                # 否则为正常停播（播完/用户停止）→ 原收尾路径。
+                if self._playing and self._movie.is_crashed():
+                    self._start_recover()
+                    return
                 self._on_stopped()
                 return
             pos = self._movie.get_position()
@@ -784,6 +803,56 @@ class VideoPlayerWindow(QWidget):
             self.overlay.refresh(pos, dur)
         except Exception:
             pass
+
+    # ---- S8：mpv 崩溃自愈（检测 → 提示 → controller 重启 → 轮询恢复结果） ----
+
+    def _start_recover(self):
+        """检测到崩溃：容器提示 + 调 controller 自愈（防重入）。
+        超限放弃/无可恢复上下文（restart_current 返回 False）→ 提示失败 + 收尾。"""
+        if self._recovering:
+            return
+        self._recovering = True
+        self._show_recover_label("播放器异常，正在恢复…")
+        ok = self._movie.restart_current(wid=self.container.native_id())
+        if not ok:
+            self._recovering = False
+            self._show_recover_label("播放器异常，自动恢复失败")
+            self._flash_recover_failed()
+            self._on_stopped()
+
+    def _recover_poll(self):
+        """恢复中轮询（tick 每 500ms）：
+        成功（新 mpv 起来 + loadfile → is_playing True）→ 重设穿透回正常态；
+        超限放弃 → 提示失败 + 收尾。"""
+        try:
+            if self._movie.is_playing():
+                self._recovering = False
+                self._hide_recover_label()
+                self._apply_mpv_mouse_passthrough()   # 新 mpv 进程 → 重设穿透（幂等）
+                self._show_overlay()
+            elif self._movie.is_gave_up():
+                self._recovering = False
+                self._show_recover_label("播放器异常，自动恢复失败")
+                self._flash_recover_failed()
+                self._on_stopped()
+        except Exception:
+            pass
+
+    def _flash_recover_failed(self):
+        """失败提示短暂停留（3s）后消失；窗口若还在播则定时器自清。"""
+        QTimer.singleShot(3000, self._hide_recover_label)
+
+    def _show_recover_label(self, text):
+        self._recover_label.setText(text)
+        self._recover_label.adjustSize()
+        self._recover_label.move(
+            max(8, (self.width() - self._recover_label.width()) // 2),
+            max(8, (self.height() - self._recover_label.height()) // 2))
+        self._recover_label.show()
+        self._recover_label.raise_()
+
+    def _hide_recover_label(self):
+        self._recover_label.hide()
 
     def _on_stopped(self):
         """停播（播完/停止/异常）：停轮询 + 隐藏 overlay/侧栏 + 通知面板。"""
@@ -920,6 +989,9 @@ class VideoPlayerWindow(QWidget):
                 self._movie.stop()
         except Exception:
             pass
+        # S8：恢复中关窗 → 停止恢复（controller.stop 清上下文，worker 守卫放弃恢复）
+        self._recovering = False
+        self._hide_recover_label()
         self._on_stopped()
         self.setWindowTitle(self._title_base)
         self.hide()

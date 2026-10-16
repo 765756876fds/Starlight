@@ -11,6 +11,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import urllib.parse
 import zipfile
 
@@ -122,6 +124,12 @@ class MovieController:
         # idle 上升沿检测：mpv --idle=yes 启动即 idle，初始 True 防首播误触发
         self._last_idle = True
         self._sub_searched = set()
+        # 崩溃自愈状态（对齐音乐链 _try_restart_mpv：防重入 + 3 次/5 分钟上限）
+        self._recover_lock = threading.Lock()
+        self._recover_pending = False   # 一次恢复进行中（防重入）
+        self._recover_count = 0         # 当前窗口内已恢复次数
+        self._recover_window_ts = 0.0   # 窗口起点
+        self._recover_gave_up = False   # 超限放弃（停止自愈）
         self._subscribe()
         self._register_commands()
 
@@ -411,6 +419,101 @@ class MovieController:
         self._current_index = None
         self._last_idle = True
         self._write_state(playing=False, paused=False)
+
+    # ---- 崩溃自愈（S8：mpv 崩 → 重启 + wid 重传 + loadfile 续播；对齐音乐链 _try_restart_mpv） ----
+
+    def is_crashed(self) -> bool:
+        """mpv 进程死且仍有播放上下文 → 崩溃（可触发自愈）。
+        正常停播（播完末集/用户停止）进程活着且 _current 已清 → False。"""
+        return self._current is not None and not self.mpv.is_running()
+
+    def is_gave_up(self) -> bool:
+        """恢复超限已放弃（3 次/5 分钟窗口内仍崩）。"""
+        return self._recover_gave_up
+
+    def restart_current(self, wid=None) -> bool:
+        """mpv 崩溃自愈入口（播放窗口 _tick 检测到 is_crashed 后调用）。
+
+        锁内只做防重入/上限决策（<1ms），实际重启在 daemon 线程
+        （stop_process + start 最坏 ~4s，不阻塞 UI——音乐链教训）。
+        恢复链：stop_process → start(taskkill=False, wid=wid)（新进程重传 --wid）
+        → loadfile 当前集 URL → seek 回崩溃前位置（续播，位置取最后一次成功轮询缓存）。
+        返回 True=已调度恢复；False=超限放弃或无可恢复上下文（调用方直接收尾）。
+        """
+        with self._recover_lock:
+            if self._recover_pending:
+                return True            # 已在恢复中（防重入：不重复起线程）
+            if self._current is None:
+                return False
+            now = time.time()
+            if now - self._recover_window_ts > 300:
+                self._recover_window_ts = now
+                self._recover_count = 0
+            if self._recover_count >= 3:
+                # 超限放弃：清播放上下文（is_crashed → False，UI 不再触发）并通知
+                if not self._recover_gave_up:
+                    self._recover_gave_up = True
+                    print("[Movie] mpv 多次重启失败，放弃自动恢复（停止自愈）")
+                    self._current = None
+                    self._current_index = None
+                    self._last_idle = True
+                    self._write_state(playing=False, paused=False)
+                return False
+            self._recover_count += 1
+            print(f"[Movie] mpv 异常，尝试自动恢复 {self._recover_count}/3")
+            self._recover_pending = True
+            # 快照（重启完成时用户可能已停/切集——worker 用快照对比，不恢复旧上下文）
+            item = self._current
+            idx = self._current_index or 0
+            eps = self.episodes(item)
+            url = eps[idx][1] if 0 <= idx < len(eps) else (item.get("first_url") or "")
+            pos = self.get_position()      # 进程死 → 回退最后成功轮询缓存（≤500ms 滞后）
+            wid_snap = wid if wid is not None else self._embed_wid
+        threading.Thread(
+            target=self._restart_worker,
+            args=(item, idx, url, pos, wid_snap),
+            daemon=True,
+            name="movie-mpv-restart",
+        ).start()
+        return True
+
+    def _restart_worker(self, item, idx, url, pos, wid):
+        """后台执行实际重启 + 恢复；任何失败不抛（崩溃恢复失败不崩 Qt）。"""
+        try:
+            try:
+                self.mpv.stop_process()
+            except Exception:
+                pass
+            try:
+                ok = bool(self.mpv.start(taskkill=False, wid=wid,
+                                         pipe_timeout=3.0, prop_timeout=0.5))
+            except Exception as e:
+                print(f"[Movie] mpv 重启异常: {e!r}")
+                ok = False
+        finally:
+            with self._recover_lock:
+                self._recover_pending = False
+        if not ok:
+            print("[Movie] mpv 重启失败，等待下次轮询")
+            return
+        # 关窗中断守卫：恢复完成时上下文已变（用户停止/切集）→ 放弃恢复
+        if self._current is not item or (self._current_index or 0) != idx:
+            if self._current is None:
+                try:
+                    self.mpv.stop_process()   # 已停止且无新播放 → 回收刚起的进程
+                except Exception:
+                    pass
+            return
+        try:
+            self.mpv.loadfile(url)
+            if pos and pos > 0:
+                self.mpv.seek(pos, "absolute")
+        except Exception as e:
+            print(f"[Movie] 崩溃恢复 loadfile 异常: {e!r}")
+            return
+        self._last_idle = False      # 恢复播放：重置连播基线（防误判 idle 上升沿）
+        self._write_state(playing=True, paused=False)
+        print("[Movie] mpv 崩溃恢复完成（wid 重传 + loadfile 续播）")
 
     # ---- 播放控制（复用 mpv JSON IPC） ----
 
