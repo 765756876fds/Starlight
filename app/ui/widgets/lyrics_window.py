@@ -1,4 +1,4 @@
-"""桌面歌词浮窗（基础版）。
+"""桌面歌词浮窗（基础版 + 批 3b 自定义）。
 
 - 窗口：Qt.Tool | FramelessWindowHint | WindowStaysOnTopHint（全局置顶浮窗，
   桌面歌词与 video overlay 的 owned-window 语义不同）+ WA_TranslucentBackground
@@ -6,26 +6,27 @@
   顶层窗口不渲染 alpha=0）；当前行高亮 + 上下各 1 行渐隐（对齐 Cadence 3 行模式）
 - 性能：QFontMetrics 构造一次预热；行文本 → QPixmap 缓存（只重绘变化行）
 - 同步：200ms QTimer 查 mpv 播放时间 → 匹配当前行（行跨度 2-4s，200ms 足够）
-- 换歌：订阅 MUSIC_TRACK_CHANGED → 重新加载歌词（本地同名 .lrc / 在线 get_lyric）
+- 换歌：订阅 MUSIC_TRACK_CHANGED → 重新加载歌词（本地同名 .lrc / 在线 get_lyric）；
+  play_online 不发事件 → 200ms tick 轮询比对歌标识自动重载（事件订阅双保险）
 - 鼠标穿透：WS_EX_TRANSPARENT（S3 经验）；拖拽时临时关穿透，松手恢复
-- 降级：无歌词 → "暂无歌词"占位；同步/加载异常不影响播放
+- 批 3b 自定义：字体/字号/颜色/背景透明度/单双行/位置记忆（settings.yaml music.lyrics 子段，
+  设置页改动即时生效 apply_prefs；拖拽松手保存坐标，越界回中央）
+- 降级：无歌词 → "暂无歌词"占位；同步/加载异常不影响播放；配置读取失败 → 默认值
 """
 import bisect
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
+from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from ...core.event_bus import EventType
 from ...music.lyrics import find_local_lrc, load_lyrics_from_file, parse_lrc
+from ..settings_store import load_lyrics_prefs, save_lyrics_prefs
 
 _W = 640          # 窗口宽
-_H = 108          # 窗口高（3 行）
-_LINE_H = 36      # 行高
-_FONT_SIZE = 22   # 歌词字号
-_COLOR_CUR = QColor(250, 180, 70)     # 当前行（橙，对齐项目主色）
-_COLOR_PREV = QColor(238, 238, 238, 120)  # 上下文行（渐隐白）
+_FONT_SIZE = 24   # 默认字号
+_COLOR_CUR_HEX = "#FAB446"  # 默认当前行颜色（橙）
 _PLACEHOLDER = "♪ 暂无歌词"
 
 
@@ -37,7 +38,6 @@ class LyricsWindow(QWidget):
         self._controller = controller
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_NativeWindow)
-        self.setFixedSize(_W, _H)
 
         # 歌词数据：[(time_sec, text)]；当前行索引；标题
         self._lines: List[Tuple[float, str]] = []
@@ -47,9 +47,16 @@ class LyricsWindow(QWidget):
         # 当前歌标识（轮询比对用：play_online 不发换歌事件，靠 200ms tick 检测）
         self._last_song_key = ""
 
-        # 字体度量预热（构造一次，防每帧 QFontMetrics 卡顿）
-        self._font = QFont("Microsoft YaHei", _FONT_SIZE)
-        self._fm = QFontMetrics(self._font)
+        # 批 3b 自定义配置（settings.yaml music.lyrics；损坏 → 默认值兜底）
+        self._prefs = dict(load_lyrics_prefs())
+        self._color_cur = QColor(str(self._prefs.get("color") or _COLOR_CUR_HEX))
+        self._color_prev = QColor(self._color_cur.red(), self._color_cur.green(),
+                                  self._color_cur.blue(), 100)
+        # 字体度量先就绪（行高取实际 ascent+descent+leading，防大字号文字贴顶/贴底被切）
+        self._apply_font()
+        self._line_h = self._line_height()
+        self._apply_window_size()
+        self._apply_position(self._prefs)
 
         # 行 pixmap 缓存：text -> (is_current, QPixmap)（只重绘变化行）
         self._row_cache: dict = {}
@@ -59,9 +66,93 @@ class LyricsWindow(QWidget):
         self._timer.setInterval(200)
         self._timer.timeout.connect(self._sync)
 
-        # 拖拽
+        # 拖拽（locked=True=锁定/穿透，不可拖；False=解锁/可拖）
         self._dragging = False
         self._drag_offset = None
+        self._apply_passthrough()
+
+    # ---- 批 3b 自定义（字体/字号/颜色/透明度/模式/位置/锁定） ----
+    def apply_prefs(self, prefs: dict) -> None:
+        """设置页即时生效入口：合并更新配置，重建字体度量/清行缓存/穿透状态。
+
+        幂等：无变化直接返回；字体/字号变 → 重建 QFontMetrics（换字体才清缓存重算）；
+        颜色/模式变 → 清行缓存 + 重设窗口高；locked 变 → 立即切换鼠标穿透。
+        **位置处理仅当 prefs 显式含 pos_x/pos_y 才执行**（设置页改动不含 pos →
+        绝不挪动窗口；只有拖拽保存/重置按钮才带位置意图）。
+        """
+        if not isinstance(prefs, dict):
+            return
+        merged = dict(self._prefs)
+        merged.update({k: v for k, v in prefs.items() if k in merged})
+        if merged == self._prefs:
+            return
+        locked_changed = merged.get("locked") != self._prefs.get("locked")
+        self._prefs = merged
+        self._color_cur = QColor(str(merged.get("color") or _COLOR_CUR_HEX))
+        self._color_prev = QColor(self._color_cur.red(), self._color_cur.green(),
+                                  self._color_cur.blue(), 100)
+        self._apply_font()          # 字体/字号 → 重建 QFontMetrics
+        self._line_h = self._line_height()
+        self._row_cache.clear()     # 颜色/字号/字体变 → 缓存失效（换字体才清，此处统一清一次）
+        self._apply_window_size()
+        # 仅显式位置意图才处理位置（改字体/锁定/颜色等绝不挪动/绝不 recenter）
+        if "pos_x" in prefs or "pos_y" in prefs:
+            self._apply_position(merged)
+        if locked_changed:
+            self._apply_passthrough()
+        self.update()
+
+    def _line_height(self) -> int:
+        """实际字体行高（QFontMetrics.height()=ascent+descent+leading）+ 上下边距——
+        保证文字完整落在行 pixmap 内，不贴顶/贴底被切（估算 size*1.5 会低估大字号）。"""
+        return self._fm.height() + 8
+
+    def _line_count(self) -> int:
+        """按模式：triple=3 行上下文；single=单行。"""
+        return 3 if str(self._prefs.get("mode") or "triple") == "triple" else 1
+
+    def _apply_font(self) -> None:
+        self._font = QFont(str(self._prefs.get("font") or "Microsoft YaHei"),
+                           int(self._prefs.get("font_size") or _FONT_SIZE))
+        self._fm = QFontMetrics(self._font)
+
+    def _apply_window_size(self) -> None:
+        # 窗口高 = 行数 × 实际行高 + 上下边距（首行不贴顶、末行不贴底）
+        self.setFixedSize(_W, self._line_count() * self._line_h + 12)
+
+    def _apply_position(self, prefs: dict) -> None:
+        x, y = prefs.get("pos_x"), prefs.get("pos_y")
+        if x is None or y is None:
+            self._recenter()
+            return
+        if self._pos_on_screen(int(x), int(y), self.width(), self.height()):
+            self.move(int(x), int(y))
+        else:
+            self._recenter()
+
+    def _recenter(self) -> None:
+        """回主屏/鼠标所在屏中央（可用区域）。"""
+        try:
+            sc = QGuiApplication.primaryScreen()
+            if sc is None:
+                return
+            geo = sc.availableGeometry()
+            self.move(geo.center().x() - self.width() // 2,
+                      geo.center().y() - self.height() // 2)
+        except Exception:
+            pass  # 无屏/异常 → 不动，默认位置
+
+    @staticmethod
+    def _pos_on_screen(x: int, y: int, w: int, h: int) -> bool:
+        """越界保护：坐标矩形是否与任一屏幕可用区域相交（多屏任一屏即可）。"""
+        try:
+            rect = QRect(int(x), int(y), int(w), int(h))
+            for sc in QGuiApplication.screens():
+                if sc.availableGeometry().intersects(rect):
+                    return True
+            return False
+        except Exception:
+            return False
 
     # ---- 生命周期 ----
     def start(self) -> None:
@@ -213,14 +304,14 @@ class LyricsWindow(QWidget):
 
     # ---- 渲染（paintEvent 手绘，S7 标准做法）----
     def _row_pixmap(self, text: str, is_current: bool) -> QPixmap:
-        """行文本 → 透明底 QPixmap（缓存：同文本+同态复用）。"""
+        """行文本 → 透明底 QPixmap（缓存：同文本+同态复用；换字体/字号/颜色清缓存）。"""
         key = (text, is_current)
         cached = self._row_cache.get(key)
         if cached is not None:
             return cached
-        color = _COLOR_CUR if is_current else _COLOR_PREV
+        color = self._color_cur if is_current else self._color_prev
         w = self._fm.horizontalAdvance(text) + 8
-        h = _LINE_H
+        h = self._line_h
         pm = QPixmap(w, h)
         pm.fill(Qt.transparent)
         painter = QPainter(pm)
@@ -234,6 +325,10 @@ class LyricsWindow(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        # 背景透明度（0=纯透明不画；>0 画半透黑底，alpha 上限 180 保证文字清晰）
+        op = int(self._prefs.get("bg_opacity") or 0)
+        if op > 0:
+            painter.fillRect(self.rect(), QColor(0, 0, 0, int(op / 100 * 180)))
         if not self._lines:
             # 占位：居中灰字
             pm = self._row_pixmap(_PLACEHOLDER, False)
@@ -243,17 +338,27 @@ class LyricsWindow(QWidget):
             return
         idx = self._current_idx
         center_y = self.height() // 2
-        # 当前行 + 上下各 1 行（行跨度大时中间可留空隙，这里固定 3 行）
-        for rel, line_idx in ((-1, idx - 1), (0, idx), (1, idx + 1)):
+        # 当前行 + 上下文行（triple=上下各 1；single=仅当前行）
+        rels = (-1, 0, 1) if self._line_count() == 3 else (0,)
+        for rel, line_idx in ((rel, idx + rel) for rel in rels):
             if line_idx < 0 or line_idx >= len(self._lines):
                 continue
             text = self._lines[line_idx][1]
             pm = self._row_pixmap(text, rel == 0)
             x = (self.width() - pm.width()) // 2
-            y = center_y + rel * _LINE_H - pm.height() // 2
+            y = center_y + rel * self._line_h - pm.height() // 2
             painter.drawPixmap(x, y, pm)
 
-    # ---- 拖拽（拖时临时关穿透）----
+    # ---- 拖拽/穿透（locked=True=锁定/穿透不可拖；False=解锁/可拖）----
+    def _apply_passthrough(self) -> None:
+        """按锁定态应用鼠标穿透（构造/设置页切换/show 时调用；winId 未就绪 → 下次再补）。"""
+        self._set_passthrough(bool(self._prefs.get("locked", True)))
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # winId 在 show 后才有有效句柄——构造时 _apply_passthrough 可能静默失败，show 时补一次
+        self._apply_passthrough()
+
     def _set_passthrough(self, on: bool) -> None:
         try:
             import ctypes
@@ -264,10 +369,12 @@ class LyricsWindow(QWidget):
             new_style = style | WS_EX_TRANSPARENT if on else style & ~WS_EX_TRANSPARENT
             ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
         except Exception:
-            pass  # 非 Windows/无权限 → 不穿透，不影响显示
+            pass  # 非 Windows/无权限/winId 未就绪 → 不穿透，不影响显示
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
+        # 仅解锁态可拖拽（锁定时 WS_EX_TRANSPARENT 穿透，鼠标事件到不了窗口；guard 双保险）
+        if event.button() == Qt.LeftButton and not self._dragging \
+                and not self._prefs.get("locked", True):
             self._dragging = True
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._set_passthrough(False)
@@ -280,4 +387,11 @@ class LyricsWindow(QWidget):
         if event.button() == Qt.LeftButton and self._dragging:
             self._dragging = False
             self._drag_offset = None
-            self._set_passthrough(True)
+            # 松手保持解锁态（用户可继续拖，直到设置页勾回"锁定"）；解锁态无需恢复穿透
+            # 位置保存（拖拽结束 → 实时保存坐标；越界由 _apply_position 兜底）
+            try:
+                pos = self.pos()
+                save_lyrics_prefs({"pos_x": pos.x(), "pos_y": pos.y()})
+            except Exception as e:
+                # 位置记忆失败不能静默——否则 yaml pos 保持 None，下次 apply_prefs 会 recenter
+                print(f"[LyricsWindow] 拖拽位置保存失败: {e!r}")

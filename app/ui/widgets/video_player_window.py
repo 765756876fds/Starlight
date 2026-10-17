@@ -16,7 +16,7 @@ EpisodeSidebar（S4，同 owned 模式）右缘选集。
 NOACTIVATE 方案 S2 实测桌面不显示，已整体弃用）。
 mpv 崩溃恢复（S8）：窗口 _tick 轮询检测。
 """
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMenu, QPushButton, QSlider,
@@ -524,7 +524,15 @@ class VideoPlayerWindow(QWidget):
         super().__init__(None)
         self._movie = controller
         self.setWindowTitle(title)
-        self.resize(960, 540)
+        self._qs = QSettings("LoLMusicAgent", "VideoPlayer")
+        saved = self._qs.value("size")
+        if saved is not None:
+            try:
+                self.resize(int(saved.width()), int(saved.height()))
+            except Exception:
+                self.resize(960, 540)
+        else:
+            self.resize(960, 540)
         self._fullscreen = False
         self._playing = False
         self._title_base = title
@@ -954,6 +962,11 @@ class VideoPlayerWindow(QWidget):
     # ---- 窗口事件：关窗=停播（隐藏保留 winId）/ Esc ----
 
     def closeEvent(self, event):
+        # 尺寸记忆：关窗（停播隐藏）时保存当前宽高，下次打开恢复
+        try:
+            self._qs.setValue("size", self.size())
+        except Exception:
+            pass
         try:
             if self._playing or self._movie.is_playing():
                 self._movie.stop()

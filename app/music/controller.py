@@ -156,6 +156,13 @@ class MusicController:
         self.scanner = MusicScanner(self.db, self.scan_dirs, self.extensions, self.mpv_path)
         self.search = MusicSearch(self.db)
         self.queue = PlayQueue()
+        # 播放模式记忆：settings.yaml music.play_mode（无 → 保持 queue 默认顺序）
+        play_mode = config.get("play_mode")
+        if play_mode:
+            try:
+                self.queue.set_play_mode(str(play_mode))
+            except Exception:
+                pass  # 非法模式值 → 保持默认，不崩
         self._missing_file_streak = 0   # 连续文件不可用计数（限次保护）
         self._last_next_ts = 0.0        # next() 防抖时间戳（语音+UI 并发双触发合并）
         self.mpv = MpvController(self.mpv_path, self.mpv_ipc_pipe)
@@ -1803,8 +1810,14 @@ class MusicController:
             self._update_state(playing=False, current_song=None)
 
     def set_play_mode(self, mode: str):
-        """设置播放模式"""
+        """设置播放模式（顺序/随机/单曲/列表循环）+ 写回 settings.yaml music.play_mode。
+        延迟 import：app/music 不依赖 app/ui 的模块级导入（防环）。"""
         self.queue.set_play_mode(mode)
+        try:
+            from app.ui.settings_store import save_settings_yaml
+            save_settings_yaml({"music": {"play_mode": mode}})
+        except Exception as e:
+            print(f"[Music] 播放模式写回配置失败: {e!r}")
 
     def get_current_song(self) -> Optional[Dict[str, Any]]:
         """获取当前播放歌曲"""

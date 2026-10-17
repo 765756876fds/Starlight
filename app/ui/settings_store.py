@@ -131,3 +131,49 @@ def save_settings_yaml(update: dict) -> bool:
         except Exception as e:
             print(f"[Settings] settings.yaml 写入失败: {e}")
             return False
+
+
+# ---------- 桌面歌词偏好（settings.yaml music.lyrics 子段） ----------
+
+DEFAULT_LYRICS_PREFS = {
+    "font": "Microsoft YaHei",   # 字体
+    "font_size": 24,             # 字号
+    "color": "#FAB446",          # 当前行颜色（橙，对齐项目主色 250,180,70）
+    "bg_opacity": 0,             # 背景透明度 0-100（0=纯透明不画背景；100=半透黑底）
+    "mode": "triple",            # triple=3 行上下文 / single=单行
+    "locked": True,              # 锁定=鼠标穿透不可拖（默认锁定）；False=解锁可拖
+    "pos_x": None,               # 窗口位置（None=未保存/居中）
+    "pos_y": None,
+}
+
+
+def load_lyrics_prefs() -> dict:
+    """读 settings.yaml music.lyrics 子段，缺省合并默认值（配置损坏 → 全默认）。"""
+    with _LOCK:
+        try:
+            import yaml
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            raw = cfg.get("music", {}).get("lyrics", {}) or {}
+        except Exception:
+            raw = {}
+        merged = dict(DEFAULT_LYRICS_PREFS)
+        if isinstance(raw, dict):
+            merged.update({k: raw[k] for k in DEFAULT_LYRICS_PREFS if k in raw})
+        return merged
+
+
+def save_lyrics_prefs(update: dict) -> bool:
+    """更新 music.lyrics 子段（仅 DEFAULT_LYRICS_PREFS 内的键）。
+
+    **深合并**：先读当前 lyrics（含已保存的 pos_x/pos_y 等），再叠加本次更新——
+    设置页普通改动（collect 不含 pos）绝不能抹掉拖拽保存的位置。
+    （save_settings_yaml 只浅合并到 music 层，lyrics 子段整段替换——
+    若直接传 clean 会把 yaml 里的 pos 冲掉 → 下次 load pos=None → 窗口 recenter。）
+    """
+    clean = {k: v for k, v in (update or {}).items() if k in DEFAULT_LYRICS_PREFS}
+    if not clean:
+        return False
+    cur = load_lyrics_prefs()
+    cur.update(clean)
+    return save_settings_yaml({"music": {"lyrics": cur}})

@@ -17,8 +17,10 @@ from app.ui.theme.colors import Colors
 
 
 from PySide6.QtCore import Qt, QThread, QObject, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
+    QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFontComboBox,
+    QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider,
     QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import (
 from ..settings_store import (
     ALL_EXTENSIONS, load_music_dirs, save_music_dirs,
     load_ui_prefs, save_ui_prefs, save_settings_yaml, reset_ui_prefs, reset_music_dirs,
+    load_lyrics_prefs, save_lyrics_prefs,
     SETTINGS_PATH as _SETTINGS_PATH,
 )
 from ..widgets.toggle_button import ToggleButton
@@ -39,6 +42,36 @@ class NoWheelSlider(QSlider):
 
     def wheelEvent(self, event):
         event.ignore()
+
+# ---------- 桌面歌词偏好监听器（设置页保存 → 已开的歌词窗即时生效） ----------
+_LYRICS_LISTENERS: list = []
+
+
+def register_lyrics_prefs_listener(fn: Callable) -> None:
+    """注册歌词窗 apply_prefs 回调（music_panel 创建窗口时注册；幂等）。"""
+    if fn not in _LYRICS_LISTENERS:
+        _LYRICS_LISTENERS.append(fn)
+
+
+def _notify_lyrics_prefs_changed(update: dict | None = None) -> None:
+    """保存后通知全部监听器（单个失败不影响其他；窗口未开则无监听，下次构造读新值）。
+
+    **位置门控（防"点锁定/改字体瞬间跑回中央"）**：本次更新不含 pos 键
+    （设置页普通改动：锁定/字体/字号/颜色/透明度/模式）→ 通知给监听器的 prefs
+    剥离 pos_x/pos_y——窗口 apply_prefs 的"仅显式含 pos 才移动"门控不触发，
+    绝不挪动/绝不 recenter。只有拖拽保存/重置位置（update 含 pos 键）才保留 pos。
+    """
+    try:
+        prefs = load_lyrics_prefs()
+    except Exception:
+        return
+    if update is not None and "pos_x" not in update and "pos_y" not in update:
+        prefs = {k: v for k, v in prefs.items() if k not in ("pos_x", "pos_y")}
+    for fn in list(_LYRICS_LISTENERS):
+        try:
+            fn(prefs)
+        except Exception:
+            pass
 
 # ---------- TTS 音色常量表（按引擎） ----------
 
@@ -243,6 +276,7 @@ class SettingsPanel(QWidget):
         self._build_music_group(tab_music)
         self._build_plugins_group(tab_music)
         self._build_movie_group(tab_music)
+        self._build_lyrics_group(tab_music)
         tab_music.addStretch(1)
         # Tab 2 语音：语音 TTS
         self._build_tts_group(tab_voice)
@@ -426,6 +460,135 @@ class SettingsPanel(QWidget):
             "auto_subtitle": self.cb_auto_subtitle.isChecked(),
         }})
         self.lbl_movie_status.setText("已保存（下次启动生效）" if ok else "保存失败")
+
+    # ---------- 🎤 桌面歌词（批 3b 自定义面板） ----------
+
+    def _build_lyrics_group(self, root: QVBoxLayout) -> None:
+        """字体/字号/颜色/透明度/单双行/锁定/重置位置；改动即时生效（保存 + 通知歌词窗）。"""
+        # 构造期 guard：setCurrentFont/setValue/toggled 会触发 *Changed 信号，
+        # 此时部分控件未就绪且不应保存——末尾才置 True，构造期信号全部忽略
+        self._lyrics_group_ready = False
+        prefs = load_lyrics_prefs()
+        box = QGroupBox("🎤 桌面歌词")
+        lay = QVBoxLayout(box)
+
+        row_font = QHBoxLayout()
+        self.cmb_lyrics_font = QFontComboBox()
+        self.cmb_lyrics_font.setCurrentFont(QFont(str(prefs.get("font") or "Microsoft YaHei")))
+        self.cmb_lyrics_font.setMaximumWidth(240)
+        self.cmb_lyrics_font.currentFontChanged.connect(self._on_lyrics_changed)
+        row_font.addWidget(QLabel("字体"))
+        row_font.addWidget(self.cmb_lyrics_font, 1)
+        lay.addLayout(row_font)
+
+        row_size = QHBoxLayout()
+        self.spin_lyrics_size = QSpinBox()
+        self.spin_lyrics_size.setRange(12, 48)
+        self.spin_lyrics_size.setValue(int(prefs.get("font_size") or 24))
+        self.spin_lyrics_size.valueChanged.connect(self._on_lyrics_changed)
+        row_size.addWidget(QLabel("字号"))
+        row_size.addWidget(self.spin_lyrics_size)
+        row_size.addStretch()
+        lay.addLayout(row_size)
+
+        row_color = QHBoxLayout()
+        self.btn_lyrics_color = QPushButton()
+        self.btn_lyrics_color.setFixedSize(28, 22)
+        self.btn_lyrics_color.setToolTip("点击选择歌词颜色（当前行）")
+        self.btn_lyrics_color.clicked.connect(self._on_lyrics_color)
+        self._lyrics_color = QColor(str(prefs.get("color") or "#FAB446"))
+        self._refresh_lyrics_color_btn()
+        row_color.addWidget(QLabel("颜色"))
+        row_color.addWidget(self.btn_lyrics_color)
+        row_color.addStretch()
+        lay.addLayout(row_color)
+
+        row_op = QHBoxLayout()
+        self.slider_lyrics_opacity = NoWheelSlider(Qt.Horizontal)
+        self.slider_lyrics_opacity.setRange(0, 100)
+        self.slider_lyrics_opacity.setValue(int(prefs.get("bg_opacity") or 0))
+        self.slider_lyrics_opacity.valueChanged.connect(self._on_lyrics_opacity)
+        self.lbl_lyrics_opacity = QLabel(f"{self.slider_lyrics_opacity.value()}%")
+        row_op.addWidget(QLabel("背景透明度"))
+        row_op.addWidget(self.slider_lyrics_opacity, 1)
+        row_op.addWidget(self.lbl_lyrics_opacity)
+        lay.addLayout(row_op)
+
+        row_mode = QHBoxLayout()
+        self.cmb_lyrics_mode = QComboBox()
+        self.cmb_lyrics_mode.addItem("3 行上下文", "triple")
+        self.cmb_lyrics_mode.addItem("单行", "single")
+        idx = self.cmb_lyrics_mode.findData(str(prefs.get("mode") or "triple"))
+        self.cmb_lyrics_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cmb_lyrics_mode.currentIndexChanged.connect(self._on_lyrics_changed)
+        row_mode.addWidget(QLabel("显示模式"))
+        row_mode.addWidget(self.cmb_lyrics_mode)
+        row_mode.addStretch()
+        lay.addLayout(row_mode)
+
+        row_lock = QHBoxLayout()
+        self.cb_lyrics_locked = QCheckBox("锁定歌词（开启后鼠标穿透、不可拖动）")
+        self.cb_lyrics_locked.setChecked(bool(prefs.get("locked", True)))
+        self.cb_lyrics_locked.setToolTip("解锁后可按住歌词窗拖动；松手保持解锁，直到再勾选锁定")
+        self.cb_lyrics_locked.toggled.connect(self._on_lyrics_changed)
+        row_lock.addWidget(self.cb_lyrics_locked)
+        row_lock.addStretch()
+        lay.addLayout(row_lock)
+
+        row_reset = QHBoxLayout()
+        btn_reset_pos = QPushButton("重置位置（回屏幕中央）")
+        btn_reset_pos.clicked.connect(self._on_lyrics_reset_pos)
+        row_reset.addWidget(btn_reset_pos)
+        row_reset.addStretch()
+        lay.addLayout(row_reset)
+
+        self.lbl_lyrics_status = QLabel("")
+        self.lbl_lyrics_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        lay.addWidget(self.lbl_lyrics_status)
+        root.addWidget(box)
+        self._lyrics_group_ready = True   # 构造完成，此后 *Changed 才触发保存
+
+    def _collect_lyrics_prefs(self) -> dict:
+        return {
+            "font": self.cmb_lyrics_font.currentFont().family(),
+            "font_size": self.spin_lyrics_size.value(),
+            "color": self._lyrics_color.name().upper(),
+            "bg_opacity": self.slider_lyrics_opacity.value(),
+            "mode": self.cmb_lyrics_mode.currentData() or "triple",
+            "locked": self.cb_lyrics_locked.isChecked(),
+        }
+
+    def _on_lyrics_changed(self, *_args) -> None:
+        # 构造期信号（setCurrentFont/setValue 触发）忽略——控件未就绪且不应写盘
+        if not getattr(self, "_lyrics_group_ready", False):
+            return
+        self._apply_lyrics_prefs(self._collect_lyrics_prefs())
+
+    def _on_lyrics_opacity(self, value: int) -> None:
+        self.lbl_lyrics_opacity.setText(f"{value}%")
+        self._on_lyrics_changed()
+
+    def _on_lyrics_color(self) -> None:
+        color = QColorDialog.getColor(self._lyrics_color, self, "选择歌词颜色")
+        if color.isValid():
+            self._lyrics_color = color
+            self._refresh_lyrics_color_btn()
+            self._on_lyrics_changed()
+
+    def _refresh_lyrics_color_btn(self) -> None:
+        self.btn_lyrics_color.setStyleSheet(
+            f"background-color: {self._lyrics_color.name()}; "
+            "border: 1px solid #555555; border-radius: 3px;")
+
+    def _apply_lyrics_prefs(self, prefs: dict) -> None:
+        ok = save_lyrics_prefs(prefs)
+        _notify_lyrics_prefs_changed(prefs)   # 传本次 update：无 pos 键 → 通知剥离 pos（窗口不挪位）
+        self.lbl_lyrics_status.setText("已保存（歌词窗已生效）" if ok else "保存失败")
+
+    def _on_lyrics_reset_pos(self) -> None:
+        ok = save_lyrics_prefs({"pos_x": None, "pos_y": None})
+        _notify_lyrics_prefs_changed({"pos_x": None, "pos_y": None})  # 含 pos 键 → 窗口回中央
+        self.lbl_lyrics_status.setText("已重置位置（歌词窗回中央）" if ok else "保存失败")
 
     # ---------- 🎛️ 内置插件（MusicFree/洛雪）----------
 
