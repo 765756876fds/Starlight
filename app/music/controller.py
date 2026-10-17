@@ -147,7 +147,9 @@ class MusicController:
         self.db_path = resolve_under_root(config.get("database", "./data/music.db"))
         self.scan_dirs = config.get("scan_dirs", [])
         self.extensions = set(config.get("extensions", [".mp3", ".flac", ".wav", ".m4a", ".ogg"]))
-        self.mpv_path = config.get("mpv_path", "mpv")
+        # mpv 查找链（打包零配置运行）：settings 显式 → 打包内置 bundled → PATH（下游兜底）
+        from app.core.config import resolve_mpv_path
+        self.mpv_path = resolve_mpv_path(config.get("mpv_path"))
         self.mpv_ipc_pipe = config.get("mpv_ipc_pipe", "\\\\.\\pipe\\lol_music_mpv")
         self.default_volume = config.get("default_volume", 70)
         # 下载目录：settings.yaml music.download_dir；缺省 = 第一个扫描目录

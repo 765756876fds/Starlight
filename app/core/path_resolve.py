@@ -39,6 +39,20 @@ def resolve_under_root(path: str) -> str:
     return str((PROJECT_ROOT / norm).resolve())
 
 
+def bundled_tool(tool: str) -> str:
+    """打包内外部工具：<PROJECT_ROOT>/third_party/<tool>/<tool>.exe。
+
+    源码态：项目根 third_party/<tool>/（build.ps1 打包数据源，gitignore）；
+    打包态（sys.frozen）：PROJECT_ROOT = exe 目录，资源经 build.ps1 后处理
+    落在 dist/third_party/<tool>/。存在返回绝对路径，否则返回 ""（调用方保持降级）。
+    """
+    try:
+        exe = str(PROJECT_ROOT / "third_party" / tool / f"{tool}.exe")
+        return exe if os.path.isfile(exe) else ""
+    except Exception:
+        return ""
+
+
 def find_llama_server(asr_config: dict) -> str:
     """llama-server 查找链：
     1. 配置 asr.llama_server（settings.yaml，空则不指定）

@@ -83,6 +83,14 @@ class JSMusicSource(MusicSource):
         env_p = os.environ.get("NODE_EXE", "")
         if env_p:
             candidates.append(env_p)
+        # 打包内 node 优先（dist/third_party/node/node.exe，frozen PROJECT_ROOT）
+        try:
+            from app.core.path_resolve import bundled_tool
+            bundled = bundled_tool("node")
+            if bundled:
+                candidates.append(bundled)
+        except Exception:
+            pass
         candidates += [
             r"C:\Program Files\nodejs\node.exe",
             r"C:\Program Files (x86)\nodejs\node.exe",

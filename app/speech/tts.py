@@ -23,6 +23,7 @@ import uuid
 from enum import Enum
 from typing import Any, Dict, Optional
 
+from app.core.config import resolve_mpv_path
 from ..core.event_bus import Event, EventType, get_event_bus
 
 
@@ -65,7 +66,8 @@ class TTSController:
         self.volume_pct = config.get("volume", "+0%")
         self.output_dir = config.get("output_dir", "./data/tts")
         self.enabled = config.get("enabled", True)
-        self.mpv_path = config.get("mpv_path", "mpv")
+        # mpv 查找链（打包零配置运行）：settings 显式 → 打包内置 bundled → PATH（下游兜底）
+        self.mpv_path = resolve_mpv_path(config.get("mpv_path"))
 
         # Qwen（阿里云百炼）引擎配置
         self.qwen_api_key = self._resolve_qwen_key(config)

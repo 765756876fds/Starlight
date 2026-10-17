@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from app.core.path_resolve import PROJECT_ROOT, resolve_under_root
+from app.core.path_resolve import PROJECT_ROOT, bundled_tool, resolve_under_root
 
 # 相对路径键 → 绝对化（解析后写入 self._data，避免下游各自猜）
 _RELATIVE_KEYS = (
@@ -25,6 +25,8 @@ def _default_config() -> Dict[str, Any]:
     """内置默认配置（全新机器无配置文件时的兜底，路径全部基于 PROJECT_ROOT 绝对化）。"""
     data_dir = str(PROJECT_ROOT / "data")
     logs_dir = str(PROJECT_ROOT / "logs")
+    # 打包内 mpv 优先（dist/third_party/mpv/mpv.exe）；源码态回退 "mpv"（PATH 查找）
+    default_mpv = bundled_tool("mpv") or "mpv"
     return {
         "app": {
             "name": "LoL Music Agent",
@@ -38,12 +40,14 @@ def _default_config() -> Dict[str, Any]:
             "extensions": [".mp3", ".flac", ".wav", ".m4a", ".ogg", ".ape"],
             "database": str(PROJECT_ROOT / "data" / "music.db"),
             "download_dir": "",
-            "mpv_path": "mpv",
+            "mpv_path": default_mpv,
             "mpv_ipc_pipe": r"\\.\pipe\lol_music_mpv",
             "default_volume": 70,
             "queue_size": 50,
             "play_mode": "sequential",
         },
+        # 顶层 mpv_path 兼容（music/controller、speech/tts 读无前缀键名的调用方）
+        "mpv_path": default_mpv,
         "player": {
             "enabled": True,
             "database": str(PROJECT_ROOT / "data" / "player.db"),
@@ -122,6 +126,28 @@ def _absolutize(data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(val, str) and val:
             cur[parts[-1]] = resolve_under_root(val)
     return out
+
+
+def resolve_mpv_path(configured: Optional[str]) -> str:
+    """mpv 可执行文件查找链（打包零配置运行，2026-10-18）：
+
+    1. settings.yaml 用户显式配置且文件存在 → 用之（尊重用户路径）
+    2. 打包内置 PROJECT_ROOT/third_party/mpv/mpv.exe（bundled_tool("mpv")，
+       源码态 = 项目根 third_party，打包态 = dist/exe 同目录 third_party）
+    3. 其余（configured 原值或 "mpv"）交给下游 mpv.py:_resolve_mpv_path 的
+       PATH（shutil.which）级兜底；仍无 → 各调用方打印提示。
+
+    覆盖"全新电脑无 settings.yaml"（走 _default_config 的 bundled）与
+    "settings.yaml 存在但缺 mpv_path 键"（此处 bundled 兜底）两种场景。
+    """
+    if configured:
+        p = str(configured).strip()
+        if p and os.path.isfile(p):
+            return p
+    bundled = bundled_tool("mpv")
+    if bundled:
+        return bundled
+    return (str(configured or "").strip()) or "mpv"
 
 
 class Config:

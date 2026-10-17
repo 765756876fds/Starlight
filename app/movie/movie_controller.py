@@ -19,7 +19,7 @@ import zipfile
 
 import requests
 
-from ..core.config import get_config
+from ..core.config import get_config, resolve_mpv_path
 from ..core.event_bus import EventType, get_event_bus
 from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
@@ -125,7 +125,8 @@ class MovieController:
         # 搜索策略 C 的状态：上次命中的源名（面板提示"已从 XX 源找到"）/ 全部失败原因
         self.last_search_source = None
         self.last_search_error = ""
-        mpv_bin = mpv_path or self._config.get("music.mpv_path") or "mpv"
+        # mpv 查找链（打包零配置运行）：settings 显式 → 打包内置 bundled → PATH（下游兜底）
+        mpv_bin = resolve_mpv_path(mpv_path or self._config.get("music.mpv_path"))
         pipe = ipc_pipe or self._config.get("movie.mpv_ipc_pipe") or DEFAULT_IPC_PIPE
         # 断点续播目录（仅电影实例；音乐链不加——用户明确不要）
         watch_dir = (self._config.get("movie.watch_later_dir")

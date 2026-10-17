@@ -67,7 +67,10 @@ def test_find_llama_none_stays_degraded():
 
 def _make_tts(tmp_path):
     from app.speech.tts import TTSController
-    with mock.patch("app.speech.tts.get_event_bus"):
+    # bundled_tool 置空：隔离本机 third_party/mpv（新查找链 bundled 优先），
+    # 保持"无配置 → 回退 'mpv'"的语义测试确定性。
+    with mock.patch("app.speech.tts.get_event_bus"), \
+         mock.patch("app.core.config.bundled_tool", return_value=""):
         return TTSController({
             "engine": "edge", "edge_voice": "zh-CN-XiaoxiaoNeural",
             "rate": "+0%", "volume": "+0%", "output_dir": str(tmp_path),
