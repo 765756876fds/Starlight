@@ -106,8 +106,19 @@ class MusicPanel(QWidget):
         # 最新请求补偿：线程运行中来了新请求 → 记待处理（覆盖旧），旧线程 done/failed 后自动补加载
         self._pending_rank_lists = False
         self._pending_rank_detail = None   # {source, list_id, title} 或 None
+        # 桌面歌词浮窗（首次点开关才创建；显式隐藏不销毁）
+        self._lyrics_window = None
 
         root = QVBoxLayout(self)
+        # 顶栏：右侧"歌词"开关（桌面歌词浮窗入口）
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+        self.btn_lyrics = QPushButton("歌词")
+        self.btn_lyrics.setCheckable(True)
+        self.btn_lyrics.setProperty("class", "secondary")
+        self.btn_lyrics.clicked.connect(self._on_toggle_lyrics)
+        top_bar.addWidget(self.btn_lyrics)
+        root.addLayout(top_bar)
         tabs = self.tabs = QTabWidget()
         root.addWidget(tabs)
         tabs.currentChanged.connect(self._on_tab_changed)
@@ -554,6 +565,21 @@ class MusicPanel(QWidget):
             self._refresh_playlists()
         elif index == 4:
             self._load_top_lists()
+
+    def _on_toggle_lyrics(self, checked: bool):
+        """桌面歌词开关：开 → 创建浮窗并显示；关 → 隐藏（保留状态可再开）。"""
+        if self._music is None:
+            self.btn_lyrics.setChecked(False)
+            return
+        if self._lyrics_window is None:
+            from app.ui.widgets.lyrics_window import LyricsWindow
+            self._lyrics_window = LyricsWindow(self._music)
+        if checked:
+            self._lyrics_window.start()
+            self._lyrics_window.show()
+        else:
+            self._lyrics_window.stop()
+            self._lyrics_window.hide()
 
     def _refresh_history(self):
         """渲染播放历史（最近在前）。"""

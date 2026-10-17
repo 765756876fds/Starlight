@@ -173,6 +173,7 @@ async function callGetLyric(plugin, rawItem) {
   if (!result) return null;
   if (typeof result === 'string') return { lyric: result };
   if (result.lyric) return { lyric: result.lyric };
+  if (result.rawLrc) return { lyric: result.rawLrc };
   return null;
 }
 

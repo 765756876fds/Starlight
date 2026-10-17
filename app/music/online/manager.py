@@ -181,13 +181,27 @@ class OnlineSourceManager:
         return {"url": r, "headers": None}
 
     def get_lyric(self, track: OnlineTrack) -> Optional[str]:
+        # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         src = self._sources.get(track.source_name)
-        if not src:
-            return None
-        try:
-            return src.get_lyric(track)
-        except Exception:
-            return None
+        if src is not None:
+            try:
+                return src.get_lyric(track)
+            except Exception:
+                return None
+        # 定向 miss：track.source_name 可能是 js_bridge 的内部插件名（如"酷狗音乐"），
+        # 而非注册名（"js_bridge"）。对齐 get_play_url：accepts 命中源优先路由，
+        # 避免遍历 http 源对陌生 track 发无谓请求。不加全遍历——歌词无强回退需求。
+        for s in self._sources.values():
+            try:
+                acc = getattr(s, "accepts", None)
+                if acc is None or not acc(track):
+                    continue
+                r = s.get_lyric(track)
+                if r:
+                    return r
+            except Exception:
+                continue  # 单源失败继续下一个
+        return None
 
     def get_top_lists(self) -> Dict[str, list]:
         """聚合各源榜单分组（源自报能力，无该方法/失败自动跳过）。
