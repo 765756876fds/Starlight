@@ -54,18 +54,30 @@ class OngoingGameLoader:
         self._cache.clear()
         self._errors.clear()
 
-    def missing_history_count(self) -> int:
-        """统计缓存中需要自动重试的失败快照数量。
+    def missing_history_count(self, session_puuids=None) -> int:
+        """统计需要自动重试的缺失快照数量。
 
-        只统计 ERROR（请求失败、可能因 SGP 瞬态/断连窗口，值得重试）；
+        - ERROR 快照（请求失败、可能因 SGP 瞬态/断连窗口，值得重试）
+        - 当前 session 有 puuid 但 cache 里根本没有其快照（如选人阶段只 resolve 出
+          己方 5 人 → 进游戏后 gameflow 10 人全 puuid：敌方 5 人从未加载，
+          必须计入缺失，否则 60s 自动重试永不触发）
+
         NO_DATA 是请求成功但过滤后无匹配/排位（业务事实，可缓存复用），
         不重复请求，否则人机局/新手队友会每 60s 触发全量 force 重载，
         导致 UI 周期性清空为"暂无数据"并浪费 SGP 请求。
         """
-        return sum(
-            1 for s in self._cache.all()
+        cached = self._cache.all()
+        error_n = sum(
+            1 for s in cached
             if getattr(s, "data_state", "ERROR") == "ERROR"
         )
+        missing_puuid_n = 0
+        if session_puuids:
+            cached_puuids = {s.puuid for s in cached}
+            missing_puuid_n = sum(
+                1 for p in session_puuids if p and p not in cached_puuids
+            )
+        return error_n + missing_puuid_n
 
     def missing_names_count(self) -> int:
         """统计名字缺失（summoner 查询曾失败）的 AVAILABLE 快照，retry 时重查补名。

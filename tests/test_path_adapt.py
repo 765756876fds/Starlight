@@ -96,13 +96,14 @@ def test_tts_resolve_which(tmp_path):
     assert tts.mpv_path == "C:/real/mpv.exe"
 
 
-def test_tts_resolve_legacy_default_only(tmp_path):
-    tts = _make_tts(tmp_path)                   # 默认值 → 尝试旧位置
-    legacy = r"D:\新建文件夹 (2)\mpv.exe"
-    with mock.patch("os.path.isfile", side_effect=lambda p: p == legacy), \
-         mock.patch("shutil.which", return_value=None):
-        assert tts._resolve_mpv_path() is True
-    assert tts.mpv_path == legacy
+def test_tts_resolve_default_no_path_no_legacy(tmp_path):
+    """P1-3（2026-10-18）：legacy 兜底已删——默认值且 PATH 无 → 直接失败（不查个人路径）。"""
+    tts = _make_tts(tmp_path)
+    with mock.patch("os.path.isfile", return_value=False), \
+         mock.patch("shutil.which", return_value=None), \
+         mock.patch("builtins.print"):
+        assert tts._resolve_mpv_path() is False
+    assert tts.mpv_path == "mpv"
 
 
 def test_tts_resolve_explicit_config_never_replaced(tmp_path):

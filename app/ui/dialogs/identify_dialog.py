@@ -1,0 +1,228 @@
+"""识曲弹窗：8 秒倒计时录音 → 识别中 → 结果卡片（歌名/歌手/立即播放）。
+
+线程模型（对齐 movie_source_dialog 的 QThread 惯例）：
+- 录音+识别在 _IdentifyWorker（后台 QThread），主线程 QTimer 展示倒计时；
+- 首次无库 → _BuildWorker 后台建库，完成自动进入录音；
+- 防重入：_busy 标志 + thread.isRunning 检查（运行中绝不覆盖线程引用）；
+- 关闭窗口仅 hide（不销毁运行中的线程；下次 start 时 isRunning 拒绝）。
+"""
+import os
+import tempfile
+
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+
+class _IdentifyWorker(QObject):
+    """后台：录 8 秒 → 识别。done(result dict | None)，failed(msg)。"""
+
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, service, wav_path):
+        super().__init__()
+        self._service = service
+        self._wav_path = wav_path
+
+    @Slot()
+    def run(self):
+        try:
+            result = self._service.record_and_identify(self._wav_path)
+        except Exception as e:  # 故障隔离：任何异常 → failed，不崩
+            self.failed.emit(str(e))
+            return
+        self.done.emit(result)
+
+
+class _BuildWorker(QObject):
+    """后台：增量建库（已入库跳过）。done(stats dict)，failed(msg)。"""
+
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, service):
+        super().__init__()
+        self._service = service
+
+    @Slot()
+    def run(self):
+        try:
+            stats = self._service.index_pending()
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.done.emit(stats)
+
+
+class IdentifyDialog(QDialog):
+    """听歌识曲窗口（也由语音"听听这是什么歌"触发）。"""
+
+    def __init__(self, service, on_play=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🎤 识曲")
+        self.resize(380, 200)
+        self._service = service
+        self._on_play = on_play
+        self._busy = False
+        self._result = None
+        self._countdown = 0
+        self._timer = None
+        self._identify_thread = None
+        self._build_thread = None
+
+        root = QVBoxLayout(self)
+        self.lbl_title = QLabel("把手机/音箱凑近麦克风，听 8 秒就能识别")
+        self.lbl_title.setWordWrap(True)
+        root.addWidget(self.lbl_title)
+        self.lbl_status = QLabel("准备就绪")
+        self.lbl_status.setWordWrap(True)
+        root.addWidget(self.lbl_status)
+        self.btn_play = QPushButton("▶ 立即播放")
+        self.btn_play.hide()
+        self.btn_play.clicked.connect(self._on_play_clicked)
+        root.addWidget(self.btn_play)
+        row = QHBoxLayout()
+        self.btn_retry = QPushButton("重新识别")
+        self.btn_retry.clicked.connect(self.start)
+        row.addWidget(self.btn_retry)
+        self.btn_close = QPushButton("关闭")
+        self.btn_close.clicked.connect(self._on_close_clicked)
+        row.addWidget(self.btn_close)
+        root.addLayout(row)
+
+    # ------------------------------------------------------------------ 对外
+    def start(self):
+        """开始一次识曲（防重入：录音/识别/建库中忽略重复触发）。"""
+        if self._busy:
+            return
+        if self._identify_thread is not None and self._identify_thread.isRunning():
+            return
+        if self._build_thread is not None and self._build_thread.isRunning():
+            return
+        # 首次无库 → 后台建库，完成后自动进入录音
+        try:
+            if not self._service.has_library():
+                self._show_build()
+                return
+        except Exception as e:
+            self.lbl_status.setText(f"指纹库不可用：{e}")
+            return
+        self._begin_record()
+
+    def is_busy(self) -> bool:
+        return self._busy
+
+    # ------------------------------------------------------------------ 录音/识别
+    def _begin_record(self):
+        self._busy = True
+        self._result = None
+        self.btn_play.hide()
+        self._countdown = self._service.record_seconds
+        self.lbl_title.setText("正在听...（把声音放出来）")
+        self.lbl_status.setText(f"录音中... {self._countdown} 秒")
+        if self._timer is None:
+            self._timer = QTimer(self)
+            self._timer.timeout.connect(self._on_tick)
+        self._timer.start(1000)
+        wav_path = os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav")
+        self._start_identify_worker(wav_path)
+
+    def _start_identify_worker(self, wav_path):
+        self._identify_thread = QThread()
+        self._identify_worker = _IdentifyWorker(self._service, wav_path)
+        self._identify_worker.moveToThread(self._identify_thread)
+        self._identify_thread.started.connect(self._identify_worker.run)
+        self._identify_worker.done.connect(self._on_done)
+        self._identify_worker.failed.connect(self._on_failed)
+        self._identify_worker.done.connect(self._identify_thread.quit)
+        self._identify_worker.failed.connect(self._identify_thread.quit)
+        self._identify_thread.finished.connect(self._cleanup_wav)
+        self._identify_thread.start()
+
+    def _on_tick(self):
+        self._countdown -= 1
+        if self._countdown > 0:
+            self.lbl_status.setText(f"录音中... {self._countdown} 秒")
+        else:
+            self._timer.stop()
+            self.lbl_status.setText("识别中...")
+
+    @Slot(object)
+    def _on_done(self, result):
+        self._busy = False
+        self._result = result
+        if self._timer is not None:
+            self._timer.stop()
+        if result is None:
+            self.lbl_title.setText("🎤 识曲")
+            self.lbl_status.setText("未找到匹配结果（试试更清晰的片段或换一首）")
+            return
+        title = result.get("title") or result.get("filename") or "未知歌曲"
+        artist = result.get("artist") or ""
+        conf = result.get("confidence", 0)
+        name = f"{title} - {artist}" if artist else title
+        self.lbl_title.setText(f"🎵 匹配到：{name}")
+        self.lbl_status.setText(f"置信度 {conf:.0%}（{result.get('quality', '')}）")
+        self.btn_play.show()
+
+    @Slot(str)
+    def _on_failed(self, msg):
+        self._busy = False
+        if self._timer is not None:
+            self._timer.stop()
+        self.lbl_title.setText("🎤 识曲")
+        self.lbl_status.setText(f"识别失败：{msg}")
+
+    # ------------------------------------------------------------------ 首次建库
+    def _show_build(self):
+        self._busy = True
+        self.lbl_title.setText("首次使用")
+        self.lbl_status.setText("正在为本地音乐建指纹库，请稍候...")
+        self._build_thread = QThread()
+        self._build_worker = _BuildWorker(self._service)
+        self._build_worker.moveToThread(self._build_thread)
+        self._build_thread.started.connect(self._build_worker.run)
+        self._build_worker.done.connect(self._on_build_done)
+        self._build_worker.failed.connect(self._on_build_failed)
+        self._build_worker.done.connect(self._build_thread.quit)
+        self._build_worker.failed.connect(self._build_thread.quit)
+        self._build_thread.start()
+
+    @Slot(object)
+    def _on_build_done(self, stats):
+        self._busy = False
+        if self._timer is not None:
+            self._timer.stop()
+        indexed = stats.get("indexed", 0)
+        skipped = stats.get("skipped", 0)
+        self.lbl_status.setText(f"建库完成：新增 {indexed} 首（已跳过 {skipped}）")
+        # 建库完成后自动开始识曲
+        self._begin_record()
+
+    @Slot(str)
+    def _on_build_failed(self, msg):
+        self._busy = False
+        self.lbl_title.setText("🎤 识曲")
+        self.lbl_status.setText(f"建库失败：{msg}")
+
+    # ------------------------------------------------------------------ 播放/关闭
+    def _on_play_clicked(self):
+        if self._on_play and self._result:
+            try:
+                self._on_play(self._result)
+            except Exception as e:
+                print(f"[Identify] 播放回调失败: {e}")
+
+    def _on_close_clicked(self):
+        self.hide()
+
+    def _cleanup_wav(self):
+        try:
+            os.remove(os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav"))
+        except OSError:
+            pass
+
+    def closeEvent(self, event):
+        # 运行中的线程引用保留（等自然结束），只隐藏窗口，避免 QThread 销毁崩溃
+        self.hide()
+        event.ignore()

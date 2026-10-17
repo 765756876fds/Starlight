@@ -50,6 +50,8 @@ class CommandType:
     MUSIC_RESCAN = "music.rescan"
     MUSIC_CLEANUP = "music.cleanup"
     MUSIC_CLEAR_QUEUE = "music.clear_queue"
+    # 哼唱识曲（听歌识曲；UI 层注册，语音/按钮触发）
+    MUSIC_IDENTIFY = "music.identify"
 
     # ===== 电影命令（包2b：语音控制电影） =====
     MOVIE_SEARCH_PLAY = "movie.search_play"

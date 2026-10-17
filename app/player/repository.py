@@ -4,13 +4,15 @@ import sqlite3
 import threading
 from typing import Optional, List
 
+from app.core.path_resolve import PROJECT_ROOT
 from .models import PlayerIdentity
 
 
 class PlayerRepository:
-    def __init__(self, db_path: str = "data/player.db"):
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    def __init__(self, db_path: str = None):
+        # P0-2：默认绝对路径（基于 PROJECT_ROOT），不依赖 CWD
+        self.db_path = db_path or str(PROJECT_ROOT / "data" / "player.db")
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._lock = threading.Lock()
         self._init_db()
 

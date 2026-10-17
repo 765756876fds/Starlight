@@ -59,7 +59,12 @@ class LiveClientAPI:
         self._last_check = 0.0
 
     def is_available(self) -> bool:
-        """检查游戏 API 是否可用"""
+        """检查游戏 API 是否可用。
+
+        2026-10-18 修：探测端点从 /liveclientdata/gamestats 改为标准最全的
+        /liveclientdata/allgamedata——腾讯服实测对 gamestats 返回 404（接口被禁），
+        导致 2999 永远判定不可用、实时 KDA 不刷新；allgamedata 是官方主数据端点。
+        """
         now = time.time()
         if now - self._last_check < 1.0:
             return self._available
@@ -67,11 +72,11 @@ class LiveClientAPI:
         self._last_check = now
         try:
             resp = self._session.get(
-                f"{self.base_url}/liveclientdata/gamestats",
+                f"{self.base_url}/liveclientdata/allgamedata",
                 timeout=self.timeout
             )
             self._available = resp.status_code == 200
-        except (requests.RequestException, OSError):
+        except (requests.RequestException, OSError) as e:
             self._available = False
 
         return self._available
@@ -85,7 +90,7 @@ class LiveClientAPI:
             if resp.status_code == 200:
                 return resp.json()
             return None
-        except (requests.RequestException, json.JSONDecodeError, OSError):
+        except (requests.RequestException, json.JSONDecodeError, OSError) as e:
             return None
 
     def get_all_game_data(self) -> Optional[Dict[str, Any]]:
@@ -129,10 +134,18 @@ class LiveClientAPI:
         return self._get(self.ENDPOINTS["eventdata"])
 
     def get_game_time(self) -> float:
-        """获取当前游戏时间（秒）"""
-        stats = self.get_game_stats()
-        if stats:
-            return float(stats.get("gameTime", 0))
+        """获取当前游戏时间（秒）。
+
+        2026-10-18 修：数据源从 /gamestats 改为 /allgamedata 的 gameData.gameTime
+        （腾讯服 gamestats 404；allgamedata 是官方主数据端点）。
+        """
+        data = self.get_all_game_data()
+        if data:
+            gd = data.get("gameData") or {}
+            try:
+                return float(gd.get("gameTime", 0))
+            except (TypeError, ValueError):
+                return 0.0
         return 0.0
 
     def close(self):

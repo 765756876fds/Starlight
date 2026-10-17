@@ -199,6 +199,22 @@ class OngoingGameService:
                     self._retry_state = {}
             return
 
+        # 选人残留清理（2026-10-18 修）：从上一把对局（InProgress/GameStart 等）直接
+        # 切到新选人而未经过上面清理分支时（训练营重开 / phase 跳变 / 新选人 session
+        # 构建失败——gameflow 未就绪 + deobfuscate 未完成），立即清空上一把 session。
+        # 严禁 UI 显示上一把队友：等新选人 session 构建成功（gameflow 就绪或
+        # deobfuscate 反解出 puuid）再填充；清空后 UI 显示"未在对局中 / 选人中"。
+        if phase == "ChampSelect" and self._session is not None:
+            with self._lock:
+                if self._session is not None:
+                    self._current_session_key = None
+                    self._snapshots = []
+                    self._session = None
+                    self._loading_in_progress = False
+                    self._last_loaded_key = None
+                    self._announced_session_id = None
+                    self._retry_state = {}
+
         # 选人阶段缓存 champ-select session（仅作 gameflow 偶发为空的合理回退，非玩家集合来源）
         if phase == "ChampSelect":
             session = self._lcu.get("/lol-champ-select/v1/session")
@@ -255,20 +271,31 @@ class OngoingGameService:
         if not isinstance(session, dict):
             return
         key = self._session_key(session)
+        _same_session = False
+        _need_load = False
         with self._lock:
             if key == self._current_session_key:
+                _same_session = True
                 # 同一局：更新 phase/updated_at；身份升级——gameflow 比现有 session 更完整时
                 # 重建 players，并保留已加载 history / realtime（覆盖"gameflow 偶发为空回退 cs 后恢复"场景）
                 if self._session is not None:
                     self._session.phase = phase
                     self._session.updated_at = time.time()
                     rebuilt = self._to_current_session(session, phase, me_puuid)
-                    if len(rebuilt.players) > len(self._session.players) or (
+                    old_puuid_n = sum(1 for p in self._session.players if p.puuid)
+                    new_puuid_n = sum(1 for p in rebuilt.players if p.puuid)
+                    # 重建触发条件改为"有 puuid 的玩家数"（2026-10-18 修）：
+                    # 选人阶段只 resolve 出己方 5 puuid、进游戏 gameflow 10 人全 puuid 时，
+                    # 旧实现按 len(players) 比较（10==10 不触发）→ 敌方 5 人永远缺身份/战绩。
+                    # 按 puuid 数比较 → 10>5 → 触发重建，并立即补拉缺失玩家。
+                    if new_puuid_n > old_puuid_n or (
                             rebuilt.game_id and not self._session.game_id):
                         old_by_puuid = {p.puuid: p for p in self._session.players if p.puuid}
+                        match_n = 0
                         for np_ in rebuilt.players:
                             op = old_by_puuid.get(np_.puuid)
                             if op is not None:
+                                match_n += 1
                                 np_.history = op.history
                                 if not np_.realtime_available:
                                     np_.live_kills = op.live_kills
@@ -278,6 +305,11 @@ class OngoingGameService:
                                     np_.live_level = op.live_level
                                     np_.realtime_available = op.realtime_available
                         self._session = rebuilt
+                        # 人数/身份突变：立即补拉缺失 puuid（loader 缓存复用已加载玩家，
+                        # 只对新 puuid 发请求）。锁内只置标志，线程启动在锁外。
+                        if new_puuid_n > old_puuid_n and not self._loading_in_progress:
+                            self._loading_in_progress = True
+                            _need_load = True
                 # 同一局：若历史战绩缺失，周期性自动重试（每 game_id 最多10次，间隔60秒，
                 # 覆盖进游戏初期 SGP 暂不可用）。直接 force 重载当前 session——
                 # 不重建 session、不重发 session_created（原实现清 _current_session_key
@@ -288,46 +320,52 @@ class OngoingGameService:
                     count, last_ts = self._retry_state.get(rk, [0, 0.0])
                     # 重试条件 = 战绩缺失 + 名字缺失（summoner 曾失败但 history 成功时，
                     # data_state=AVAILABLE 而 display_name 空——missing_names_count 兜住，
-                    # 重载时用 InProgress 的 gameflow session（summonerId 真实）→ by-id 补名）
-                    missing = (self._loader.missing_history_count()
+                    # 重载时用 InProgress 的 gameflow session（summonerId 真实）→ by-id 补名）。
+                    # 缺失计数含"session 有 puuid 但 cache 无快照"（2026-10-18 修）：
+                    # 敌方从未加载的玩家也计入，60s 自动重试才能触发。
+                    session_puuids = ({p.puuid for p in self._session.players if p.puuid}
+                                      if self._session else set())
+                    missing = (self._loader.missing_history_count(session_puuids)
                                + self._loader.missing_names_count())
                     if (count < 10 and now - last_ts > 60.0 and missing > 0):
                         self._retry_state[rk] = [count + 1, now]
                         self._force_reload = True  # retry：绕过 ERROR cache，真正重新请求 SGP
                         self._loading_in_progress = True  # 防重入（_load_in_thread finally 复位）
-                        t = threading.Thread(
-                            target=self._load_in_thread, args=(session,), daemon=True)
-                        t.start()
-                        return
-                return  # 同一局，已加载/加载中
-            if self._loading_in_progress:
+                        _need_load = True
+            elif self._loading_in_progress:
                 return
-            self._current_session_key = key
-            self._loading_in_progress = True
-            self._snapshots = []
-            # 新 session：game_id 为生命周期锚点；旧 session（含 players）立即失效
-            self._session = self._to_current_session(session, phase, me_puuid)
-            # 新对局 retry 计数从 0 开始（_retry_state 按 game_id 持久，新 game_id 自动归零；
-            # 复用 gameId 的新局已在离开对局分支清空 _retry_state）
-            if key != self._last_loaded_key:
-                # 真正的新对局：不信任旧局 history cache（TTL 不承担 session 隔离），
-                # 强制重新请求全部玩家，禁止跨局复用上一局 PlayerSnapshot
-                self._force_reload = True
-            self._last_loaded_key = key
-            # session_created 防抖：同一 session（game_id）只宣布一次。
-            # 离开对局已清空 _announced_session_id，故腾讯服复用 gameId 的新局会重新宣布。
-            sid = f"gid:{self._session.game_id}" if self._session.game_id else key
-            if sid != self._announced_session_id:
-                self._announced_session_id = sid
-                self._on_event("ongoing.session_created", {
-                    "game_id": self._session.game_id,
-                    "players": len(self._session.players),
-                    "puuid": sum(1 for p in self._session.players if p.puuid),
-                    "my_team": len(self._session.my_team),
-                    "their_team": len(self._session.their_team),
-                })
-        t = threading.Thread(target=self._load_in_thread, args=(session,), daemon=True)
-        t.start()
+            else:
+                self._current_session_key = key
+                self._loading_in_progress = True
+                self._snapshots = []
+                # 新 session：game_id 为生命周期锚点；旧 session（含 players）立即失效
+                self._session = self._to_current_session(session, phase, me_puuid)
+                # 新对局 retry 计数从 0 开始（_retry_state 按 game_id 持久，新 game_id 自动归零；
+                # 复用 gameId 的新局已在离开对局分支清空 _retry_state）
+                if key != self._last_loaded_key:
+                    # 真正的新对局：不信任旧局 history cache（TTL 不承担 session 隔离），
+                    # 强制重新请求全部玩家，禁止跨局复用上一局 PlayerSnapshot
+                    self._force_reload = True
+                self._last_loaded_key = key
+                # session_created 防抖：同一 session（game_id）只宣布一次。
+                # 离开对局已清空 _announced_session_id，故腾讯服复用 gameId 的新局会重新宣布。
+                sid = f"gid:{self._session.game_id}" if self._session.game_id else key
+                if sid != self._announced_session_id:
+                    self._announced_session_id = sid
+                    self._on_event("ongoing.session_created", {
+                        "game_id": self._session.game_id,
+                        "players": len(self._session.players),
+                        "puuid": sum(1 for p in self._session.players if p.puuid),
+                        "my_team": len(self._session.my_team),
+                        "their_team": len(self._session.their_team),
+                    })
+        # 锁外启动线程（_load_in_thread 的 finally 会重取锁，锁内启动有死锁窗口）
+        if _need_load:
+            threading.Thread(target=self._load_in_thread, args=(session,), daemon=True).start()
+            return
+        if _same_session:
+            return
+        threading.Thread(target=self._load_in_thread, args=(session,), daemon=True).start()
 
     def _build_gameflow_session(self, me_puuid: Optional[str]):
         """身份主源：gameflow session.gameData.teamOne/teamTwo → myTeam/theirTeam。

@@ -1,13 +1,14 @@
 """
 Highlight Detector - V4 Early-Rise 本地高光检测
 纯CPU后台运行，失败不影响任何核心功能
+P1（2026-10-18）：librosa 惰性加载（移入函数内）——避免启动链必载
+numba/llvmlite，降低打包难度与启动开销。
 """
 import contextlib
 import io
 import os
 import warnings
 import numpy as np
-import librosa
 from scipy.signal import find_peaks
 from typing import Optional, Tuple
 import logging
@@ -32,6 +33,7 @@ def _silent_load(audio_path: str):
     这里在 load 期间把进程 fd 2 临时指向 devnull，加载完立即恢复；
     同时抑制 librosa 的 UserWarning/FutureWarning。窗口仅限本次解码调用。"""
     import os as _os
+    import librosa  # 惰性：仅高光检测实际调用时加载（P1）
     with warnings.catch_warnings(), contextlib.redirect_stderr(io.StringIO()):
         warnings.simplefilter("ignore")
         saved = _os.dup(2)
@@ -53,6 +55,7 @@ def detect_highlight(audio_path: str) -> Optional[Tuple[float, float, float]]:
     返回 (start_seconds, end_seconds, score)，失败返回None
     """
     try:
+        import librosa  # 惰性（P1）
         # 静默加载（坏文件解码器 stderr / librosa 警告均不刷控制台）
         y, sr, duration = _silent_load(audio_path)
         

@@ -110,6 +110,16 @@ class TestLyricsPrefsStore:
 # ---------- 歌词窗：apply_prefs 即时生效 ----------
 
 class TestLyricsWindowPrefs:
+    @pytest.fixture(autouse=True)
+    def _isolate_settings(self, tmp_path, monkeypatch):
+        """类内所有用例把 settings_store 写盘目标重定向到 tmp：
+        不依赖真实 settings.yaml（用户可能已自定义颜色等 → 默认值断言被破坏）。
+        """
+        p = tmp_path / "settings.yaml"
+        p.write_text("app:\n  name: t\nmusic:\n  scan_dirs: []\n", encoding="utf-8")
+        monkeypatch.setattr(settings_store, "SETTINGS_PATH", str(p))
+        yield
+
     def test_default_construction(self, qapp):
         w = LyricsWindow(_controller())
         assert w._prefs["font"] == "Microsoft YaHei"
@@ -128,15 +138,21 @@ class TestLyricsWindowPrefs:
         cache_was = dict(w._row_cache)  # 触发一次缓存
         w._row_pixmap("行一", True)
         assert len(w._row_cache) == 1
-        old_h = w.height()
-        w.apply_prefs({"font": "SimHei", "font_size": 30})
+        # 先固定字体（不同字体的 QFontMetrics 行高不可比——SimHei 30 可能低于雅黑 24）
+        w.apply_prefs({"font": "SimHei", "font_size": 24})
         assert w._prefs["font"] == "SimHei"
-        assert w._prefs["font_size"] == 30
+        assert w._prefs["font_size"] == 24
         assert w._font.family() == "SimHei"
-        assert w._font.pointSize() == 30
+        assert w._font.pointSize() == 24
         assert w._row_cache == {}            # 换字体 → 清缓存重算
         assert w._line_h == w._fm.height() + 8   # 行高 = 实际字体行高 + 边距
-        assert w.height() > old_h            # 大字号 → 窗口变高
+        old_h = w.height()
+        w.apply_prefs({"font": "SimHei", "font_size": 30})
+        assert w._prefs["font_size"] == 30
+        assert w._font.pointSize() == 30
+        assert w._row_cache == {}
+        assert w._line_h == w._fm.height() + 8
+        assert w.height() > old_h            # 同字体字号变大 → 窗口变高
 
     def test_apply_color(self, qapp):
         w = LyricsWindow(_controller())

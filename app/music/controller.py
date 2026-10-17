@@ -142,7 +142,9 @@ class MusicController:
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.db_path = config.get("database", "./data/music.db")
+        # 路径绝对化（P0-2）：相对路径（如 ./data/music.db）基于 PROJECT_ROOT，不依赖 CWD
+        from app.core.path_resolve import resolve_under_root
+        self.db_path = resolve_under_root(config.get("database", "./data/music.db"))
         self.scan_dirs = config.get("scan_dirs", [])
         self.extensions = set(config.get("extensions", [".mp3", ".flac", ".wav", ".m4a", ".ogg"]))
         self.mpv_path = config.get("mpv_path", "mpv")

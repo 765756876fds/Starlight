@@ -457,7 +457,7 @@ class TTSController:
             return None
 
     def _resolve_mpv_path(self) -> bool:
-        """解析 mpv：配置(isfile) → PATH(which) → 仅默认值时旧默认位置（迁移保护）。
+        """解析 mpv：配置(isfile) → PATH(which)。
         照抄 music 链 mpv.py:_resolve_mpv_path 范本。
         显式配置的路径不自动替换（尊重配置语义）。"""
         if os.path.isfile(self.mpv_path):
@@ -467,11 +467,6 @@ class TTSController:
         if found:
             self.mpv_path = found
             return True
-        if self.mpv_path == "mpv":      # 仅默认值：本机旧默认位置兜底（本机不改也能播）
-            legacy = r"D:\新建文件夹 (2)\mpv.exe"
-            if os.path.isfile(legacy):
-                self.mpv_path = legacy
-                return True
         print(f"[TTS] mpv 不存在: {self.mpv_path}")
         return False
 

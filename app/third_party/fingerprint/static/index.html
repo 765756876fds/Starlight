@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <title>AudioFP</title>
+  <meta name="description" content="Self-hosted audio fingerprinting: identify clips and find audio patterns across your private library." />
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237c3aed'/%3E%3Cpath d='M20 44V18l24-4v26' stroke='white' stroke-width='4' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='14' cy='44' r='6' fill='white'/%3E%3Ccircle cx='38' cy='40' r='6' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main" id="skip-link">Skip to content</a>
+
+  <!-- Mobile top bar -->
+  <header class="mobile-topbar">
+    <div class="brand brand-sm">
+      <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+      AudioFP
+    </div>
+    <div class="row gap-2">
+      <span class="status-pill" id="status-pill-mobile"><span class="status-dot"></span><span class="status-text">Connecting</span></span>
+      <button class="icon-btn" data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"></button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <!-- Sidebar -->
+    <aside class="sidebar" aria-label="Primary">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+        <span class="brand-text">AudioFP<small>Audio search &amp; patterns</small></span>
+      </div>
+
+      <nav class="sidebar-nav" aria-label="Views">
+        <a class="nav-item" href="#search" data-view="search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>Search
+        </a>
+        <a class="nav-item" href="#library" data-view="library">
+          <svg viewBox="0 0 24 24"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>Library
+        </a>
+        <a class="nav-item" href="#activity" data-view="activity">
+          <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Activity
+          <span class="nav-badge hidden" id="nav-active-jobs">0</span>
+        </a>
+        <a class="nav-item" href="#settings" data-view="settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings
+        </a>
+      </nav>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">Library</div>
+        <dl class="stat-list">
+          <div class="stat-row"><dt>Tracks</dt><dd id="st-tracks">-</dd></div>
+          <div class="stat-row"><dt>Fingerprints</dt><dd id="st-hashes">-</dd></div>
+          <div class="stat-row"><dt>Audio indexed</dt><dd id="st-duration">-</dd></div>
+          <div class="stat-row"><dt>Storage</dt><dd id="st-storage">-</dd></div>
+        </dl>
+      </div>
+
+      <div class="sidebar-footer">
+        <span class="status-pill" id="status-pill"><span class="status-dot"></span><span class="status-text">Connecting</span></span>
+        <button class="icon-btn" data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"></button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="content" id="main" tabindex="-1">
+
+      <!-- ===================== SEARCH ===================== -->
+      <section class="view" id="view-search" aria-labelledby="search-title">
+        <div class="page-header">
+          <div>
+            <h1 id="search-title">Search</h1>
+            <p>Identify a clip, or find every place a pattern turns up in your library.</p>
+          </div>
+          <div class="segmented" role="radiogroup" aria-label="Search mode">
+            <label class="segment"><input type="radio" name="mode" value="identify" checked /><span>Identify clip</span></label>
+            <label class="segment"><input type="radio" name="mode" value="occurrences" /><span>Find all occurrences</span></label>
+          </div>
+        </div>
+        <p class="mode-hint" id="mode-hint"></p>
+
+        <div class="drop-zone" id="search-zone" role="button" tabindex="0" aria-label="Choose an audio or video clip to search with">
+          <input type="file" id="search-input" accept="audio/*,video/*" hidden />
+          <div class="dz-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="dz-title">Drop an audio or video clip</div>
+          <div class="dz-sub">or click to browse (3 seconds is usually enough)</div>
+          <div class="dz-formats" id="search-formats"></div>
+          <div class="dz-actions">
+            <button class="btn btn-ghost" id="record-btn" type="button" title="Record from your microphone">
+              <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              <span>Record</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="recorder hidden" id="recorder">
+          <span class="rec-dot"></span><span id="rec-time">0:00</span>
+          <button class="btn btn-primary btn-sm" id="rec-stop" type="button">Stop &amp; use</button>
+          <button class="btn btn-ghost btn-sm" id="rec-cancel" type="button">Cancel</button>
+        </div>
+
+        <div class="search-bar hidden" id="search-bar">
+          <div class="file-chip">
+            <span class="file-chip-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+            <span class="file-chip-info"><b id="search-fname"></b><small id="search-fmeta"></small></span>
+            <button class="icon-btn" id="search-clear" title="Clear selection" aria-label="Clear selection">×</button>
+          </div>
+          <div class="search-actions">
+            <button class="btn btn-primary" id="search-btn" type="button">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>Search library
+            </button>
+            <label class="field-inline">Results<select id="opt-topk"><option>1</option><option>3</option><option selected>5</option><option>10</option><option>20</option></select></label>
+            <button class="btn btn-ghost btn-sm" id="adv-toggle" type="button" aria-expanded="false" aria-controls="adv-panel">Thresholds</button>
+          </div>
+          <div class="adv-panel hidden" id="adv-panel">
+            <label class="field">Min confidence<input type="number" id="opt-minconf" min="0" max="1" step="0.01" /><small>Fraction of the matched region's hashes that align (0 to 1).</small></label>
+            <label class="field">Min aligned hashes<input type="number" id="opt-minaligned" min="1" step="1" /><small>Hard floor on the number of distinct hashes voting for one offset.</small></label>
+            <label class="field">Min peak ratio<input type="number" id="opt-minratio" min="0" step="0.5" /><small>Spike height over the histogram background. Chance matches stay below ~8.</small></label>
+            <button class="btn btn-ghost btn-sm" id="adv-reset" type="button">Reset to server defaults</button>
+          </div>
+        </div>
+
+        <div id="search-results" aria-live="polite"></div>
+
+        <section class="recent hidden" id="recent-searches" aria-labelledby="recent-title">
+          <h2 id="recent-title" class="h2-sm">Recent searches <span class="muted">(this session)</span></h2>
+          <div id="recent-list" class="recent-list"></div>
+        </section>
+      </section>
+
+      <!-- ===================== LIBRARY ===================== -->
+      <section class="view" id="view-library" aria-labelledby="library-title">
+        <div class="page-header">
+          <div>
+            <h1 id="library-title">Library</h1>
+            <p>Everything that has been fingerprinted so far. Upload files here or index a folder on the server.</p>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel" aria-labelledby="upload-title">
+            <header class="panel-header"><h3 id="upload-title">Upload files</h3><span class="muted" id="upload-limit"></span></header>
+            <div class="drop-zone drop-zone-sm" id="lib-zone" role="button" tabindex="0" aria-label="Choose files to upload and index">
+              <input type="file" id="lib-input" accept="audio/*,video/*" multiple hidden />
+              <div class="dz-title">Drop files here or click to browse</div>
+              <div class="dz-sub">Duplicates are detected automatically and indexing runs in the background</div>
+            </div>
+            <div class="upload-meta">
+              <label class="field-inline">Tags for this batch<input type="text" id="upload-tags" placeholder="e.g. campaign-a, inbound" /></label>
+            </div>
+            <ul class="upload-queue" id="upload-queue" aria-label="Upload queue"></ul>
+          </section>
+
+          <section class="panel" aria-labelledby="folder-title" id="folder-panel">
+            <header class="panel-header"><h3 id="folder-title">Index a folder</h3></header>
+            <p class="muted" id="folder-help">Index every supported file below a directory on the server.</p>
+            <form class="dir-form" id="dir-form">
+              <input class="text-input" id="dir-input" placeholder="/path/to/recordings" autocomplete="off" aria-label="Server directory path" />
+              <button class="btn btn-primary" type="submit" id="dir-btn">Index</button>
+            </form>
+            <label class="checkbox"><input type="checkbox" id="dir-recursive" checked /> Include sub-folders</label>
+          </section>
+        </div>
+
+        <div class="toolbar">
+          <div class="search-field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input type="search" id="lib-search" placeholder="Search title, artist, filename or tag (press /)" aria-label="Search library" />
+          </div>
+          <select id="lib-sort" aria-label="Sort by">
+            <option value="indexed_at:desc">Newest first</option>
+            <option value="indexed_at:asc">Oldest first</option>
+            <option value="title:asc">Title A-Z</option>
+            <option value="title:desc">Title Z-A</option>
+            <option value="duration:desc">Longest</option>
+            <option value="duration:asc">Shortest</option>
+            <option value="num_hashes:desc">Most fingerprints</option>
+          </select>
+          <select id="lib-type" aria-label="Filter by type">
+            <option value="">All types</option><option value="audio">Audio</option><option value="video">Video</option>
+          </select>
+          <select id="lib-perpage" aria-label="Items per page">
+            <option>12</option><option selected>24</option><option>48</option><option>96</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" id="lib-select" type="button">Select</button>
+          <button class="btn btn-ghost btn-sm" id="lib-refresh" type="button" title="Refresh" aria-label="Refresh library">↻</button>
+        </div>
+
+        <div class="bulk-bar hidden" id="bulk-bar">
+          <span id="bulk-count">0 selected</span>
+          <button class="btn btn-ghost btn-sm" id="bulk-all" type="button">Select page</button>
+          <button class="btn btn-danger btn-sm" id="bulk-delete" type="button">Delete selected</button>
+          <button class="btn btn-ghost btn-sm" id="bulk-cancel" type="button">Done</button>
+        </div>
+
+        <p class="muted" id="lib-summary"></p>
+        <div class="track-grid" id="track-grid"></div>
+        <nav class="pager" id="lib-pager" aria-label="Pagination"></nav>
+      </section>
+
+      <!-- ===================== ACTIVITY ===================== -->
+      <section class="view" id="view-activity" aria-labelledby="activity-title">
+        <div class="page-header">
+          <div>
+            <h1 id="activity-title">Activity</h1>
+            <p>Background indexing jobs. The history survives restarts, and a job that a restart cut short shows as interrupted.</p>
+          </div>
+          <div class="row gap-2">
+            <select id="jobs-filter" aria-label="Filter jobs"><option value="">All</option><option value="active">Active</option><option value="completed">Completed</option><option value="failed,interrupted">Failed</option><option value="cancelled">Cancelled</option></select>
+            <button class="btn btn-ghost btn-sm" id="jobs-refresh" type="button" title="Refresh" aria-label="Refresh jobs">↻</button>
+          </div>
+        </div>
+        <div id="jobs-list" class="jobs-list"></div>
+      </section>
+
+      <!-- ===================== SETTINGS ===================== -->
+      <section class="view" id="view-settings" aria-labelledby="settings-title">
+        <div class="page-header"><div><h1 id="settings-title">Settings</h1><p>Client preferences, server search defaults and system information.</p></div></div>
+
+        <div class="settings-grid">
+          <section class="panel" aria-labelledby="s-access">
+            <header class="panel-header"><h3 id="s-access">Access</h3></header>
+            <p class="muted" id="apikey-status"></p>
+            <div class="row gap-2">
+              <input class="text-input" type="password" id="apikey-input" placeholder="API key" autocomplete="off" aria-label="API key" />
+              <button class="btn btn-primary btn-sm" id="apikey-save" type="button">Save</button>
+              <button class="btn btn-ghost btn-sm" id="apikey-clear" type="button">Forget</button>
+            </div>
+            <small class="muted">Stored only in this browser. Sent as <code>X-API-Key</code>.</small>
+          </section>
+
+          <section class="panel" aria-labelledby="s-defaults">
+            <header class="panel-header"><h3 id="s-defaults">Server search defaults</h3><span class="muted">apply to every client</span></header>
+            <form id="defaults-form" class="form-grid">
+              <label class="field">Mode<select name="mode"><option value="identify">identify</option><option value="occurrences">occurrences</option></select></label>
+              <label class="field">Results (top_k)<input type="number" name="top_k" min="1" step="1" /></label>
+              <label class="field">Min confidence<input type="number" name="min_confidence" min="0" max="1" step="0.01" /></label>
+              <label class="field">Min aligned hashes<input type="number" name="min_aligned_hashes" min="1" step="1" /></label>
+              <label class="field">Min peak ratio<input type="number" name="min_peak_ratio" min="0" step="0.5" /></label>
+              <div class="row gap-2"><button class="btn btn-primary btn-sm" type="submit">Save defaults</button></div>
+            </form>
+          </section>
+
+          <section class="panel" aria-labelledby="s-appearance">
+            <header class="panel-header"><h3 id="s-appearance">Appearance</h3></header>
+            <div class="row gap-2">
+              <button class="btn btn-ghost btn-sm" data-theme-set="dark" type="button">Dark</button>
+              <button class="btn btn-ghost btn-sm" data-theme-set="light" type="button">Light</button>
+              <button class="btn btn-ghost btn-sm" data-theme-set="system" type="button">Follow system</button>
+            </div>
+            <label class="checkbox"><input type="checkbox" id="pref-autoplay" /> Start playback at the matched position when I press play on a result</label>
+          </section>
+
+          <section class="panel" aria-labelledby="s-system">
+            <header class="panel-header"><h3 id="s-system">System</h3><button class="btn btn-ghost btn-sm" id="sys-refresh" type="button" title="Refresh" aria-label="Refresh system information">↻</button></header>
+            <dl class="kv" id="sys-info"></dl>
+            <div class="row gap-2 wrap">
+              <a class="btn btn-ghost btn-sm" href="/docs" target="_blank" rel="noopener">API docs</a>
+              <a class="btn btn-ghost btn-sm" href="/api/v1/openapi.json" target="_blank" rel="noopener">OpenAPI JSON</a>
+              <a class="btn btn-ghost btn-sm" href="https://github.com/inboxpraveen/Audio-Fingerprint" target="_blank" rel="noopener">Source &amp; guides</a>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Mobile bottom tabs -->
+  <nav class="mobile-tabs" aria-label="Views">
+    <a class="mobile-tab" href="#search" data-view="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>Search</a>
+    <a class="mobile-tab" href="#library" data-view="library"><svg viewBox="0 0 24 24"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>Library</a>
+    <a class="mobile-tab" href="#activity" data-view="activity"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Activity</a>
+    <a class="mobile-tab" href="#settings" data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</a>
+  </nav>
+
+  <!-- Track drawer -->
+  <div class="drawer-backdrop hidden" id="drawer-backdrop"></div>
+  <aside class="drawer hidden" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
+    <header class="drawer-header">
+      <h2 id="drawer-title">Track</h2>
+      <button class="icon-btn" id="drawer-close" aria-label="Close">×</button>
+    </header>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <!-- Modal -->
+  <div class="modal-backdrop hidden" id="modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
+      <h2 id="modal-title"></h2>
+      <div id="modal-body"></div>
+      <div class="modal-actions" id="modal-actions"></div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>

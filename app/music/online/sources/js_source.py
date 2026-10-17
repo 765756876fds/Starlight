@@ -86,8 +86,6 @@ class JSMusicSource(MusicSource):
         candidates += [
             r"C:\Program Files\nodejs\node.exe",
             r"C:\Program Files (x86)\nodejs\node.exe",
-            r"D:\nodejs\node.exe",
-            r"D:\Program Files\nodejs\node.exe",
             r"C:\nvm4w\nodejs\node.exe",
             os.path.expanduser(r"~\scoop\apps\nodejs\current\node.exe"),
             os.path.expanduser(r"~\scoop\shims\node.exe"),

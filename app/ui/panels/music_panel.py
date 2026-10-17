@@ -1,4 +1,6 @@
 """音乐面板（本地 + 在线）。"""
+from typing import List
+
 from PySide6.QtCore import QEvent, QThread, Qt, QTimer, QObject, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
@@ -6,9 +8,31 @@ from PySide6.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget,
 )
 
+from ..dialogs.identify_dialog import IdentifyDialog
 from ..theme.colors import Colors
+from ...core.command_bus import CommandType, get_command_bus
 from ...core.event_bus import get_event_bus
+from ...music.humming import HummingService
+from ...music.lyric_search import LyricIndex
 from ...music.online.events import ONLINE_SEARCH_DONE, ONLINE_ERROR
+
+
+class _LyricBuildWorker(QObject):
+    """后台构建歌词索引（懒加载：首次按歌词搜索 / 扫描完成后重建）。"""
+    done = Signal(int)
+    failed = Signal(str)
+
+    def __init__(self, index: LyricIndex):
+        super().__init__()
+        self._index = index
+
+    def run(self):
+        try:
+            n = self._index.build()
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.done.emit(n)
 
 
 class _SearchWorker(QObject):
@@ -83,6 +107,8 @@ class _RankDetailWorker(QObject):
 class MusicPanel(QWidget):
     # P1 候选旁路：后台线程 publish → 此 Signal 桥到主线程渲染
     _search_event = Signal(dict)
+    # 识曲语音命令（MUSIC_IDENTIFY）跨线程桥：voice 线程 emit → 主线程弹窗
+    _identify_trigger = Signal()
     # 下载进度：后台线程 emit → 主线程渲染（跨线程安全）；pct None=无总量，-1=完成，-2=失败
     _dl_signal = Signal(str, object)  # key, pct
 
@@ -108,6 +134,11 @@ class MusicPanel(QWidget):
         self._pending_rank_detail = None   # {source, list_id, title} 或 None
         # 桌面歌词浮窗（首次点开关才创建；显式隐藏不销毁）
         self._lyrics_window = None
+        # 哼唱识曲：语音命令跨线程桥 + 复用弹窗单例 + 服务（首次点按钮才建）
+        self._identify_trigger.connect(self._on_identify_click)
+        get_command_bus().register(CommandType.MUSIC_IDENTIFY, self._on_identify_cmd)
+        self._identify_dialog = None
+        self._identify_service = None
 
         root = QVBoxLayout(self)
         # 顶栏：右侧"歌词"开关（桌面歌词浮窗入口）
@@ -118,6 +149,10 @@ class MusicPanel(QWidget):
         self.btn_lyrics.setProperty("class", "secondary")
         self.btn_lyrics.clicked.connect(self._on_toggle_lyrics)
         top_bar.addWidget(self.btn_lyrics)
+        self.btn_identify = QPushButton("🎤 识曲")
+        self.btn_identify.setProperty("class", "secondary")
+        self.btn_identify.clicked.connect(self._on_identify_click)
+        top_bar.addWidget(self.btn_identify)
         root.addLayout(top_bar)
         tabs = self.tabs = QTabWidget()
         root.addWidget(tabs)
@@ -142,10 +177,14 @@ class MusicPanel(QWidget):
         local_search_row = QHBoxLayout()
         self.edit_local = QLineEdit()
         self.edit_local.setPlaceholderText("搜索本地歌曲")
+        self.cb_local_mode = QComboBox()
+        self.cb_local_mode.addItems(["按歌名", "按歌词"])
+        self.cb_local_mode.setToolTip("按歌名：匹配标题/歌手；按歌词：模糊匹配本地 .lrc 歌词内容")
         self.btn_local_search = QPushButton("搜索")
         self.btn_local_search.setProperty("class", "primary")
         self.btn_local_clear = QPushButton("清空")
         local_search_row.addWidget(self.edit_local)
+        local_search_row.addWidget(self.cb_local_mode)
         local_search_row.addWidget(self.btn_local_search)
         local_search_row.addWidget(self.btn_local_clear)
         ll.addLayout(local_search_row)
@@ -399,6 +438,11 @@ class MusicPanel(QWidget):
         self.lbl_scan_status.setText(
             f"扫描完成：新增{result.get('added', 0)} 更新{result.get('updated', 0)} "
             f"跳过{result.get('skipped', 0)} 错误{result.get('errors', 0)}")
+        # 本地库变化 → 歌词索引失效，下次按歌词搜索时重建
+        try:
+            self._get_lyric_index().invalidate()
+        except Exception:
+            pass
         self._load_local_all()
 
     def _on_scan_failed(self, err: str) -> None:
@@ -411,7 +455,81 @@ class MusicPanel(QWidget):
 
     def _do_local_search(self):
         kw = self.edit_local.text().strip()
-        self._refresh_local_list(kw)
+        if self.cb_local_mode.currentText() == "按歌词":
+            self._do_lyric_search(kw)
+        else:
+            self._refresh_local_list(kw)
+
+    # ---- 按歌词模糊搜索 ----
+    def _get_lyric_index(self) -> LyricIndex:
+        """惰性创建歌词索引（db 从 music.controller 取，可为 None 不崩）。"""
+        if getattr(self, "_lyric_index", None) is None:
+            self._lyric_index = LyricIndex(
+                getattr(self._music, "db", None) if self._music else None)
+        return self._lyric_index
+
+    def _do_lyric_search(self, kw: str):
+        """按歌词搜索：索引未建 → 后台构建后自动继续；已建 → 直接模糊匹配。"""
+        if self._music is None:
+            return
+        idx = self._get_lyric_index()
+        if not idx.is_built():
+            self.lbl_scan_status.setText("正在建立歌词索引…")
+            self._pending_lyric_query = kw
+            self._start_lyric_build()
+            return
+        try:
+            songs = idx.search(kw)
+        except Exception as e:
+            print(f"[Music] lyric search error: {e}")
+            songs = []
+        self._show_lyric_results(songs, kw)
+
+    def _start_lyric_build(self):
+        """后台线程建索引（防重入：已有运行中线程则忽略）。"""
+        if (getattr(self, "_lyric_build_thread", None) is not None
+                and self._lyric_build_thread.isRunning()):
+            return
+        idx = self._get_lyric_index()
+        thread = QThread()
+        worker = _LyricBuildWorker(idx)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.done.connect(self._on_lyric_build_done)
+        worker.failed.connect(self._on_lyric_build_failed)
+        self._lyric_build_thread = thread
+        self._lyric_build_worker = worker
+        thread.start()
+
+    def _on_lyric_build_done(self, n: int):
+        self.lbl_scan_status.setText(f"歌词索引就绪（{n} 行）")
+        q = self._pending_lyric_query
+        self._pending_lyric_query = None
+        if q:
+            self._do_lyric_search(q)  # 索引已建 → 直接匹配
+
+    def _on_lyric_build_failed(self, err: str):
+        self.lbl_scan_status.setText(f"歌词索引失败: {err}")
+        self._pending_lyric_query = None
+
+    def _show_lyric_results(self, songs: List[dict], kw: str):
+        """结果列表复用本地列表（title - artist + UserRole=song，双击走 _on_local_play）。"""
+        if not songs:
+            self.list_local.clear()
+            self._local_songs = []
+            self.lbl_scan_status.setText(f"未找到包含该歌词的歌曲：{kw}")
+            return
+        self._local_songs = songs
+        self.list_local.clear()
+        for s in songs:
+            title = s.get("title", "?")
+            artist = s.get("artist", "")
+            item = QListWidgetItem(f"{title} - {artist}")
+            item.setData(Qt.UserRole, s)
+            self.list_local.addItem(item)
+        self.lbl_scan_status.setText(f"歌词匹配 {len(songs)} 首")
 
     def _refresh_local_list(self, kw: str):
         if self._music is None:
@@ -627,6 +745,49 @@ class MusicPanel(QWidget):
         else:
             self._lyrics_window.stop()
             self._lyrics_window.hide()
+
+    # ------------------------------------------------------------------ 哼唱识曲
+    def _on_identify_cmd(self, command):
+        """语音命令 MUSIC_IDENTIFY 处理器（voice 线程）→ 跨线程桥到主线程弹窗。"""
+        self._identify_trigger.emit()
+
+    def _get_identify_service(self) -> HummingService:
+        """惰性创建识曲服务（scan_dirs / 指纹库路径 / 扩展名来自 music 配置）。"""
+        if self._identify_service is None:
+            music = self._music
+            scan_dirs = list(getattr(music, "scan_dirs", None) or [])
+            config = getattr(music, "config", None) or {}
+            db_path = config.get("fingerprints", "data/music/fingerprints.db")
+            ext = list(config.get("extensions") or []) or None
+            self._identify_service = HummingService(
+                scan_dirs=scan_dirs, sqlite_path=db_path, extensions=ext)
+        return self._identify_service
+
+    def _on_identify_click(self):
+        """按钮或语音触发识曲：显示弹窗并开始（弹窗内部防重入）。"""
+        if self._identify_dialog is None:
+            self._identify_dialog = IdentifyDialog(
+                self._get_identify_service(), on_play=self._on_identify_play, parent=self)
+        self._identify_dialog.show()
+        self._identify_dialog.raise_()
+        self._identify_dialog.start()
+
+    def _on_identify_play(self, result):
+        """识别成功 → 按指纹 filepath 回本地库 → play_song（失败静默提示）。"""
+        music = self._music
+        if music is None:
+            return
+        filepath = (result or {}).get("filepath") or ""
+        if not filepath:
+            return
+        try:
+            song = music.db.get_song_by_path(filepath)
+            if not song:
+                print(f"[Identify] 指纹命中但本地库无该歌: {filepath}")
+                return
+            music.play_song(song)
+        except Exception as e:
+            print(f"[Identify] 播放失败: {e}")
 
     def _refresh_history(self):
         """渲染播放历史（最近在前）。"""

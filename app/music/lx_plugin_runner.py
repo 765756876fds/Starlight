@@ -119,14 +119,3 @@ class LxPluginRunner:
         # 先简化：直接调用插件的搜索逻辑
         # 这里先返回空，后面完善
         return []
-
-
-def test_plugin():
-    """测试插件加载"""
-    plugin_path = r"D:\落雪\落雪音源\爱坤.js"
-    runner = LxPluginRunner(plugin_path)
-    print(f"[测试] 插件加载成功，支持的源: {list(runner._sources.keys()) if hasattr(runner, '_sources') else '未知'}")
-
-
-if __name__ == "__main__":
-    test_plugin()

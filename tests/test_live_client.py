@@ -127,3 +127,71 @@ class TestLiveClientAPI:
 
         # 验证链路通畅
         assert len(received) > 0 or len(events) >= 0  # 时间可能没变化
+
+
+# ---------- 2026-10-18：2999 404 修复（gamestats → allgamedata） ----------
+
+class _FakeResp:
+    def __init__(self, status_code, json_data=None):
+        self.status_code = status_code
+        self._json = json_data
+
+    def json(self):
+        return self._json
+
+
+class TestAllGameDataProbe:
+    """is_available / get_game_time 已改走标准最全端点 /allgamedata。
+
+    腾讯服实测 /liveclientdata/gamestats 返回 404（接口被禁）→ 2999 永远判定
+    不可用、实时 KDA 不刷新；allgamedata 是官方主数据端点。
+    """
+
+    def test_is_available_uses_allgamedata(self, monkeypatch):
+        api = LiveClientAPI()
+        urls = []
+
+        def fake_get(url, timeout=None):
+            urls.append(url)
+            return _FakeResp(200, {"gameData": {"gameMode": "PRACTICETOOL"}})
+
+        monkeypatch.setattr(api._session, "get", fake_get)
+        assert api.is_available() is True
+        assert urls and urls[0].endswith("/liveclientdata/allgamedata")
+        assert all("gamestats" not in u for u in urls)
+
+    def test_is_available_404_false(self, monkeypatch):
+        api = LiveClientAPI()
+
+        def fake_get(url, timeout=None):
+            return _FakeResp(404)
+
+        monkeypatch.setattr(api._session, "get", fake_get)
+        assert api.is_available() is False
+
+    def test_is_available_connection_error_false(self, monkeypatch):
+        import requests
+        api = LiveClientAPI()
+
+        def fake_get(url, timeout=None):
+            raise requests.ConnectionError("refused")
+
+        monkeypatch.setattr(api._session, "get", fake_get)
+        assert api.is_available() is False
+
+    def test_get_game_time_from_allgamedata(self, monkeypatch):
+        api = LiveClientAPI()
+        monkeypatch.setattr(api, "get_all_game_data",
+                            lambda: {"gameData": {"gameTime": 123.5}})
+        assert api.get_game_time() == 123.5
+
+    def test_get_game_time_missing_falls_back_zero(self, monkeypatch):
+        api = LiveClientAPI()
+        monkeypatch.setattr(api, "get_all_game_data", lambda: {"gameData": {}})
+        assert api.get_game_time() == 0.0
+
+    def test_get_game_time_error_falls_back_zero(self, monkeypatch):
+        api = LiveClientAPI()
+        monkeypatch.setattr(api, "get_all_game_data",
+                            lambda: {"gameData": {"gameTime": "abc"}})
+        assert api.get_game_time() == 0.0

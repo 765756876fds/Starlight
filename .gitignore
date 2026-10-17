@@ -128,6 +128,8 @@ data/tts_test/
 data/assets/
 # 电影链运行时产物（watch-later 断点目录 + 未来下载缓存；不进 git）
 data/movie/
+# 哼唱识曲指纹库（运行时产物，200MB 级，不进 git）
+data/music/
 # 根目录一次性脚本（保留 tests/ 目录内的测试）
 /temp_*.py
 /probe_*.py

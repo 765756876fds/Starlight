@@ -1,14 +1,42 @@
 """路径解析工具：外部可执行文件查找链（配置 → 自动搜索 → 降级）。
 P0 路径自适应（2026-10-16）：llama-server 定位统一走这里；
 P1（2026-10-16）：PROJECT_ROOT 单一来源，lol_data / music_sources 路径统一基于它。
+P2（2026-10-18）：PROJECT_ROOT 打包态适配（sys.frozen → exe 目录）+
+resolve_under_root 统一把相对配置路径绝对化（消除 CWD 依赖）。
 """
 import glob
 import os
 import shutil
+import sys
 from pathlib import Path
 
-# 项目根（app/core/path_resolve.py → 上溯 2 层）。所有 data/ 路径的单一来源。
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+def _compute_project_root() -> Path:
+    """源码态：app/core/path_resolve.py → 上溯 2 层；打包态（PyInstaller）：exe 所在目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+# 项目根。所有 data/、config/、logs/ 路径的单一来源（不依赖 CWD）。
+PROJECT_ROOT = _compute_project_root()
+
+
+def resolve_under_root(path: str) -> str:
+    """把配置里的相对路径绝对化（基于 PROJECT_ROOT）；绝对路径原样返回。
+
+    - "./data/music.db" → <PROJECT_ROOT>/data/music.db
+    - "data/player.db"  → <PROJECT_ROOT>/data/player.db
+    - "D:\\xxx\\a.db"     → 原样（用户绝对路径不动）
+    """
+    if not path:
+        return path
+    p = str(path).strip()
+    if os.path.isabs(p):
+        return p
+    # 去掉开头的 ./ 或 .\，再基于 PROJECT_ROOT 拼接
+    norm = p.replace("\\", "/").lstrip("./")
+    return str((PROJECT_ROOT / norm).resolve())
 
 
 def find_llama_server(asr_config: dict) -> str:
