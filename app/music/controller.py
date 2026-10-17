@@ -935,6 +935,7 @@ class MusicController:
                             "source": "online",
                             "source_name": chosen.source_name,
                             "track_id": chosen.track_id,
+                            "extra": getattr(chosen, 'extra', None) or {},
                         }
                         self._current_song = online_song
                         self._update_state(
@@ -1031,6 +1032,7 @@ class MusicController:
                 "source": "online",
                 "source_name": chosen.source_name,
                 "track_id": chosen.track_id,
+                "extra": getattr(chosen, 'extra', None) or {},
             }
             self._current_song = online_song
             self._update_state(playing=True, current_song=online_song)
@@ -1483,7 +1485,10 @@ class MusicController:
             "album": track.album,
             "duration": track.duration_seconds,
             "path": url,
-            "online": True,
+            "source": "online",
+            "source_name": getattr(track, "source_name", "") or "",
+            "track_id": getattr(track, "track_id", "") or "",
+            "extra": getattr(track, "extra", None) or {},
         }
         self._update_state(
             playing=True,

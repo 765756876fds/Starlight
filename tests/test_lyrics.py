@@ -169,6 +169,137 @@ class TestLyricsWindow:
         assert len(w._lines) == 1
         assert w._lines[0][1] == "在线歌词"
 
+    def test_track_changed_online_dict_http_path(self, qapp):
+        """实机形态（controller :928）：dict + path=http URL + source=online + extra → 走在线分支，
+        不误入本地 .lrc；dict 转 OnlineTrack（source_name/track_id/extra 透传）后调 manager。"""
+        from app.core.event_bus import Event, EventType
+        from app.music.online.models import OnlineTrack
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        song = {
+            "id": -1, "title": "晴天", "artist": "周杰伦", "album": "叶惠美",
+            "duration": 269, "path": "https://example.com/play.m3u8", "source": "online",
+            "source_name": "酷狗音乐", "track_id": "20505418",
+            "extra": {"_raw": {"hash": "abc123"}},
+        }
+        mgr = MagicMock()
+        mgr.get_lyric.return_value = "[00:01.00]实机在线歌词"
+        ctrl = _controller(current_song=song, online_manager=mgr)
+        w = LyricsWindow(ctrl)
+        w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={"song": song}))
+        # 在线分支：manager.get_lyric 被调，且收到的是 OnlineTrack（不是 dict——manager 按属性路由）
+        assert mgr.get_lyric.call_count == 1
+        got = mgr.get_lyric.call_args.args[0]
+        assert isinstance(got, OnlineTrack)
+        assert got.source_name == "酷狗音乐"
+        assert got.track_id == "20505418"
+        assert got.extra == {"_raw": {"hash": "abc123"}}
+        assert len(w._lines) == 1
+        assert w._lines[0][1] == "实机在线歌词"
+
+    def test_track_changed_online_dict_no_path(self, qapp):
+        """在线 dict 无 path（部分源不发 URL）也走在线分支。"""
+        from app.core.event_bus import Event, EventType
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        song = {"source": "online", "source_name": "酷我音乐", "track_id": "k1", "title": "词"}
+        mgr = MagicMock()
+        mgr.get_lyric.return_value = "[00:01.00]ok"
+        ctrl = _controller(current_song=song, online_manager=mgr)
+        w = LyricsWindow(ctrl)
+        w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={"song": song}))
+        assert mgr.get_lyric.call_count == 1
+        assert len(w._lines) == 1
+
+    def test_track_changed_clears_old_lyrics(self, qapp):
+        """切歌必清空：新歌事件到达（无论加载成败）→ 旧歌词立即消失，不串词。"""
+        from app.core.event_bus import Event, EventType
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        ctrl = _controller(online_manager=None)
+        w = LyricsWindow(ctrl)
+        w.set_lyrics([(1.0, "上一首歌词")], "上一首")
+        assert len(w._lines) == 1
+        # 新歌在线 dict，加载失败（无 online_manager）→ 旧词必须清空
+        w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={
+            "song": {"source": "online", "source_name": "酷狗音乐", "track_id": "t1", "title": "新歌"}}))
+        assert w._lines == []          # 旧歌词消失（防串词）
+        assert w._title == "新歌"
+
+    def test_track_changed_clears_before_load_failure(self, qapp):
+        """manager 抛异常 → 旧词仍清空，占位不崩。"""
+        from app.core.event_bus import Event, EventType
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        mgr = MagicMock()
+        mgr.get_lyric.side_effect = RuntimeError("boom")
+        ctrl = _controller(online_manager=mgr)
+        w = LyricsWindow(ctrl)
+        w.set_lyrics([(1.0, "旧词"), (2.0, "旧词二")], "旧")
+        w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={
+            "song": {"source": "online", "source_name": "酷狗音乐", "track_id": "t2", "title": "新"}}))
+        assert w._lines == []
+        assert w._title == "新"
+
+    def test_track_changed_online_dict_missing_fields_placeholder(self, qapp):
+        """旧形态缺字段（online:True、无 source_name/track_id/extra）→ 不崩、占位（兼容降级）。"""
+        from app.core.event_bus import Event, EventType
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        song = {"id": None, "title": "旧形态", "path": "http://x/a.m3u8", "online": True}
+        mgr = MagicMock()
+        mgr.get_lyric.return_value = None
+        ctrl = _controller(current_song=song, online_manager=mgr)
+        w = LyricsWindow(ctrl)
+        w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={"song": song}))
+        assert w._lines == []
+        assert w._title == "旧形态"
+
+    def test_poll_reloads_on_song_change(self, qapp):
+        """轮询换歌：play_online 不发事件，当前歌标识变了 → _sync 自动重载（无需事件）。"""
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        mgr = MagicMock()
+        mgr.get_lyric.return_value = "[00:01.00]歌A歌词"
+        song_a = {"source": "online", "source_name": "酷狗音乐", "track_id": "a1",
+                  "title": "歌A", "path": "http://x/a.m3u8", "extra": {"_raw": {}}}
+        ctrl = _controller(current_song=song_a, online_manager=mgr)
+        w = LyricsWindow(ctrl)
+        w._load_current()
+        assert len(w._lines) == 1
+        assert w._lines[0][1] == "歌A歌词"
+        assert w._last_song_key == w._song_key(song_a)
+        # 切歌（play_online 路径——只改 current_song，不发事件）
+        song_b = {"source": "online", "source_name": "酷狗音乐", "track_id": "b2",
+                  "title": "歌B", "path": "http://x/b.m3u8", "extra": {"_raw": {}}}
+        mgr.get_lyric.return_value = "[00:01.00]歌B歌词"
+        ctrl.get_current_song.return_value = song_b
+        w._sync()
+        assert w._lines[0][1] == "歌B歌词"      # 自动重载
+        assert w._last_song_key == w._song_key(song_b)
+
+    def test_poll_no_reload_same_song(self, qapp):
+        """同一首歌反复 tick → 不重复加载（key 相同）。"""
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        mgr = MagicMock()
+        mgr.get_lyric.return_value = "[00:01.00]歌词"
+        song = {"source": "online", "source_name": "酷狗音乐", "track_id": "a1",
+                "title": "歌", "path": "http://x/a.m3u8", "extra": {"_raw": {}}}
+        ctrl = _controller(current_song=song, online_manager=mgr)
+        w = LyricsWindow(ctrl)
+        w._load_current()
+        calls0 = mgr.get_lyric.call_count
+        w._sync()
+        w._sync()
+        assert mgr.get_lyric.call_count == calls0   # 未重复触发
+
+    def test_poll_song_none_clears(self, qapp):
+        """current_song 变 None（停止播放）→ 轮询清空歌词。"""
+        from app.ui.widgets.lyrics_window import LyricsWindow
+        song = {"source": "online", "source_name": "酷狗音乐", "track_id": "a1",
+                "title": "歌", "path": "http://x/a.m3u8", "extra": {"_raw": {}}}
+        ctrl = _controller(current_song=song)
+        w = LyricsWindow(ctrl)
+        w._load_current()
+        ctrl.get_current_song.return_value = None
+        w._sync()
+        assert w._lines == []
+        assert w._last_song_key == ""
+
     def test_no_lyrics_placeholder(self, qapp):
         from app.ui.widgets.lyrics_window import LyricsWindow
         ctrl = _controller(current_song={"id": 1, "title": "无词", "path": "Z:/missing.mp3"})

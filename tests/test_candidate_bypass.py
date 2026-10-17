@@ -228,6 +228,24 @@ def test_play_online_before_load_callback_false(tmp_path):
     c.mpv.loadfile.assert_not_called()
     assert c._current_song is prev_song
 
+def test_play_online_success_sets_full_current_song(tmp_path):
+    """play_online 成功 → _current_song 带齐 source/source_name/track_id/extra（歌词路由字段）。"""
+    from app.music.online.models import OnlineTrack
+    c = _make_controller(tmp_path)
+    c.online_manager = MagicMock()
+    c.online_manager.get_play_url.return_value = {"url": "http://x/a.m3u8", "headers": None}
+    track = OnlineTrack(source_name="酷狗音乐", track_id="20505418",
+                        title="晴天", artist="周杰伦", extra={"_raw": {"hash": "h1"}})
+    ok = c.play_online(track)
+    assert ok is True
+    c.mpv.loadfile.assert_called_once_with("http://x/a.m3u8")
+    cs = c._current_song
+    assert cs["source"] == "online"
+    assert cs["source_name"] == "酷狗音乐"
+    assert cs["track_id"] == "20505418"
+    assert cs["extra"] == {"_raw": {"hash": "h1"}}
+    assert str(cs["path"]).startswith("http")
+
 def test_resume_failover_no_late_loadfile_after_cancel(tmp_path):
     """用户取消后：晚到的 play_online 不再产生副作用（不 loadfile、不劫持播放）。"""
     import time as _real

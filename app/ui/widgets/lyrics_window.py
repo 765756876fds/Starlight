@@ -44,6 +44,8 @@ class LyricsWindow(QWidget):
         self._title = ""
         self._current_idx = 0
         self._started = False
+        # 当前歌标识（轮询比对用：play_online 不发换歌事件，靠 200ms tick 检测）
+        self._last_song_key = ""
 
         # 字体度量预热（构造一次，防每帧 QFontMetrics 卡顿）
         self._font = QFont("Microsoft YaHei", _FONT_SIZE)
@@ -101,11 +103,25 @@ class LyricsWindow(QWidget):
             return
         self._load_lyric(song)
 
+    @staticmethod
+    def _song_key(song) -> str:
+        """歌标识：path|source_name|track_id（dict / OnlineTrack 通吃；None → ""）。"""
+        if song is None:
+            return ""
+        if isinstance(song, dict):
+            return "|".join(str(song.get(k) or "") for k in ("path", "source_name", "track_id"))
+        return "|".join(str(getattr(song, k, "") or "") for k in ("path", "source_name", "track_id"))
+
     def _load_lyric(self, song) -> None:
-        """本地歌：同名 .lrc；在线歌：manager.get_lyric。失败 → 占位。"""
+        """本地歌（本地文件路径）：同名 .lrc；在线歌（dict source=online / http path）：manager.get_lyric。失败 → 占位。"""
+        # 更新歌标识（事件/轮询两条路都同步，防轮询对同一首歌重复触发）
+        self._last_song_key = self._song_key(song)
+        # 入口先清空旧歌词——防串词（切歌时旧 lines 残留，加载失败/未完成会继续显示上一首）
+        self.set_lyrics([], "")
         title = getattr(song, "title", None) or (song.get("title") if isinstance(song, dict) else None)
         path = song.get("path") if isinstance(song, dict) else None
-        if path:
+        # 本地分支：path 必须是本地文件路径（在线歌 dict 也带 path=http URL，误判会丢歌词）
+        if path and not str(path).startswith(("http://", "https://")):
             lrc_path = find_local_lrc(path)
             if lrc_path:
                 lines = load_lyrics_from_file(lrc_path)
@@ -114,13 +130,26 @@ class LyricsWindow(QWidget):
                     return
             self.set_lyrics([], title or "")
             return
-        # 在线歌
+        # 在线歌：OnlineTrack 对象直传；controller 发布的 dict 转 OnlineTrack（补 extra._raw）
         try:
             mgr = getattr(self._controller, "online_manager", None)
             if mgr is None:
                 self.set_lyrics([], title or "")
                 return
-            raw = mgr.get_lyric(song)
+            track = song
+            if isinstance(song, dict):
+                from ...music.online.models import OnlineTrack
+                track = OnlineTrack(
+                    source_name=song.get("source_name") or "",
+                    track_id=song.get("track_id") or "",
+                    title=song.get("title") or "",
+                    artist=song.get("artist") or "",
+                    album=song.get("album") or "",
+                    duration_seconds=song.get("duration") or 0,
+                    cover_url=song.get("cover_url"),
+                    extra=song.get("extra") or {},
+                )
+            raw = mgr.get_lyric(track)
             lines = parse_lrc(raw) if raw else []
             self.set_lyrics(lines, title or "")
         except Exception:
@@ -153,6 +182,22 @@ class LyricsWindow(QWidget):
         return max(i, 0)
 
     def _sync(self) -> None:
+        # 轮询检测换歌（play_online 不发 MUSIC_TRACK_CHANGED——防语音链误触）：
+        # 现有 200ms tick 顺便比对当前歌标识，变了 → 重新加载（事件订阅保留，双保险）。
+        try:
+            song = self._controller.get_current_song()
+        except Exception:
+            song = None
+        if song is None:
+            if self._last_song_key:
+                self._last_song_key = ""
+                self.set_lyrics([], "")
+                return
+            # 无歌且 key 本就为空 → 走时间同步（_lines 可能已有内容）
+        key = self._song_key(song)
+        if key != self._last_song_key:
+            self._load_lyric(song)
+            return
         if not self._lines:
             return
         try:
