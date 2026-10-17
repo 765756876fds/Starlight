@@ -74,13 +74,13 @@ data/combo_usage.json
 test_output/
 *.test.mp3
 
-# Temporary verification scripts
+# Temporary verification scripts（根目录一次性脚本；tests/ 内正式测试不受影响）
 check_*.py
 fix_*.py
 list_*.py
-test_2999_*.py
-test_mpv_*.py
-test_lcu_*.py
+/test_2999_*.py
+/test_mpv_*.py
+/test_lcu_*.py
 audit_*.py
 
 # ASR test recordings
