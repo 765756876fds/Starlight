@@ -20,14 +20,15 @@ def qapp():
 
 # ---------- ② 窗口关闭后唤醒（start 守卫查进程存活） ----------
 
-def _launched_mpv(video=False, watch_later_dir=None):
+def _launched_mpv(video=False, watch_later_dir=None, extra_video_args=None):
     """启动一个 MpvController（mock Popen/pipe），返回 (mpv, m_popen)。"""
     with patch("app.music.mpv.subprocess.Popen") as m_popen, \
          patch("app.music.mpv.os.path.exists", return_value=True), \
          patch("app.music.mpv.open", create=True) as m_open:
         m_open.return_value = MagicMock()
         mpv = MpvController(sys.executable, video=video,
-                            watch_later_dir=watch_later_dir)
+                            watch_later_dir=watch_later_dir,
+                            extra_video_args=extra_video_args)
         assert mpv.start(taskkill=False, pipe_timeout=1.0, prop_timeout=0.3)
     return mpv, m_popen
 
@@ -108,6 +109,65 @@ def test_movie_controller_default_watch_later_dir(tmp_path):
         MovieController(config=cfg)
     kwargs = M.call_args.kwargs
     assert kwargs["watch_later_dir"] == str(tmp_path / "movie" / "watch_later")
+
+
+# ---------- ⑥ 电影网络缓冲参数（包2d：卡顿优化） ----------
+
+_BUFFER_ARGS = [
+    "--demuxer-max-bytes=256MiB",
+    "--demuxer-readahead-secs=15",
+    "--cache-pause-initial=yes",
+    "--cache-pause-wait=2",
+    "--network-timeout=15",
+    "--demuxer-thread=yes",
+]
+
+
+def test_video_branch_has_buffer_args():
+    """电影 video 分支含全部缓冲参数 + hls-bitrate=max 保留（画质优先）。"""
+    mpv, m_popen = _launched_mpv(video=True, extra_video_args=_BUFFER_ARGS)
+    args = m_popen.call_args[0][0]
+    for a in _BUFFER_ARGS:
+        assert a in args, f"video 分支缺缓冲参数: {a}"
+    assert "--hls-bitrate=max" in args   # 包2c 画质参数保留
+
+
+def test_music_branch_no_buffer_args():
+    """音乐分支（video=False）零缓冲参数（音乐链零影响）。"""
+    mpv, m_popen = _launched_mpv(extra_video_args=_BUFFER_ARGS)
+    args = m_popen.call_args[0][0]
+    assert not any(a.startswith(("--demuxer-", "--cache-pause", "--network-timeout"))
+                   for a in args)
+    assert "--hls-bitrate=max" not in args
+
+
+def test_movie_controller_passes_default_buffer_args(tmp_path):
+    """MovieController 构造 → MpvController 带内置默认缓冲参数（settings 缺省兜底）。"""
+    from app.movie.movie_controller import MovieController
+    cfg = _fake_cfg({"app.data_dir": str(tmp_path)})
+    with patch("app.movie.movie_controller.MpvController") as M:
+        MovieController(config=cfg)
+    extra = M.call_args.kwargs["extra_video_args"]
+    assert isinstance(extra, list)
+    for a in _BUFFER_ARGS:
+        assert a in extra, f"默认缓冲参数缺失: {a}"
+
+
+def test_movie_controller_buffer_respects_settings(tmp_path):
+    """settings movie.mpv_buffer 可配：自定义值覆盖默认。"""
+    from app.movie.movie_controller import MovieController
+    cfg = _fake_cfg({
+        "app.data_dir": str(tmp_path),
+        "movie.mpv_buffer": {"readahead_secs": 30, "network_timeout": 10,
+                             "pause_initial": False},
+    })
+    with patch("app.movie.movie_controller.MpvController") as M:
+        MovieController(config=cfg)
+    extra = M.call_args.kwargs["extra_video_args"]
+    assert "--demuxer-readahead-secs=30" in extra
+    assert "--network-timeout=10" in extra
+    assert "--cache-pause-initial=no" in extra
+    assert "--demuxer-max-bytes=256MiB" in extra  # 未配项仍默认
 
 
 # ---------- ③ 软件退出钩子 ----------

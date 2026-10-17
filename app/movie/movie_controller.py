@@ -87,6 +87,24 @@ def episode_eps(item):
     return split_play_url(item.get("play_url") or "")
 
 
+def _mpv_buffer_args(config) -> list:
+    """电影 mpv 网络缓冲参数（卡顿优化，包2d）。
+    settings movie.mpv_buffer 可配（用户可调），缺省用内置默认：
+    demuxer_max_bytes=256MiB / readahead_secs=15 / pause_initial=yes /
+    pause_wait=2 / network_timeout=15，demuxer-thread 固定开启。
+    仅电影 video 分支生效——音乐链零影响（音乐不加缓冲参数）。"""
+    b = config.get("movie.mpv_buffer", {}) or {}
+    args = [
+        "--demuxer-max-bytes=" + str(b.get("demuxer_max_bytes", "256MiB")),
+        "--demuxer-readahead-secs=" + str(b.get("readahead_secs", 15)),
+        "--cache-pause-initial=" + ("yes" if b.get("pause_initial", True) else "no"),
+        "--cache-pause-wait=" + str(b.get("pause_wait", 2)),
+        "--network-timeout=" + str(b.get("network_timeout", 15)),
+        "--demuxer-thread=yes",
+    ]
+    return args
+
+
 class MovieController:
     """搜索 + 播放控制 + 与音乐互斥（事件解耦）。"""
 
@@ -117,7 +135,8 @@ class MovieController:
             os.makedirs(watch_dir, exist_ok=True)
         except Exception:
             pass
-        self.mpv = MpvController(mpv_bin, pipe, video=True, watch_later_dir=watch_dir)
+        self.mpv = MpvController(mpv_bin, pipe, video=True, watch_later_dir=watch_dir,
+                                 extra_video_args=_mpv_buffer_args(self._config))
         self._music = music
         self._current = None
         self._current_index = None

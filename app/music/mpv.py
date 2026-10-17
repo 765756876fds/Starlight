@@ -16,12 +16,14 @@ class MpvController:
     """mpv JSON IPC 控制器"""
 
     def __init__(self, mpv_path: str, ipc_pipe: str = "\\\\.\\pipe\\lol_music_mpv",
-                 video: bool = False, watch_later_dir: Optional[str] = None):
+                 video: bool = False, watch_later_dir: Optional[str] = None,
+                 extra_video_args: Optional[list] = None):
         self.mpv_path = mpv_path
         self.ipc_pipe = ipc_pipe
         self._base_ipc_pipe = ipc_pipe  # P0-2：每次 launch 从 base 重建（不追加累积）
         self.video = video
         self.watch_later_dir = watch_later_dir
+        self.extra_video_args = extra_video_args or []  # 电影缓冲参数（仅 video 分支追加）
         self._process: Optional[subprocess.Popen] = None
         self._pipe = None
         self._running = False
@@ -89,6 +91,10 @@ class MpvController:
             args.append("--force-window=yes")
             args.append("--osc=no")   # 电影：弃用英文自带 OSC，控制走应用面板
             args.append("--hls-bitrate=max")  # 包2c：HLS 强制最高码率（仅视频实例，音乐不加）
+            # 电影网络缓冲（包2d）：卡顿优化——预读 15s + 前向缓冲 256MiB + 开局预缓冲
+            # + 缓冲后多攒 2s + 断流 15s 快速重试 + 解复用独立线程。
+            # 音乐链零影响（仅 video 分支追加）；参数不识别（老 mpv）mpv 会报 warning 忽略，不崩。
+            args.extend(self.extra_video_args)
             if wid is not None:
                 # 内嵌：渲染到 Qt 容器 HWND（win32 句柄 32 位，负值 mpv 拒收 → 转 uint32）
                 args.append("--wid=%d" % (int(wid) & 0xFFFFFFFF))

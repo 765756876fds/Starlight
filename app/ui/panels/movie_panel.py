@@ -5,16 +5,19 @@ import functools
 import html as _html_mod
 import re
 import urllib.request
+import requests
+from concurrent.futures import ThreadPoolExecutor
 
-from PySide6.QtCore import QObject, QSize, QThread, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QObject, QRect, QSize, QThread, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListView, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea,
-    QSlider, QStackedWidget, QVBoxLayout, QWidget,
+    QSlider, QStackedWidget, QStyledItemDelegate, QStyle, QVBoxLayout, QWidget,
 )
 
 from ..dialogs.movie_source_dialog import MovieSourceDialog
+from ...movie import douban_rank
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
 _POSTER_DIR = Path("data/movie/posters")
@@ -42,6 +45,97 @@ def _make_poster_placeholder(name):
     p.drawText(pix.rect(), Qt.AlignCenter | Qt.TextWordWrap, (name or "无海报")[:12])
     p.end()
     return pix
+
+
+def _make_thumb_pixmap(pix, size=_POSTER_SIZE, radius=8):
+    """海报缩略：KeepAspectRatio + SmoothTransformation 缩放（防锯齿）+ 圆角。
+    对齐爱奇艺海报样式；仅榜单海报用（搜索海报墙 _PosterBatchWorker 不受影响）。"""
+    if pix.isNull():
+        return pix
+    scaled = pix.scaled(size[0], size[1], Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    out = QPixmap(size[0], size[1])
+    out.fill(Qt.transparent)
+    p = QPainter(out)
+    path = QPainterPath()
+    path.addRoundedRect(0, 0, size[0], size[1], radius, radius)
+    p.setClipPath(path)
+    p.drawPixmap((size[0] - scaled.width()) // 2, (size[1] - scaled.height()) // 2, scaled)
+    p.end()
+    return out
+
+
+# 内容无效的海报 URL（豆瓣对无海报条目返回 text/html ~990B 反爬页，非图——
+# 实机取证 5/20 张同况，且集中在 img9 域）。会话内不再重试（避免每轮切换标签重复拉无效内容）。
+_db_poster_failed: set = set()
+
+# 豆瓣海报多镜像域。取证：img9 域对部分条目返回反爬页（~990B HTML 非图），
+# 换 img1 域同一 photo id 100% 成功（5/5，21-38KB JPEG）；延迟重试/完整 UA/代理均无效
+# （域级风控，非频率/UA 问题）——故仅多域回退，不降并发不加间隔。
+_POSTER_DOMAINS = tuple(f"img{i}" for i in range(1, 10))
+
+
+def _poster_candidates(url: str) -> list:
+    """同一海报的多域候选 URL：原域在首位（多数条目原域直连即成功），失败再依次换域。"""
+    m = re.search(r"img(\d)\.doubanio\.com", url or "")
+    if not m:
+        return [url]
+    cur = int(m.group(1))
+    order = [cur] + [i for i in range(1, 10) if i != cur]
+    return [url.replace(f"img{cur}.doubanio.com", f"img{i}.doubanio.com") for i in order]
+
+
+class _RankItemDelegate(QStyledItemDelegate):
+    """榜单海报 item 自绘（对齐爱奇艺：海报 + 片名大字 + 评分小字 + hover/选中背景）。
+    item 数据：UserRole=dict（title/rate/cover/url/id/db_key），DecorationRole=QIcon。"""
+
+    _GRID = (170, 250)
+    _PAD = 15          # 海报左右留白
+    _TOP = 10          # 海报上留白
+    _TITLE_H = 22
+    _RATE_H = 16
+
+    def paint(self, painter, option, index):
+        data = index.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            super().paint(painter, option, index)
+            return
+        painter.save()
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, QColor(60, 64, 74))
+        elif option.state & QStyle.State_MouseOver:
+            painter.fillRect(option.rect, QColor(46, 49, 58))
+        # 海报（icon 已缩略+圆角；AlignCenter 保比例）
+        icon = index.data(Qt.DecorationRole)
+        img = QRect(option.rect.left() + self._PAD, option.rect.top() + self._TOP,
+                    option.rect.width() - self._PAD * 2,
+                    option.rect.height() - self._TOP - self._TITLE_H - self._RATE_H - 6)
+        if isinstance(icon, QIcon) and not icon.isNull():
+            icon.paint(painter, img, Qt.AlignCenter)
+        # 片名（大字 + 省略号）
+        title = str(data.get("title") or "")
+        f1 = QFont("Microsoft YaHei", 10, QFont.Bold)
+        painter.setFont(f1)
+        el = QFontMetrics(f1).elidedText(title, Qt.ElideRight,
+                                         option.rect.width() - 12)
+        painter.setPen(QColor(235, 235, 235))
+        painter.drawText(QRect(option.rect.left() + 6,
+                               option.rect.top() + option.rect.height() - self._TITLE_H - self._RATE_H,
+                               option.rect.width() - 12, self._TITLE_H),
+                         Qt.AlignHCenter | Qt.AlignVCenter, el)
+        # 评分（小字角标）
+        rate = str(data.get("rate") or "")
+        if rate:
+            f2 = QFont("Microsoft YaHei", 9)
+            painter.setFont(f2)
+            painter.setPen(QColor(250, 180, 60))
+            painter.drawText(QRect(option.rect.left() + 6,
+                                   option.rect.top() + option.rect.height() - self._RATE_H,
+                                   option.rect.width() - 12, self._RATE_H),
+                             Qt.AlignHCenter | Qt.AlignVCenter, rate)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(*self._GRID)
 
 
 def _get_poster(vod_id):
@@ -80,26 +174,137 @@ class _SearchWorker(QObject):
 
 
 class _PosterBatchWorker(QObject):
-    """串行下载整批海报到磁盘缓存；逐张 done(vod_id, 本地路径)（失败=""）。"""
+    """串行下载整批海报到磁盘缓存；逐张 done(vod_id, 本地路径)（失败=""）。
+    finished 在整批结束后 emit（面板用它做"待处理批次"补偿）。
+    cancel() 置位后循环尽快退出（当前阻塞请求最多等到 TIMEOUT）。"""
 
     done = Signal(str, str)
+    finished = Signal()
 
     def __init__(self, jobs):
         super().__init__()
         self._jobs = jobs  # [(vod_id, url)]
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         for vod_id, url in self._jobs:
+            if self._cancelled:
+                break
             path = _POSTER_DIR / f"{vod_id}.jpg"
             try:
                 if not path.exists():
-                    urllib.request.urlretrieve(url, path)
+                    r = requests.get(url, timeout=douban_rank.TIMEOUT)
+                    if r.status_code == 200 and r.content:
+                        path.write_bytes(r.content)
                 if path.exists():
                     self.done.emit(str(vod_id), str(path))
                     continue
             except Exception as e:
                 print(f"[Movie] 海报下载失败 {vod_id}: {e}")
             self.done.emit(str(vod_id), "")
+        self.finished.emit()
+
+
+class _DbPosterBatchWorker(QObject):
+    """豆瓣榜单海报下载（独立 worker，不碰现有 _PosterBatchWorker 的 job 结构）。
+    豆瓣海报 CDN 防盗链：必须带 UA+Referer（裸连/只带 UA 均 418，取证确认）。
+    逐张 done(key, 本地路径)（失败=""）；key 形如 "db36179101"。
+    内容校验：豆瓣对无海报条目返回 text/html ~990B 反爬页（非图，实机取证）——
+    非 JPEG/过小 → 记 _db_poster_failed（会话内不再重试）+ done 空（占位兜底）。
+    并发：ThreadPoolExecutor(max_workers=4) 对齐音乐下载器并发模式。
+    finished 整批结束 emit；cancel() 置位后 run 直接结束（当前请求最多等到超时）。"""
+
+    done = Signal(str, str)
+    finished = Signal()
+
+    def __init__(self, jobs):
+        super().__init__()
+        self._jobs = jobs  # [(key, url)]
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def _download(self, key, url):
+        for cand in _poster_candidates(url):  # 原域优先，失败换 img1..img9 其余域（取证有效）
+            if self._cancelled:
+                return ""
+            try:
+                r = requests.get(cand, headers=douban_rank.HEADERS, timeout=douban_rank.TIMEOUT)
+                if r.status_code == 200 and len(r.content) >= 5000 \
+                        and r.content[:2] == b"\xff\xd8":
+                    pix = QPixmap()
+                    if pix.loadFromData(r.content):
+                        path = _POSTER_DIR / f"{key}.jpg"
+                        thumb = _make_thumb_pixmap(pix)
+                        if thumb.save(str(path)):
+                            return str(path)
+            except Exception as e:
+                print(f"[Movie] 豆瓣海报下载失败 {key} {cand}: {e}")
+        # 全部域无效 → 会话内不再重试（占位兜底）
+        _db_poster_failed.add(url)
+        return ""
+
+    def run(self):
+        if self._cancelled:
+            self.finished.emit()
+            return
+        results = {}
+        if self._jobs:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                futs = {ex.submit(self._download, k, u): (k, u) for k, u in self._jobs}
+                for fut in futs:
+                    k, _ = futs[fut]
+                    try:
+                        results[k] = fut.result()
+                    except Exception:
+                        results[k] = ""
+        for key, path in results.items():
+            if self._cancelled:
+                break
+            self.done.emit(str(key), str(path))
+        self.finished.emit()
+
+
+class _RankTagsWorker(QObject):
+    """后台拉豆瓣标签列表（失败降级 failed → 状态栏提示不崩）。"""
+
+    done = Signal(list)
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            tags = douban_rank.get_tags()
+            if not tags:
+                self.failed.emit("豆瓣标签为空")
+            else:
+                self.done.emit(tags)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class _RankSubjectsWorker(QObject):
+    """后台拉某标签的榜单条目（失败降级 failed → 状态栏提示不崩）。"""
+
+    done = Signal(list, str)  # (subjects, tag)
+    failed = Signal(str)
+
+    def __init__(self, tag, page_start=0, page_limit=20):
+        super().__init__()
+        self._tag = tag
+        self._page_start = page_start
+        self._page_limit = page_limit
+
+    def run(self):
+        try:
+            subs = douban_rank.get_subjects(self._tag, page_start=self._page_start,
+                                            page_limit=self._page_limit)
+            self.done.emit(subs, self._tag)
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class MoviePanel(QWidget):
@@ -118,7 +323,19 @@ class MoviePanel(QWidget):
             pass
         self._voice_attach_requested.connect(self._on_voice_attach_requested)
         self._thread = None
+        self._worker = None
         self._items_by_row = []
+        # 榜单 QThread：同一时刻只持一个引用，运行中绝不覆盖（QThread 崩溃教训）
+        self._rank_thread = None
+        self._rank_worker = None
+        self._rank_tag = None
+        # 海报下载线程：同款防重入 + 待处理补偿（旧线程结束后自动补最新一批）
+        self._poster_thread = None
+        self._poster_worker = None
+        self._rank_db_thread = None
+        self._rank_db_worker = None
+        self._pending_poster_jobs = None
+        self._pending_db_jobs = None
 
         root = QVBoxLayout(self)
 
@@ -137,6 +354,9 @@ class MoviePanel(QWidget):
         self.btn_view.setChecked(True)
         self.btn_view.setToolTip("列表/海报 视图切换（默认海报墙，对齐爱奇艺/B站）")
         search_row.addWidget(self.btn_view)
+        self.btn_rank = QPushButton("榜单")
+        self.btn_rank.setToolTip("豆瓣榜单（热门/最新/高分…）——点条目按片名搜源内播放")
+        search_row.addWidget(self.btn_rank)
         self.btn_source = QPushButton("源")
         self.btn_source.setToolTip("电影源管理（多源 / 测源 / 增删 / 设当前）")
         search_row.addWidget(self.btn_source)
@@ -164,6 +384,26 @@ class MoviePanel(QWidget):
         self.list_posters.setWordWrap(True)
         self.stack_results.addWidget(self.list_results)
         self.stack_results.addWidget(self.list_posters)
+        # 榜单视图（第 3 页）：左标签竖列 + 右海报网格（对齐豆瓣 App 榜单页）
+        self.page_rank = QWidget()
+        rank_lay = QHBoxLayout(self.page_rank)
+        rank_lay.setContentsMargins(0, 0, 0, 0)
+        rank_lay.setSpacing(6)
+        self.list_rank_tags = QListWidget()
+        self.list_rank_tags.setFixedWidth(96)
+        self.list_rank_tags.setToolTip("豆瓣榜单标签")
+        self.list_rank = QListWidget()
+        self.list_rank.setViewMode(QListWidget.IconMode)
+        self.list_rank.setIconSize(QSize(*_POSTER_SIZE))
+        self.list_rank.setGridSize(QSize(170, 250))
+        self.list_rank.setResizeMode(QListView.Adjust)
+        self.list_rank.setSpacing(10)
+        self.list_rank.setWordWrap(True)
+        self.list_rank.setItemDelegate(_RankItemDelegate(self.list_rank))
+        self.list_rank.setToolTip("双击条目 → 按片名搜源内并显示结果（不自动播）")
+        rank_lay.addWidget(self.list_rank_tags)
+        rank_lay.addWidget(self.list_rank, 1)
+        self.stack_results.addWidget(self.page_rank)
         root.addWidget(self.stack_results, 1)
         self._poster_mode = True
         self.stack_results.setCurrentWidget(self.list_posters)  # 默认海报墙
@@ -231,6 +471,9 @@ class MoviePanel(QWidget):
         self.btn_search.clicked.connect(self._do_search)
         self.btn_clear.clicked.connect(self._do_clear)
         self.edit_kw.returnPressed.connect(self._do_search)
+        self.btn_rank.clicked.connect(self._enter_rank_view)
+        self.list_rank_tags.itemClicked.connect(self._on_rank_tag_clicked)
+        self.list_rank.itemDoubleClicked.connect(self._on_rank_item_activated)
         self.list_results.itemDoubleClicked.connect(self._on_item_activated)
         self.list_results.itemClicked.connect(self._on_item_clicked)
         self.list_posters.itemClicked.connect(self._on_item_clicked)
@@ -297,6 +540,21 @@ class MoviePanel(QWidget):
 
     def _on_app_quit(self):
         try:
+            # 退出清理（QThread 崩溃修复）：先 cancel（循环快速停）→ quit → 有界 wait。
+            # 最坏情况当前网络请求阻塞：requests 超时 TIMEOUT=8s 收尾，wait 上限 9s 覆盖。
+            for w in (self._worker, self._rank_worker, self._poster_worker,
+                      self._rank_db_worker):
+                cancel = getattr(w, "cancel", None)
+                if cancel is not None:
+                    try:
+                        cancel()
+                    except Exception:
+                        pass
+            for t in (self._thread, self._rank_thread, self._poster_thread,
+                      self._rank_db_thread):
+                if t is not None and t.isRunning():
+                    t.quit()
+                    t.wait(9000)
             self._movie.close()
         except Exception:
             pass
@@ -431,6 +689,144 @@ class MoviePanel(QWidget):
             self.btn_view.setText("列表")
             self.btn_view.setChecked(False)
 
+    # ---- 榜单视图（豆瓣榜单 + 苹果 CMS 播放对接）----
+
+    def _enter_rank_view(self):
+        self.stack_results.setCurrentWidget(self.page_rank)
+        if self.list_rank_tags.count() == 0:
+            self._load_rank_tags()
+
+    def _load_rank_tags(self):
+        """拉豆瓣标签列表；完成后自动拉第一个标签的榜单。防重入（运行中忽略）。"""
+        if self._rank_thread is not None and self._rank_thread.isRunning():
+            return
+        self.lbl_status.setText("加载榜单标签…")
+        try:
+            self._rank_thread = QThread()
+            self._rank_worker = _RankTagsWorker()
+            self._rank_worker.moveToThread(self._rank_thread)
+            self._rank_thread.started.connect(self._rank_worker.run)
+            self._rank_worker.done.connect(self._on_rank_tags_done)
+            self._rank_worker.failed.connect(self._on_rank_tags_failed)
+            self._rank_worker.done.connect(self._rank_thread.quit)
+            self._rank_worker.failed.connect(self._rank_thread.quit)
+            self._rank_thread.start()
+        except Exception as e:
+            self.lbl_status.setText(f"榜单加载失败: {e}")
+
+    def _on_rank_tags_done(self, tags: list):
+        self.list_rank_tags.clear()
+        self.list_rank.clear()
+        for t in tags:
+            item = QListWidgetItem(str(t))
+            item.setData(Qt.UserRole, str(t))
+            self.list_rank_tags.addItem(item)
+        if tags:
+            self.list_rank_tags.setCurrentRow(0)
+            # 时序：旧 _rank_thread 的 quit 此刻可能仍在排队（isRunning 仍 True）——
+            # 直接调 _load_rank_subjects 会被防重入忽略（首次进榜单不自动加载）。
+            # 延后一拍等旧线程真正结束再触发默认"热门"标签。
+            QTimer.singleShot(0, lambda: self._load_rank_subjects(str(tags[0])))
+        else:
+            self.lbl_status.setText("榜单标签为空")
+
+    def _on_rank_tags_failed(self, err: str):
+        self.lbl_status.setText(f"榜单加载失败: {err}")
+
+    def _on_rank_tag_clicked(self, item):
+        tag = item.data(Qt.UserRole)
+        if tag and tag != self._rank_tag:
+            self._load_rank_subjects(str(tag))
+
+    def _load_rank_subjects(self, tag):
+        """拉某标签的榜单条目 → 渲染海报网格。防重入（运行中忽略，连点不崩）。"""
+        if self._rank_thread is not None and self._rank_thread.isRunning():
+            return
+        self._rank_tag = tag
+        self.lbl_status.setText(f"加载榜单「{tag}」…")
+        try:
+            self._rank_thread = QThread()
+            self._rank_worker = _RankSubjectsWorker(tag, 0, 20)
+            self._rank_worker.moveToThread(self._rank_thread)
+            self._rank_thread.started.connect(self._rank_worker.run)
+            self._rank_worker.done.connect(self._on_rank_subjects_done)
+            self._rank_worker.failed.connect(self._on_rank_subjects_failed)
+            self._rank_worker.done.connect(self._rank_thread.quit)
+            self._rank_worker.failed.connect(self._rank_thread.quit)
+            self._rank_thread.start()
+        except Exception as e:
+            self.lbl_status.setText(f"榜单加载失败: {e}")
+
+    def _on_rank_subjects_done(self, subs: list, tag: str):
+        self.list_rank.clear()
+        jobs = []
+        for s in subs:
+            if not isinstance(s, dict):
+                continue
+            key = "db" + str(s.get("id") or "")
+            pit = QListWidgetItem()
+            pit.setData(Qt.UserRole, {**s, "db_key": key})
+            tip = s.get("title") or ""
+            if s.get("rate"):
+                tip += f"  评分 {s['rate']}"
+            pit.setToolTip(tip)
+            pit.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            self.list_rank.addItem(pit)
+            pix = _get_poster(key)
+            if pix is not None:
+                pit.setIcon(QIcon(_make_thumb_pixmap(pix)))
+            else:
+                # 占位先行（thumb 化圆角），下载完成后替换
+                pit.setIcon(QIcon(_make_thumb_pixmap(_make_poster_placeholder(s.get("title") or ""))))
+                if s.get("cover") and s["cover"] not in _db_poster_failed:
+                    jobs.append((key, s["cover"]))
+        if jobs:
+            self._start_db_poster_jobs(jobs)
+        n = len(subs)
+        self.lbl_status.setText(f"榜单「{tag}」{n} 部" if n else f"榜单「{tag}」为空")
+
+    def _on_rank_subjects_failed(self, err: str):
+        self.lbl_status.setText(f"榜单加载失败: {err}")
+
+    def _on_rank_item_activated(self, item):
+        """双击榜单条目 → 按片名搜苹果 CMS → 切回搜索视图显示结果（不自动播，规避误命中）。"""
+        data = item.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            return
+        title = (data.get("title") or "").strip()
+        if not title:
+            return
+        self.edit_kw.setText(title)
+        self.stack_results.setCurrentWidget(self.list_posters)
+        self._do_search()
+
+    def _start_db_poster_jobs(self, jobs):
+        """豆瓣榜单海报下载。防重入：旧线程运行中 → 记最新一批待处理，
+        旧线程 finished 后自动补下载（不覆盖运行中引用 → 不崩）。"""
+        if not jobs:
+            return
+        if self._rank_db_thread is not None and self._rank_db_thread.isRunning():
+            self._pending_db_jobs = jobs
+            return
+        self._pending_db_jobs = None
+        try:
+            self._rank_db_thread = QThread()
+            self._rank_db_worker = _DbPosterBatchWorker(jobs)
+            self._rank_db_worker.moveToThread(self._rank_db_thread)
+            self._rank_db_thread.started.connect(self._rank_db_worker.run)
+            self._rank_db_worker.done.connect(self._on_poster_done)
+            self._rank_db_worker.done.connect(self._rank_db_thread.quit)
+            self._rank_db_worker.finished.connect(self._on_db_poster_batch_finished)
+            self._rank_db_thread.start()
+        except Exception as e:
+            print(f"[Movie] 榜单海报下载线程启动失败: {e}")
+
+    def _on_db_poster_batch_finished(self):
+        if self._pending_db_jobs:
+            jobs = self._pending_db_jobs
+            self._pending_db_jobs = None
+            QTimer.singleShot(0, lambda: self._start_db_poster_jobs(jobs))
+
     def _on_voice_feedback(self, msg):
         """语音搜电影结果反馈 → 状态栏（未找到/只有1集/越界/开始播放）。
         内嵌模式："开始播放" → 播放窗口接管（mpv 已用注入 winId 内嵌，show 即显示画面）。
@@ -500,13 +896,31 @@ class MoviePanel(QWidget):
         self._refresh_source_label()
 
     def _start_poster_jobs(self, jobs):
-        self._poster_thread = QThread()
-        self._poster_worker = _PosterBatchWorker(jobs)
-        self._poster_worker.moveToThread(self._poster_thread)
-        self._poster_thread.started.connect(self._poster_worker.run)
-        self._poster_worker.done.connect(self._on_poster_done)
-        self._poster_worker.done.connect(self._poster_thread.quit)
-        self._poster_thread.start()
+        """搜索海报墙下载。防重入（存量同款缺陷修复）：旧线程运行中 →
+        记最新一批待处理，finished 后自动补下载（不覆盖运行中引用 → 不崩）。"""
+        if not jobs:
+            return
+        if self._poster_thread is not None and self._poster_thread.isRunning():
+            self._pending_poster_jobs = jobs
+            return
+        self._pending_poster_jobs = None
+        try:
+            self._poster_thread = QThread()
+            self._poster_worker = _PosterBatchWorker(jobs)
+            self._poster_worker.moveToThread(self._poster_thread)
+            self._poster_thread.started.connect(self._poster_worker.run)
+            self._poster_worker.done.connect(self._on_poster_done)
+            self._poster_worker.done.connect(self._poster_thread.quit)
+            self._poster_worker.finished.connect(self._on_poster_batch_finished)
+            self._poster_thread.start()
+        except Exception as e:
+            print(f"[Movie] 海报下载线程启动失败: {e}")
+
+    def _on_poster_batch_finished(self):
+        if self._pending_poster_jobs:
+            jobs = self._pending_poster_jobs
+            self._pending_poster_jobs = None
+            QTimer.singleShot(0, lambda: self._start_poster_jobs(jobs))
 
     def _on_poster_done(self, vod_id, path):
         if not path:
@@ -515,12 +929,18 @@ class MoviePanel(QWidget):
         if pix.isNull():
             return
         _posters_cache[vod_id] = pix
-        for i in range(self.list_posters.count()):
-            it = self.list_posters.item(i)
-            data = it.data(Qt.UserRole)
-            if isinstance(data, dict) and str(data.get("vod_id", "")) == vod_id:
-                it.setIcon(QIcon(pix))
-                break
+        # 搜索海报墙（vod_id，原图）与榜单海报墙（db_key，缩略+圆角）都匹配更新
+        for lst in (self.list_posters, self.list_rank):
+            for i in range(lst.count()):
+                it = lst.item(i)
+                data = it.data(Qt.UserRole)
+                if not isinstance(data, dict):
+                    continue
+                key = str(data.get("vod_id", "")) or str(data.get("db_key", ""))
+                if key == vod_id:
+                    icon_pix = _make_thumb_pixmap(pix) if lst is self.list_rank else pix
+                    it.setIcon(QIcon(icon_pix))
+                    break
 
     def _play_item(self, it, index=None):
         """统一播放入口：控制器播放 + 状态刷新 + 自动字幕（配置开时每片一次）。
