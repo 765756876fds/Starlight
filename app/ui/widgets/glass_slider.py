@@ -155,19 +155,26 @@ class VolumeButton(QPushButton):
     def _show_popover(self) -> None:
         if self._popover is None or self._popover.isVisible():
             return
-        # 全局坐标对齐（mapToGlobal 修正父窗口 padding/嵌套布局偏移）：
-        # X = 按钮全局中心 X - 面板宽 / 2（喇叭正对下方按钮，左右居中）
-        # Y = 按钮全局顶部 Y - 面板高 - 8px 间隙（紧贴上方）
-        btn_center = self.mapToGlobal(self.rect().center())
-        btn_top = self.mapToGlobal(QPoint(0, 0))
-        x = btn_center.x() - self._popover.width() // 2
-        y = btn_top.y() - self._popover.height() - 8
-        self._popover.move(x, y)
+        # 绝对屏幕坐标对齐（mapToGlobal 修正父窗口 padding / 嵌套布局偏移）：
+        #   X = 按钮左上角 X + (按钮宽 - 面板宽) / 2   → 垂直中轴线与喇叭图标重合
+        #   Y = 按钮左上角 Y - 面板高 - 8px 间隙       → 面板底部紧贴按钮上方
+        top_left = self.mapToGlobal(QPoint(0, 0))
+        pw, ph = self._popover.width(), self._popover.height()
+        bw = self.width()
+        x = top_left.x() + (bw - pw) / 2
+        y = top_left.y() - ph - 8
+        # 高 DPI 说明：mapToGlobal/move 均为 Qt 逻辑像素，同屏下 DPR 一致无需换算；
+        # 打印按钮全局坐标与 DPR 便于实机核验缩放场景。
+        scr = self.screen()
+        dpr = scr.devicePixelRatio() if scr else 1.0
+        print(f"[Volume] btn_global=({top_left.x()},{top_left.y()}) dpr={dpr} "
+              f"popover={pw}x{ph} target=({round(x)},{round(y)})")
+        self._popover.move(round(x), round(y))
         self._popover.show()
         self._popover.raise_()
         # 部分平台 Popup 显示时可能调整 geometry——show 后再校正一次保证紧贴
         if self._popover.isVisible():
-            self._popover.move(x, y)
+            self._popover.move(round(x), round(y))
 
     def enterEvent(self, event):  # noqa: N802
         self._show_popover()
