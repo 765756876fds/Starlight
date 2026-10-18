@@ -100,6 +100,29 @@ class VolumePopover(QWidget):
         self.lbl_icon.setPixmap(
             lucide_icon(name, 18, Tokens.TEXT_PRIMARY).pixmap(18, 18))
 
+    # ---- 弹出定位（self=面板；anchor=底部小喇叭按钮）----
+    def show_near(self, anchor: QWidget) -> None:
+        """在 anchor 正上方弹出。参照物显式传入，杜绝"局部坐标算全局位置"：
+        X = anchor 全局中心 X - 面板宽 // 2   （面板垂直中轴线 = 喇叭图标中心线，绝对居中）
+        Y = anchor 全局顶部 Y - 面板高 - 8px   （面板底部紧贴按钮上方 8px 间隙）
+        mapToGlobal / move 均为 Qt 逻辑像素，同屏 DPR 一致无需换算。
+        """
+        btn_center = anchor.mapToGlobal(anchor.rect().center())
+        btn_top = anchor.mapToGlobal(QPoint(0, 0))
+        x = btn_center.x() - self.width() // 2
+        y = btn_top.y() - self.height() - 8
+        print(f"[Volume] btn_center=({btn_center.x()},{btn_center.y()}) "
+              f"btn_top=({btn_top.x()},{btn_top.y()}) popover={self.width()}x{self.height()} "
+              f"target=({x},{y})")
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        # 部分平台 Popup 显示时可能调整 geometry——show 后二次校正 + 打印实际位置对照
+        if self.isVisible():
+            self.move(x, y)
+        print(f"[Volume] after_show pos=({self.pos().x()},{self.pos().y()}) "
+              f"pop_center_x={self.pos().x() + self.width() // 2} 期望={btn_center.x()}")
+
     def paintEvent(self, event):  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
@@ -155,26 +178,8 @@ class VolumeButton(QPushButton):
     def _show_popover(self) -> None:
         if self._popover is None or self._popover.isVisible():
             return
-        # 绝对屏幕坐标对齐（mapToGlobal 修正父窗口 padding / 嵌套布局偏移）：
-        #   X = 按钮左上角 X + (按钮宽 - 面板宽) / 2   → 垂直中轴线与喇叭图标重合
-        #   Y = 按钮左上角 Y - 面板高 - 8px 间隙       → 面板底部紧贴按钮上方
-        top_left = self.mapToGlobal(QPoint(0, 0))
-        pw, ph = self._popover.width(), self._popover.height()
-        bw = self.width()
-        x = top_left.x() + (bw - pw) / 2
-        y = top_left.y() - ph - 8
-        # 高 DPI 说明：mapToGlobal/move 均为 Qt 逻辑像素，同屏下 DPR 一致无需换算；
-        # 打印按钮全局坐标与 DPR 便于实机核验缩放场景。
-        scr = self.screen()
-        dpr = scr.devicePixelRatio() if scr else 1.0
-        print(f"[Volume] btn_global=({top_left.x()},{top_left.y()}) dpr={dpr} "
-              f"popover={pw}x{ph} target=({round(x)},{round(y)})")
-        self._popover.move(round(x), round(y))
-        self._popover.show()
-        self._popover.raise_()
-        # 部分平台 Popup 显示时可能调整 geometry——show 后再校正一次保证紧贴
-        if self._popover.isVisible():
-            self._popover.move(round(x), round(y))
+        # 定位逻辑全部在 VolumePopover.show_near：self=面板、参照物显式传入（绝对居中）
+        self._popover.show_near(self)
 
     def enterEvent(self, event):  # noqa: N802
         self._show_popover()
