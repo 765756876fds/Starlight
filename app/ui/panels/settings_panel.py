@@ -297,18 +297,27 @@ class SettingsPanel(QWidget):
         page.setWidgetResizable(True)
         inner = QWidget()
         lay = QVBoxLayout(inner)
-        lay.setSpacing(Tokens.SPACING_SM)
+        lay.setSpacing(Tokens.SPACING_LG)  # 组间 24px（8px 网格：组间用 LG）
         lay.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
                                Tokens.SPACING_SM, Tokens.SPACING_SM)
         page.setWidget(inner)
         self._tabs.addTab(page, title)
         return lay
 
+    @staticmethod
+    def _label(text: str) -> QLabel:
+        """统一表单 Label：120px 固定宽 + 右对齐（组内 Label/Input 水平对齐规范）。"""
+        l = QLabel(text)
+        l.setFixedWidth(120)
+        l.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        return l
+
     # ---------- 🎵 音乐目录管理 ----------
 
     def _build_music_group(self, root: QVBoxLayout) -> None:
         box = QGroupBox("音乐目录管理")
         lay = QVBoxLayout(box)
+        lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
         # 目录列表容器：QScrollArea + 行 widget（避开 QListWidget setItemWidget 压缩）
         list_scroll = QScrollArea()
@@ -390,6 +399,7 @@ class SettingsPanel(QWidget):
     def _build_movie_group(self, root: QVBoxLayout) -> None:
         box = QGroupBox("电影（字幕）")
         lay = QVBoxLayout(box)
+        lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
         row1 = QHBoxLayout()
         self.edit_subtitle_token = QLineEdit()
@@ -397,7 +407,7 @@ class SettingsPanel(QWidget):
         self.edit_subtitle_token.setText(self._load_movie_token())
         btn_save = QPushButton("保存")
         btn_save.clicked.connect(self._on_save_movie_settings)
-        row1.addWidget(QLabel("字幕 Token"))
+        row1.addWidget(self._label("字幕 Token"))
         row1.addWidget(self.edit_subtitle_token, 1)
         row1.addWidget(btn_save)
         lay.addLayout(row1)
@@ -474,13 +484,14 @@ class SettingsPanel(QWidget):
         prefs = load_lyrics_prefs()
         box = QGroupBox("桌面歌词")
         lay = QVBoxLayout(box)
+        lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
         row_font = QHBoxLayout()
         self.cmb_lyrics_font = QFontComboBox()
         self.cmb_lyrics_font.setCurrentFont(QFont(str(prefs.get("font") or "Microsoft YaHei")))
         self.cmb_lyrics_font.setMaximumWidth(240)
         self.cmb_lyrics_font.currentFontChanged.connect(self._on_lyrics_changed)
-        row_font.addWidget(QLabel("字体"))
+        row_font.addWidget(self._label("字体"))
         row_font.addWidget(self.cmb_lyrics_font, 1)
         lay.addLayout(row_font)
 
@@ -489,7 +500,7 @@ class SettingsPanel(QWidget):
         self.spin_lyrics_size.setRange(12, 48)
         self.spin_lyrics_size.setValue(int(prefs.get("font_size") or 24))
         self.spin_lyrics_size.valueChanged.connect(self._on_lyrics_changed)
-        row_size.addWidget(QLabel("字号"))
+        row_size.addWidget(self._label("字号"))
         row_size.addWidget(self.spin_lyrics_size)
         row_size.addStretch()
         lay.addLayout(row_size)
@@ -501,7 +512,7 @@ class SettingsPanel(QWidget):
         self.btn_lyrics_color.clicked.connect(self._on_lyrics_color)
         self._lyrics_color = QColor(str(prefs.get("color") or "#FAB446"))
         self._refresh_lyrics_color_btn()
-        row_color.addWidget(QLabel("颜色"))
+        row_color.addWidget(self._label("颜色"))
         row_color.addWidget(self.btn_lyrics_color)
         row_color.addStretch()
         lay.addLayout(row_color)
@@ -512,7 +523,7 @@ class SettingsPanel(QWidget):
         self.slider_lyrics_opacity.setValue(int(prefs.get("bg_opacity") or 0))
         self.slider_lyrics_opacity.valueChanged.connect(self._on_lyrics_opacity)
         self.lbl_lyrics_opacity = QLabel(f"{self.slider_lyrics_opacity.value()}%")
-        row_op.addWidget(QLabel("背景透明度"))
+        row_op.addWidget(self._label("背景透明度"))
         row_op.addWidget(self.slider_lyrics_opacity, 1)
         row_op.addWidget(self.lbl_lyrics_opacity)
         lay.addLayout(row_op)
@@ -524,7 +535,7 @@ class SettingsPanel(QWidget):
         idx = self.cmb_lyrics_mode.findData(str(prefs.get("mode") or "triple"))
         self.cmb_lyrics_mode.setCurrentIndex(idx if idx >= 0 else 0)
         self.cmb_lyrics_mode.currentIndexChanged.connect(self._on_lyrics_changed)
-        row_mode.addWidget(QLabel("显示模式"))
+        row_mode.addWidget(self._label("显示模式"))
         row_mode.addWidget(self.cmb_lyrics_mode)
         row_mode.addStretch()
         lay.addLayout(row_mode)
@@ -600,6 +611,7 @@ class SettingsPanel(QWidget):
         self._js_source = self._find_js_source()
         box = QGroupBox("内置插件 (MusicFree/洛雪)")
         lay = QVBoxLayout(box)
+        lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
         # 插件行容器：直接平铺（不再内嵌 QScrollArea → 双重滚动）。
         # tab 页外层 QScrollArea 负责滚动；插件数通常 ~7 个，平铺可接受。
@@ -1066,10 +1078,11 @@ class SettingsPanel(QWidget):
     def _build_tts_group(self, root: QVBoxLayout) -> None:
         box = QGroupBox("语音 TTS")
         lay = QVBoxLayout(box)
+        lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
         # 引擎下拉（最上；切换联动音色/滑块）
         erow = QHBoxLayout()
-        erow.addWidget(QLabel("引擎："))
+        erow.addWidget(self._label("引擎："))
         self.cmb_engine = QComboBox()
         self.cmb_engine.addItem("Qwen（阿里云）", "qwen")
         self.cmb_engine.addItem("Edge（在线）", "edge")
@@ -1079,7 +1092,7 @@ class SettingsPanel(QWidget):
 
         # 音色下拉（只选，按引擎填充）
         vrow = QHBoxLayout()
-        vrow.addWidget(QLabel("音色："))
+        vrow.addWidget(self._label("音色："))
         self.cmb_voice = QComboBox()
         self.cmb_voice.setEditable(False)
         self.cmb_voice.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -1104,7 +1117,7 @@ class SettingsPanel(QWidget):
 
         # API Key 行：状态 + 密码输入 + 保存（写 tools/.qwen_key，不碰 settings.yaml）
         krow = QHBoxLayout()
-        krow.addWidget(QLabel("API Key："))
+        krow.addWidget(self._label("API Key："))
         self.lbl_key_status = QLabel("")
         self.lbl_key_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         krow.addWidget(self.lbl_key_status)
@@ -1301,6 +1314,7 @@ class SettingsPanel(QWidget):
     def _build_lol_group(self, root: QVBoxLayout) -> None:
         box = QGroupBox("LoL")
         lay = QVBoxLayout(box)
+        lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
         prefs = load_ui_prefs()
         self.btn_gate = ToggleButton("仅 LoL 前台时触发",
@@ -1373,6 +1387,7 @@ class SettingsPanel(QWidget):
     def _build_ui_group(self, root: QVBoxLayout) -> None:
         box = QGroupBox("界面")
         lay = QVBoxLayout(box)
+        lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
         self.btn_overlay = ToggleButton("显示游戏内 Overlay", self._overlay_enabled)
         self.btn_overlay.setMinimumWidth(180)
@@ -1380,7 +1395,7 @@ class SettingsPanel(QWidget):
         lay.addWidget(self.btn_overlay)
 
         irow = QHBoxLayout()
-        irow.addWidget(QLabel("刷新间隔（毫秒）："))
+        irow.addWidget(self._label("刷新间隔（毫秒）："))
         self.spin_refresh = QSpinBox()
         self.spin_refresh.setRange(100, 5000)
         self.spin_refresh.setSingleStep(100)

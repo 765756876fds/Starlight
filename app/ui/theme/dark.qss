@@ -88,13 +88,17 @@ QListWidget::item { padding: 8px 10px; border-radius: 6px; margin: 2px 0; }
 QListWidget::item:hover { background-color: #2a2a3e; }
 QListWidget::item:selected { background-color: #3e3e5c; color: #e0e0e8; }
 
-/* 滚动条 */
-QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
-QScrollBar::handle:vertical { background: #3a3a4e; border-radius: 5px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: #4a4a62; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { background: transparent; height: 10px; }
-QScrollBar::handle:horizontal { background: #3a3a4e; border-radius: 5px; min-width: 30px; }
+/* 滚动条（与 Glass 一致：6px / track 全透明 / 无箭头 / 悬停变蓝） */
+QScrollBar:vertical { background: transparent; width: 6px; margin: 0; }
+QScrollBar::track:vertical { background: transparent; border: none; }
+QScrollBar::handle:vertical { background: rgba(255, 255, 255, 0.2); border-radius: 3px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: rgba(74, 158, 255, 0.8); }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; width: 0; background: transparent; border: none; }
+QScrollBar:horizontal { background: transparent; height: 6px; margin: 0; }
+QScrollBar::track:horizontal { background: transparent; border: none; }
+QScrollBar::handle:horizontal { background: rgba(255, 255, 255, 0.2); border-radius: 3px; min-width: 30px; }
+QScrollBar::handle:horizontal:hover { background: rgba(74, 158, 255, 0.8); }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; height: 0; background: transparent; border: none; }
 
 /* Checkbox */
 QCheckBox { color: #e0e0e8; spacing: 8px; }

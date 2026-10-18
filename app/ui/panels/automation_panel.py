@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..widgets.toggle_button import ToggleButton
+from ..widgets.icon_utils import lucide_icon
 from ..dialogs.auto_queue_config_dialog import AutoQueueConfigDialog
 from ..dialogs.ban_pick_config_dialog import BanPickConfigDialog
 from ..theme.colors import Colors
@@ -46,8 +47,12 @@ class AutomationPanel(QWidget):
             r = QHBoxLayout()
             r.addWidget(btn)  # Expanding，自动拉伸
             if gear is not None:
-                g = QPushButton("⚙")
-                g.setFixedWidth(36)
+                g = QPushButton()
+                g.setIcon(lucide_icon("settings-2", 16, Colors.TEXT_SECONDARY))
+                g.setFixedSize(28, 28)
+                g.setProperty("class", "btn-gear")
+                g.setToolTip("高级选项")
+                g.setCursor(Qt.PointingHandCursor)
                 g.clicked.connect(gear)
                 r.addWidget(g)
             return r

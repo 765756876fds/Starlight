@@ -517,6 +517,20 @@ class TestMainWindowGlass:
         assert "QTabBar::tab:selected" in sheet
         assert "border-radius: 10px" in sheet
 
+    def test_btn_gear_lucide_icon(self, qapp):
+        # 回归：自动化面板高级选项按钮为 Lucide settings-2 线性图标（非 Emoji 齿轮）
+        from unittest.mock import MagicMock
+        from app.ui.panels.automation_panel import AutomationPanel
+        from app.ui.widgets.icon_utils import _LUCIDE
+        assert "settings-2" in _LUCIDE
+        a = AutomationPanel(service=MagicMock(), lcu=MagicMock(), combo_manager=MagicMock())
+        gears = [w for w in a.findChildren(
+            __import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton)
+            if w.property("class") == "btn-gear"]
+        assert len(gears) == 4
+        assert not gears[0].text()  # 纯图标按钮，无 Emoji 文字
+        assert not any("⚙" in w.text() for w in gears)
+
     def test_switch_to_tabs_still_works(self, qapp):
         # 回归：无边框外壳不破坏 switch_to_tabs 组装
         from app.ui.main_window import MainWindow

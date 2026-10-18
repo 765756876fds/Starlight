@@ -77,6 +77,8 @@ _LUCIDE = {
     "minus": '<line x1="5" y1="12" x2="19" y2="12"/>',
     "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    "settings-2": ('<path d="M20 7h-9"/><path d="M14 17H5"/>'
+                   '<circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>'),
 }
 
 _FALLBACK_CHAR = {

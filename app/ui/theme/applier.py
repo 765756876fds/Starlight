@@ -311,6 +311,13 @@ QWidget#GlassDialogShell {{
 }}
 #GlassTitleBar QPushButton:hover {{ background-color: rgba({T.BG_HOVER_RGB}, 200); color: {T.TEXT_PRIMARY}; }}
 #GlassTitleBar QPushButton#btn_close:hover {{ background-color: {T.DANGER}; color: #ffffff; }}
+QPushButton[class="btn-gear"] {{
+    background: rgba({T.BG_HOVER_RGB}, 130); border: 1px solid rgba({T.BORDER_RGB}, 180);
+    border-radius: 8px; padding: 0; min-height: 0; min-width: 0;
+}}
+QPushButton[class="btn-gear"]:hover {{ background: rgba({T.BG_HOVER_RGB}, 210); border-color: {T.ACCENT}; }}
+QPushButton[class="btn-gear"]:pressed {{ background: rgba({T.ACCENT_RGB}, 90); border-color: {T.ACCENT}; }}
+QPushButton[class="btn-gear"]:focus {{ border-color: rgba({T.ACCENT_RGB}, 180); }}
 """
 
 
