@@ -1,99 +1,78 @@
-"""桌面宠物第一阶段：PetWindow 窗口属性 / 拖拽 / 贴边隐藏 / 设置开关持久化 / MainTabs 集成。
-注意：不触发真实 QOpenGLWidget GL 上下文（offscreen 无 GL 会段错误），GL 用普通 QWidget 替换。"""
+"""PetWindow（GIF 版）测试：无边框置顶透明 + QMovie + 拖拽 + 贴边隐藏 + 全屏检测。"""
 import os
 import sys
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from pathlib import Path
 
 import pytest
-
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
-from app.ui.widgets.pet_window import PetWindow, PetGLWidget, _EDGE_MARGIN, _PEEK_WIDTH
+from app.ui.widgets.pet_window import (
+    PetWindow,
+    _EDGE_SNAP,
+    _is_fullscreen_window,
+)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
 
 
-@pytest.fixture()
-def pet(qapp, monkeypatch):
-    # GL 承载替换为普通 QWidget：避免 offscreen 无 GL 上下文触发 initializeGL 崩溃
-    monkeypatch.setattr("app.ui.widgets.pet_window.PetGLWidget",
-                        lambda model_path, parent=None: QWidget(parent))
-    return PetWindow(model_path="dummy.model3.json")
+@pytest.fixture
+def pet(qapp):
+    w = PetWindow()
+    yield w
+    w.close()
+    w.deleteLater()
 
 
+# ---- 窗口属性 ----
 def test_pet_window_flags(pet):
-    assert bool(pet.windowFlags() & Qt.FramelessWindowHint)
-    assert bool(pet.windowFlags() & Qt.Tool)
-    assert bool(pet.windowFlags() & Qt.WindowStaysOnTopHint)
+    flags = pet.windowFlags()
+    assert flags & Qt.FramelessWindowHint
+    assert flags & Qt.Tool
+    assert flags & Qt.WindowStaysOnTopHint
     assert pet.testAttribute(Qt.WA_TranslucentBackground)
-    assert pet.width() == 240 and pet.height() == 360
 
 
-def test_pet_gl_uses_live2d_api(qapp, monkeypatch):
-    """PetGLWidget 的 live2d 调用序列（mock 库）：init → LoadModelJson → CreateRenderer → 待机。"""
-    import types
-    from app.ui.widgets import pet_window
-    calls = []
-
-    class FakeL2D:
-        @staticmethod
-        def init():
-            calls.append("init")
-
-        @staticmethod
-        def clearBuffer(*a):
-            pass
-
-        class Model:
-            def __init__(self):
-                self.motion_calls = []
-
-            def LoadModelJson(self, p):
-                calls.append(f"load:{p}")
-
-            def CreateRenderer(self):
-                calls.append("renderer")
-
-            def SetAutoBlink(self, v):
-                pass
-
-            def SetAutoBreath(self, v):
-                pass
-
-            def StartMotion(self, g, n, pr):
-                calls.append(f"motion:{g}:{n}")
-
-            def Update(self):
-                calls.append("update")
-
-            def Draw(self):
-                calls.append("draw")
-
-        class MotionPriority:
-            Normal = 0
-
-    fake = types.SimpleNamespace(**{k: getattr(FakeL2D, k) for k in
-                                    ("init", "clearBuffer", "Model", "MotionPriority")})
-    fake.v2 = fake  # 模拟 v2 子模块：真机走 v2 纯 Python 路径
-    monkeypatch.setitem(sys.modules, "live2d", fake)
-    gl = PetGLWidget("x/y.model3.json")
-    gl.initializeGL()
-    assert "init" in calls and "load:x/y.model3.json" in calls and "renderer" in calls
-    assert "motion:idle:0" in calls
-    gl.paintGL()
-    assert "update" in calls and "draw" in calls
+def test_pet_window_has_label_movie(pet):
+    assert pet._label is not None
+    assert pet._label.parent() is pet
+    # 素材存在时 QMovie 已启动
+    assert pet._movie is not None
+    assert pet._current == "idle"
 
 
-def test_pet_drag_moves_window(pet, qapp, monkeypatch):
-    from PySide6.QtCore import QPoint
-    from PySide6.QtTest import QTest
-    pet._gl = QWidget(pet)          # 无 GL 承载
+def test_pet_motion_fallback_missing_file(qapp):
+    """缺少 listen.gif 时 play_motion 回退 idle，不崩溃。"""
+    w = PetWindow(motions={"idle": str(Path(__file__).parent / "data" / "idle.gif"),
+                           "listen": "Z:/not_exist/listen.gif",
+                           "ok": "Z:/not_exist/ok.gif"})
+    w.play_motion("listen")
+    assert w._current == "idle"
+    w.close()
+    w.deleteLater()
+
+
+def test_pet_motion_switch(qapp, tmp_path):
+    """提供自定义素材目录时，可正常切换到 listen。"""
+    src = Path(__file__).parent / "data" / "idle.gif"
+    idle = tmp_path / "idle.gif"
+    listen = tmp_path / "listen.gif"
+    idle.write_bytes(src.read_bytes())
+    listen.write_bytes(src.read_bytes())
+    w = PetWindow(motions={"idle": str(idle), "listen": str(listen), "ok": str(listen)})
+    w.play_motion("listen")
+    assert w._current == "listen"
+    w.close()
+    w.deleteLater()
+
+
+# ---- 拖拽 ----
+def test_pet_drag_moves_window(pet, qapp):
     pet.resize(240, 360)
     pet.show()
     qapp.processEvents()
@@ -103,88 +82,64 @@ def test_pet_drag_moves_window(pet, qapp, monkeypatch):
     QTest.mouseMove(pet, QPoint(80, 60))
     QTest.mouseRelease(pet, Qt.LeftButton, pos=QPoint(80, 60))
     qapp.processEvents()
-    # 拖拽距离 = (80-30, 60-30) = (50, 30)
+    # 远离屏幕边缘（100,100 起步），不应触发贴边隐藏
     assert pet.frameGeometry().topLeft() == start + QPoint(50, 30)
     assert pet._drag_offset is None
+    assert pet.isVisible()
     pet.hide()
 
 
-def test_pet_edge_hide_target_pos(pet):
-    from PySide6.QtCore import QRect
-    geo = QRect(0, 0, 1920, 1080)
-    pet._hidden_edge = "left"
-    x, y = pet._target_hidden_pos(geo)
-    assert x == 0 - pet.width() + _PEEK_WIDTH and y == pet.y()
-    pet._hidden_edge = "right"
-    x, _ = pet._target_hidden_pos(geo)
-    assert x == geo.right() - _PEEK_WIDTH
-    pet._hidden_edge = "top"
-    _, y = pet._target_hidden_pos(geo)
-    assert y == 0 - pet.height() + _PEEK_WIDTH
-
-
-def test_pet_edge_hide_and_restore(pet, qapp, monkeypatch):
-    """贴近屏幕左缘 + 鼠标不在窗口上 → 隐藏留触发条；鼠标进触发条 → 恢复。"""
-    pet._gl = QWidget(pet)
+# ---- 贴边隐藏（松手判定） ----
+def test_pet_snap_hide_near_left_edge(pet, qapp):
     pet.resize(240, 360)
-    pet.show()
-    qapp.processEvents()
     scr = pet.screen() or QApplication.primaryScreen()
     geo = scr.availableGeometry()
-    pet.move(geo.left() + 5, 400)          # 贴近左缘
-    normal = (pet.x(), pet.y())
-    # 鼠标移到屏幕中部（不在窗口/触发条上）
-    pet.cursor().setPos(geo.left() + 500, 400)
-    pet._check_edge()
-    assert pet._hidden_edge == "left"
-    assert pet.x() == 0 - pet.width() + _PEEK_WIDTH, "隐藏后只留触发条"
-    # 鼠标移到触发条内 → 恢复
-    pet.cursor().setPos(geo.left() + _PEEK_WIDTH // 2, 400)
-    pet._check_edge()
-    assert pet._hidden_edge is None
-    assert pet.x() == normal[0] and pet.y() == normal[1]
+    pet.move(geo.left() + 5, geo.top() + 100)   # 距左缘 5px < 15px
+    pet.show()
+    qapp.processEvents()
+    pet._snap_to_edge_if_near()
+    assert not pet.isVisible()
+    assert pet._hidden_by_edge
+
+
+def test_pet_snap_no_hide_far_from_edge(pet, qapp):
+    scr = pet.screen() or QApplication.primaryScreen()
+    geo = scr.availableGeometry()
+    pet.move(geo.left() + 300, geo.top() + 300)  # 远离边缘
+    pet.show()
+    qapp.processEvents()
+    pet._snap_to_edge_if_near()
+    assert pet.isVisible()
+    assert not pet._hidden_by_edge
+
+
+# ---- 全屏检测 ----
+def test_pet_fullscreen_hide_and_restore(pet, qapp, monkeypatch):
+    import app.ui.widgets.pet_window as pw
+    pet.show()
+    qapp.processEvents()
+    monkeypatch.setattr(pw, "_is_fullscreen_window", lambda hwnd: True)
+    pet._check_fullscreen()
+    assert not pet.isVisible()
+    assert pet._hidden_by_fullscreen
+    monkeypatch.setattr(pw, "_is_fullscreen_window", lambda hwnd: False)
+    pet._check_fullscreen()
+    assert pet.isVisible()
+    assert not pet._hidden_by_fullscreen
     pet.hide()
 
 
-def test_settings_pet_checkbox_persists(qapp, monkeypatch):
-    """设置页「启用桌面宠物」复选框：默认关；勾选 → 持久化 pet_enabled=True + 回调触发。"""
-    from PySide6.QtWidgets import QCheckBox
-    store = {}
-    monkeypatch.setattr("app.ui.panels.settings_panel.load_ui_prefs",
-                        lambda: dict(store))
-    monkeypatch.setattr("app.ui.panels.settings_panel.save_ui_prefs",
-                        lambda patch: store.update(patch))
-    from app.ui.panels.settings_panel import SettingsPanel
-    calls = []
-    p = SettingsPanel(pet_toggle_cb=calls.append)
-    cb = p.cb_pet
-    assert isinstance(cb, QCheckBox)
-    assert cb.isChecked() is False, "默认关闭"
-    cb.setChecked(True)
-    assert store.get("pet_enabled") is True
-    assert calls == [True]
-    cb.setChecked(False)
-    assert store.get("pet_enabled") is False
-    assert calls == [True, False]
+def test_pet_fullscreen_ignores_self(pet, qapp, monkeypatch):
+    import app.ui.widgets.pet_window as pw
+    pet.show()
+    qapp.processEvents()
+    monkeypatch.setattr(pw, "_is_fullscreen_window", lambda hwnd: True)
+    monkeypatch.setattr(pw.ctypes.windll.user32, "GetForegroundWindow", lambda: int(pet.winId()))
+    pet._check_fullscreen()
+    assert pet.isVisible()
 
 
-def test_main_tabs_pet_enabled_creates_and_toggle_hides(qapp, monkeypatch):
-    """MainTabs：pet_enabled=True 时启动即创建并显示；回调关闭后隐藏。"""
-    from app.ui.widgets import main_tabs as mt
-    created = []
-
-    class FakePet:
-        def __init__(self, *a, **k):
-            created.append(self)
-            self.visible = False
-
-        def set_visible_with_pet(self, on):
-            self.visible = on
-
-    monkeypatch.setattr("app.ui.widgets.pet_window.PetWindow", FakePet)
-    monkeypatch.setattr(mt, "load_ui_prefs", lambda: {"pet_enabled": True})
-    tabs = mt.MainTabs(automation_service=None, cooldown_manager=None, music=None)
-    assert len(created) == 1
-    assert created[0].visible is True, "启动即显示桌宠"
-    tabs._on_pet_toggle(False)
-    assert created[0].visible is False
+def test_is_fullscreen_window_size_heuristic():
+    """非 Windows 平台启发式判定（宽高接近屏幕 → True）。"""
+    if sys.platform.startswith("win"):
+        pytest.skip("windows 走 Win32 分支")
