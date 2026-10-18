@@ -45,7 +45,11 @@ class Tokens:
     BORDER_RGB = _rgb_of(Colors.BORDER)               # 58, 58, 78
     BORDER_LIGHT_RGB = _rgb_of(Colors.BORDER_LIGHT)   # 74, 74, 98
     TEXT_DISABLED_RGB = _rgb_of(Colors.TEXT_DISABLED)  # 90, 90, 114
+    TEXT_PRIMARY_RGB = _rgb_of(Colors.TEXT_PRIMARY)     # 224, 224, 232
+    TEXT_SECONDARY_RGB = _rgb_of(Colors.TEXT_SECONDARY)  # 168, 168, 192
+    TEXT_RGB = TEXT_SECONDARY_RGB   # 进度条 groove 等“未激活”元素用次文字色
     ACCENT_RGB = _rgb_of(Colors.ACCENT)               # 74, 158, 255
+    ACCENT_LIGHT = Colors.ACCENT_HOVER                # 渐变亮端（进度条已播放区）
 
     # ---- 玻璃质感（半透明 / 卡片 / 高亮） ----
     GLASS_BG_RGB = BG_BASE_RGB

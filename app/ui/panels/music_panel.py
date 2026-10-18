@@ -227,10 +227,12 @@ class MusicPanel(QWidget):
         self.lbl_track.setProperty("class", "title")
         ll.addWidget(self.lbl_track)
 
-        # 进度条
-        self.slider_pos = QSlider(Qt.Horizontal)
+        # 进度条（律动波形：播放中频谱跳动，暂停低电平）
+        from ..widgets.waveform_slider import WaveformSlider
+        self.slider_pos = WaveformSlider()
         self.slider_pos.setRange(0, 1000)
         self.slider_pos.setEnabled(False)
+        self._wave_slider = self.slider_pos
         self.lbl_time = QLabel("0:00 / 0:00")
         self.lbl_time.setAlignment(Qt.AlignCenter)
         # 播放时间用 tabular figures（数字等宽，计时变化不跳动；impeccable §craft floor）
@@ -720,6 +722,12 @@ class MusicPanel(QWidget):
             playing = bool(self._music.is_playing())
         except Exception:
             playing = None
+        # 波形进度条：播放中跳动、暂停低电平
+        try:
+            if hasattr(self, "_wave_slider"):
+                self._wave_slider.set_active(bool(playing))
+        except Exception:
+            pass
         if playing is not None:
             want = "pause" if playing else "play"
             if getattr(self, "_toggle_icon", None) != want:
@@ -727,9 +735,16 @@ class MusicPanel(QWidget):
                 self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
 
     def _on_toggle(self):
-        try: self._music.toggle()
-        except Exception: pass
-        self._sync_toggle_icon()  # 点击后立即刷新图标（暂停↔播放）
+        try:
+            self._music.toggle()
+        except Exception:
+            pass
+        # 立即翻转图标（不等 mpv 异步状态反馈，保证点击即时手感）；
+        # 150ms 后用真实状态校正一次，防止本地与 mpv 状态漂移。
+        want = "play" if getattr(self, "_toggle_icon", None) == "pause" else "pause"
+        self._toggle_icon = want
+        self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
+        QTimer.singleShot(150, self._sync_toggle_icon)
 
     def _on_toggle_mode(self):
         self._mode_idx = (self._mode_idx + 1) % len(self._modes)

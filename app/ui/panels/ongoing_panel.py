@@ -496,6 +496,17 @@ class OngoingPanel(QWidget):
         self.in_search = QLineEdit()
         self.in_search.setPlaceholderText("例如：果子#48230")
         self.in_search.returnPressed.connect(self._do_search)
+        # Akari 式模糊搜索：拼音首字母 + difflib，输入变化实时刷新下拉候选
+        from PySide6.QtCore import QStringListModel
+        from PySide6.QtWidgets import QCompleter
+        self._recent_queries = []
+        self._ac_model = QStringListModel([], self)
+        self._ac_completer = QCompleter(self._ac_model, self)
+        self._ac_completer.setCompletionMode(
+            QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        self._ac_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.in_search.setCompleter(self._ac_completer)
+        self.in_search.textChanged.connect(self._update_ac_candidates)
         btn = QPushButton("搜索")
         btn.clicked.connect(self._do_search)
         srow.addWidget(self.in_search); srow.addWidget(btn)
@@ -574,6 +585,25 @@ class OngoingPanel(QWidget):
         self._acct_next = 0.0
         self._refresh_account()
 
+    def _update_ac_candidates(self, text: str):
+        """输入变化 → 实时模糊候选（当前对局玩家名 + 近期查询；拼音首字母/子串/difflib）。"""
+        from app.lol.ongoing.fuzzy import fuzzy_candidates
+        q = (text or "").strip()
+        if not q:
+            self._ac_model.setStringList([])
+            return
+        names = []
+        try:
+            if self._svc is not None:
+                for s in self._svc.get_snapshots():
+                    dn = getattr(s, "display_name", "") or ""
+                    if dn and dn not in names:
+                        names.append(dn)
+        except Exception:
+            pass
+        names += [x for x in self._recent_queries if x not in names]
+        self._ac_model.setStringList(fuzzy_candidates(q, names, top=8))
+
     def _do_search(self):
         from app.lol.ongoing.player_search import PlayerSearchService
         from app.lol.ongoing.player_search import parse_riot_id
@@ -609,6 +639,10 @@ class OngoingPanel(QWidget):
             elif getattr(r, "privacy", "") == "ERROR":
                 priv_tag = "  [隐私状态未知]"
             self._search_status.setText(f"{r.game_name}#{r.tag_line} 近期战绩{priv_tag}")
+            full = f"{r.game_name}#{r.tag_line}"
+            if full not in self._recent_queries:
+                self._recent_queries.append(full)
+                self._recent_queries = self._recent_queries[-20:]
             for m in r.matches[:10]:
                 self._search_box.addWidget(_match_row(m, self._acct))
     def _refresh_account(self):

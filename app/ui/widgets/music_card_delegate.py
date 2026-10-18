@@ -78,20 +78,31 @@ class _LocalCoverTask(QRunnable):
 
     def run(self):
         img = QImage()
-        # ① ID3 内嵌封面（MP3 APIC / MP4 covr），读失败静默降级
+        # ① ID3/FLAC 内嵌封面（MP3 APIC / MP4 covr / FLAC PICTURE 块），读失败打日志降级
         if _MUTAGEN_OK:
             try:
                 mf = _MutagenFile(self._path)
                 tags = mf.tags if mf is not None else None
                 data = None
                 if tags is not None:
+                    # ID3v2.4 键 "APIC:"，ID3v2.3 键 "APIC"（无冒号）——都要兼容
                     if "APIC:" in tags:
                         data = tags["APIC:"].data
+                    elif "APIC" in tags:
+                        data = tags["APIC"].data
                     elif "covr" in tags and tags["covr"]:
                         data = bytes(tags["covr"][0])
+                # FLAC 封面是 PICTURE 块（pictures 属性，tags 通常为 None）——
+                # 必须在 tags 分支之外检查，否则永远提取不到 FLAC 内嵌封面
+                if data is None:
+                    pics = getattr(mf, "pictures", None) or []
+                    if pics and getattr(pics[0], "data", None):
+                        data = bytes(pics[0].data)
                 if data:
                     img = QImage.fromData(data)
-            except Exception:
+            except Exception as e:
+                if img.isNull():
+                    print(f"[cover] ID3 内嵌封面读取失败 {os.path.basename(self._path)}: {e}")
                 img = QImage()
         # ② 同级目录封面文件（cover/folder/album/front.*）
         if img.isNull():

@@ -267,14 +267,19 @@ QCheckBox::indicator:checked {{
     background-color: {T.ACCENT}; border-color: {T.ACCENT}; image: none;
 }}
 
-/* Slider */
-QSlider::groove:horizontal {{ height: 4px; background: rgba({T.BORDER_RGB}, 210); border-radius: 2px; }}
-QSlider::sub-page:horizontal {{ background: {T.ACCENT}; border-radius: 2px; }}
-QSlider::handle:horizontal {{
-    background: {T.TEXT_PRIMARY}; border: none; width: 14px; height: 14px;
-    margin: -5px 0; border-radius: 7px;
+/* Slider：sub-page 高亮强调色（已播放/已填充），groove 半透明深灰（未填充），handle 纯白圆点微光 */
+QSlider::groove:horizontal {{ height: 4px; background: rgba({T.TEXT_RGB}, 45); border-radius: 2px; }}
+QSlider::sub-page:horizontal {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 {T.ACCENT}, stop:1 {T.ACCENT_LIGHT}); border-radius: 2px;
 }}
-QSlider::handle:horizontal:hover {{ background: {T.ACCENT}; }}
+QSlider::handle:horizontal {{
+    background: #ffffff; border: 1px solid rgba({T.ACCENT_RGB}, 230);
+    width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
+}}
+QSlider::handle:horizontal:hover {{
+    background: #ffffff; border: 1px solid {T.ACCENT};
+}}
 
 /* GroupBox */
 QGroupBox {{
