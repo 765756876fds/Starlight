@@ -145,6 +145,27 @@ class TestGlassQss:
         mp._on_toggle()  # 模拟点击：toggle() + 立即同步
         assert getattr(mp, "_toggle_icon", None) == "play"
 
+    def test_delay_config_dialog_glass(self, qapp):
+        # 延迟接受配置弹窗：GlassDialog 无边框 + 中文按钮 + 确定 primary 蓝实底
+        from PySide6.QtWidgets import QPushButton
+        from app.ui.dialogs.delay_config_dialog import DelayConfigDialog
+        d = DelayConfigDialog(0.0)
+        btns = {b.text(): b.property("class")
+                for b in d.findChildren(QPushButton) if b.text()}
+        assert btns.get("确定") == "primary"
+        assert "取消" in btns
+        assert not any(t in btns for t in ("OK", "Cancel"))
+
+    def test_glass_msgbox_chinese_buttons(self, qapp):
+        # 全局弹窗防漏网：glass_question 按钮全中文 + 主操作 primary
+        from PySide6.QtWidgets import QPushButton
+        from app.ui.widgets.glass_msg import _GlassMsgBox
+        q = _GlassMsgBox(None, "确认", "确定继续？", [("取消", False), ("是", True)])
+        btns = {b.text(): b.property("class")
+                for b in q.findChildren(QPushButton) if b.text()}
+        assert "取消" in btns and "是" in btns
+        assert btns.get("是") == "primary"
+
     def test_no_non_scale_font_sizes(self):
         # QSS 中不得出现非排版阶梯的字面量字号
         qss = build_glass_qss()

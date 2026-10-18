@@ -12,12 +12,13 @@ from PySide6.QtCore import QObject, QRect, QSize, QThread, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListView, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea,
+    QListView, QListWidgetItem, QMenu, QPushButton, QScrollArea,
     QSlider, QStackedWidget, QStyledItemDelegate, QStyle, QVBoxLayout, QWidget,
 )
 
 from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..widgets.glass_dialog import GlassDialog
+from ..widgets.glass_msg import glass_info
 from ...movie import douban_rank
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
@@ -1230,7 +1231,7 @@ class MoviePanel(QWidget):
             "====================\n"
             "播放控制也可用本面板按钮（全屏/倍速/音量/静音）。"
         )
-        QMessageBox.information(self, "快捷键说明", table)
+        glass_info(self, "快捷键说明", table)
 
     def _on_stop(self):
         try:

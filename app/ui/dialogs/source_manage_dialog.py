@@ -3,9 +3,11 @@
 """
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLineEdit, QLabel, QFileDialog, QMessageBox, QCheckBox
+    QPushButton, QLineEdit, QLabel, QFileDialog, QCheckBox
 )
 from PySide6.QtCore import Qt
+
+from ..widgets.glass_msg import glass_info, glass_critical, glass_warning, glass_question
 
 from app.music.source_manager import MusicSourceManager, MusicSource
 from ..widgets.glass_dialog import GlassDialog
@@ -112,25 +114,25 @@ class SourceManageDialog(GlassDialog):
             return
         try:
             source = self.manager.import_from_json(path)
-            QMessageBox.information(self, "成功", f"已导入音源: {source.name}")
+            glass_info(self, "成功", f"已导入音源: {source.name}")
             self._notify_changed()
             self._refresh_list()
         except Exception as e:
-            QMessageBox.critical(self, "导入失败", f"错误: {str(e)}")
+            glass_critical(self, "导入失败", f"错误: {str(e)}")
 
     def _import_from_url(self):
         """从URL导入"""
         url = self.inp_url.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入音源URL")
+            glass_warning(self, "提示", "请输入音源URL")
             return
         try:
             source = self.manager.import_from_url(url)
-            QMessageBox.information(self, "成功", f"已导入音源: {source.name}")
+            glass_info(self, "成功", f"已导入音源: {source.name}")
             self._notify_changed()
             self._refresh_list()
         except Exception as e:
-            QMessageBox.critical(self, "导入失败", f"错误: {str(e)}")
+            glass_critical(self, "导入失败", f"错误: {str(e)}")
 
     def _delete_selected(self):
         """删除选中的音源"""
@@ -140,10 +142,8 @@ class SourceManageDialog(GlassDialog):
         name = item.data(Qt.UserRole)
         if not name:
             return
-        reply = QMessageBox.question(
-            self, "确认删除", f"确定删除音源 {name} 吗？"
-        )
-        if reply == QMessageBox.Yes:
-            self.manager.remove_source(name)
-            self._notify_changed()
-            self._refresh_list()
+        if not glass_question(self, "确认删除", f"确定删除音源 {name} 吗？"):
+            return
+        self.manager.remove_source(name)
+        self._notify_changed()
+        self._refresh_list()

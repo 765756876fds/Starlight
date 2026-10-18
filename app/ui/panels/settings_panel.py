@@ -22,7 +22,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFontComboBox,
     QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider,
+    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider,
     QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -34,6 +34,7 @@ from ..settings_store import (
 )
 from ..widgets.toggle_button import ToggleButton
 from ..widgets.glass_dialog import GlassDialog
+from ..widgets.glass_msg import glass_question, glass_warning
 from ..widgets.icon_utils import lucide_icon
 from ...lol.data.lol_data_updater import update_all as _update_lol_data
 
@@ -442,8 +443,7 @@ class SettingsPanel(QWidget):
             from app.ui.theme.colors import Colors  # noqa: F401
             print(f"[Settings] 打开电影源管理失败: {e}")
             try:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "提示", f"打开电影源管理失败: {e}")
+                glass_warning(self, "提示", f"打开电影源管理失败: {e}")
             except Exception:
                 pass
 
@@ -866,17 +866,14 @@ class SettingsPanel(QWidget):
         upd = self._plugin_updates.get(name)
         if not upd:
             return
-        ret = QMessageBox.question(
+        if not glass_question(
             self,
             "确认更新插件",
             f"将更新插件「{name}」\n"
             f"v{upd.get('local_version')} → v{upd.get('remote_version')}\n\n"
             f"更新会替换本地插件文件（旧版备份到 data/plugins_backup/），"
             f"并短暂中断在线搜索。\n确定继续？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if ret != QMessageBox.Yes:
+        ):
             return
         self.lbl_plugin_status.setText(f"更新 {name} 中…")
         btn_upd = self._update_btns.get(name)
@@ -903,15 +900,12 @@ class SettingsPanel(QWidget):
         """确认 → 后台删除插件文件 + reload → 回主线程刷新列表。"""
         if self._js_source is None:
             return
-        ret = QMessageBox.question(
+        if not glass_question(
             self,
             "确认删除插件",
             f"将删除插件文件「{name}」并重新加载插件列表。\n\n"
             f"删除会短暂中断在线搜索。\n确定继续？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if ret != QMessageBox.Yes:
+        ):
             return
         self.lbl_plugin_status.setText(f"删除 {name} 中…")
         btn_del = self._delete_btns.get(name)

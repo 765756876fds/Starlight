@@ -16,14 +16,15 @@ from app.ui.theme.tokens import Tokens
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout,
     QWidget,
 )
 
 from app.combo.models import Combo, ComboStep, ChampionCombos
 from app.combo.validation import SEQUENCE_KEYS, validate_combo
 from app.ui.widgets.glass_dialog import GlassDialog
+from app.ui.widgets.glass_msg import glass_info, glass_question, glass_warning
 from app.ui.widgets.icon_utils import lucide_icon
 
 # 按键分组展示（触发键模式只显示 物品 + 其他）
@@ -147,11 +148,8 @@ class TriggerCaptureDialog(GlassDialog):
             self.lbl_hint.setText("该键不支持，请重新按（支持字母与主键盘数字）")
             return
         if key in ("q", "w", "e", "r", "d", "f"):
-            ret = QMessageBox.question(
-                self, "确认触发键",
-                f"触发键 {key.upper()} 是游戏常用键，可能误触发，确认要用吗？",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if ret != QMessageBox.Yes:
+            if not glass_question(self, "确认触发键",
+                                  f"触发键 {key.upper()} 是游戏常用键，可能误触发，确认要用吗？"):
                 self.lbl_hint.setText("已取消，请重新按其他键")
                 return
         self._captured = key
@@ -336,7 +334,7 @@ class ComboEditDialog(GlassDialog):
         ok, errors = validate_combo(
             self._champ, trigger, self._steps, exclude=self._combo)
         if not ok:
-            QMessageBox.warning(self, "校验失败", "\n".join(errors))
+            glass_warning(self, "校验失败", "\n".join(errors))
             return
         note = self.edt_note.text().strip()
         if self._combo is not None:
@@ -406,7 +404,7 @@ class AddChampionDialog(GlassDialog):
     def _confirm(self) -> None:
         item = self.lst.currentItem()
         if item is None:
-            QMessageBox.information(self, "添加英雄", "请先选择要添加的英雄")
+            glass_info(self, "添加英雄", "请先选择要添加的英雄")
             return
         cid = item.data(Qt.UserRole) or 0
         self.selected = (int(cid), item.text().replace("（已添加）", ""))

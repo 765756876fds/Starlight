@@ -331,6 +331,13 @@ QPushButton[class="btn-gear"] {{
 QPushButton[class="btn-gear"]:hover {{ background: rgba({T.BG_HOVER_RGB}, 210); border-color: {T.ACCENT}; }}
 QPushButton[class="btn-gear"]:pressed {{ background: rgba({T.ACCENT_RGB}, 90); border-color: {T.ACCENT}; }}
 QPushButton[class="btn-gear"]:focus {{ border-color: rgba({T.ACCENT_RGB}, 180); }}
+QPushButton[class="danger"] {{
+    background-color: rgba({_rgb(T.DANGER)}, 90); color: #fecaca;
+    border: 1px solid {T.DANGER}; border-radius: {T.RADIUS}px;
+    padding: 6px 14px;
+}}
+QPushButton[class="danger"]:hover {{ background-color: {T.DANGER}; color: #ffffff; }}
+QPushButton[class="danger"]:pressed {{ background-color: rgba({_rgb(T.DANGER)}, 70); }}
 """
 
 

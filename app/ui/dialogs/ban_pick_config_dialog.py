@@ -1,12 +1,13 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QLineEdit, QPushButton, QDialogButtonBox, QMessageBox,
+    QLineEdit, QPushButton, QDialogButtonBox,
 )
 import json
 import os
 
 from ..widgets.glass_dialog import GlassDialog
+from ..widgets.glass_msg import glass_info
 from ..widgets.icon_utils import lucide_icon
 from ..theme.tokens import Tokens
 
@@ -126,7 +127,7 @@ class BanPickConfigDialog(GlassDialog):
     def _on_pick(self, item):
         cid = item.data(Qt.UserRole)
         if cid in self._item_ids:
-            QMessageBox.information(self, "提示", "已在列表中")
+            glass_info(self, "提示", "已在列表中")
             return
         self._item_ids.append(cid)
         self._refresh_list()

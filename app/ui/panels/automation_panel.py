@@ -138,12 +138,11 @@ class AutomationPanel(QWidget):
             return
         cfg = getattr(self._svc, "config", None)
         cur = float(getattr(cfg, "accept_delay", 0.0) or 0.0)
-        from PySide6.QtWidgets import QInputDialog
-        val, ok = QInputDialog.getDouble(self, "延迟接受配置",
-                                         "延迟接受（秒，0=立即接受）：",
-                                         cur, 0.0, 30.0, 1)
-        if not ok:
+        from ..dialogs.delay_config_dialog import DelayConfigDialog
+        dlg = DelayConfigDialog(cur, self)
+        if not dlg.exec():
             return
+        val = dlg.value()
         try:
             setattr(cfg, "accept_delay", val)
             # 同时保存到yaml配置（沿用现有模式）

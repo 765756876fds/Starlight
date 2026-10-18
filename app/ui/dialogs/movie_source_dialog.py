@@ -3,11 +3,12 @@
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QVBoxLayout,
+    QPushButton, QVBoxLayout,
 )
 
 from ...movie.source_manager import MovieSourceManager
 from ...ui.widgets.glass_dialog import GlassDialog
+from ...ui.widgets.glass_msg import glass_info, glass_question, glass_warning
 
 
 class _SourceTestWorker(QObject):
@@ -141,15 +142,15 @@ class MovieSourceDialog(GlassDialog):
         name = self.inp_name.text().strip()
         url = self.inp_url.text().strip()
         if not name or not url:
-            QMessageBox.warning(self, "提示", "请输入名称和接口URL")
+            glass_warning(self, "提示", "请输入名称和接口URL")
             return
         if not url.startswith(("http://", "https://")):
-            QMessageBox.warning(self, "提示", "URL 需以 http:// 或 https:// 开头")
+            glass_warning(self, "提示", "URL 需以 http:// 或 https:// 开头")
             return
         if not self.manager.add_source(name, url):
-            QMessageBox.warning(self, "提示", "添加失败：名称重复或无效")
+            glass_warning(self, "提示", "添加失败：名称重复或无效")
             return
-        QMessageBox.information(self, "成功", f"已添加源: {name}")
+        glass_info(self, "成功", f"已添加源: {name}")
         self.inp_url.clear()
         self.inp_name.clear()
         self._notify_changed()
@@ -162,11 +163,11 @@ class MovieSourceDialog(GlassDialog):
         name = item.data(Qt.UserRole)
         if not name:
             return
-        reply = QMessageBox.question(self, "确认删除", f"确定删除源 {name} 吗？（永久删除）")
-        if reply == QMessageBox.Yes:
-            self.manager.remove_source(name)
-            self._notify_changed()
-            self._refresh_list()
+        if not glass_question(self, "确认删除", f"确定删除源 {name} 吗？（永久删除）"):
+            return
+        self.manager.remove_source(name)
+        self._notify_changed()
+        self._refresh_list()
 
     def _set_active(self):
         item = self.list_widget.currentItem()

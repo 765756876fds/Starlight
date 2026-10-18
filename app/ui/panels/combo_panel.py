@@ -340,19 +340,9 @@ class ComboPanel(QWidget):
     # ---------- 二期第二步：删除 ----------
 
     def _confirm_delete(self, title: str, text: str) -> bool:
-        """二次确认框：默认焦点在[取消]，[确定删除]为红色警示按钮。"""
-        from PySide6.QtWidgets import QMessageBox
-        box = QMessageBox(self)
-        box.setWindowTitle(title)
-        box.setText(text)
-        btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
-        btn_del = box.addButton("确定删除", QMessageBox.DestructiveRole)
-        btn_del.setStyleSheet(
-            f"background-color: {Colors.DANGER}; color: white; font-weight: bold;")
-        box.setDefaultButton(btn_cancel)   # 防手滑回车误删
-        box.setEscapeButton(btn_cancel)
-        box.exec()
-        return box.clickedButton() is btn_del
+        """二次确认框：默认焦点在[取消]，[确定删除]为红色警示按钮（GlassDialog 封装）。"""
+        from ..widgets.glass_msg import glass_confirm_danger
+        return glass_confirm_danger(self, title, text)
 
     def _on_delete_combo(self, champ, combo) -> None:
         """删连招：只删连招保留英雄 → save_config 保存 → 刷新。"""
