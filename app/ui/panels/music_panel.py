@@ -20,6 +20,7 @@ from ...core.event_bus import get_event_bus
 from ...music.humming import HummingService
 from ...music.lyric_search import LyricIndex
 from ...music.online.events import ONLINE_SEARCH_DONE, ONLINE_ERROR
+from ...music.online.models import OnlineTrack
 
 
 class _LyricBuildWorker(QObject):
@@ -1415,9 +1416,24 @@ class MusicPanel(QWidget):
             self._load_rank_detail(req["source"], req["list_id"], req["title"])
 
     def _on_rank_song_play(self, item: QListWidgetItem):
-        track = item.data(Qt.UserRole)
-        if not track or self._music is None:
+        data = item.data(Qt.UserRole)
+        if not data or self._music is None:
             return
+        # 卡片 UserRole 存的是 dict（Delegate 用）；play_online 依赖 OnlineTrack 属性。
+        # 必须还原为 OnlineTrack 对象，且 extra 完整携带（含 _raw 原始歌曲对象，getUrl 依赖）。
+        if isinstance(data, OnlineTrack):
+            track = data
+        else:
+            track = OnlineTrack(
+                source_name=data.get("source_name", "") or "",
+                track_id=data.get("track_id", "") or "",
+                title=data.get("title", "") or "",
+                artist=data.get("artist", "") or "",
+                album=data.get("album", "") or "",
+                duration_seconds=int(data.get("duration_seconds") or 0),
+                cover_url=data.get("cover_url") or None,
+                extra=data.get("extra") or {},
+            )
         try:
             ok = self._music.play_online(track)
         except Exception as e:
@@ -1425,8 +1441,7 @@ class MusicPanel(QWidget):
             self.lbl_rank_status.setText(f"播放失败: {e}")
             return
         if ok:
-            name = track.get("title") if isinstance(track, dict) else getattr(track, "title", "")
-            self.lbl_rank_status.setText(f"正在播放：{name}")
+            self.lbl_rank_status.setText(f"正在播放：{track.title}")
         else:
             self.lbl_rank_status.setText("该曲目无法播放")
 

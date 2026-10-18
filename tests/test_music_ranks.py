@@ -280,7 +280,9 @@ def test_rank_detail_done_renders_ranked_songs(qapp):
 
 def test_rank_detail_done_carries_raw_item_for_play(qapp):
     # 回归：P0 榜单无法播放——item 数据必须保留 extra._raw，play_online 才能取 raw_item。
+    # 新契约：卡片 UserRole 是 dict（Delegate 用），双击时还原为 OnlineTrack（含完整 extra）。
     from PySide6.QtWidgets import QListWidgetItem
+    from app.music.online.models import OnlineTrack as OT
     p = _panel()
     t = OnlineTrack(source_name="酷我音乐", track_id="9", title="A", artist="B",
                     duration_seconds=200, extra={"_raw": {"id": "9", "name": "A"}})
@@ -288,15 +290,18 @@ def test_rank_detail_done_carries_raw_item_for_play(qapp):
     d = p.list_rank_songs.item(0).data(Qt.UserRole)
     assert d["extra"]["_raw"] == {"id": "9", "name": "A"}
     assert d["duration_seconds"] == 200
-    # 用 dict 卡数据直接走播放链：extra 必须能被 get_play_url 读取（不 AttributeError）
+    # 用 dict 卡数据直接走播放链：必须还原为 OnlineTrack，extra._raw 完整（不 AttributeError）
     item = QListWidgetItem("1. A - B")
     item.setData(Qt.UserRole, d)
     p.list_rank_songs.addItem(item)
-    p._music.play_online.side_effect = lambda tr: tr["extra"].get("_raw") or tr
+    p._music.play_online.side_effect = lambda tr: tr.extra.get("_raw") or tr
     p._on_rank_song_play(item)
     assert p._music.play_online.called
     called = p._music.play_online.call_args[0][0]
-    assert called["extra"]["_raw"]["id"] == "9"
+    assert isinstance(called, OT)
+    assert called.source_name == "酷我音乐"
+    assert called.track_id == "9"
+    assert called.extra["_raw"]["id"] == "9"
 
 
 def test_rank_detail_done_empty_degrades(qapp):
@@ -517,3 +522,68 @@ def test_do_search_normal_starts(qapp, monkeypatch):
     p.edit_kw.setText("晴天")
     p._do_search()
     assert p._thread.started_calls == 1
+
+
+# ---------- 榜单双击播放：dict → OnlineTrack 还原（回归：'dict' object has no attribute 'source_name'） ----------
+
+def test_rank_song_play_converts_dict_to_onlinetrack(qapp, monkeypatch):
+    """卡片 UserRole 是 dict（Delegate 用），双击必须还原为 OnlineTrack 再 play_online：
+    属性访问不崩，且 extra 里的 _raw 原样携带（getUrl 依赖）。"""
+    from PySide6.QtWidgets import QListWidgetItem
+    from app.music.online.models import OnlineTrack as OT
+    p = _panel()
+    raw = {"id": "k1", "song_mid": "m1", "name": "晴天"}   # 插件原始对象（extra._raw）
+    t = OT(source_name="酷我音乐", track_id="k1", title="晴天", artist="周杰伦",
+           duration_seconds=210, cover_url="https://img/c.jpg", extra={"_raw": raw})
+    p._on_rank_detail_done({"tracks": [t]})
+    item = p.list_rank_songs.item(0)
+    data = item.data(Qt.UserRole)
+    assert isinstance(data, dict), "卡片 UserRole 必须是 dict（供 Delegate 渲染）"
+    p._music.play_online.return_value = True
+    p._on_rank_song_play(item)
+    got = p._music.play_online.call_args[0][0]
+    assert isinstance(got, OT), f"play_online 必须收到 OnlineTrack，实际 {type(got)}"
+    assert got.source_name == "酷我音乐"
+    assert got.track_id == "k1"
+    assert got.title == "晴天"
+    assert got.artist == "周杰伦"
+    assert got.duration_seconds == 210
+    assert got.cover_url == "https://img/c.jpg"
+    assert got.extra.get("_raw") == raw, "extra 必须原样携带 _raw，否则 getUrl 报'无法获取播放链接'"
+    assert "正在播放" in p.lbl_rank_status.text()
+
+
+def test_rank_song_play_already_onlinetrack_passthrough(qapp, monkeypatch):
+    """UserRole 已是 OnlineTrack 时（防御分支）直接透传，不做二次转换。"""
+    from PySide6.QtWidgets import QListWidgetItem
+    from app.music.online.models import OnlineTrack as OT
+    p = _panel()
+    t = OT(source_name="网易云", track_id="n1", title="稻香", artist="周杰伦",
+           extra={"_raw": {"id": "n1"}})
+    p._on_rank_detail_done({"tracks": [t]})
+    item = p.list_rank_songs.item(0)
+    # 直接给 item 塞 OnlineTrack（防御路径）
+    item.setData(Qt.UserRole, t)
+    p._music.play_online.return_value = False
+    p._on_rank_song_play(item)
+    got = p._music.play_online.call_args[0][0]
+    assert got is t
+    assert "无法播放" in p.lbl_rank_status.text()
+
+
+def test_rank_song_play_missing_extra_still_ok(qapp, monkeypatch):
+    """extra 缺失/为 None 时还原不崩（防御），字段空串兜底。"""
+    from PySide6.QtWidgets import QListWidgetItem
+    from app.music.online.models import OnlineTrack as OT
+    p = _panel()
+    p._on_rank_detail_done({"tracks": []})
+    item = QListWidgetItem("x")
+    item.setData(Qt.UserRole, {"source_name": "", "track_id": "", "title": "未知",
+                               "artist": "", "album": "", "duration_seconds": 0,
+                               "cover_url": None, "extra": None})
+    p.list_rank_songs.addItem(item)
+    p._music.play_online.return_value = True
+    p._on_rank_song_play(item)   # 不应抛异常
+    got = p._music.play_online.call_args[0][0]
+    assert isinstance(got, OT)
+    assert got.extra == {}
