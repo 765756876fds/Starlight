@@ -76,6 +76,7 @@ _LUCIDE = {
     "x": '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
     "minus": '<line x1="5" y1="12" x2="19" y2="12"/>',
     "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    "chevron-down": '<path d="m6 9 6 6 6-6"/>',
 }
 
 _FALLBACK_CHAR = {
@@ -85,7 +86,7 @@ _FALLBACK_CHAR = {
     "volume-2": "🔊", "volume-x": "🔇", "rotate-ccw": "↺",
     "grid": "▦", "list": "☰",
     "link": "🔗", "cpu": "▦", "mic-off": "🎤",
-    "x": "✕",
+    "x": "✕", "minus": "−", "plus": "＋", "chevron-down": "▾",
 }
 
 

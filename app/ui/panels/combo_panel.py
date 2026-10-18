@@ -12,14 +12,15 @@ import json
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 from app.ui.widgets.icon_utils import lucide_icon
-
 import os
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QStyledItemDelegate, QStyle,
+    QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -27,6 +28,51 @@ CHAMPIONS_JSON = os.path.join(PROJECT_ROOT, "data", "lol_data", "champions.json"
 
 # 固定置顶的两个英雄（施工指令：盲僧第 1、锤石第 2）
 PINNED_IDS = [64, 412]
+
+# Delegate 配色（QColor 不支持 rgba() 字符串，由 hex 拆出 alpha）
+_NAV_PILL_Q = QColor(Colors.ACCENT)
+_NAV_PILL_Q.setAlpha(61)          # Tokens.NAV_PILL 等价色
+_ACCENT_Q = QColor(Colors.ACCENT)
+_BG_ELEVATED_Q = QColor(Colors.BG_ELEVATED)
+
+
+class _HeroListDelegate(QStyledItemDelegate):
+    """英雄列表自绘：选中项半透明胶囊 + 左侧 3px accent 亮条。
+    Qt QSS 对 ::item 的 border 不渲染，故改由 Delegate 绘制（只绘制不拦事件）。
+    """
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem,
+              index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        rect = opt.rect
+        painter.save()
+        selected = bool(opt.state & QStyle.State_Selected)
+        hover = bool(opt.state & QStyle.State_MouseOver)
+        focus = bool(opt.state & QStyle.State_HasFocus)
+        if selected:
+            painter.fillRect(rect, _NAV_PILL_Q)
+            painter.fillRect(rect.left(), rect.top(), 3, rect.height(),
+                             _ACCENT_Q)
+        elif hover:
+            painter.fillRect(rect, _BG_ELEVATED_Q)
+        if opt.text:
+            painter.setFont(opt.font)
+            painter.setPen(_ACCENT_Q if selected else QColor(Tokens.TEXT_PRIMARY))
+            fm = QFontMetrics(opt.font)
+            elided = fm.elidedText(opt.text, Qt.ElideRight, rect.width() - 20)
+            painter.drawText(rect.adjusted(10, 0, -10, 0),
+                             Qt.AlignVCenter | Qt.AlignLeft, elided)
+        if focus and selected:
+            painter.setPen(_ACCENT_Q)
+            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+        painter.restore()
+
+    def sizeHint(self, option, index) -> object:
+        s = super().sizeHint(option, index)
+        if s.height() < 32:
+            s.setHeight(32)
+        return s
 
 
 class ComboPanel(QWidget):
@@ -65,6 +111,7 @@ class ComboPanel(QWidget):
         # 左列：英雄列表 + [删除此英雄]（普通布局，不做进列表 item，避免宽度压缩）
         left_col = QVBoxLayout()
         self.lst_heroes = QListWidget()
+        self.lst_heroes.setItemDelegate(_HeroListDelegate(self.lst_heroes))
         self.lst_heroes.currentItemChanged.connect(self._on_select)
         left_col.addWidget(self.lst_heroes, 1)
         self.btn_delete_champion = QPushButton("删除此英雄")
@@ -168,7 +215,7 @@ class ComboPanel(QWidget):
             return
         name = self._combo.current_champion_name()
         if not (isinstance(name, str) and name):
-            name = "-"   # 非真实字符串（None/异常/mock）不展示
+            name = "未识别"   # 禁止把 Mock/非字符串占位转成 UI 文本
         self.lbl_current.setText(
             f"当前对局英雄：{name}（自动识别）")
         # 当前英雄若有连招配置，自动滚动/标记（列表刷新已处理 ● 标记）
@@ -192,7 +239,8 @@ class ComboPanel(QWidget):
             if w is not None:
                 w.deleteLater()
         cc = self._combo.find_champion_by_id(cid) if self._combo else None
-        if cc is None:
+        name = getattr(cc, "name", None)
+        if cc is None or not (isinstance(name, str) and name):
             self.lbl_detail_champ.setText("当前英雄：-")
             if self._combo and not self._combo.get_champions():
                 hint = QLabel("暂无英雄，点击「+ 添加英雄」添加")
@@ -203,13 +251,14 @@ class ComboPanel(QWidget):
             self._detail_layout.addWidget(hint)
             self._detail_layout.addStretch(1)  # 剩余空间留在底部，内容顶对齐
             return
-        self.lbl_detail_champ.setText(f"当前英雄：{cc.name}")
-        if not cc.combos:
+        self.lbl_detail_champ.setText(f"当前英雄：{name}")
+        combos = getattr(cc, "combos", None) or []
+        if not combos:
             hint = QLabel("暂无连招，点击下方 [+ 添加连招] 创建")
             hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._detail_layout.addWidget(hint)
         else:
-            for combo in cc.combos:
+            for combo in combos:
                 row = QWidget()
                 row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)  # 垂直不拉伸
                 h = QHBoxLayout(row)

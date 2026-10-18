@@ -458,6 +458,38 @@ class TestGlassDialog:
         finally:
             d.close()
 
+    def test_autoqueue_grid_and_primary_btn(self, qapp):
+        # QGridLayout 严格对齐 + 底部主按钮 accent 实底（零原生控件布局）
+        from PySide6.QtWidgets import QGridLayout, QPushButton
+        from app.ui.dialogs.auto_queue_config_dialog import AutoQueueConfigDialog
+        d = AutoQueueConfigDialog({"auto_queue_mode": "normal"})
+        try:
+            grids = d.findChildren(QGridLayout)
+            assert grids, "AutoQueue 必须使用 QGridLayout 对齐"
+            btns = d.findChildren(QPushButton)
+            ok = next(b for b in btns if b.text() == "确定")
+            assert ok.property("class") == "primary", "主按钮必须是 accent 实底"
+        finally:
+            d.close()
+
+    def test_combo_hero_delegate_draws_bar(self, qapp):
+        # 英雄列表 Delegate：选中项左 3px accent 亮条（QSS ::item border 不渲染）
+        from unittest.mock import MagicMock
+        from app.ui.dialogs.combo_manager_dialog import ComboManagerDialog
+        from app.ui.panels.combo_panel import _HeroListDelegate
+        cm = MagicMock()
+        cm.get_combos.return_value = {}
+        cm.get_usage.return_value = 0
+        cm.find_champion_by_id.return_value = None
+        cm.get_current_champion.return_value = None
+        cm.current_champion_name.return_value = None
+        d = ComboManagerDialog(cm)
+        try:
+            lst = d.findChildren(QListWidget)[0]
+            assert isinstance(lst.itemDelegate(), _HeroListDelegate)
+        finally:
+            d.close()
+
 
 # ---------- MainWindow Glass 外壳 ----------
 

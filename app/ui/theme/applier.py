@@ -10,6 +10,13 @@ from PySide6.QtWidgets import QApplication
 
 from .tokens import Tokens
 
+_ICONS_DIR = Path(__file__).parent / "icons"
+
+
+def _qss_url(rel_name: str) -> str:
+    """QSS url() 用绝对路径（Windows 反斜杠转正斜杠）。"""
+    return (_ICONS_DIR / rel_name).as_posix()
+
 
 def _load_qss(name: str) -> str:
     """仅旧 dark 主题使用（未 token 化的历史文件，保留兼容）。"""
@@ -45,7 +52,7 @@ QLabel[class="status-warning"] {{ color: {T.WARNING}; }}
 
 /* ---- 按钮：六态（default / hover / pressed(active) / focus / disabled / primary） ---- */
 QPushButton {{
-    background-color: rgba({T.CARD_RGB}, 200);
+    background: transparent;
     color: {T.TEXT_PRIMARY};
     border: 1px solid rgba({T.BORDER_RGB}, 210);
     border-radius: {T.RADIUS}px;
@@ -148,16 +155,29 @@ QComboBox {{
 }}
 QComboBox:hover {{ border-color: {T.ACCENT}; }}
 QComboBox:focus {{ border-color: {T.ACCENT}; background-color: rgba({T.BG_HOVER_RGB}, 200); }}
-QComboBox::drop-down {{ border: none; width: 24px; }}
+QComboBox::drop-down {{ border: none; background: transparent; width: 26px; }}
 QComboBox::down-arrow {{
-    image: none; border-left: 4px solid transparent;
-    border-right: 4px solid transparent; border-top: 5px solid {T.TEXT_SECONDARY};
-    margin-right: 8px;
+    image: url("{_qss_url('chevron-down.svg')}");
+    width: 16px; height: 16px; margin-right: 6px;
 }}
 QComboBox QAbstractItemView {{
     background-color: rgba({T.CARD_RGB}, 240); color: {T.TEXT_PRIMARY};
     border: 1px solid rgba({T.BORDER_RGB}, 210); border-radius: {T.RADIUS_SMALL}px;
     selection-background-color: {T.ACCENT}; selection-color: #ffffff; outline: none;
+}}
+
+/* 数字微调：隐藏原生上下按钮，输入框走 Glass 圆角样式 */
+QSpinBox, QDoubleSpinBox {{
+    background-color: {T.INPUT_BG};
+    color: {T.TEXT_PRIMARY};
+    border: 1px solid rgba({T.BORDER_RGB}, 210);
+    border-radius: {T.RADIUS}px;
+    padding: 6px 10px; min-height: 20px;
+}}
+QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {T.ACCENT}; background-color: rgba({T.BG_HOVER_RGB}, 200); }}
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+    width: 0; height: 0; border: none; background: transparent;
 }}
 
 /* Tab：半透明面板 + 导航胶囊高亮 */
