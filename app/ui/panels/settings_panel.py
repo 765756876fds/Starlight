@@ -244,6 +244,7 @@ class SettingsPanel(QWidget):
                  on_refresh_changed: Optional[Callable[[int], None]] = None,
                  overlay_toggle: Optional[Callable[[bool], None]] = None,
                  overlay_enabled: bool = True,
+                 pet_toggle_cb: Optional[Callable[[bool], None]] = None,
                  parent=None):
         super().__init__(parent)
         self._music = music
@@ -253,6 +254,7 @@ class SettingsPanel(QWidget):
         self._on_refresh_changed = on_refresh_changed
         self._overlay_toggle = overlay_toggle
         self._overlay_enabled = bool(overlay_enabled)
+        self._pet_toggle_cb = pet_toggle_cb
         self._scan_thread = None
         self._js_source = None
         self._reloading = False
@@ -1389,6 +1391,12 @@ class SettingsPanel(QWidget):
         self.btn_overlay.toggled_state.connect(self._on_overlay_toggle)
         lay.addWidget(self.btn_overlay)
 
+        # 桌面宠物开关（默认关，持久化 ui_prefs.json pet_enabled；经 pet_toggle_cb 通知主界面创建/关闭）
+        self.cb_pet = QCheckBox("启用桌面宠物（Live2D 桌宠）")
+        self.cb_pet.setChecked(bool(load_ui_prefs().get("pet_enabled", False)))
+        self.cb_pet.toggled.connect(self._on_pet_toggle)
+        lay.addWidget(self.cb_pet)
+
         irow = QHBoxLayout()
         irow.addWidget(self._label("刷新间隔（毫秒）："))
         self.spin_refresh = QSpinBox()
@@ -1407,6 +1415,11 @@ class SettingsPanel(QWidget):
     def _on_overlay_toggle(self, on: bool) -> None:
         if self._overlay_toggle is not None:
             self._overlay_toggle(on)
+
+    def _on_pet_toggle(self, on: bool) -> None:
+        save_ui_prefs({"pet_enabled": bool(on)})
+        if self._pet_toggle_cb is not None:
+            self._pet_toggle_cb(bool(on))
 
     def _build_reset_row(self, root: QVBoxLayout) -> None:
         """设置页底部：恢复默认设置（只重置设置页管理的配置）。"""
