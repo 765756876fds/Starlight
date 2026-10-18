@@ -6,7 +6,7 @@ from PySide6.QtCore import QEvent, QThread, Qt, QTimer, QObject, Signal
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSlider,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
     QStyledItemDelegate, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -290,10 +290,13 @@ class MusicPanel(QWidget):
         row_sub.addWidget(self.btn_mode)
         row_sub.addWidget(self.btn_clear_queue)
         row_sub.addStretch()
-        row_sub.addWidget(QLabel("音量"))
-        self.slider_vol = QSlider(Qt.Horizontal)
+        # 音量：MusicFree 悬浮极简风——平时仅喇叭图标，悬停/点击弹出垂直玻璃面板
+        from ..widgets.glass_slider import GlassSlider, VolumeButton
+        self.btn_volume = VolumeButton()
+        self.slider_vol = GlassSlider(Qt.Vertical)
         self.slider_vol.setRange(0, 100)
-        row_sub.addWidget(self.slider_vol, 1)
+        self.btn_volume.set_slider(self.slider_vol)
+        row_sub.addWidget(self.btn_volume)
         ll.addLayout(row_sub)
 
         # 键盘优先：Ctrl+F / Ctrl+K 聚焦搜索框（窗口级快捷键）

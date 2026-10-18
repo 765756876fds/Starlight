@@ -15,6 +15,7 @@ import urllib.request
 from typing import Callable, Optional
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
+from app.ui.widgets.glass_slider import GlassSlider
 
 
 from PySide6.QtCore import Qt, QThread, QObject, Signal
@@ -22,7 +23,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFontComboBox,
     QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider,
+    QLineEdit, QPushButton, QScrollArea, QSizePolicy,
     QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -39,10 +40,10 @@ from ..widgets.icon_utils import lucide_icon
 from ...lol.data.lol_data_updater import update_all as _update_lol_data
 
 
-class NoWheelSlider(QSlider):
+class NoWheelSlider(GlassSlider):
     """滚轮悬停不改值：wheelEvent 忽略 → 事件冒泡给父 QScrollArea 滚动。
     Qt 滚轮事件发给悬停控件（与键盘焦点无关），QSlider 默认消费 wheel 改值，
-    设置页滚动时路过滑块会被误触。"""
+    设置页滚动时路过滑块会被误触。基类 GlassSlider = 纯 QPainter 自绘（无白底）。"""
 
     def wheelEvent(self, event):
         event.ignore()
