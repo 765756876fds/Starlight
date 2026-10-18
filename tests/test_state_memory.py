@@ -209,6 +209,8 @@ class TestVideoWindowSizeMemory:
 # ---------- 本地列表"强制跳回"优化 ----------
 
 class TestLocalListJump:
+    """自动跳回已彻底剥离：刷新只驱动 Delegate 高亮，绝不滚动/选中/设定时器。"""
+
     def _panel(self, qapp):
         from app.ui.panels.music_panel import MusicPanel
         music = FakeMusic()
@@ -222,57 +224,30 @@ class TestLocalListJump:
             panel.list_local.addItem(it)
         return panel
 
-    def test_refresh_highlights_but_no_scroll(self, qapp):
-        """正在播放的歌：setCurrentRow 高亮；不立即 scrollToItem（防拽走）；10s 计时开始。"""
+    def test_no_jump_timer_initialized(self, qapp):
+        """初始化后不存在 _local_jump_timer / _local_anchor_row（彻底剥离）。"""
+        panel = self._panel(qapp)
+        assert not hasattr(panel, "_local_jump_timer")
+        assert not hasattr(panel, "_local_anchor_row")
+        assert not hasattr(panel, "_local_jump_to_current")
+        # 类自身未重写 eventFilter（基类 QWidget 方法不算）
+        assert "eventFilter" not in panel.__class__.__dict__
+
+    def test_refresh_no_scroll_no_select(self, qapp):
+        """刷新播放状态：不 scrollToItem、不 setCurrentRow（currentRow 保持未选中）。"""
         panel = self._panel(qapp)
         panel._music._current = {"id": 2, "title": "B", "artist": "", "online": False}
-        with patch.object(panel.list_local, "scrollToItem") as sc:
+        with patch.object(panel.list_local, "scrollToItem") as sc, \
+             patch.object(panel.list_local, "setCurrentRow") as sr:
             panel._refresh()
-        assert panel.list_local.currentRow() == 1
-        assert panel._local_anchor_row == 1
         sc.assert_not_called()
-        assert panel._local_jump_timer.isActive()
+        sr.assert_not_called()
+        assert panel.list_local.currentRow() == -1
 
-    def test_user_interaction_resets_timer(self, qapp):
-        """用户滚轮/移动/点击 → 重置 10s 计时（期间绝不跳回）。"""
+    def test_playing_key_still_synced(self, qapp):
+        """播放态高亮仍由 Delegate playing_key 驱动（唯一高亮来源）。"""
         panel = self._panel(qapp)
         panel._music._current = {"id": 2, "title": "B", "artist": "", "online": False}
         panel._refresh()
-        # 模拟用户滚轮（事件过滤拦截）
-        from PySide6.QtGui import QWheelEvent
-        ev = QWheelEvent(QPoint(0, 0), QPoint(0, 0), QPoint(0, 0), QPoint(0, 120),
-                         Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
-        assert panel.eventFilter(panel.list_local, ev) is False  # 不吞事件
-        assert panel._local_jump_timer.isActive()                # 计时被重置
-
-    def test_timeout_scrolls_to_anchor(self, qapp):
-        """10s 无操作 → 单次滚回正在播放的歌（scrollToItem 被调）。"""
-        panel = self._panel(qapp)
-        panel._music._current = {"id": 3, "title": "C", "artist": "", "online": False}
-        panel._refresh()
-        with patch.object(panel.list_local, "scrollToItem") as sc:
-            panel._local_jump_to_current()
-        sc.assert_called_once()
-        assert sc.call_args[0][0].data(Qt.UserRole)["id"] == 3
-
-    def test_no_anchor_no_scroll(self, qapp):
-        """无锚点（从未 refresh 到本地歌）→ 超时不滚动（不崩）。"""
-        panel = self._panel(qapp)
-        panel._local_anchor_row = -1
-        with patch.object(panel.list_local, "scrollToItem") as sc:
-            panel._local_jump_to_current()
-        sc.assert_not_called()
-
-    def test_same_song_refresh_does_not_restart(self, qapp):
-        """同一首歌反复 refresh：anchor 不变 → 不重启计时（避免永远到不了超时）。"""
-        panel = self._panel(qapp)
-        panel._music._current = {"id": 2, "title": "B", "artist": "", "online": False}
-        panel._refresh()
-        starts0 = panel._local_jump_timer.isActive()
-        with patch.object(panel._local_jump_timer, "start") as st:
-            panel._refresh()           # 同歌
-            st.assert_not_called()
-        panel._music._current = {"id": 3, "title": "C", "artist": "", "online": False}
-        with patch.object(panel._local_jump_timer, "start") as st:
-            panel._refresh()           # 换歌 → 重启
-            st.assert_called_once()
+        assert panel._dl_local.playing_key is not None
+        assert panel._dl_results.playing_key is not None

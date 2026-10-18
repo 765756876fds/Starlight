@@ -2,10 +2,10 @@
 import zlib
 from typing import List
 
-from PySide6.QtCore import QEvent, QThread, Qt, QTimer, QObject, Signal
+from PySide6.QtCore import QThread, Qt, QTimer, QObject, Signal
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
     QStyledItemDelegate, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -211,16 +211,6 @@ class MusicPanel(QWidget):
         self.list_local = QListWidget()
         self._dl_local = self._setup_card_view(self.list_local)
         ll.addWidget(self.list_local, 1)
-        # 本地列表"强制跳回"优化：正在播放的歌高亮（setCurrentRow）保留，
-        # 但自动滚动改为——无操作 10 秒后单次跳回；用户任何操作（移动/滚轮/点击/悬停）
-        # 重置计时（期间绝不跳回，防"想选别的一瞬间被拽走"）。
-        self._local_anchor_row = -1
-        self._local_jump_timer = QTimer(self)
-        self._local_jump_timer.setSingleShot(True)
-        self._local_jump_timer.setInterval(10000)
-        self._local_jump_timer.timeout.connect(self._local_jump_to_current)
-        self.list_local.setMouseTracking(True)
-        self.list_local.installEventFilter(self)
 
         # 当前曲目（小标题级）
         self.lbl_track = QLabel("未播放")
@@ -820,28 +810,6 @@ class MusicPanel(QWidget):
             QTimer.singleShot(1000, lambda: save_settings_yaml({"music": {"default_volume": value}}))
         except Exception as e:
             print(f"[MusicPanel] 音量写回配置失败: {e!r}")
-
-    # ---- 本地列表"强制跳回"优化 ----
-    def eventFilter(self, obj, event) -> bool:
-        """用户操作本地列表（移动/滚轮/点击/进出悬停）→ 重置 10s 跳回计时，
-        期间绝不自动滚动回当前播放曲。"""
-        if obj is self.list_local and event.type() in (
-                QEvent.MouseMove, QEvent.Wheel, QEvent.MouseButtonPress,
-                QEvent.Enter, QEvent.Leave):
-            self._local_jump_timer.start()
-        return super().eventFilter(obj, event)
-
-    def _local_jump_to_current(self) -> None:
-        """无操作 10s 后：滚动回正在播放的歌曲（单次；此后用户操作会重新计时）。"""
-        row = self._local_anchor_row
-        if row < 0 or row >= self.list_local.count():
-            return
-        try:
-            item = self.list_local.item(row)
-            if item is not None:
-                self.list_local.scrollToItem(item, QAbstractItemView.PositionAtCenter)
-        except Exception:
-            pass
 
     # ---- 在线 ----
     def _do_search(self):
@@ -1904,20 +1872,8 @@ class MusicPanel(QWidget):
                     for w in (self.list_local, self.list_results, self.list_history,
                               self.list_playlist_songs, self.list_rank_songs):
                         w.viewport().update()
-                # 自动定位到本地列表中正在播放的歌曲：只高亮（setCurrentRow），
-                # 滚动交给 _local_jump_timer（无操作 10s 后单次跳回；用户操作期间绝不滚）
-                if not song.get("online"):
-                    song_id = song.get("id")
-                    if song_id:
-                        for i in range(self.list_local.count()):
-                            item = self.list_local.item(i)
-                            s = item.data(Qt.UserRole)
-                            if s and s.get("id") == song_id:
-                                self.list_local.setCurrentRow(i)
-                                if self._local_anchor_row != i:
-                                    self._local_anchor_row = i
-                                    self._local_jump_timer.start()  # 新歌/新行 → 重新计时
-                                break
+                # 播放态高亮只由 Delegate playing_key 驱动（不 setCurrentRow、不滚动，
+                # 用户上下翻找列表时绝不被打断）
         except Exception as e:
             print(f"[UI] music refresh error: {e!r}")
         # 同步播放模式/高潮模式按钮：独立 try，不被上面的进度/歌曲异常拖累

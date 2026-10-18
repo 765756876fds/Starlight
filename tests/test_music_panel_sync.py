@@ -123,9 +123,8 @@ def test_refresh_syncs_buttons_with_real_controller(qapp, tmp_path):
 
 
 def test_refresh_scroll_no_attribute_error(qapp, tmp_path, capsys):
-    """回归：_refresh 在"当前歌曲在本地列表中有匹配项"时走 scrollToItem 分支，
-    不允许抛 AttributeError（此前 self.list_local.PositionAtCenter 是错误属性，
-    导致刷新每轮刷屏错误、并拖累后面的按钮同步）。"""
+    """回归：自动跳回已剥离后，_refresh 在本地列表含当前歌曲时不滚动、不选中、
+    不抛任何 AttributeError，按钮同步正常。"""
     from unittest.mock import MagicMock, patch
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QListWidgetItem
