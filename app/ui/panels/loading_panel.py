@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 
@@ -24,6 +24,8 @@ MODULES = [
 class LoadingPanel(QWidget):
     # 跨线程状态更新：backend 线程 emit，AutoConnection 自动 queued 到 UI 线程
     status_changed = Signal(str, str)  # (key, status)
+    # 启动兜底：任何单点状态（backend 异常/切换失败）卡死 15s 后强制进入主界面
+    boot_timeout = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,6 +54,11 @@ class LoadingPanel(QWidget):
         lay.addWidget(self._log, 1)
         get_log_bus().sig_log.connect(self._on_log)
         self.status_changed.connect(self.set_module_status)
+        # 兜底：15s 未完成启动（后台异常/切换失败/信号断开）→ 强制进入主界面
+        QTimer.singleShot(15_000, self._on_boot_timeout)
+
+    def _on_boot_timeout(self):
+        self.boot_timeout.emit()
 
     def _on_log(self, text):
         self._log.appendPlainText(text)

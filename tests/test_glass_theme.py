@@ -524,3 +524,23 @@ class TestMainWindowGlass:
         w.switch_to_tabs(None)
         assert w._tabs is not None
         assert w._stack.currentWidget() is w._tabs
+
+    def test_boot_timeout_guard(self, qapp):
+        # LoadingPanel 15s 兜底：正常切换后不再二次切换；重复调用防重
+        from app.ui.main_window import MainWindow
+        w = MainWindow(music=None)
+        assert hasattr(w._loading, "boot_timeout")     # 兜底信号存在
+        w.switch_to_tabs(None)
+        n = w._stack.count()
+        w.switch_to_tabs(None)                          # 防重：不再 addWidget
+        assert w._stack.count() == n
+        w._on_boot_timeout()                            # 已切换 → 兜底忽略
+        assert w._stack.count() == n
+
+    def test_boot_timeout_forces_switch(self, qapp):
+        # 兜底生效路径：仍停留在 LoadingPanel 时超时强制进入主界面
+        from app.ui.main_window import MainWindow
+        w = MainWindow(music=None)
+        assert w._stack.currentWidget() is w._loading
+        w._on_boot_timeout()
+        assert w._stack.currentWidget() is not w._loading

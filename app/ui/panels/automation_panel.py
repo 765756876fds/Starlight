@@ -212,7 +212,8 @@ class AutomationPanel(QWidget):
             self.lbl_state.setText(f"状态：{state_zh}")
             self.lbl_phase.setText(f"游戏阶段：{phase_zh}")
             try:
-                self._lbl_hint.setText(service.get_status_hint() or "")
+                hint = getattr(self._svc, "get_status_hint", None)
+                self._lbl_hint.setText(hint() if hint else "")
             except Exception:
                 pass
             cfg = getattr(self._svc, "config", None)

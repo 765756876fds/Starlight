@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..dialogs.movie_source_dialog import MovieSourceDialog
+from ..widgets.glass_dialog import GlassDialog
 from ...movie import douban_rank
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----

@@ -109,6 +109,8 @@ class MainWindow(QMainWindow):
 
         # Page 0: loading
         self._loading = LoadingPanel()
+        self._boot_done = False
+        self._loading.boot_timeout.connect(self._on_boot_timeout)
         self._stack.addWidget(self._loading)
 
         # Page 1: tabs (built lazily via switch_to_tabs)
@@ -124,8 +126,18 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _on_boot_timeout(self):
+        """启动兜底：LoadingPanel 15s 未完成 → 强制进入主界面（仅仍停留在 loading 时）。"""
+        if self._stack.currentWidget() is self._loading:
+            print("[UI] boot timeout -> force switch_to_tabs")
+            self.switch_to_tabs()
+
     def switch_to_tabs(self, tabs=None):
         print("[UI] switch_to_tabs")
+        if self._boot_done:
+            print("[UI] switch_to_tabs skipped (already booted)")
+            return
+        self._boot_done = True
         if tabs is None:
             # Build tabs ourselves
             central = QWidget()
