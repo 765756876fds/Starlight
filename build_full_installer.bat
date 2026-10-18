@@ -1,26 +1,15 @@
 @echo off
-REM LoL_Music_Agent FULL (offline) installer build script
+REM LoL_Music_Agent FULL (offline) installer build script (ASCII only - safe on any codepage)
 REM Prereq: run build.ps1 first to produce dist\LoL_Music_Agent
 REM Bundles local ASR models -> {app}\models, works fully offline (no download)
-chcp 65001 >nul
+REM NOTE: the ASR model folder is defined in setup_full.iss via #define ModelsDir
+REM       (change it there if your models live elsewhere; cmd cannot carry the
+REM       unicode path safely, ISCC reads the .iss directly).
 setlocal
 cd /d "%~dp0"
 
 if not exist "dist\LoL_Music_Agent\LoL_Music_Agent.exe" (
     echo [ERROR] dist\LoL_Music_Agent\LoL_Music_Agent.exe not found. Run build.ps1 first.
-    exit /b 1
-)
-
-REM ASR model directory (override via: set MODELS_DIR=D:\path before running)
-if "%MODELS_DIR%"=="" set "MODELS_DIR=D:\迅雷下载\ggml-org\Qwen3-ASR-0.6B-GGUF"
-if not exist "%MODELS_DIR%\Qwen3-ASR-0.6B-Q8_0.gguf" (
-    echo [ERROR] Model not found: %MODELS_DIR%\Qwen3-ASR-0.6B-Q8_0.gguf
-    echo Set MODELS_DIR to the folder containing the ASR gguf files and re-run.
-    exit /b 1
-)
-if not exist "%MODELS_DIR%\mmproj-Qwen3-ASR-0.6B-bf16.gguf" (
-    echo [ERROR] Model not found: %MODELS_DIR%\mmproj-Qwen3-ASR-0.6B-bf16.gguf
-    echo Set MODELS_DIR to the folder containing the ASR gguf files and re-run.
     exit /b 1
 )
 
@@ -38,15 +27,16 @@ if not exist "dist\LoL_Music_Agent\third_party\llama\llama-server.exe" (
 )
 :copied
 
-REM [2/2] Compile full installer (bundles ~1.13GB ASR models, works offline)
+REM [2/2] Compile full installer. ModelsDir comes from setup_full.iss (#define),
+REM       so ISCC handles the unicode path (cmd cannot carry non-ASCII safely).
 set ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe
 if not exist "%ISCC%" set "ISCC=C:\Program Files\Inno Setup 6\ISCC.exe"
 if not exist "%ISCC%" (
     echo [ERROR] Inno Setup not found. Download from https://jrsoftware.org/ and install.
     exit /b 1
 )
-echo [2/2] Compiling Setup_Full.exe (models from %MODELS_DIR%) ...
-"%ISCC%" /DModelsDir="%MODELS_DIR%" "setup_full.iss"
+echo [2/2] Compiling Setup_Full.exe (models bundled per setup_full.iss ModelsDir) ...
+"%ISCC%" "setup_full.iss"
 if errorlevel 1 (
     echo [ERROR] Inno Setup compile failed.
     exit /b 1

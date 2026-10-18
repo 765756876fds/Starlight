@@ -41,16 +41,17 @@ hiddenimports = [
 ] + pyside_hidden
 
 datas = [
-    ('app/music/online/js_bridge/node_modules',
-     'app/music/online/js_bridge/node_modules'),
+    # JS 桥接模块整目录（桥接运行必需：bridge.js + lib/*.js + package.json +
+    # node_modules；只收 node_modules 会漏 bridge.js 导致在线音乐桥接启动失败）
+    ('app/music/online/js_bridge', 'app/music/online/js_bridge'),
     ('app/third_party/fingerprint', 'app/third_party/fingerprint'),
     ('data/lol_data', 'data/lol_data'),
 ] + pyside_datas
 
 binaries = [
-    ('third_party/mpv/mpv.exe', 'third_party/mpv'),
-    ('third_party/mpv/d3dcompiler_43.dll', 'third_party/mpv'),
-    ('third_party/node/node.exe', 'third_party/node'),
+    # 目录整体收集：mpv/node 下的 .exe 与全部 dll（防新增 dll 遗漏）
+    ('third_party/mpv', 'third_party/mpv'),
+    ('third_party/node', 'third_party/node'),
 ] + pyside_binaries
 
 a = Analysis(
