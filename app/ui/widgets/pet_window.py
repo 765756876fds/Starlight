@@ -6,17 +6,32 @@ PetWindow：无边框置顶透明窗口，内含 Live2D 渲染承载（QOpenGLWi
 - 贴边隐藏：靠近屏幕左/右/上边缘时隐藏到屏幕外，只留触发条；鼠标回到触发区自动恢复
 - 降级：live2d 不可用或模型加载失败时静默隐藏（不留下空白透明窗）
 
-live2d-py 1.0.0 API：live2d.init() / live2d.Model() → LoadModelJson(path) →
-CreateRenderer() → StartMotion(group, no, priority) → Update() + Draw()。
+live2d-py API：优先 v2 子模块（纯 Python Cubism2 运行时，稳定不崩，支持
+Cubism2 .moc 模型）；v3/顶层（CsmSDK5 C++）的 CreateRenderer 在本机环境必崩
+（已验证：全库版本 + 官方 Cubism4 模型 + desktop/software/ANGLE/GLFW 全崩）。
+两运行时方法名一致（大写驼峰）：init() / Model() → LoadModelJson →
+CreateRenderer → StartMotion → Update() + Draw()。
 """
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QSurfaceFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
-# 默认测试模型（imuncle/live2d 浅克隆产物）；可参数化传入其他 .model3.json
-DEFAULT_MODEL = (r"D:\Live2D_Models\live2d\live2d_3\model"
-                 r"\Azue Lane(JP)\lingbo\lingbo.model3.json")
+
+def _get_live2d():
+    """返回 (运行时模块, 是否 v2)。v2 纯 Python 路径稳定；v3 C++ 本机崩溃。"""
+    import live2d
+    try:
+        from live2d import v2
+        if hasattr(v2, "Model") and hasattr(v2, "init"):
+            return v2, True
+    except Exception:
+        pass
+    return live2d, False
+
+# 默认测试模型（imuncle/live2d 浅克隆产物，Cubism2 格式，v2 运行时可用）；
+# 可参数化传入其他 .model3.json / .model.json
+DEFAULT_MODEL = (r"D:\Live2D_Models\live2d\model\haru\haru_01.model.json")
 _FRAME_MS = 33          # 约 30fps 待机动画循环
 _EDGE_CHECK_MS = 500    # 贴边检测频率
 _EDGE_MARGIN = 24       # 距屏幕边缘多远视为"贴边"
@@ -29,32 +44,74 @@ class PetGLWidget(QOpenGLWidget):
 
     def __init__(self, model_path: str, parent=None):
         super().__init__(parent)
+        # alpha 缓冲 + 自身透明：桌宠必须透明（不出现白底/黑底）
+        fmt = QSurfaceFormat()
+        fmt.setAlphaBufferSize(8)
+        self.setFormat(fmt)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAutoFillBackground(False)
         self._model_path = model_path
         self._model = None
+        self._l2d = None
         self._ready = False
 
     def initializeGL(self):  # noqa: N802
         try:
-            import live2d
-            live2d.init()
-            self._model = live2d.Model()
+            l2d, is_v2 = _get_live2d()
+            l2d.init()
+            self._is_v2 = is_v2
+            self._l2d = l2d
+            self._model = l2d.Model()
             self._model.LoadModelJson(self._model_path)
             self._model.CreateRenderer()
+            if is_v2:
+                # v2 矩阵链不可靠：清掉 layout translate（center_x/center_y 等
+                # 会被 scale 放大成巨大 NDC 偏移），顶点定位由 drawTexture 归一化接管。
+                try:
+                    self._model.modelMatrix.identity()
+                except Exception:
+                    pass
+                # 顶点缩放系数：drawTexture 内绕包围盒中心缩放（库级 _pet_zoom）。
+                # 标定值 0.0015：blanc/haru 画布 2400 系，实测居中 ~150x250px。
+                try:
+                    self._model.live2DModel.getDrawParam()._pet_zoom = 0.0015
+                except Exception:
+                    pass
+            # 待机动画：v2 运行时 StartMotion 对不存在的组安全返回（纯 Python，
+            # 无 C++ 崩溃）；v3 C++ 对不存在的组会访问违规，故仅 v2 启动 motion。
+            if is_v2:
+                try:
+                    self._model.StartMotion("idle", 0, l2d.MotionPriority.Normal)
+                except Exception:
+                    pass
             try:
                 self._model.SetAutoBlink(True)
                 self._model.SetAutoBreath(True)
             except Exception:
                 pass
-            # 待机动画：优先 Idle 组第 0 条；无 Idle 组则随机待机
+            # 主动适配窗口尺寸：resizeGL 可能在 GL 就绪前被调用而被跳过
+            w, h = self.width(), self.height()
             try:
-                self._model.StartMotion("Idle", 0, live2d.MotionPriority.Normal)
-            except Exception:
-                try:
-                    self._model.StartRandomMotion("Idle", live2d.MotionPriority.Normal)
-                except Exception:
-                    self._model.StartRandomMotion("", live2d.MotionPriority.Normal)
+                self._model.Resize(w, h)
+            except Exception as e:
+                print(f"[Pet] Resize 失败: {e!r}")
+            try:
+                w, h = self.width(), self.height()
+                if is_v2:
+                    # v2 实测：Draw 后 m0 = __scale * 7.05e-7（模型矩阵归一化链）。
+                    # 模型画布 2400px 中角色约占 273px，目标 NDC 宽 ~1.6（~192px 窗口）：
+                    # 273 * m0 = 1.6 → m0 ≈ 5.9e-3 → __scale ≈ 5.9e-3 / 7.05e-7 ≈ 8300。
+                    scale = 1250.0
+                else:
+                    cw, ch = self._model.GetCanvasSizePixel()
+                    scale = min(w / cw, h / ch) if (cw and ch) else min(w / 3.0, h / 4.0)
+                self._model.SetScale(scale)
+                print(f"[Pet] scale={scale:.2f} win={w}x{h}")
+            except Exception as e:
+                print(f"[Pet] SetScale 失败: {e!r}")
             self._ready = True
-            print(f"[Pet] Live2D 模型就绪: {self._model_path}")
+            print(f"[Pet] Live2D 模型就绪 (runtime={'v2' if is_v2 else 'csm5'}): {self._model_path}")
         except Exception as e:
             self._ready = False
             print(f"[Pet] Live2D 初始化失败（桌宠降级隐藏）: {e}")
@@ -63,8 +120,14 @@ class PetGLWidget(QOpenGLWidget):
         if not self._ready or self._model is None:
             return
         try:
-            import live2d
-            live2d.clearBuffer(0, 0, 0, 0)
+            from OpenGL import GL
+            try:
+                # 透明清屏：GL 侧清 alpha=0（v2 纯 Python 的 clearBuffer 可能清白色，
+                # 故不用它清背景；Draw 内部自行管理混合）
+                GL.glClearColor(0.0, 0.0, 0.0, 0.0)
+                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+            except Exception:
+                pass  # offscreen/无上下文时跳过清屏，仍推进动画帧
             self._model.Update()
             self._model.Draw()
         except Exception:
@@ -75,9 +138,12 @@ class PetGLWidget(QOpenGLWidget):
             return
         try:
             self._model.Resize(w, h)
-            cw, ch = self._model.GetCanvasSizePixel()
-            if cw and ch:
-                self._model.SetScale(min(w / cw, h / ch))
+            if self._is_v2:
+                self._model.SetScale(1250.0)
+            else:
+                cw, ch = self._model.GetCanvasSizePixel()
+                if cw and ch:
+                    self._model.SetScale(min(w / cw, h / ch))
         except Exception:
             pass
 

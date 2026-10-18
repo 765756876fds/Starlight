@@ -80,11 +80,12 @@ def test_pet_gl_uses_live2d_api(qapp, monkeypatch):
 
     fake = types.SimpleNamespace(**{k: getattr(FakeL2D, k) for k in
                                     ("init", "clearBuffer", "Model", "MotionPriority")})
+    fake.v2 = fake  # 模拟 v2 子模块：真机走 v2 纯 Python 路径
     monkeypatch.setitem(sys.modules, "live2d", fake)
     gl = PetGLWidget("x/y.model3.json")
     gl.initializeGL()
     assert "init" in calls and "load:x/y.model3.json" in calls and "renderer" in calls
-    assert "motion:Idle:0" in calls
+    assert "motion:idle:0" in calls
     gl.paintGL()
     assert "update" in calls and "draw" in calls
 
