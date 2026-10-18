@@ -17,6 +17,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from PySide6.QtCore import Qt
+
 from app.music.online.sources.js_source import JSMusicSource
 from app.music.online.models import OnlineTrack
 
@@ -36,6 +38,11 @@ def test_bridge_js_exposes_rank_protocol():
     # 插件自报能力：bridge 按 typeof 跳过无能力的插件，不硬编码平台
     assert "typeof p.getTopLists !== 'function'" in bridge
     assert "typeof plugin.getTopLists !== 'function'" in loader
+    # P0 封面/字段：MusicFree 标准 name/artists/duration(秒)/image/artwork/cover 归一
+    assert "normalizeMusicItem" in loader
+    assert "item.title || item.name" in loader
+    assert "cover_url: item.image || item.artwork || item.cover" in loader
+    assert "Number(dur) > 1000" in loader
 
 
 # ---------- js_source 封装 ----------
@@ -262,6 +269,34 @@ def test_rank_detail_done_renders_ranked_songs(qapp):
     assert "A - B" in p.list_rank_songs.item(0).text()
     assert "2." in p.list_rank_songs.item(1).text()
     assert "共 2 首" in p.lbl_rank_status.text()
+    # 卡片 UserRole 必须携带 extra（含 _raw）与 duration：play_online → getUrl
+    # 依赖 raw_item 构造插件 URL；缺失会 AttributeError 导致榜单永远无法播放。
+    d0 = p.list_rank_songs.item(0).data(Qt.UserRole)
+    assert isinstance(d0, dict)
+    assert d0.get("extra") == {}
+    assert d0.get("track_id") == "1"
+    assert d0.get("duration_seconds") == 0
+
+
+def test_rank_detail_done_carries_raw_item_for_play(qapp):
+    # 回归：P0 榜单无法播放——item 数据必须保留 extra._raw，play_online 才能取 raw_item。
+    from PySide6.QtWidgets import QListWidgetItem
+    p = _panel()
+    t = OnlineTrack(source_name="酷我音乐", track_id="9", title="A", artist="B",
+                    duration_seconds=200, extra={"_raw": {"id": "9", "name": "A"}})
+    p._on_rank_detail_done({"tracks": [t], "is_end": True})
+    d = p.list_rank_songs.item(0).data(Qt.UserRole)
+    assert d["extra"]["_raw"] == {"id": "9", "name": "A"}
+    assert d["duration_seconds"] == 200
+    # 用 dict 卡数据直接走播放链：extra 必须能被 get_play_url 读取（不 AttributeError）
+    item = QListWidgetItem("1. A - B")
+    item.setData(Qt.UserRole, d)
+    p.list_rank_songs.addItem(item)
+    p._music.play_online.side_effect = lambda tr: tr["extra"].get("_raw") or tr
+    p._on_rank_song_play(item)
+    assert p._music.play_online.called
+    called = p._music.play_online.call_args[0][0]
+    assert called["extra"]["_raw"]["id"] == "9"
 
 
 def test_rank_detail_done_empty_degrades(qapp):

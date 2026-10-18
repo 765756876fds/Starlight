@@ -52,6 +52,49 @@ def test_search_parses_response(monkeypatch):
     assert out[0].source_name == "kg"
 
 
+def test_parse_tracks_maps_cover_and_extra_fields():
+    # P0 封面不显示：MusicFree 协议封面字段 image/artwork/cover 必须映射 cover_url；
+    # extra 需补 id/platform/artwork（播放/下载链直接读）。
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._sources = []
+    raw = {
+        "source_name": "酷我音乐",
+        "track_id": "20505418",
+        "title": "晴天", "artist": "周杰伦",
+        "image": "http://x/cover.jpg",
+    }
+    out = s._parse_tracks([raw])
+    assert len(out) == 1
+    assert out[0].cover_url == "http://x/cover.jpg"
+    assert out[0].extra.get("image") == "http://x/cover.jpg"
+
+    raw2 = {"source_name": "kg", "track_id": "7", "title": "A",
+            "id": "7", "platform": "kg", "artwork": "http://y/art.jpg"}
+    out2 = s._parse_tracks([raw2])
+    assert out2[0].cover_url == "http://y/art.jpg"
+    assert out2[0].extra.get("id") == "7"
+    assert out2[0].extra.get("platform") == "kg"
+
+    # MusicFree 标准字段兜底：name/duration(秒)/cover（artists 数组归一在 bridge 侧）
+    raw3 = {"source_name": "kg", "name": "B", "artist": "甲",
+            "duration": 180, "cover": "http://z/c.jpg"}
+    out3 = s._parse_tracks([raw3])
+    assert out3[0].title == "B"
+    assert out3[0].artist == "甲"
+    assert out3[0].duration_seconds == 180
+    assert out3[0].cover_url == "http://z/c.jpg"
+
+
+def test_parse_tracks_keeps_raw_for_play():
+    # 榜单/搜索播放依赖 extra._raw（bridge getUrl 用它构造 URL）
+    s = JSMusicSource.__new__(JSMusicSource)
+    s._sources = []
+    raw = {"source_name": "酷我音乐", "track_id": "9", "title": "A",
+           "extra": {"_raw": {"id": "9", "name": "A"}}}
+    out = s._parse_tracks([raw])
+    assert out[0].extra["_raw"]["id"] == "9"
+
+
 def test_get_play_url_no_url(monkeypatch):
     s = JSMusicSource.__new__(JSMusicSource)
     s._proc = FakeProc([])

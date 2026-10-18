@@ -126,15 +126,31 @@ async function callSearch(plugin, keyword, limit) {
   if (typeof plugin.search !== 'function') return [];
   const result = await plugin.search(keyword, 1, 'music');
   const items = (result && result.data) || (Array.isArray(result) ? result : []);
-  return items.slice(0, limit).map((item) => ({
-    source_name: plugin.name,
-    track_id: String(item.id || item.songmid || item.hash || ''),
-    title: item.title || '',
-    artist: item.artist || '',
+  return items.slice(0, limit).map((item) => normalizeMusicItem(plugin.name, item));
+}
+
+// MusicFree 标准歌曲对象：title/name、artists(数组或字符串)、duration(秒)、
+// image/artwork/cover(封面)。各插件字段名不一，统一规范化成 Python 友好结构。
+function normalizeMusicItem(sourceName, item) {
+  const title = item.title || item.name || '';
+  const artists = Array.isArray(item.artists)
+    ? item.artists.map((a) => (a && typeof a === 'object' ? a.name : a))
+        .filter(Boolean).join(' / ')
+    : (item.artist || item.artists || '');
+  const dur = item.duration;
+  const duration_seconds = dur
+    ? (Number(dur) > 1000 ? Math.floor(Number(dur) / 1000) : Math.floor(Number(dur)))
+    : 0;
+  return {
+    source_name: sourceName,
+    track_id: String(item.id || item.songmid || item.hash || item.rid || ''),
+    title,
+    artist: artists,
     album: item.album || '',
-    duration_seconds: item.duration ? Math.floor(Number(item.duration) / 1000) : 0,
+    duration_seconds,
+    cover_url: item.image || item.artwork || item.cover || item.coverImg || '',
     extra: { _raw: item },
-  }));
+  };
 }
 
 async function callGetUrl(plugin, rawItem, quality) {
@@ -206,15 +222,7 @@ async function callGetTopListDetail(plugin, topListItem, page) {
   const items = (result && result.musicList) || (Array.isArray(result) ? result : []);
   return {
     is_end: !!(result && result.isEnd),
-    tracks: items.map((item) => ({
-      source_name: plugin.name,
-      track_id: String(item.id || item.songmid || item.hash || ''),
-      title: item.title || '',
-      artist: item.artist || '',
-      album: item.album || '',
-      duration_seconds: item.duration ? Math.floor(Number(item.duration) / 1000) : 0,
-      extra: { _raw: item },
-    })),
+    tracks: items.map((item) => normalizeMusicItem(plugin.name, item)),
   };
 }
 

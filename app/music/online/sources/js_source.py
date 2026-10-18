@@ -410,18 +410,30 @@ class JSMusicSource(MusicSource):
         out: List[OnlineTrack] = []
         for r in result:
             try:
-                extra = r.get("extra") or {}
+                extra = dict(r.get("extra") or {}) if isinstance(r.get("extra"), dict) else {}
+                # 补全 MusicFree 协议关键字段（播放/下载链可直接读 extra）：
+                # id/songmid/hash 已在 bridge 归一为 track_id，此处补原始标识与
+                # platform/封面别名，兼容未走 bridge 归一化的 HTTP 源。
+                for k in ("id", "songmid", "hash", "rid", "platform",
+                          "image", "artwork", "cover", "coverImg"):
+                    if k not in extra and r.get(k) is not None:
+                        extra[k] = r.get(k)
                 cover = (r.get("cover_url") or r.get("cover_img")
                          or r.get("artwork") or r.get("pic")
+                         or r.get("image") or r.get("cover")
                          or (extra.get("cover_img") if isinstance(extra, dict) else None)
+                         or (extra.get("image") if isinstance(extra, dict) else None)
+                         or (extra.get("artwork") if isinstance(extra, dict) else None)
                          or "")
+                dur = r.get("duration_seconds") or r.get("duration") or 0
                 out.append(OnlineTrack(
                     source_name=r.get("source_name", self.name),
-                    track_id=str(r.get("track_id", "")),
-                    title=r.get("title", ""),
-                    artist=r.get("artist", ""),
-                    album=r.get("album", ""),
-                    duration_seconds=int(r.get("duration_seconds") or 0),
+                    track_id=str(r.get("track_id") or extra.get("id") or extra.get("songmid")
+                                 or extra.get("hash") or ""),
+                    title=r.get("title") or r.get("name") or "",
+                    artist=r.get("artist") or "",
+                    album=r.get("album") or "",
+                    duration_seconds=int(dur) if dur else 0,
                     cover_url=cover or None,
                     extra=extra,
                 ))
@@ -509,11 +521,12 @@ class JSMusicSource(MusicSource):
 
     def get_play_url(self, track: OnlineTrack, quality: str = "high") -> Optional[dict]:
         print(f"[getUrl] -> {track.source_name} track_id={track.track_id}", flush=True)
+        extra = track.extra if isinstance(getattr(track, "extra", None), dict) else {}
         r = self._call("getUrl", {
             "source": track.source_name,
             "track_id": track.track_id,
             "quality": quality,   # MusicFree 标准音质键（'320k' 非标准，kg/wy 会直接失败）；下载可传 super/high
-            "raw_item": track.extra.get("_raw"),
+            "raw_item": extra.get("_raw"),
         })
         print(f"[getUrl] <- {track.source_name} raw={None if r is None else 'dict'}", flush=True)
         if not r:

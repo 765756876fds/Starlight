@@ -14,7 +14,7 @@ from ..dialogs.identify_dialog import IdentifyDialog
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
 from ..widgets.icon_utils import lucide_icon
-from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles, cover_key_of
+from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
 from ...core.command_bus import CommandType, get_command_bus
 from ...core.event_bus import get_event_bus
 from ...music.humming import HummingService
@@ -1298,12 +1298,16 @@ class MusicPanel(QWidget):
             if t.artist:
                 text += f" - {t.artist}"
             item = QListWidgetItem(text)
+            # extra 必须随卡携带（含 _raw 原始歌曲对象）：play_online → getUrl
+            # 依赖 raw_item 构造插件 URL，缺了会 AttributeError → 榜单永远无法播放。
             item.setData(Qt.UserRole, self._card_data({
                 "title": t.title,
                 "artist": t.artist,
                 "source_name": t.source_name,
                 "track_id": t.track_id,
                 "cover_url": getattr(t, "cover_url", None) or None,
+                "extra": t.extra,
+                "duration_seconds": t.duration_seconds,
             }, t.artist, f"net:{t.track_id}" if t.track_id else None))
             self.list_rank_songs.addItem(item)
         n = len(tracks)
@@ -1332,7 +1336,8 @@ class MusicPanel(QWidget):
             self.lbl_rank_status.setText(f"播放失败: {e}")
             return
         if ok:
-            self.lbl_rank_status.setText(f"正在播放：{track.title}")
+            name = track.get("title") if isinstance(track, dict) else getattr(track, "title", "")
+            self.lbl_rank_status.setText(f"正在播放：{name}")
         else:
             self.lbl_rank_status.setText("该曲目无法播放")
 
