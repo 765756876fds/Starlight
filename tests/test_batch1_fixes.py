@@ -136,25 +136,29 @@ def test_waveform_slider_renders(qapp):
     assert not img.isNull(), "波形进度条离屏渲染失败"
 
 
-# ---------------- ⑤ 滑条分层：左亮蓝 / 右半透明深灰 ----------------
+# ---------------- ⑤ 滑条分层：左亮蓝 / 右透明露出深灰底槽 ----------------
 def test_slider_left_blue_right_gray(qapp):
-    """QSS 结构断言：groove/add-page 显式深灰、sub-page 亮蓝、handle 白点；
-    Fusion 基底生效（QSS 子元素分层可靠）。像素级验证见离屏脚本（深色底实测
-    left=#4a9eff / right=#444457）。"""
+    """QSS 结构断言（对标酷狗/网易云极简深色）：QSlider 整体透明；groove=4px
+    半透明白深灰细线；sub-page=ACCENT 亮蓝；add-page=transparent（Fusion 基底
+    下可靠，露出底槽）；handle=纯白 12px。像素级验证见离屏脚本（深色底实测
+    left=#4a9eff / 右侧深灰）。"""
     from app.ui.theme.applier import apply_glass_theme, build_glass_qss
     from app.ui.theme.tokens import Tokens
     apply_glass_theme(qapp)
     qss = build_glass_qss()
+    assert "QSlider { background: transparent;" in qss, "滑块整体必须透明"
     assert "QSlider::groove:horizontal" in qss
     assert "QSlider::sub-page:horizontal" in qss
     assert "QSlider::add-page:horizontal" in qss
-    addpage = qss.split("QSlider::add-page:horizontal")[1].split("}")[0]
-    assert "transparent" not in addpage, "add-page 不能依赖 transparent（Qt 子元素不可靠）"
-    assert "rgba" in addpage, "add-page 必须显式深灰背景"
+    groove = qss.split("QSlider::groove:horizontal")[1].split("}")[0]
+    assert Tokens.SLIDER_GROOVE_RGB in groove, "groove 底槽必须为半透明白 Token"
+    assert "height: 4px" in groove, "groove 必须 4px 细线"
     sub = qss.split("QSlider::sub-page:horizontal")[1].split("}")[0]
     assert Tokens.ACCENT in sub, "sub-page 必须为 ACCENT 亮蓝"
-    assert "background: #ffffff" in qss.split("QSlider::handle:horizontal")[1].split("}")[0], \
-        "handle 必须纯白圆点"
+    addpage = qss.split("QSlider::add-page:horizontal")[1].split("}")[0]
+    assert "transparent" in addpage, "add-page 必须完全透明，露出深色底槽"
+    handle = qss.split("QSlider::handle:horizontal")[1].split("}")[0]
+    assert "background: #ffffff" in handle and "width: 12px" in handle, "handle 必须纯白 12px 圆点"
     assert "StyleSheet" in qapp.style().metaObject().className(), "Fusion 基底未生效"
 
 

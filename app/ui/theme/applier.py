@@ -267,31 +267,30 @@ QCheckBox::indicator:checked {{
     background-color: {T.ACCENT}; border-color: {T.ACCENT}; image: none;
 }}
 
-/* Slider：左亮蓝（已走过）/ 右半透明深灰（未走过）/ 纯白圆点 handle。
-   子元素 background 用 transparent 在 Qt QSS 上不可靠（会露出原生亮色 groove），
-   因此 add-page 必须显式声明深灰背景（与 groove 同色），不能依赖 transparent。 */
+/* Slider：对标酷狗/网易云极简深色——整体透明；底槽=半透明白深灰细线 4px；
+   已走过=亮蓝 sub-page；未走过=transparent 露出底槽（Fusion 基底保证子元素 QSS 可靠）；
+   圆点=纯白 12px，hover 微灰放大。严禁白色实底（任何位置都不出现 #fff 整条）。 */
+QSlider {{ background: transparent; }}
 QSlider::groove:horizontal {{
-    background: rgba({T.TEXT_RGB}, 38);   /* 底槽半透明深灰 */
-    height: 6px; border-radius: 3px;
+    background: rgba({T.SLIDER_GROOVE_RGB}, 38);   /* 底槽半透明白（叠深色底=深灰细线） */
+    height: 4px; border-radius: 2px;
 }}
 QSlider::sub-page:horizontal {{
     background: {T.ACCENT};               /* 已走过：亮蓝 */
-    border-radius: 3px;
+    border-radius: 2px;
 }}
 QSlider::add-page:horizontal {{
-    background: rgba({T.TEXT_RGB}, 38);   /* 未走过：显式深灰（同 groove） */
-    border-radius: 3px;
+    background: transparent;              /* 未走过：完全透明，露出深色底槽 */
 }}
 QSlider::handle:horizontal {{
-    background: #ffffff;                   /* 纯白圆点 */
-    width: 14px; height: 14px; margin: -4px 0; border-radius: 7px;
-    border: 1px solid rgba({T.ACCENT_RGB}, 200);
+    background: #ffffff;                   /* 纯白圆点（仅 12px 圆点） */
+    width: 12px; height: 12px; margin: -4px 0; border-radius: 6px;
 }}
 QSlider::handle:horizontal:hover {{
-    background: #ffffff; border: 1px solid {T.ACCENT};
+    background: #e0e0e0; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
 }}
 QSlider:focus::handle {{
-    background: #ffffff; border: 1px solid {T.ACCENT};
+    background: #ffffff;
 }}
 
 /* GroupBox */

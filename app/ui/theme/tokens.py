@@ -48,6 +48,7 @@ class Tokens:
     TEXT_PRIMARY_RGB = _rgb_of(Colors.TEXT_PRIMARY)     # 224, 224, 232
     TEXT_SECONDARY_RGB = _rgb_of(Colors.TEXT_SECONDARY)  # 168, 168, 192
     TEXT_RGB = TEXT_SECONDARY_RGB   # 进度条 groove 等“未激活”元素用次文字色
+    SLIDER_GROOVE_RGB = "255, 255, 255"   # 滑条底槽（半透明白，alpha≈0.15 叠深色底=深灰细线）
     ACCENT_RGB = _rgb_of(Colors.ACCENT)               # 74, 158, 255
     ACCENT_LIGHT = Colors.ACCENT_HOVER                # 渐变亮端（进度条已播放区）
 
