@@ -1,6 +1,17 @@
-﻿"""主窗口。"""
+﻿"""主窗口（Glass 无边框 + 半透明圆角 + 自定义顶栏）。"""
+import sys
+
+try:
+    import ctypes
+    from ctypes import windll, wintypes
+    _WIN32 = sys.platform.startswith("win")
+except Exception:
+    _WIN32 = False
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget,
+    QApplication, QCheckBox, QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget,
     QWidget, QVBoxLayout,
 )
 
@@ -10,6 +21,49 @@ from .panels.music_panel import MusicPanel
 from .panels.ongoing_panel import OngoingPanel
 from .panels.status_bar import StatusBar
 from .panels.loading_panel import LoadingPanel
+from .theme.tokens import Tokens
+from .widgets.title_bar import GlassTitleBar
+
+# ---- Windows 无边框窗口边缘缩放（WM_NCHITTEST） ----
+_WM_NCHITTEST = 0x0084
+_HT_CLIENT = 1
+_HT_LEFT = 10
+_HT_RIGHT = 11
+_HT_TOP = 12
+_HT_TOPLEFT = 13
+_HT_TOPRIGHT = 14
+_HT_BOTTOM = 15
+_HT_BOTTOMLEFT = 16
+_HT_BOTTOMRIGHT = 17
+_RESIZE_BORDER_PX = 5  # 窗口边缘 5px 内视为缩放手柄，恢复原生拖拽缩放
+
+
+def _nchit_edge(lx: int, ly: int, w: int, h: int, border: int = _RESIZE_BORDER_PX) -> int:
+    """把鼠标相对窗口左上角的物理像素坐标映射为 WM_NCHITTEST 命中码（纯函数）。
+
+    lx/ly 以窗口物理像素为原点；w/h 为窗口物理像素尺寸；border 为缩放手柄宽度。
+    """
+    left = lx <= border
+    right = lx >= w - 1 - border
+    top = ly <= border
+    bottom = ly >= h - 1 - border
+    if top and left:
+        return _HT_TOPLEFT
+    if top and right:
+        return _HT_TOPRIGHT
+    if bottom and left:
+        return _HT_BOTTOMLEFT
+    if bottom and right:
+        return _HT_BOTTOMRIGHT
+    if left:
+        return _HT_LEFT
+    if right:
+        return _HT_RIGHT
+    if top:
+        return _HT_TOP
+    if bottom:
+        return _HT_BOTTOM
+    return _HT_CLIENT
 
 
 class MainWindow(QMainWindow):
@@ -19,6 +73,25 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LoL Music Agent")
         self.resize(1100, 720)
         self._services = services or {}
+
+        # ---- Glass 主框架：无边框 + 半透明圆角（外壳，不动任何面板逻辑） ----
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        # 全局套用 Glass 样式（覆盖 main.py 的 dark.qss；测试环境 qapp 已存在则同样生效）
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                from .theme.applier import apply_glass_theme
+                apply_glass_theme(app)
+            except Exception as e:
+                print(f"[UI] Glass 主题应用失败（降级，不影响运行）: {e}")
+        self._shell = QWidget()
+        self._shell.setObjectName("GlassShellRoot")
+        self._shell_layout = QVBoxLayout(self._shell)
+        self._shell_layout.setContentsMargins(0, 0, 0, 0)
+        self._shell_layout.setSpacing(0)
+        self._title_bar = GlassTitleBar("LoL Music Agent")
+        self._shell_layout.addWidget(self._title_bar)
 
         # 自动恢复上次窗口大小和位置
         from PySide6.QtCore import QSettings
@@ -31,7 +104,8 @@ class MainWindow(QMainWindow):
             self.resize(size)
 
         self._stack = QStackedWidget()
-        self.setCentralWidget(self._stack)
+        self._shell_layout.addWidget(self._stack, 1)
+        self.setCentralWidget(self._shell)
 
         # Page 0: loading
         self._loading = LoadingPanel()
@@ -112,9 +186,54 @@ class MainWindow(QMainWindow):
         if not on and self._overlay_window is not None:
             self._overlay_window.hide()
 
+    # ---- Glass 外壳：绘制深色半透明圆角底（最大化时铺满直角） ----
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        if self.isMaximized():
+            path = QPainterPath()
+            path.addRect(rect)
+        else:
+            r = Tokens.WINDOW_RADIUS
+            path = QPainterPath()
+            path.addRoundedRect(rect, r, r)
+        painter.setPen(QColor(74, 158, 255, 60))  # 高光细边
+        bg = QColor(30, 30, 46, int(255 * Tokens.GLASS_BG_ALPHA))
+        painter.fillPath(path, bg)
+        painter.drawPath(path)
+        super().paintEvent(event)
+
     def closeEvent(self, event):
         event.ignore()
         self.hide()
+
+    def nativeEvent(self, eventType, message):
+        """Windows 无边框窗口边缘缩放：拦截 WM_NCHITTEST，边缘 5px 内返回缩放手柄。
+
+        最大化状态不参与缩放（Windows 原生也不允许拖拽调整最大化窗口）；
+        任何解析异常降级走默认处理，绝不阻断 Qt 事件流。
+        """
+        if _WIN32:
+            try:
+                if str(eventType) == "windows_generic_MSG":
+                    msg = wintypes.MSG.from_address(int(message))
+                    if msg.message == _WM_NCHITTEST:
+                        if self.isMaximized():
+                            return True, _HT_CLIENT
+                        # lParam 低/高 16 位为鼠标屏幕坐标（物理像素，有符号）
+                        sx = ctypes.c_short(msg.lParam & 0xFFFF).value
+                        sy = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                        rect = wintypes.RECT()
+                        windll.user32.GetWindowRect(msg.hwnd, ctypes.byref(rect))
+                        hit = _nchit_edge(
+                            sx - rect.left, sy - rect.top,
+                            rect.right - rect.left, rect.bottom - rect.top,
+                        )
+                        return True, hit
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)
 
 
 

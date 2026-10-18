@@ -199,28 +199,47 @@ class OngoingGameService:
                     self._retry_state = {}
             return
 
-        # 选人残留清理（2026-10-18 修）：从上一把对局（InProgress/GameStart 等）直接
+        # 选人阶段缓存 champ-select session（仅作 gameflow 偶发为空的合理回退，非玩家集合来源）
+        cs_session = None
+        if phase == "ChampSelect":
+            cs_session = self._lcu.get("/lol-champ-select/v1/session")
+            if isinstance(cs_session, dict):
+                # 缓存完整选人 session：10 人含 puuid，供 InProgress 阶段 gameflow 空时补自己
+                self._champ_select_session = cs_session
+
+        # 选人残留清理（2026-10-18 修 + 本修）：从上一把对局（InProgress/GameStart 等）直接
         # 切到新选人而未经过上面清理分支时（训练营重开 / phase 跳变 / 新选人 session
-        # 构建失败——gameflow 未就绪 + deobfuscate 未完成），立即清空上一把 session。
-        # 严禁 UI 显示上一把队友：等新选人 session 构建成功（gameflow 就绪或
-        # deobfuscate 反解出 puuid）再填充；清空后 UI 显示"未在对局中 / 选人中"。
+        # 构建失败——gameflow 未就绪 + deobfuscate 未完成），清空上一把 session，
+        # 严禁 UI 显示上一把队友。
+        # 本修：加"同局判定"，避免同一局选人期间每个 tick 都清空重建（同 gameId 的连续
+        # ChampSelect tick 不清理、不重置 _loading_in_progress，消除选人阶段每秒
+        # 清空→重建→force 重拉全部玩家的瀑布式重复加载）。
+        # 清理仅当：① session 不是本次选人构建的（session.phase != "ChampSelect"，即上一把
+        # InProgress/GameStart 残留或 phase 跳变）；或 ② cs session 已就绪且 gameId 与现有
+        # session 不同（确属换局）。cs 暂不可用且 session 是本次选人构建的 → 保留（同局）。
         if phase == "ChampSelect" and self._session is not None:
             with self._lock:
                 if self._session is not None:
-                    self._current_session_key = None
-                    self._snapshots = []
-                    self._session = None
-                    self._loading_in_progress = False
-                    self._last_loaded_key = None
-                    self._announced_session_id = None
-                    self._retry_state = {}
-
-        # 选人阶段缓存 champ-select session（仅作 gameflow 偶发为空的合理回退，非玩家集合来源）
-        if phase == "ChampSelect":
-            session = self._lcu.get("/lol-champ-select/v1/session")
-            if isinstance(session, dict):
-                # 缓存完整选人 session：10 人含 puuid，供 InProgress 阶段 gameflow 空时补自己
-                self._champ_select_session = session
+                    cs_gid = (cs_session or {}).get("gameId") if isinstance(cs_session, dict) else None
+                    # 仅在"确认换局"时才清理：cs 已带有效 gameId 且与现有 session 不同；
+                    # cs 缺失/为 0（瞬态）不当作换局证据，避免同局选人期间误清重建。
+                    diff_game_confirmed = (
+                        bool(cs_gid)
+                        and bool(self._session.game_id)
+                        and cs_gid != self._session.game_id
+                    )
+                    same_game = (
+                        self._session.phase == "ChampSelect"
+                        and not diff_game_confirmed
+                    )
+                    if not same_game:
+                        self._current_session_key = None
+                        self._snapshots = []
+                        self._session = None
+                        self._loading_in_progress = False
+                        self._last_loaded_key = None
+                        self._announced_session_id = None
+                        self._retry_state = {}
 
         me_puuid = None
         try:
@@ -288,7 +307,14 @@ class OngoingGameService:
                     # 选人阶段只 resolve 出己方 5 puuid、进游戏 gameflow 10 人全 puuid 时，
                     # 旧实现按 len(players) 比较（10==10 不触发）→ 敌方 5 人永远缺身份/战绩。
                     # 按 puuid 数比较 → 10>5 → 触发重建，并立即补拉缺失玩家。
-                    if new_puuid_n > old_puuid_n or (
+                    # 本修追加"身份升级"触发（summonerId 数）：选人 HIDDEN cell summonerId=0，
+                    # 进游戏 gameflow cell summonerId 为真实值（人数相同、puuid 数不变的
+                    # ARAM/人机局等），此时也必须重建并重查身份，否则队友名字/等级永远
+                    # 是空的（UI 显示 "? Lv.?"）。
+                    old_sid_n = sum(1 for p in self._session.players if p.summoner_id)
+                    new_sid_n = sum(1 for p in rebuilt.players if p.summoner_id)
+                    identity_upgraded = new_sid_n > old_sid_n
+                    if new_puuid_n > old_puuid_n or identity_upgraded or (
                             rebuilt.game_id and not self._session.game_id):
                         old_by_puuid = {p.puuid: p for p in self._session.players if p.puuid}
                         match_n = 0
@@ -305,11 +331,20 @@ class OngoingGameService:
                                     np_.live_level = op.live_level
                                     np_.realtime_available = op.realtime_available
                         self._session = rebuilt
-                        # 人数/身份突变：立即补拉缺失 puuid（loader 缓存复用已加载玩家，
-                        # 只对新 puuid 发请求）。锁内只置标志，线程启动在锁外。
-                        if new_puuid_n > old_puuid_n and not self._loading_in_progress:
+                        # 人数/身份突变：立即补拉缺失玩家（loader 缓存复用已加载玩家，
+                        # 只对新 puuid / 缺名字玩家发请求）。锁内只置标志，线程启动在锁外。
+                        if (new_puuid_n > old_puuid_n or identity_upgraded) and not self._loading_in_progress:
                             self._loading_in_progress = True
                             _need_load = True
+                        reason = "puuid_upgrade" if new_puuid_n > old_puuid_n else ("identity_upgrade" if identity_upgraded else "game_id_fill")
+                        self._on_event("ongoing.session_rebuilt", {
+                            "game_id": rebuilt.game_id,
+                            "puuid": new_puuid_n,
+                            "summoner": new_sid_n,
+                            "reason": reason,
+                            "old_puuid": old_puuid_n,
+                            "old_summoner": old_sid_n,
+                        })
                 # 同一局：若历史战绩缺失，周期性自动重试（每 game_id 最多10次，间隔60秒，
                 # 覆盖进游戏初期 SGP 暂不可用）。直接 force 重载当前 session——
                 # 不重建 session、不重发 session_created（原实现清 _current_session_key
@@ -429,6 +464,24 @@ class OngoingGameService:
         my_puuids = {c.get("puuid") for c in my_team if c.get("puuid")}
         resolved = sum(1 for c in my_team + their_team if c.get("puuid"))
         total = len(my_team) + len(their_team)
+        # 诊断：分队记录反解明细（my/their 各有几人有真实 puuid、几个 HIDDEN 且带
+        # obfuscatedPuuid）。用于直接回答"选人阶段敌方 puuid 解密成功了吗"——
+        # 若 their_has_obfuscated > 0 但 their_resolved 少，说明 XOR 反解失败；
+        # 若 their_has_obfuscated == 0，说明该对局 LCU 选人接口根本不下发敌方混淆身份，
+        # 必须等进游戏后 gameflow 10/10 明文 puuid 补拉（identity_upgrade/puuid_upgrade）。
+        def _team_stats(cells):
+            return {
+                "resolved": sum(1 for c in cells if c.get("puuid")),
+                "total": len(cells),
+                "hidden_with_obfuscated": sum(
+                    1 for c in cells
+                    if c.get("nameVisibilityType") == "HIDDEN" and c.get("obfuscatedPuuid")
+                ),
+            }
+        self._on_event("ongoing.cs_team_resolve", {
+            "my": _team_stats(my_team),
+            "their": _team_stats(their_team),
+        })
         if not me_puuid or me_puuid not in my_puuids:
             self._on_event("ongoing.champ_select_skip", {
                 "reason": "me_puuid_not_in_resolved_team",

@@ -80,16 +80,20 @@ class OngoingGameLoader:
         return error_n + missing_puuid_n
 
     def missing_names_count(self) -> int:
-        """统计名字缺失（summoner 查询曾失败）的 AVAILABLE 快照，retry 时重查补名。
+        """统计名字缺失（summoner 查询曾失败）的快照，retry 时重查补名。
 
-        与 missing_history_count 互补：history 成功但 summoner 404 时，
-        data_state=AVAILABLE 而 display_name 为空——这类快照也要触发重载，
-        重载时用的是 InProgress 的 gameflow session（summonerId 真实）→
-        by-summonerId 拿到 gameName#tagLine 回填。
+        与 missing_history_count 互补：
+        - AVAILABLE 空名：history 成功但 summoner 404（腾讯服禁用 by-puuid）
+        - NO_DATA 空名：战绩请求成功但同样 summoner 失败（选人 HIDDEN cell
+          summonerId=0 导致 by-summonerId 无法查询）——名字/等级缺失同样要让
+          retry 触发，重载时用的是 InProgress 的 gameflow session（summonerId
+          真实）→ by-summonerId 拿到 gameName#tagLine / summonerLevel 回填，
+          修复 UI "? Lv.?"。
+        ERROR 不在此统计：由 missing_history_count 的 error_n 覆盖。
         """
         return sum(
             1 for s in self._cache.all()
-            if getattr(s, "data_state", "ERROR") == "AVAILABLE"
+            if getattr(s, "data_state", "ERROR") != "ERROR"
             and not getattr(s, "display_name", "")
         )
 
@@ -129,8 +133,12 @@ class OngoingGameLoader:
             if cached is not None:
                 st = getattr(cached, "data_state", "ERROR")
                 if not force and st in self._REUSABLE_STATES:
-                    if st == "AVAILABLE" and not cached.display_name:
-                        # 名字缺失（summoner 曾失败）：不当作可复用，重新请求重查 summoner
+                    if not cached.display_name:
+                        # 名字缺失（summoner 曾失败）：AVAILABLE/NO_DATA 都不当作可复用，
+                        # 重新请求重查 summoner —— 本修覆盖 NO_DATA 空名：进游戏后
+                        # gameflow cell 有真实 summonerId，by-summonerId 可补回名字/等级，
+                        # 修复 UI "? Lv.?"。请求数受加载时机（session 创建/升级/60s retry）
+                        # 约束，不会每 tick 重发。
                         self._on_event("history.name_missing", {"puuid": p["puuid"]})
                         pending_puuid.append(p["puuid"])
                     else:
