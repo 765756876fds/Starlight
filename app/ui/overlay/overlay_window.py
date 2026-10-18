@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
 
 from PySide6.QtCore import Qt, QTimer, Signal, QSize, QSettings
 from PySide6.QtGui import QFont, QPixmap, QPainter, QPainterPath, QColor
@@ -203,8 +204,9 @@ class OverlayWindow(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
         self._root = QVBoxLayout(self)
-        self._root.setContentsMargins(8, 8, 8, 8)
-        self._root.setSpacing(6)
+        self._root.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+                                      Tokens.SPACING_SM, Tokens.SPACING_SM)
+        self._root.setSpacing(Tokens.SPACING_SM)
 
         # 增量刷新状态：5 张卡创建一次，之后只更新变化的字段
         self._cards: list = []          # 复用的卡片控件（与 rows 一一对应）

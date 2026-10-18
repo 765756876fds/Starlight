@@ -162,10 +162,10 @@ class _LineChart(QWidget):
 
 def _show_detail(m, svc=None) -> None:
     from PySide6.QtWidgets import QTabWidget
-    dlg = QDialog()
-    dlg.setWindowTitle("对局详情")
+    from app.ui.widgets.glass_dialog import GlassDialog
+    dlg = GlassDialog("对局详情")
     dlg.resize(520, 720)
-    root = QVBoxLayout(dlg)
+    root = dlg.body_layout
     dt = datetime.datetime.fromtimestamp(m.game_creation / 1000).strftime("%Y-%m-%d %H:%M") if m.game_creation else "--"
     dur = f"{m.game_duration // 60}分{m.game_duration % 60}秒" if m.game_duration else "--"
     win = "胜利" if m.win else "失败"
@@ -477,9 +477,11 @@ class OngoingPanel(QWidget):
         # ---- Page 0: 我的战绩 ----
         page_acct = QWidget()
         pl = QVBoxLayout(page_acct)
-        pl.setContentsMargins(8, 8, 8, 8)
-        self.lbl_hint = QLabel("⚠️ 战绩信息来自公开数据，仅供参考")
-        self.lbl_hint.setStyleSheet("color: {Tokens.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
+        pl.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+                              Tokens.SPACING_SM, Tokens.SPACING_SM)
+        self.lbl_hint = QLabel("战绩信息来自公开数据，仅供参考")
+        self.lbl_hint.setStyleSheet(
+            f"color: {Tokens.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         pl.addWidget(self.lbl_hint)
 
         head = QHBoxLayout()
@@ -516,7 +518,8 @@ class OngoingPanel(QWidget):
         # ---- Page 1: 当前对局 ----
         page_cur = QWidget()
         cl = QVBoxLayout(page_cur)
-        cl.setContentsMargins(8, 8, 8, 8)
+        cl.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+                              Tokens.SPACING_SM, Tokens.SPACING_SM)
         self.lbl_status = QLabel("未进入选人阶段")
         cl.addWidget(self.lbl_status)
         self.scroll = QScrollArea()

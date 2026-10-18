@@ -33,6 +33,8 @@ from ..settings_store import (
     SETTINGS_PATH as _SETTINGS_PATH,
 )
 from ..widgets.toggle_button import ToggleButton
+from ..widgets.glass_dialog import GlassDialog
+from ..widgets.icon_utils import lucide_icon
 from ...lol.data.lol_data_updater import update_all as _update_lol_data
 
 
@@ -191,15 +193,13 @@ class _ScanWorker(QObject):
             self.failed.emit(str(e))
 
 
-class _DirEditDialog(QDialog):
+class _DirEditDialog(GlassDialog):
     """单个目录编辑：格式过滤多选 + 排除子目录。"""
 
     def __init__(self, entry: dict, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("编辑音乐目录")
-        self.setModal(True)
+        super().__init__("编辑音乐目录", parent)
         self._exts = set(entry.get("extensions") or ALL_EXTENSIONS)
-        root = QVBoxLayout(self)
+        root = self.body_layout
         root.addWidget(QLabel(f"<b>{entry.get('path', '')}</b>"))
         root.addWidget(QLabel("格式过滤（勾选要扫描的格式）："))
         self._boxes = []
@@ -297,8 +297,9 @@ class SettingsPanel(QWidget):
         page.setWidgetResizable(True)
         inner = QWidget()
         lay = QVBoxLayout(inner)
-        lay.setSpacing(10)
-        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(Tokens.SPACING_SM)
+        lay.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+                               Tokens.SPACING_SM, Tokens.SPACING_SM)
         page.setWidget(inner)
         self._tabs.addTab(page, title)
         return lay
@@ -306,7 +307,7 @@ class SettingsPanel(QWidget):
     # ---------- 🎵 音乐目录管理 ----------
 
     def _build_music_group(self, root: QVBoxLayout) -> None:
-        box = QGroupBox("🎵 音乐目录管理")
+        box = QGroupBox("音乐目录管理")
         lay = QVBoxLayout(box)
 
         # 目录列表容器：QScrollArea + 行 widget（避开 QListWidget setItemWidget 压缩）
@@ -315,8 +316,9 @@ class SettingsPanel(QWidget):
         list_scroll.setMinimumHeight(100)  # 有内容时按内容撑高，无内容不占大块
         self._dirs_container = QWidget()
         self._dirs_layout = QVBoxLayout(self._dirs_container)
-        self._dirs_layout.setContentsMargins(4, 4, 4, 4)
-        self._dirs_layout.setSpacing(4)
+        self._dirs_layout.setContentsMargins(Tokens.SPACING_XS, Tokens.SPACING_XS,
+                                             Tokens.SPACING_XS, Tokens.SPACING_XS)
+        self._dirs_layout.setSpacing(Tokens.SPACING_XS)
         list_scroll.setWidget(self._dirs_container)
         lay.addWidget(list_scroll)
 
@@ -339,7 +341,7 @@ class SettingsPanel(QWidget):
         root.addWidget(box)
 
         # 下载目录（在线歌下载到本地；默认 = 第一个音乐目录）
-        dl_box = QGroupBox("⬇️ 下载目录（在线歌下载）")
+        dl_box = QGroupBox("下载目录（在线歌下载）")
         dl_lay = QVBoxLayout(dl_box)
         dl_row = QHBoxLayout()
         self.edit_download_dir = QLineEdit()
@@ -386,7 +388,7 @@ class SettingsPanel(QWidget):
     # ---------- 🎬 电影（Assrt 字幕） ----------
 
     def _build_movie_group(self, root: QVBoxLayout) -> None:
-        box = QGroupBox("🎬 电影（字幕）")
+        box = QGroupBox("电影（字幕）")
         lay = QVBoxLayout(box)
 
         row1 = QHBoxLayout()
@@ -470,7 +472,7 @@ class SettingsPanel(QWidget):
         # 此时部分控件未就绪且不应保存——末尾才置 True，构造期信号全部忽略
         self._lyrics_group_ready = False
         prefs = load_lyrics_prefs()
-        box = QGroupBox("🎤 桌面歌词")
+        box = QGroupBox("桌面歌词")
         lay = QVBoxLayout(box)
 
         row_font = QHBoxLayout()
@@ -579,7 +581,8 @@ class SettingsPanel(QWidget):
     def _refresh_lyrics_color_btn(self) -> None:
         self.btn_lyrics_color.setStyleSheet(
             f"background-color: {self._lyrics_color.name()}; "
-            "border: 1px solid #555555; border-radius: 3px;")
+            f"border: 1px solid {Tokens.BORDER}; "
+            f"border-radius: {Tokens.RADIUS_SMALL}px;")
 
     def _apply_lyrics_prefs(self, prefs: dict) -> None:
         ok = save_lyrics_prefs(prefs)
@@ -595,14 +598,15 @@ class SettingsPanel(QWidget):
 
     def _build_plugins_group(self, root: QVBoxLayout) -> None:
         self._js_source = self._find_js_source()
-        box = QGroupBox("🎛️ 内置插件 (MusicFree/洛雪)")
+        box = QGroupBox("内置插件 (MusicFree/洛雪)")
         lay = QVBoxLayout(box)
 
         # 插件行容器：直接平铺（不再内嵌 QScrollArea → 双重滚动）。
         # tab 页外层 QScrollArea 负责滚动；插件数通常 ~7 个，平铺可接受。
         self._plugins_container = QWidget()
         self._plugins_layout = QVBoxLayout(self._plugins_container)
-        self._plugins_layout.setContentsMargins(4, 4, 4, 4)
+        self._plugins_layout.setContentsMargins(Tokens.SPACING_XS, Tokens.SPACING_XS,
+                                                Tokens.SPACING_XS, Tokens.SPACING_XS)
         self._plugins_layout.setSpacing(2)   # 更紧凑的行间距
         lay.addWidget(self._plugins_container)
 
@@ -614,7 +618,8 @@ class SettingsPanel(QWidget):
         self.btn_refresh_plugins = QPushButton("刷新插件")
         self.btn_refresh_plugins.setToolTip("重新扫描插件目录（新丢进的 .js 生效）；刷新会短暂中断搜索")
         self.btn_refresh_plugins.clicked.connect(self._on_refresh_plugins)
-        self.btn_check_updates = QPushButton("🔍 检查更新")
+        self.btn_check_updates = QPushButton("检查更新")
+        self.btn_check_updates.setIcon(lucide_icon("search", 16, Colors.TEXT_PRIMARY))
         self.btn_check_updates.setToolTip("拉取全部 MusicFree 插件更新源，对比版本；有新版的行会显示「更新」按钮")
         self.btn_check_updates.clicked.connect(self._on_check_updates)
         self.lbl_plugin_status = QLabel("")
@@ -833,7 +838,8 @@ class SettingsPanel(QWidget):
     def _on_updates_done(self, msg: str, updates: list) -> None:
         self._checking_updates = False
         self.btn_check_updates.setEnabled(True)
-        self.btn_check_updates.setText("🔍 检查更新")
+        self.btn_check_updates.setText("检查更新")
+        self.btn_check_updates.setIcon(lucide_icon("search", 16, Colors.TEXT_PRIMARY))
         self.lbl_plugin_status.setText(msg)
         by_name = {}
         for u in updates:
@@ -959,11 +965,11 @@ class SettingsPanel(QWidget):
         btn_edit.setFixedHeight(28)
         btn_edit.clicked.connect(lambda _=False, i=idx: self._on_edit_dir(i))
         h.addWidget(btn_edit)
-        btn_del = QPushButton("×")
+        btn_del = QPushButton()
+        btn_del.setIcon(lucide_icon("x", 13, Colors.DANGER))
         btn_del.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         btn_del.setMinimumWidth(32)
         btn_del.setFixedHeight(28)
-        btn_del.setStyleSheet(f"color: {Colors.DANGER}; font-weight: bold;")
         btn_del.setToolTip("删除此目录")
         btn_del.clicked.connect(lambda _=False, i=idx: self._on_del_dir(i))
         h.addWidget(btn_del)
@@ -1058,7 +1064,7 @@ class SettingsPanel(QWidget):
     # ---------- 🎤 语音 TTS ----------
 
     def _build_tts_group(self, root: QVBoxLayout) -> None:
-        box = QGroupBox("🎤 语音 TTS")
+        box = QGroupBox("语音 TTS")
         lay = QVBoxLayout(box)
 
         # 引擎下拉（最上；切换联动音色/滑块）
@@ -1293,7 +1299,7 @@ class SettingsPanel(QWidget):
     # ---------- 🎮 LoL 开关 ----------
 
     def _build_lol_group(self, root: QVBoxLayout) -> None:
-        box = QGroupBox("🎮 LoL")
+        box = QGroupBox("LoL")
         lay = QVBoxLayout(box)
 
         prefs = load_ui_prefs()
@@ -1311,7 +1317,8 @@ class SettingsPanel(QWidget):
 
         # LoL 静态数据一键更新（英雄/技能/装备）
         h_data = QHBoxLayout()
-        self.btn_update_data = QPushButton("🔄 更新数据（英雄/技能/装备）")
+        self.btn_update_data = QPushButton("更新数据（英雄/技能/装备）")
+        self.btn_update_data.setIcon(lucide_icon("rotate-ccw", 16, Colors.TEXT_PRIMARY))
         self.btn_update_data.setMinimumWidth(180)
         self.btn_update_data.clicked.connect(self._on_update_data)
         h_data.addWidget(self.btn_update_data)
@@ -1358,12 +1365,13 @@ class SettingsPanel(QWidget):
         """主线程槽：恢复按钮 + 显示结果。"""
         self.lbl_update_status.setText(msg)
         self.btn_update_data.setEnabled(True)
-        self.btn_update_data.setText("🔄 更新数据（英雄/技能/装备）")
+        self.btn_update_data.setText("更新数据（英雄/技能/装备）")
+        self.btn_update_data.setIcon(lucide_icon("rotate-ccw", 16, Colors.TEXT_PRIMARY))
 
     # ---------- 🖥️ 界面 ----------
 
     def _build_ui_group(self, root: QVBoxLayout) -> None:
-        box = QGroupBox("🖥️ 界面")
+        box = QGroupBox("界面")
         lay = QVBoxLayout(box)
 
         self.btn_overlay = ToggleButton("显示游戏内 Overlay", self._overlay_enabled)
@@ -1384,7 +1392,7 @@ class SettingsPanel(QWidget):
 
         root.addWidget(box)
 
-        self.spin_refresh.valueChanged.connect(self._on_refresh_changed)
+        self.spin_refresh.valueChanged.connect(self._handle_refresh_changed)
 
     def _on_overlay_toggle(self, on: bool) -> None:
         if self._overlay_toggle is not None:
@@ -1438,7 +1446,9 @@ class SettingsPanel(QWidget):
             except Exception as e:
                 print(f"[Settings] TTS 重置应用失败: {e}")
 
-    def _on_refresh_changed(self, ms: int) -> None:
+    def _handle_refresh_changed(self, ms: int) -> None:
+        """刷新间隔槽。方法名避开 _on_refresh_changed（实例属性 = 外部回调，
+        旧实现被属性遮蔽，on_refresh_changed=None 时构造即崩——已修复）。"""
         save_ui_prefs({"ui_refresh_interval": int(ms)})
         if self._on_refresh_changed is not None:
             self._on_refresh_changed(int(ms))

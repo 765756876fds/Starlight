@@ -93,6 +93,18 @@ class TestTokens:
         # placeholder 复用辅助文字色（WCAG 覆盖，impeccable）
         assert Tokens.PLACEHOLDER == tokens.Colors.TEXT_SECONDARY
 
+    def test_cover_palette(self):
+        # 动态专辑图：≥6 组高级渐变对 + 首字浅色半透明（深底可读）
+        assert len(Tokens.COVER_PALETTES) >= 6
+        for top, bot in Tokens.COVER_PALETTES:
+            assert "," in top and "," in bot
+        assert "rgba(255, 255, 255, 170)" in Tokens.COVER_LETTER
+
+    def test_skeleton_seed_variety(self):
+        # 调色板按 seed 稳定映射：连续 6 个 seed 完整覆盖全部调色板（无重复映射缺陷）
+        n = len(Tokens.COVER_PALETTES)
+        assert {s % n for s in range(n)} == set(range(n))
+
 
 # ---------- build_glass_qss()（theme.qss 文件已移除，样式由 Tokens 生成） ----------
 
@@ -137,6 +149,12 @@ class TestGlassQss:
         qss = build_glass_qss()
         assert "QLineEdit:focus" in qss and Tokens.ACCENT in qss
         assert "QPushButton:focus" in qss
+
+    def test_checkable_checked(self):
+        # 通用 checkable 按钮：checked 态 accent 高亮（MoviePanel 视图切换等）
+        qss = build_glass_qss()
+        assert "QPushButton:checked" in qss
+        assert Tokens.ACCENT in qss
 
     def test_placeholder_uses_secondary(self):
         # placeholder 颜色来自 Token（WCAG 对比，非暗灰字面量）
@@ -301,6 +319,30 @@ class TestMusicPanelCards:
         assert p._play_key({"online": True, "track_id": "t1"}) == "net:t1"
         assert p._play_key(None) is None
 
+    def test_card_data_cover_fallback(self, qapp):
+        # 不同源封面字段名 → 统一映射 cover_url；并预计算 _seed
+        from app.ui.panels.music_panel import MusicPanel
+        p = MusicPanel(music=None)
+        d = p._card_data({"title": "x", "extra": {"raw": {"coverUrl": "http://a/1.jpg"}}},
+                         "s", "net:1")
+        assert d["cover_url"] == "http://a/1.jpg"
+        assert isinstance(d.get("_seed"), int)
+        d2 = p._card_data({"title": "x", "cover_img": "http://a/2.jpg"}, "s", "net:1")
+        assert d2["cover_url"] == "http://a/2.jpg"
+
+    def test_view_toggle_switches_all_lists(self, qapp):
+        from app.ui.panels.music_panel import MusicPanel
+        p = MusicPanel(music=None)
+        assert p.btn_view_toggle.isChecked() is True     # 默认网格
+        p._toggle_view_mode(False)
+        for w in (p.list_local, p.list_results, p.list_history,
+                  p.list_playlist_songs, p.list_rank_songs):
+            assert w.viewMode() == QListView.ListMode, w
+        p._toggle_view_mode(True)
+        for w in (p.list_local, p.list_results, p.list_history,
+                  p.list_playlist_songs, p.list_rank_songs):
+            assert w.viewMode() == QListView.IconMode, w
+
     def test_ctrl_f_shortcut_focuses_search(self, qapp):
         from app.ui.panels.music_panel import MusicPanel
         p = MusicPanel(music=None)
@@ -355,6 +397,66 @@ class TestTitleBar:
                               QPointF(50, 20), Qt.LeftButton, Qt.NoButton, Qt.NoModifier)
         tb.mouseReleaseEvent(release)
         assert tb._drag_offset is None  # 松手清除偏移
+
+
+# ---------- 状态栏（Glass 重绘） ----------
+
+class TestStatusBar:
+    def test_glass_redraw_no_emoji(self, qapp):
+        from app.ui.panels.status_bar import StatusBar
+        sb = StatusBar({})
+        try:
+            # 无原生圆点 / Emoji：Lucide 图标 + 状态文字
+            assert "●" not in sb.lbl_lcu.text() and "●" not in sb.lbl_asr.text()
+            assert "🎤" not in sb.btn_mic.text()
+            assert sb.lbl_lcu.pixmap() is not None      # link 图标已渲染
+            assert sb.lbl_asr.pixmap() is not None      # cpu 图标已渲染
+            assert not sb.btn_mic.icon().isNull()
+            # refresh 不重建 widget（防每秒泄漏）
+            old = sb.lbl_lcu
+            sb.refresh()
+            assert sb.lbl_lcu is old
+        finally:
+            sb._timer.stop()
+
+
+# ---------- GlassDialog（无边框对话框基类） ----------
+
+class TestGlassDialog:
+    def test_frameless_translucent(self, qapp):
+        from app.ui.widgets.glass_dialog import GlassDialog
+        d = GlassDialog("测试")
+        try:
+            assert d.windowFlags() & Qt.FramelessWindowHint
+            assert d.testAttribute(Qt.WA_TranslucentBackground)
+            assert d.lbl_title.text() == "测试"
+            assert not d.btn_close.icon().isNull()      # Lucide x 关闭图标
+            # body 布局可直接挂内容（回归 PySide6 二次 setLayout 内容丢失 bug）
+            from PySide6.QtWidgets import QLabel
+            d.body_layout.addWidget(QLabel("HELLO"))
+            assert d.body.findChildren(QLabel)
+        finally:
+            d.close()
+
+    def test_esc_closes(self, qapp):
+        from PySide6.QtWidgets import QDialog
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtCore import QEvent
+        from app.ui.widgets.glass_dialog import GlassDialog
+        d = GlassDialog("x")
+        d.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+        assert d.result() == QDialog.Rejected
+
+    def test_dialog_subclasses_glass(self, qapp):
+        # 全局 QDialog 子类已迁移 GlassDialog（无原生白色标题栏）
+        from app.ui.dialogs.auto_queue_config_dialog import AutoQueueConfigDialog
+        from app.ui.widgets.glass_dialog import GlassDialog
+        d = AutoQueueConfigDialog({"auto_queue_mode": "normal"})
+        try:
+            assert isinstance(d, GlassDialog)
+            assert d.windowFlags() & Qt.FramelessWindowHint
+        finally:
+            d.close()
 
 
 # ---------- MainWindow Glass 外壳 ----------

@@ -172,8 +172,9 @@ class CurrentGamePanel(QWidget):
                 })
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+                                Tokens.SPACING_SM, Tokens.SPACING_SM)
+        root.setSpacing(Tokens.SPACING_SM)
 
         # 标题
         self.lbl_title = QLabel("未在对局中")

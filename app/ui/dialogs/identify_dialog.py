@@ -10,7 +10,12 @@ import os
 import tempfile
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+from ..widgets.glass_dialog import GlassDialog
+from ..widgets.icon_utils import lucide_icon
+from ..theme.colors import Colors
+from ..theme.tokens import Tokens
 
 
 class _IdentifyWorker(QObject):
@@ -54,12 +59,11 @@ class _BuildWorker(QObject):
         self.done.emit(stats)
 
 
-class IdentifyDialog(QDialog):
+class IdentifyDialog(GlassDialog):
     """听歌识曲窗口（也由语音"听听这是什么歌"触发）。"""
 
     def __init__(self, service, on_play=None, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("🎤 识曲")
+        super().__init__("识曲", parent)
         self.resize(380, 200)
         self._service = service
         self._on_play = on_play
@@ -70,14 +74,15 @@ class IdentifyDialog(QDialog):
         self._identify_thread = None
         self._build_thread = None
 
-        root = QVBoxLayout(self)
+        root = self.body_layout
         self.lbl_title = QLabel("把手机/音箱凑近麦克风，听 8 秒就能识别")
         self.lbl_title.setWordWrap(True)
         root.addWidget(self.lbl_title)
         self.lbl_status = QLabel("准备就绪")
         self.lbl_status.setWordWrap(True)
         root.addWidget(self.lbl_status)
-        self.btn_play = QPushButton("▶ 立即播放")
+        self.btn_play = QPushButton("立即播放")
+        self.btn_play.setIcon(lucide_icon("play", 14, Colors.TEXT_PRIMARY))
         self.btn_play.hide()
         self.btn_play.clicked.connect(self._on_play_clicked)
         root.addWidget(self.btn_play)
@@ -154,14 +159,14 @@ class IdentifyDialog(QDialog):
         if self._timer is not None:
             self._timer.stop()
         if result is None:
-            self.lbl_title.setText("🎤 识曲")
+            self.lbl_title.setText("识曲")
             self.lbl_status.setText("未找到匹配结果（试试更清晰的片段或换一首）")
             return
         title = result.get("title") or result.get("filename") or "未知歌曲"
         artist = result.get("artist") or ""
         conf = result.get("confidence", 0)
         name = f"{title} - {artist}" if artist else title
-        self.lbl_title.setText(f"🎵 匹配到：{name}")
+        self.lbl_title.setText(f"匹配到：{name}")
         self.lbl_status.setText(f"置信度 {conf:.0%}（{result.get('quality', '')}）")
         self.btn_play.show()
 
@@ -170,7 +175,7 @@ class IdentifyDialog(QDialog):
         self._busy = False
         if self._timer is not None:
             self._timer.stop()
-        self.lbl_title.setText("🎤 识曲")
+        self.lbl_title.setText("识曲")
         self.lbl_status.setText(f"识别失败：{msg}")
 
     # ------------------------------------------------------------------ 首次建库
@@ -202,7 +207,7 @@ class IdentifyDialog(QDialog):
     @Slot(str)
     def _on_build_failed(self, msg):
         self._busy = False
-        self.lbl_title.setText("🎤 识曲")
+        self.lbl_title.setText("识曲")
         self.lbl_status.setText(f"建库失败：{msg}")
 
     # ------------------------------------------------------------------ 播放/关闭

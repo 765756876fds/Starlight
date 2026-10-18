@@ -90,7 +90,7 @@ QPushButton#btn_toggle {{
 QPushButton#btn_toggle:hover {{ background-color: {T.ACCENT_HOVER}; border-color: {T.ACCENT_HOVER}; }}
 QPushButton#btn_toggle:pressed {{ background-color: {T.ACCENT_PRESSED}; padding: 0; }}
 QPushButton#btn_toggle:focus {{ border: 1px solid #ffffff; }}
-QPushButton#btn_prev, QPushButton#btn_next {{
+QPushButton#btn_prev, QPushButton#btn_next, QPushButton#btn_stop {{
     min-width: {T.BTN_SUB}px; min-height: {T.BTN_SUB}px;
     border-radius: {int(T.BTN_SUB / 2)}px; padding: 0;
 }}
@@ -103,6 +103,25 @@ QPushButton[toggle="on"] {{ background-color: rgba({_rgb(T.SUCCESS)}, 90); borde
 QPushButton[toggle="on"]:hover {{ background-color: rgba({_rgb(T.SUCCESS)}, 130); }}
 QPushButton[toggle="off"] {{ background-color: rgba({T.CARD_RGB}, 200); border: 1px solid rgba({T.BORDER_LIGHT_RGB}, 200); color: {T.TEXT_SECONDARY}; }}
 QPushButton[toggle="off"]:hover {{ background-color: rgba({T.BG_HOVER_RGB}, 210); border-color: {T.BORDER_LIGHT}; }}
+
+/* 通用 checkable（视图切换等原生 isChecked 按钮） */
+QPushButton:checked {{ background-color: rgba({_rgb(T.ACCENT)}, 40); border: 1px solid {T.ACCENT}; color: {T.ACCENT}; }}
+QPushButton:checked:hover {{ background-color: rgba({_rgb(T.ACCENT)}, 70); }}
+
+/* Combo：序列步骤半透明圆角卡片 */
+QWidget#combo_step_card {{
+    background-color: rgba({T.CARD_RGB}, 110);
+    border: 1px solid rgba({T.BORDER_RGB}, 90);
+    border-radius: {T.RADIUS_SMALL}px;
+}}
+/* Combo：删除英雄（危险操作）深红半透明底 + 红字 */
+QPushButton#btn_delete_champion {{
+    background-color: rgba({_rgb(T.DANGER)}, 42);
+    border: 1px solid rgba({_rgb(T.DANGER)}, 70);
+    color: #f87171; font-weight: 600;
+}}
+QPushButton#btn_delete_champion:hover {{ background-color: rgba({_rgb(T.DANGER)}, 80); color: #fecaca; }}
+QPushButton#btn_delete_champion:pressed {{ background-color: rgba({_rgb(T.DANGER)}, 110); }}
 
 /* 输入 */
 QLineEdit, QTextEdit, QPlainTextEdit {{
@@ -179,15 +198,30 @@ QListWidget::item:hover {{ background-color: rgba({T.BG_ELEVATED_RGB}, 200); }}
 QListWidget::item:selected {{ background-color: {T.NAV_PILL}; color: {T.TEXT_PRIMARY}; }}
 /* 卡片网格列表：由 MusicCardDelegate 自绘（此处的 item 规则不作用于卡片） */
 
-/* 滚动条：极简细线半透明 */
-QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
+/* 滚动条：极简细线半透明（track 全透明、无箭头，仅悬浮显示滑块） */
+QScrollBar:vertical, QScrollBar:horizontal {{ background: transparent; margin: 0; }}
+QScrollBar::track:vertical, QScrollBar::track:horizontal {{ background: transparent; border: none; }}
+QScrollBar:vertical {{ width: 6px; }}
 QScrollBar::handle:vertical {{ background: {T.SCROLL_HANDLE}; border-radius: 3px; min-height: 30px; }}
 QScrollBar::handle:vertical:hover {{ background: rgba({T.ACCENT_RGB}, 150); }}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-QScrollBar:horizontal {{ background: transparent; height: 6px; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; width: 0; background: transparent; border: none; }}
+QScrollBar:horizontal {{ height: 6px; }}
 QScrollBar::handle:horizontal {{ background: {T.SCROLL_HANDLE}; border-radius: 3px; min-width: 30px; }}
 QScrollBar::handle:horizontal:hover {{ background: rgba({T.ACCENT_RGB}, 150); }}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; height: 0; background: transparent; border: none; }}
+
+/* 状态栏（Glass）：半透明底 + 极细上边框，与主窗口融合 */
+QStatusBar {{ background-color: rgba({T.CARD_RGB}, 60); border-top: 1px solid rgba({T.BORDER_RGB}, 120); color: {T.TEXT_SECONDARY}; }}
+QStatusBar::item {{ border: none; }}
+QLabel[class="status_item"] {{ padding: 0 {T.SPACING_SM}px; }}
+QPushButton#btn_status_mic {{
+    background-color: rgba({T.CARD_RGB}, 210); border: 1px solid rgba({T.BORDER_RGB}, 200);
+    border-radius: 14px; padding: 2px {T.SPACING_SM}px; color: {T.TEXT_SECONDARY};
+}}
+QPushButton#btn_status_mic:hover {{ background-color: rgba({T.BG_HOVER_RGB}, 220); border-color: {T.BORDER_LIGHT}; }}
+QPushButton#btn_status_mic:pressed {{ background-color: rgba({T.BG_ACTIVE_RGB}, 230); padding-top: 3px; padding-bottom: 1px; }}
+/* 去 focus 粗框：聚焦仅微亮（视觉等同 hover），不出现蓝框 */
+QPushButton#btn_status_mic:focus {{ border-color: rgba({T.BORDER_RGB}, 200); background-color: rgba({T.BG_HOVER_RGB}, 180); }}
 
 /* Checkbox */
 QCheckBox {{ color: {T.TEXT_PRIMARY}; spacing: 8px; }}
@@ -236,6 +270,15 @@ QMenu::separator {{ height: 1px; background: rgba({T.BORDER_RGB}, 210); margin: 
 
 /* ---- Glass 专属（主窗口外壳） ---- */
 #GlassShellRoot {{ background: transparent; }}
+/* GlassDialog 外壳：深色半透明圆角容器（无边框对话框共用） */
+QWidget#GlassDialogShell {{
+    background-color: rgba({T.CARD_RGB}, 246);
+    border: 1px solid rgba({T.ACCENT_RGB}, 0.28);
+    border-radius: {T.RADIUS}px;
+}}
+#GlassDialogShell QPushButton {{
+    padding: 4px 10px; min-height: 0; min-width: 0;
+}}
 #GlassTitleBar {{
     background: transparent;
     border-top-left-radius: {T.WINDOW_RADIUS}px;

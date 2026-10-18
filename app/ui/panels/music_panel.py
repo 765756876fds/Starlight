@@ -1,4 +1,5 @@
 """音乐面板（本地 + 在线）。"""
+import zlib
 from typing import List
 
 from PySide6.QtCore import QEvent, QThread, Qt, QTimer, QObject, Signal
@@ -6,7 +7,7 @@ from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSlider,
-    QTabWidget, QVBoxLayout, QWidget,
+    QStyledItemDelegate, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..dialogs.identify_dialog import IdentifyDialog
@@ -160,6 +161,14 @@ class MusicPanel(QWidget):
         self.btn_identify.setIcon(lucide_icon("mic", 16, Tokens.TEXT_SECONDARY))
         self.btn_identify.clicked.connect(self._on_identify_click)
         top_bar.addWidget(self.btn_identify)
+        # 列表/网格 视图切换（Lucide grid/list，全局作用于全部歌曲列表）
+        self.btn_view_toggle = QPushButton()
+        self.btn_view_toggle.setCheckable(True)
+        self.btn_view_toggle.setChecked(True)
+        self.btn_view_toggle.setIcon(lucide_icon("grid", 16, Tokens.TEXT_PRIMARY))
+        self.btn_view_toggle.setToolTip("切换 网格卡片 / 平铺列表（作用于全部歌曲列表）")
+        self.btn_view_toggle.clicked.connect(self._toggle_view_mode)
+        top_bar.addWidget(self.btn_view_toggle)
         root.addLayout(top_bar)
         tabs = self.tabs = QTabWidget()
         root.addWidget(tabs)
@@ -457,12 +466,56 @@ class MusicPanel(QWidget):
         w.setItemDelegate(d)
         return d
 
+    def _toggle_view_mode(self, grid_on: bool):
+        """列表/网格 全局切换：网格 = 卡片 Delegate；列表 = 默认文本 delegate。"""
+        pairs = [
+            (self.list_local, self._dl_local),
+            (self.list_results, self._dl_results),
+            (self.list_history, self._dl_history),
+            (self.list_playlist_songs, self._dl_playlist_songs),
+            (self.list_rank_songs, self._dl_rank_songs),
+        ]
+        mode = QListWidget.IconMode if grid_on else QListWidget.ListMode
+        for w, d in pairs:
+            try:
+                w.setViewMode(mode)
+                # ListMode 下显式挂默认 delegate（setItemDelegate(None) 会令行高归零）
+                w.setItemDelegate(d if grid_on else QStyledItemDelegate(w))
+                if grid_on:
+                    w.setMovement(QListWidget.Static)
+                    w.setResizeMode(QListWidget.Adjust)
+                    w.setSpacing(Tokens.SPACING_MD)
+            except RuntimeError:
+                pass  # 视图已销毁
+        self.btn_view_toggle.setIcon(lucide_icon(
+            "grid" if grid_on else "list", 16, Tokens.TEXT_PRIMARY))
+
     @staticmethod
     def _card_data(base: dict, sub: str, play_key) -> dict:
-        """卡片 UserRole dict：附第二行文本 + 播放 key（不覆盖原数据）。"""
+        """卡片 UserRole dict：附第二行文本 + 播放 key（不覆盖原数据）。
+
+        封面字段兜底：不同源字段名不一（cover_url/artwork/coverImg/pic 等），
+        统一映射到 cover_url 供 delegate 异步下载；并预计算渐变种子 _seed
+        （歌曲名 crc32）供「无封面哈希渐变兜底」直接读取——paint 零计算。
+        """
         d = dict(base)
         d["_sub"] = sub
         d["_play_key"] = play_key
+        if not d.get("cover_url"):
+            extra = d.get("extra")
+            raw = extra.get("raw") if isinstance(extra, dict) else None
+            for cand in ("cover_url", "cover_img", "artwork", "pic", "cover", "pic_url"):
+                v = d.get(cand)                    # base 顶层字段
+                if not v and isinstance(extra, dict):
+                    v = extra.get(cand)
+                if not v and isinstance(raw, dict):
+                    v = raw.get(cand) or raw.get("coverUrl")
+                if v:
+                    d["cover_url"] = v
+                    break
+        title = d.get("title")
+        if title:
+            d["_seed"] = zlib.crc32(str(title).encode("utf-8", "ignore"))
         return d
 
     @staticmethod

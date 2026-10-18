@@ -2,11 +2,12 @@
 """电影源管理对话框：多源列表 + 增删 + 测源（三合一）+ 设为当前。仿音源管理。"""
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QVBoxLayout,
 )
 
 from ...movie.source_manager import MovieSourceManager
+from ...ui.widgets.glass_dialog import GlassDialog
 
 
 class _SourceTestWorker(QObject):
@@ -25,12 +26,11 @@ class _SourceTestWorker(QObject):
             self.done.emit(idx, src.get("name") or "", ok, detail)
 
 
-class MovieSourceDialog(QDialog):
-    """电影源管理：✅/❌ + 名称 + URL + 勾选启用 + 设为当前 + 测试。"""
+class MovieSourceDialog(GlassDialog):
+    """电影源管理：状态 + 名称 + URL + 勾选启用 + 设为当前 + 测试。"""
 
     def __init__(self, parent=None, manager=None, on_sources_changed=None):
-        super().__init__(parent)
-        self.setWindowTitle("电影源管理")
+        super().__init__("电影源管理", parent)
         self.resize(680, 440)
         self.manager = manager if manager is not None else MovieSourceManager()
         self.on_sources_changed = on_sources_changed
@@ -38,9 +38,9 @@ class MovieSourceDialog(QDialog):
         self._test_thread = None
         self._test_worker = None
 
-        root = QVBoxLayout(self)
+        root = self.body_layout
 
-        tip = QLabel("💡 电影源（苹果 CMS V10 接口）。勾选启用、双击行切换；"
+        tip = QLabel("电影源（苹果 CMS V10 接口）。勾选启用、双击行切换；"
                      "测试为三合一（连通 / 搜索有结果 / m3u8 可播）")
         tip.setWordWrap(True)
         root.addWidget(tip)
@@ -223,7 +223,7 @@ class MovieSourceDialog(QDialog):
         mark = "✅" if ok else "❌"
         label = f"{mark} {name}" + ("（测源）" if ok else f"（{detail}）")
         # 重建该行（保留勾选状态）
-        item.setText(f"{'⭐ ' if name == active else ''}{'✅' if s.get('enabled', True) else '❌'} {name} - {s.get('url', '')}  |  测源: {label}")
+        item.setText(f"{'[当前] ' if name == active else ''}{'✅' if s.get('enabled', True) else '❌'} {name} - {s.get('url', '')}  |  测源: {label}")
 
     # ---- 变更回调 ----
 

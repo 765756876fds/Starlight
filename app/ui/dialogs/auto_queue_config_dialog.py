@@ -1,10 +1,14 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QComboBox, QDialogButtonBox,
+    QVBoxLayout, QFormLayout, QComboBox, QDialogButtonBox,
 )
 
+from ...ui.theme.tokens import Tokens
+from ...ui.widgets.glass_dialog import GlassDialog
 
-class AutoQueueConfigDialog(QDialog):
-    """自动排队配置：模式 + 主/副位置"""
+
+class AutoQueueConfigDialog(GlassDialog):
+    """自动排队配置：模式 + 主/副位置（GlassDialog 无边框 + QFormLayout 标签右对齐）。"""
 
     MODES = [
         ("人机", "bot"),
@@ -16,10 +20,16 @@ class AutoQueueConfigDialog(QDialog):
     ROLES = ["不限", "上单", "打野", "中单", "ADC", "辅助"]
 
     def __init__(self, current: dict, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("自动排队配置")
-        self.setMinimumWidth(320)
+        super().__init__("自动排队配置", parent)
+        self.setMinimumWidth(360)
+
         form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        form.setFormAlignment(Qt.AlignTop)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setSpacing(Tokens.SPACING_SM)
+        form.setContentsMargins(0, 0, 0, 0)
+
         self.cb_mode = QComboBox()
         for label, val in self.MODES:
             self.cb_mode.addItem(label, userData=val)
@@ -44,7 +54,7 @@ class AutoQueueConfigDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
 
-        lay = QVBoxLayout(self)
+        lay = self.body_layout
         lay.addLayout(form)
         lay.addWidget(btns)
 

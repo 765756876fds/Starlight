@@ -1,21 +1,21 @@
 """
-音源管理对话框
+音源管理对话框（GlassDialog 无边框）
 """
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
+    QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QLineEdit, QLabel, QFileDialog, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import Qt
 
 from app.music.source_manager import MusicSourceManager, MusicSource
+from ..widgets.glass_dialog import GlassDialog
 
 
-class SourceManageDialog(QDialog):
+class SourceManageDialog(GlassDialog):
     """音源管理对话框"""
 
     def __init__(self, parent=None, on_sources_changed=None, manager=None):
-        super().__init__(parent)
-        self.setWindowTitle("音乐源管理")
+        super().__init__("音乐源管理", parent)
         self.resize(600, 400)
         # 构造注入（默认从磁盘自建，向后兼容；测试/复用可传入同一实例）
         self.manager = manager if manager is not None else MusicSourceManager()
@@ -24,10 +24,10 @@ class SourceManageDialog(QDialog):
         # 刷新期间置 True：setCheckState 触发的 itemChanged 不视为用户操作
         self._loading = False
 
-        root = QVBoxLayout(self)
+        root = self.body_layout
 
         # 说明
-        root.addWidget(QLabel("💡 支持添加自定义在线音乐源，格式参考洛雪音乐"))
+        root.addWidget(QLabel("支持添加自定义在线音乐源，格式参考洛雪音乐"))
 
         # 音源列表
         self.list_widget = QListWidget()
@@ -76,8 +76,8 @@ class SourceManageDialog(QDialog):
                 return
 
             for s in sources:
-                status = "✅" if s.enabled else "❌"
-                item = QListWidgetItem(f"{status} {s.name} - {s.api_url}")
+                status = "开" if s.enabled else "关"
+                item = QListWidgetItem(f"[{status}] {s.name} - {s.api_url}")
                 item.setData(Qt.UserRole, s.name)
                 # 双击切换启用/禁用
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)

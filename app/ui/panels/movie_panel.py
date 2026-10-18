@@ -154,7 +154,67 @@ def _get_poster(vod_id):
 
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
+from ..widgets.icon_utils import lucide_icon
 from ...movie.movie_controller import MovieController
+
+
+class _PosterWallDelegate(QStyledItemDelegate):
+    """在线搜索结果海报墙：海报（圆角缩略）+ 电影名 14 主色 + 备注 12 次色。
+    item 数据：UserRole=dict（vod_name/vod_remarks/...），DecorationRole=QIcon。"""
+
+    _GRID = (170, 292)          # 海报 140×210 + 名行 + 备注行
+    _POSTER = (140, 210)
+    _TOP = 4
+    _RADIUS = Tokens.RADIUS_SMALL
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(*self._GRID)
+
+    def paint(self, painter, option, index):
+        data = index.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            super().paint(painter, option, index)
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = option.rect
+        # hover/选中：微弱背景（不抢海报视觉）
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(rect, QColor(60, 64, 74))
+        elif option.state & QStyle.State_MouseOver:
+            painter.fillRect(rect, QColor(46, 49, 58))
+        # 海报（圆角 8 裁剪，居中）
+        pw, ph = self._POSTER
+        px = rect.left() + (rect.width() - pw) // 2
+        py = rect.top() + self._TOP
+        icon = index.data(Qt.DecorationRole)
+        if isinstance(icon, QIcon) and not icon.isNull():
+            pm = icon.pixmap(pw, ph)
+            clip = QPainterPath()
+            clip.addRoundedRect(px, py, pw, ph, self._RADIUS, self._RADIUS)
+            painter.setClipPath(clip)
+            painter.drawPixmap(px, py, pm)
+            painter.setClipping(False)
+        # 电影名 14 主色（加粗 + 省略号）
+        name = str(data.get("vod_name") or "")
+        f1 = QFont()
+        f1.setPixelSize(Tokens.FONT_SIZE_BODY)
+        f1.setBold(True)
+        fm1 = QFontMetrics(f1)
+        el = fm1.elidedText(name, Qt.ElideRight, rect.width() - 12)
+        painter.setFont(f1)
+        painter.setPen(QColor(Tokens.TEXT_PRIMARY))
+        painter.drawText(px + 6, py + ph + fm1.ascent() + 6, el)
+        # 备注 12 次色
+        remarks = str(data.get("vod_remarks") or "")
+        f2 = QFont()
+        f2.setPixelSize(Tokens.FONT_SIZE_SUB)
+        fm2 = QFontMetrics(f2)
+        el2 = fm2.elidedText(remarks, Qt.ElideRight, rect.width() - 12)
+        painter.setFont(f2)
+        painter.setPen(QColor(Tokens.TEXT_SECONDARY))
+        painter.drawText(px + 6, py + ph + fm1.height() + 6 + fm2.ascent(), el2)
+        painter.restore()
 
 
 class _SearchWorker(QObject):
@@ -379,17 +439,19 @@ class MoviePanel(QWidget):
         self.list_posters = QListWidget()
         self.list_posters.setViewMode(QListWidget.IconMode)
         self.list_posters.setIconSize(QSize(*_POSTER_SIZE))
-        self.list_posters.setGridSize(QSize(170, 250))
+        self.list_posters.setGridSize(QSize(*_PosterWallDelegate._GRID))
         self.list_posters.setResizeMode(QListView.Adjust)
-        self.list_posters.setSpacing(10)
+        self.list_posters.setSpacing(Tokens.SPACING_MD)
         self.list_posters.setWordWrap(True)
+        self.list_posters.setItemDelegate(_PosterWallDelegate(self.list_posters))
+        self.list_posters.setMouseTracking(True)
         self.stack_results.addWidget(self.list_results)
         self.stack_results.addWidget(self.list_posters)
         # 榜单视图（第 3 页）：左标签竖列 + 右海报网格（对齐豆瓣 App 榜单页）
         self.page_rank = QWidget()
         rank_lay = QHBoxLayout(self.page_rank)
         rank_lay.setContentsMargins(0, 0, 0, 0)
-        rank_lay.setSpacing(6)
+        rank_lay.setSpacing(Tokens.SPACING_SM)
         self.list_rank_tags = QListWidget()
         self.list_rank_tags.setFixedWidth(96)
         self.list_rank_tags.setToolTip("豆瓣榜单标签")
@@ -398,7 +460,7 @@ class MoviePanel(QWidget):
         self.list_rank.setIconSize(QSize(*_POSTER_SIZE))
         self.list_rank.setGridSize(QSize(170, 250))
         self.list_rank.setResizeMode(QListView.Adjust)
-        self.list_rank.setSpacing(10)
+        self.list_rank.setSpacing(Tokens.SPACING_MD)
         self.list_rank.setWordWrap(True)
         self.list_rank.setItemDelegate(_RankItemDelegate(self.list_rank))
         self.list_rank.setToolTip("双击条目 → 按片名搜源内并显示结果（不自动播）")
@@ -420,6 +482,12 @@ class MoviePanel(QWidget):
         self.slider_pos.setEnabled(False)
         self.lbl_time = QLabel("0:00 / 0:00")
         self.lbl_time.setAlignment(Qt.AlignCenter)
+        try:  # tabular figures：计时数字等宽不跳动（impeccable）
+            _f = self.lbl_time.font()
+            _f.setFeature(QFont.Tag("tnum"), 1)
+            self.lbl_time.setFont(_f)
+        except Exception:
+            pass
         self.lbl_res = QLabel("")
         self.lbl_res.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         time_row = QHBoxLayout()
@@ -430,8 +498,16 @@ class MoviePanel(QWidget):
 
         # 播放控制
         row = QHBoxLayout()
-        self.btn_toggle = QPushButton("⏯")
-        self.btn_stop = QPushButton("⏹")
+        self.btn_toggle = QPushButton()
+        self.btn_toggle.setObjectName("btn_toggle")   # 复用主按钮金字塔样式
+        self.btn_toggle.setIcon(lucide_icon("play", 20, Colors.TEXT_PRIMARY))
+        self.btn_toggle.setToolTip("播放/暂停")
+        self.btn_toggle.setFixedSize(52, 40)   # 主按钮：放大 + 固定尺寸防图标挤压
+        self.btn_stop = QPushButton()
+        self.btn_stop.setObjectName("btn_stop")       # 复用次按钮尺寸（防挤压）
+        self.btn_stop.setIcon(lucide_icon("square", 18, Colors.TEXT_PRIMARY))
+        self.btn_stop.setToolTip("停止")
+        self.btn_stop.setFixedSize(40, 32)
         row.addWidget(self.btn_toggle)
         row.addWidget(self.btn_stop)
         row.addStretch()
@@ -439,14 +515,17 @@ class MoviePanel(QWidget):
 
         # 增强控制行（--osc=no 后 mpv 窗口无控件，控制全在面板）
         row2 = QHBoxLayout()
-        self.btn_fullscreen = QPushButton("⛶ 全屏")
+        self.btn_fullscreen = QPushButton("全屏")
+        self.btn_fullscreen.setIcon(lucide_icon("maximize", 16, Colors.TEXT_PRIMARY))
         self.btn_speed = QPushButton("倍速 1x")
         self.lbl_vol = QLabel("音量")
         self.slider_vol = QSlider(Qt.Horizontal)
         self.slider_vol.setRange(0, 100)
         self.slider_vol.setValue(70)
         self.slider_vol.setFixedWidth(120)
-        self.btn_mute = QPushButton("🔊")
+        self.btn_mute = QPushButton()
+        self.btn_mute.setIcon(lucide_icon("volume-2", 16, Colors.TEXT_PRIMARY))
+        self.btn_mute.setToolTip("静音切换")
         self.btn_subtitle = QPushButton("字")
         self.btn_shortcut = QPushButton("快捷键")
         self.cb_autonext = QCheckBox("连播")
@@ -871,19 +950,26 @@ class MoviePanel(QWidget):
             print(f"[Movie] 语音窗口接管异常: {e}", flush=True)
 
     def _current_source_name(self):
-        """当前源名（管理器读不到时返回 None，不打扰 UI）。"""
+        """当前源名（管理器读不到/非真实源时返回 None，不打扰 UI）。"""
         try:
-            return self._movie._source_manager.get_active_name()
+            movie = getattr(self, "_movie", None)
+            if movie is None:
+                return None
+            mgr = getattr(movie, "_source_manager", None)
+            if mgr is None:
+                return None
+            name = mgr.get_active_name()
+            return name if isinstance(name, str) and name else None
         except Exception:
             return None
 
     def _refresh_source_label(self):
-        """状态栏显示当前源名（如"当前源：量子资源"）。"""
+        """状态栏显示当前源名；读不到时显示“未选择”。"""
         try:
             name = self._current_source_name()
-            self.lbl_source.setText(f"当前源：{name}" if name else "")
+            self.lbl_source.setText(f"当前源：{name}" if name else "当前源：未选择")
         except Exception:
-            self.lbl_source.setText("")
+            self.lbl_source.setText("当前源：未选择")
 
     def _on_source_manage(self):
         """"源"按钮 → 源管理对话框（增删/测源/设当前；变更后刷新状态栏）。"""
@@ -959,6 +1045,7 @@ class MoviePanel(QWidget):
                 self.lbl_now.setText(f"播放中: {name}")
                 self.lbl_status.setText("")
                 self.slider_pos.setEnabled(True)
+                self._sync_toggle_icon()
                 self._maybe_auto_subtitle(it)
             else:
                 self.lbl_status.setText("无法播放：无可用地址")
@@ -980,6 +1067,7 @@ class MoviePanel(QWidget):
                 self.lbl_now.setText(f"播放中: {name}")
                 self.lbl_status.setText("")
                 self._embed_playing = True
+                self._sync_toggle_icon()
                 self._maybe_auto_subtitle(it)
             else:
                 self.lbl_status.setText("无法播放：无可用地址")
@@ -993,6 +1081,7 @@ class MoviePanel(QWidget):
         self.slider_pos.setEnabled(False)
         self.slider_pos.setValue(0)
         self.lbl_time.setText("0:00 / 0:00")
+        self._sync_toggle_icon()
 
     def _show_episode_dialog(self, it):
         """多集 → 选集对话框（第01集…，点选即播）。"""
@@ -1000,10 +1089,9 @@ class MoviePanel(QWidget):
         if len(eps) <= 1:
             self._play_item(it, index=None)
             return
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"选集 - {(it.get('vod_name') or '')[:24]}")
+        dlg = GlassDialog(f"选集 - {(it.get('vod_name') or '')[:24]}", self)
         dlg.resize(320, 420)
-        lay = QVBoxLayout(dlg)
+        lay = dlg.body_layout
         tip = QLabel(f"共 {len(eps)} 集，双击选集播放（连播开时播完自动下一集）")
         tip.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(tip)
@@ -1051,10 +1139,20 @@ class MoviePanel(QWidget):
         if n > 0:
             self.lbl_status.setText(f"已找到 {n} 个字幕，点「字」加载")
 
+    def _sync_toggle_icon(self):
+        """按真实播放状态刷新 播放/暂停 图标（纯 UI 呈现）。"""
+        try:
+            playing = bool(self._movie.is_playing())
+        except Exception:
+            playing = False
+        self.btn_toggle.setIcon(lucide_icon(
+            "pause" if playing else "play", 20, Colors.TEXT_PRIMARY))
+
     def _on_toggle(self):
         try:
             if self._movie.is_playing():
                 self._movie.toggle_pause()
+                self._sync_toggle_icon()
         except Exception as e:
             self.lbl_status.setText(f"控制失败: {e}")
 
@@ -1110,7 +1208,7 @@ class MoviePanel(QWidget):
     def _on_mute(self):
         try:
             self._movie.toggle_mute()
-            self.btn_mute.setText("🔇")
+            self.btn_mute.setIcon(lucide_icon("volume-x", 16, Colors.TEXT_PRIMARY))
         except Exception as e:
             self.lbl_status.setText(f"静音失败: {e}")
 
@@ -1236,17 +1334,16 @@ class _SubtitleLoadWorker(QObject):
             self.done.emit(False, f"字幕加载失败: {e}")
 
 
-class _SubtitleDialog(QDialog):
+class _SubtitleDialog(GlassDialog):
     """字幕对话框：搜索框（预填当前片名）+ 结果列表（native_name / 语言 / 格式 / 评分），
     双击条目 → 后台下载加载 → 状态反馈。失败降级不崩。"""
 
     def __init__(self, movie, default_kw="", parent=None):
-        super().__init__(parent)
+        super().__init__("字幕（Assrt）", parent)
         self._movie = movie
-        self.setWindowTitle("字幕（Assrt）")
         self.resize(460, 420)
 
-        lay = QVBoxLayout(self)
+        lay = self.body_layout
         row = QHBoxLayout()
         self.edit_kw = QLineEdit(default_kw)
         self.edit_kw.setPlaceholderText("输入片名搜索字幕")
@@ -1324,17 +1421,16 @@ class _SubtitleDialog(QDialog):
             self.lbl_state.setText(str(msg) or "字幕加载失败")
 
 
-class _MovieDetailDialog(QDialog):
+class _MovieDetailDialog(GlassDialog):
     """详情页：大图 + 评分/导演/演员/简介 + 播放按钮（对齐爱奇艺点击进详情）。"""
 
     def __init__(self, it, panel, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"{(it.get('vod_name') or '')[:24]} - 详情")
+        super().__init__(f"{(it.get('vod_name') or '')[:24]} - 详情", parent)
         self.resize(540, 660)
         self._panel = panel
         self._it = it
 
-        root = QVBoxLayout(self)
+        root = self.body_layout
 
         vod_id = str(it.get("vod_id", ""))
         pix = _get_poster(vod_id)

@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
 
 from app.combo.models import Combo, ComboStep, ChampionCombos
 from app.combo.validation import SEQUENCE_KEYS, validate_combo
+from app.ui.widgets.glass_dialog import GlassDialog
+from app.ui.widgets.icon_utils import lucide_icon
 
 # 按键分组展示（触发键模式只显示 物品 + 其他）
 _KEY_GROUPS = [
@@ -33,15 +35,13 @@ _KEY_GROUPS = [
 ]
 
 
-class KeyPickerDialog(QDialog):
+class KeyPickerDialog(GlassDialog):
     """按键选择器（序列按键用，列表点选；触发键改用 TriggerCaptureDialog 捕获）。"""
 
     def __init__(self, parent=None, title: str = "选择按键"):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setModal(True)
+        super().__init__(title, parent)
         self._selected: Optional[str] = None
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         layout.addWidget(QLabel("点击按键选择"))
         for label, keys in _KEY_GROUPS:
             row = QHBoxLayout()
@@ -70,7 +70,7 @@ class KeyPickerDialog(QDialog):
         return self._selected
 
 
-class TriggerCaptureDialog(QDialog):
+class TriggerCaptureDialog(GlassDialog):
     """触发键捕获：按键盘按键实时捕获。
 
     - 允许：字母 a-z / 主键区数字 0-9（统一转小写）
@@ -82,13 +82,11 @@ class TriggerCaptureDialog(QDialog):
     _captured_signal = Signal(str)  # 跨线程（keyboard 回调线程 → UI 线程）
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("选择触发键")
-        self.setModal(True)
+        super().__init__("选择触发键", parent)
         self._captured: Optional[str] = None
         self._remove_hook = None
 
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         layout.addWidget(QLabel("请按下你想用的触发键"))
         self.lbl_display = QLabel("—")
         self.lbl_display.setAlignment(Qt.AlignCenter)
@@ -184,10 +182,11 @@ def _make_step_row(dialog: "ComboEditDialog", index: int,
     行内控件显式 sizePolicy，保证最小宽度被尊重。
     """
     row = QWidget()
+    row.setObjectName("combo_step_card")   # 半透明圆角卡片（QSS #combo_step_card）
     row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)  # 垂直不拉伸
     h = QHBoxLayout(row)
-    h.setContentsMargins(4, 2, 4, 2)
-    h.setSpacing(6)
+    h.setContentsMargins(Tokens.SPACING_XS, 2, Tokens.SPACING_XS, 2)
+    h.setSpacing(Tokens.SPACING_SM)
 
     lbl_idx = QLabel(f"{index}.")
     lbl_idx.setMinimumWidth(22)
@@ -218,11 +217,13 @@ def _make_step_row(dialog: "ComboEditDialog", index: int,
     spin.valueChanged.connect(lambda v, s=step: setattr(s, "delay_after_ms", int(v)))
     h.addWidget(spin)
 
-    btn_del = QPushButton("×")
+    btn_del = QPushButton()
+    btn_del.setIcon(lucide_icon("x", 13, Colors.TEXT_SECONDARY))
     # 显式 sizePolicy：水平 Minimum（最小宽度被尊重），垂直 Fixed
     btn_del.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
     btn_del.setMinimumWidth(32)
     btn_del.setFixedHeight(30)
+    btn_del.setToolTip("删除该步骤")
     btn_del.clicked.connect(lambda: dialog._remove_step(step))
     h.addWidget(btn_del)
 
@@ -230,20 +231,18 @@ def _make_step_row(dialog: "ComboEditDialog", index: int,
     return row
 
 
-class ComboEditDialog(QDialog):
+class ComboEditDialog(GlassDialog):
     """添加/编辑连招。combo=None → 添加模式；否则编辑现有 combo（直接改其字段）。"""
 
     def __init__(self, champ: ChampionCombos, combo: Optional[Combo] = None,
                  parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("编辑连招" if combo is not None else "添加连招")
-        self.setModal(True)
+        super().__init__("编辑连招" if combo is not None else "添加连招", parent)
         self._champ = champ
         self._combo = combo
         self._steps: List[ComboStep] = (
             list(combo.sequence) if combo is not None else [])
 
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
 
         # 触发键
         trig_row = QHBoxLayout()
@@ -270,20 +269,24 @@ class ComboEditDialog(QDialog):
         self.scroll_steps.setFrameShape(QFrame.StyledPanel)
         self.steps_container = QWidget()
         self.steps_layout = QVBoxLayout(self.steps_container)
-        self.steps_layout.setContentsMargins(4, 4, 4, 4)
-        self.steps_layout.setSpacing(4)
+        self.steps_layout.setContentsMargins(Tokens.SPACING_XS, Tokens.SPACING_XS,
+                                             Tokens.SPACING_XS, Tokens.SPACING_XS)
+        self.steps_layout.setSpacing(Tokens.SPACING_XS)
         self.scroll_steps.setWidget(self.steps_container)
         layout.addWidget(self.scroll_steps, 1)
         self._rebuild_steps()
 
-        btn_add = QPushButton("+ 添加一步")
+        btn_add = QPushButton("添加一步")
+        btn_add.setIcon(lucide_icon("plus", 14, Colors.TEXT_PRIMARY))
         btn_add.clicked.connect(self._add_step)
         layout.addWidget(btn_add)
 
         btns = QHBoxLayout()
+        btns.setSpacing(Tokens.SPACING_SM)
         btn_cancel = QPushButton("取消")
         btn_cancel.clicked.connect(self.reject)
         btn_save = QPushButton("保存")
+        btn_save.setProperty("class", "primary")
         btn_save.clicked.connect(self._save)
         btns.addStretch()
         btns.addWidget(btn_cancel)
@@ -346,21 +349,19 @@ class ComboEditDialog(QDialog):
         self.accept()
 
 
-class AddChampionDialog(QDialog):
+class AddChampionDialog(GlassDialog):
     """添加英雄：全英雄搜索（中文名 / 英文名 / title），已配置英雄置灰不可选。"""
 
     def __init__(self, champions: List[Tuple[int, str, str, str]],
                  existing_ids: List[int], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("添加英雄")
-        self.setModal(True)
+        super().__init__("添加英雄", parent)
         self._champions = champions  # (cid, name, alias, title)
         self._existing = set(int(x) for x in existing_ids)
         self.selected: Optional[Tuple[int, str]] = None  # (cid, name)
 
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         self.edt_search = QLineEdit()
-        self.edt_search.setPlaceholderText("🔍 搜索（中文/英文/别名）")
+        self.edt_search.setPlaceholderText("搜索（中文/英文/别名）")
         self.edt_search.textChanged.connect(self._refresh)
         layout.addWidget(self.edt_search)
 
@@ -371,6 +372,7 @@ class AddChampionDialog(QDialog):
         btn_cancel = QPushButton("取消")
         btn_cancel.clicked.connect(self.reject)
         btn_ok = QPushButton("确定")
+        btn_ok.setProperty("class", "primary")
         btn_ok.clicked.connect(self._confirm)
         btns.addStretch()
         btns.addWidget(btn_cancel)

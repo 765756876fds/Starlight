@@ -1,10 +1,14 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QLineEdit, QPushButton, QDialogButtonBox, QMessageBox,
 )
 import json
 import os
+
+from ..widgets.glass_dialog import GlassDialog
+from ..widgets.icon_utils import lucide_icon
+from ..theme.tokens import Tokens
 
 # 别名表（俗称/本名 → 称号）：导入失败则退化为 中文名/英文名/称号 三字段匹配
 try:
@@ -13,12 +17,11 @@ except Exception:
     _ALIASES = {}
 
 
-class BanPickConfigDialog(QDialog):
+class BanPickConfigDialog(GlassDialog):
     """Ban / Pick 优先级列表编辑 - 搜索式英雄选择（中文/英文/称号/俗称），内部存ID"""
 
     def __init__(self, title: str, current_list: list, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(title)
+        super().__init__(title, parent)
         self.setMinimumWidth(400)
         self.setMinimumHeight(500)
 
@@ -41,7 +44,7 @@ class BanPickConfigDialog(QDialog):
                 if name in self._name_to_id:
                     self._item_ids.append(self._name_to_id[name])
 
-        lay = QVBoxLayout(self)
+        lay = self.body_layout
         lay.addWidget(QLabel("优先级列表（越靠前越优先）"))
 
         self.list_widget = QListWidget()
@@ -51,7 +54,7 @@ class BanPickConfigDialog(QDialog):
         # 搜索式英雄选择：输入即过滤，双击/回车添加（与连招面板交互一致）
         lay.addWidget(QLabel("选择英雄（搜索过滤，双击/回车添加）"))
         self.edt_search = QLineEdit()
-        self.edt_search.setPlaceholderText("🔍 搜索英雄（中文/英文/别名）")
+        self.edt_search.setPlaceholderText("搜索英雄（中文/英文/别名）")
         self.edt_search.textChanged.connect(self._refresh_candidates)
         lay.addWidget(self.edt_search)
 

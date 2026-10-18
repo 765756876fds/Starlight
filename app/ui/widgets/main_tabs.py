@@ -9,6 +9,7 @@ from app.ui.panels.music_panel import MusicPanel
 from app.ui.panels.ongoing_panel import OngoingPanel
 from app.ui.panels.settings_panel import SettingsPanel
 from app.ui.settings_store import load_ui_prefs
+from app.ui.theme.tokens import Tokens
 
 
 def _build_acct(ongoing_service, services_dict):
@@ -38,8 +39,9 @@ class MainTabs(QWidget):
         self._tts = tts
         self._equip_toggle = equip_toggle
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+                                  Tokens.SPACING_SM, Tokens.SPACING_SM)
+        layout.setSpacing(Tokens.SPACING_SM)
 
         tabs = QTabWidget()
         self._panels = {}

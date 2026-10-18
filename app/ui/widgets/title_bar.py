@@ -2,6 +2,10 @@
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
+from ..theme.colors import Colors
+from ..theme.tokens import Tokens
+from ..widgets.icon_utils import lucide_icon
+
 
 class GlassTitleBar(QWidget):
     """无边框主窗口的顶栏。
@@ -20,21 +24,23 @@ class GlassTitleBar(QWidget):
         self._drag_offset: QPoint | None = None
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 0, 8, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(Tokens.SPACING_MD, 0, Tokens.SPACING_SM, 0)
+        layout.setSpacing(Tokens.SPACING_XS)
 
         self.lbl_title = QLabel(title)
         layout.addWidget(self.lbl_title)
         layout.addStretch(1)
 
-        self.btn_min = QPushButton("—")
+        self.btn_min = QPushButton()
         self.btn_min.setObjectName("btn_min")
+        self.btn_min.setIcon(lucide_icon("minus", 14, Colors.TEXT_SECONDARY))
         self.btn_min.setToolTip("最小化")
         self.btn_min.setFixedSize(40, 26)
         layout.addWidget(self.btn_min)
 
-        self.btn_close = QPushButton("✕")
+        self.btn_close = QPushButton()
         self.btn_close.setObjectName("btn_close")
+        self.btn_close.setIcon(lucide_icon("x", 13, Colors.TEXT_SECONDARY))
         self.btn_close.setToolTip("关闭")
         self.btn_close.setFixedSize(40, 26)
         layout.addWidget(self.btn_close)

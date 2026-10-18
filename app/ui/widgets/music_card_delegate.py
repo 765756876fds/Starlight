@@ -12,6 +12,7 @@
 - 不重写 editorEvent——双击/右键等信号继续由 QListWidget 既有机制发出。
 """
 import os
+import zlib
 
 from PySide6.QtCore import (
     QPointF, QPropertyAnimation, QRunnable, QRectF, QSize,
@@ -26,6 +27,13 @@ from PySide6.QtWidgets import QAbstractItemView, QStyledItemDelegate, QStyle
 
 from ..theme import motion
 from ..theme.tokens import Tokens
+
+# ID3 封面读取（模块级预热：避免在后台 worker 线程首次 import 拖慢）
+try:
+    from mutagen import File as _MutagenFile
+    _MUTAGEN_OK = True
+except Exception:  # pragma: no cover
+    _MUTAGEN_OK = False
 
 # item 附加数据角色（避免与业务 UserRole 冲突）
 
@@ -70,16 +78,33 @@ class _LocalCoverTask(QRunnable):
 
     def run(self):
         img = QImage()
-        try:
-            d = os.path.dirname(self._path)
-            for name in self._NAMES:
-                p = os.path.join(d, name)
-                if os.path.isfile(p):
-                    img = QImage(p)
-                    if not img.isNull():
-                        break
-        except Exception:
-            img = QImage()
+        # ① ID3 内嵌封面（MP3 APIC / MP4 covr），读失败静默降级
+        if _MUTAGEN_OK:
+            try:
+                mf = _MutagenFile(self._path)
+                tags = mf.tags if mf is not None else None
+                data = None
+                if tags is not None:
+                    if "APIC:" in tags:
+                        data = tags["APIC:"].data
+                    elif "covr" in tags and tags["covr"]:
+                        data = bytes(tags["covr"][0])
+                if data:
+                    img = QImage.fromData(data)
+            except Exception:
+                img = QImage()
+        # ② 同级目录封面文件（cover/folder/album/front.*）
+        if img.isNull():
+            try:
+                d = os.path.dirname(self._path)
+                for name in self._NAMES:
+                    p = os.path.join(d, name)
+                    if os.path.isfile(p):
+                        img = QImage(p)
+                        if not img.isNull():
+                            break
+            except Exception:
+                img = QImage()
         self._bridge.local_done.emit(self._key, img)
 
 
@@ -321,7 +346,10 @@ class MusicCardDelegate(QStyledItemDelegate):
         if pm is not None:
             painter.drawPixmap(cover.toRect(), pm)
         else:
-            self._paint_skeleton(painter, cover)
+            seed = data.get("_seed")
+            if seed is None:   # 老数据兜底：paint 内单次 crc（纯内建 C 函数，μs 级）
+                seed = zlib.crc32(str(data.get("title") or "?").encode("utf-8", "ignore"))
+            self._paint_skeleton(painter, cover, seed, data.get("title") or "")
             if key and not self._loader.failed(key):
                 self._loader.request(key)   # 仅登记异步加载，无 IO
 
@@ -354,13 +382,24 @@ class MusicCardDelegate(QStyledItemDelegate):
             QPointF(rect.left() + pad, text_top + fm1.height() + 2 + fm2.ascent()), sub)
         painter.restore()
 
-    # ---- 骨架占位（封面未就绪：渐变 + 微光扫描 + 音符） ----
+    # ---- 骨架占位 → 动态专辑图（无封面时：哈希渐变 + 受光光斑 + 首字 + 微光） ----
     @staticmethod
-    def _paint_skeleton(painter: QPainter, cover: QRectF):
+    def _paint_skeleton(painter: QPainter, cover: QRectF, seed: int, title: str):
+        # Spotify/网易云式动态专辑图：按歌曲名哈希稳定选取高级渐变对
+        pal = Tokens.COVER_PALETTES[seed % len(Tokens.COVER_PALETTES)]
         grad = QLinearGradient(cover.topLeft(), cover.bottomRight())
-        grad.setColorAt(0.0, QColor(52, 52, 80))
-        grad.setColorAt(1.0, QColor(34, 34, 52))
+        grad.setColorAt(0.0, QColor(*_split(pal[0])))
+        grad.setColorAt(1.0, QColor(*_split(pal[1])))
         painter.fillRect(cover, grad)
+        # 受光光斑：顶部暖高光圆 + 底部暗圆（专辑封面层次感，非纯平渐变）
+        cx, cy = cover.center().x(), cover.center().y()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 26))
+        painter.drawEllipse(QPointF(cx - cover.width() * 0.28, cy - cover.height() * 0.34),
+                            cover.width() * 0.45, cover.height() * 0.45)
+        painter.setBrush(QColor(0, 0, 0, 46))
+        painter.drawEllipse(QPointF(cx + cover.width() * 0.22, cy + cover.height() * 0.30),
+                            cover.width() * 0.34, cover.height() * 0.34)
         # 微光扫描线（ui-ux-pro-max motion：#15 gradient sweep, sine.inOut, 1400ms 循环）；
         # 时钟仅在存在加载中封面时运行（_CoverLoader pending 计数），reduced-motion 静态。
         clock = motion.ShimmerClock.instance()
@@ -374,11 +413,14 @@ class MusicCardDelegate(QStyledItemDelegate):
             sweep.setColorAt(0.5, QColor(255, 255, 255, _SHIMMER_A))
             sweep.setColorAt(1.0, QColor(255, 255, 255, 0))
             painter.fillRect(cover, sweep)
+        # 歌曲名首字（浅色半透明白粗体；空标题回退音符）
+        ch = (str(title) or "").strip()[:1].upper() or "♪"
         f = QFont()
-        f.setPixelSize(52)
+        f.setPixelSize(int(cover.height() * 0.34))
+        f.setBold(True)
         painter.setFont(f)
-        painter.setPen(QColor(150, 150, 185, 110))
-        painter.drawText(cover, Qt.AlignCenter, "♪")
+        painter.setPen(QColor(255, 255, 255, _COVER_LETTER_A))
+        painter.drawText(cover, Qt.AlignCenter, ch)
 
     # ---- 播放徽标（封面左上：accent 圆 + 白三角） ----
     @staticmethod
@@ -454,3 +496,4 @@ _TOP_LINE_HOVER_A = _rgba_alpha(Tokens.GLASS_TOP_LINE_HOVER)
 _BOTTOM_LINE_A = _rgba_alpha(Tokens.GLASS_BOTTOM_LINE)
 _SHIMMER_STR = getattr(Tokens, "SHIMMER_LINE", "rgba(255, 255, 255, 30)")
 _SHIMMER_A = _rgba_alpha(_SHIMMER_STR) if "rgba(" in _SHIMMER_STR else 30
+_COVER_LETTER_A = _rgba_alpha(Tokens.COVER_LETTER)

@@ -410,6 +410,11 @@ class JSMusicSource(MusicSource):
         out: List[OnlineTrack] = []
         for r in result:
             try:
+                extra = r.get("extra") or {}
+                cover = (r.get("cover_url") or r.get("cover_img")
+                         or r.get("artwork") or r.get("pic")
+                         or (extra.get("cover_img") if isinstance(extra, dict) else None)
+                         or "")
                 out.append(OnlineTrack(
                     source_name=r.get("source_name", self.name),
                     track_id=str(r.get("track_id", "")),
@@ -417,7 +422,8 @@ class JSMusicSource(MusicSource):
                     artist=r.get("artist", ""),
                     album=r.get("album", ""),
                     duration_seconds=int(r.get("duration_seconds") or 0),
-                    extra=r.get("extra") or {},
+                    cover_url=cover or None,
+                    extra=extra,
                 ))
             except Exception:
                 continue

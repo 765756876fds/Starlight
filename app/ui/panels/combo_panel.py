@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
+from app.ui.widgets.icon_utils import lucide_icon
 
 import os
 from typing import Dict, List, Optional, Tuple
@@ -44,11 +45,17 @@ class ComboPanel(QWidget):
         layout.addWidget(box_title)
 
         self.edt_search = QLineEdit()
-        self.edt_search.setPlaceholderText("🔍 搜索英雄（中文/英文/别名）")
+        self.edt_search.setPlaceholderText("搜索英雄（中文/英文/别名）")
         self.edt_search.textChanged.connect(self._refresh_list)
         search_row = QHBoxLayout()
+        search_row.setSpacing(Tokens.SPACING_SM)
+        lbl_search = QLabel()
+        lbl_search.setPixmap(lucide_icon("search", 14, Colors.TEXT_SECONDARY).pixmap(14, 14))
+        lbl_search.setFixedSize(14, 14)
+        search_row.addWidget(lbl_search)      # Lucide search 图标（搜索框左侧）
         search_row.addWidget(self.edt_search, 1)
-        self.btn_add_champion = QPushButton("+ 添加英雄")
+        self.btn_add_champion = QPushButton("添加英雄")
+        self.btn_add_champion.setIcon(lucide_icon("plus", 14, Colors.TEXT_PRIMARY))
         self.btn_add_champion.setMinimumWidth(96)  # 自适应，不写死
         self.btn_add_champion.clicked.connect(self._on_add_champion)
         search_row.addWidget(self.btn_add_champion)
@@ -61,20 +68,20 @@ class ComboPanel(QWidget):
         self.lst_heroes.currentItemChanged.connect(self._on_select)
         left_col.addWidget(self.lst_heroes, 1)
         self.btn_delete_champion = QPushButton("删除此英雄")
+        self.btn_delete_champion.setObjectName("btn_delete_champion")  # 危险操作样式（QSS）
         self.btn_delete_champion.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self.btn_delete_champion.setMinimumWidth(88)
-        self.btn_delete_champion.setStyleSheet(
-            f"background-color: {Colors.DANGER}; color: white; font-weight: bold;")
         self.btn_delete_champion.clicked.connect(self._on_delete_champion)
         left_col.addWidget(self.btn_delete_champion)
         body.addLayout(left_col, 3)
 
         self.detail = QWidget()
         self._detail_layout = QVBoxLayout(self.detail)
-        self._detail_layout.setContentsMargins(4, 0, 0, 0)
+        self._detail_layout.setContentsMargins(Tokens.SPACING_XS, 0, 0, 0)
         self._detail_layout.setAlignment(Qt.AlignTop)  # 内容顶对齐，不留垂直居中
         self.lbl_detail_champ = QLabel("当前英雄：-")
-        self.lbl_detail_champ.setStyleSheet("font-weight: bold;")
+        self.lbl_detail_champ.setStyleSheet(
+            f"font-size: {Tokens.FONT_SIZE_TITLE}px; font-weight: bold;")
         self._detail_layout.addWidget(self.lbl_detail_champ)
         body.addWidget(self.detail, 4)
         layout.addLayout(body, 1)
@@ -160,8 +167,10 @@ class ComboPanel(QWidget):
         if not self._combo:
             return
         name = self._combo.current_champion_name()
+        if not (isinstance(name, str) and name):
+            name = "-"   # 非真实字符串（None/异常/mock）不展示
         self.lbl_current.setText(
-            f"当前对局英雄：{name if name else '-'}（自动识别）")
+            f"当前对局英雄：{name}（自动识别）")
         # 当前英雄若有连招配置，自动滚动/标记（列表刷新已处理 ● 标记）
         self._refresh_list()
 
@@ -218,12 +227,12 @@ class ComboPanel(QWidget):
                 btn.clicked.connect(lambda _=False, c=combo:
                                     self._on_edit_combo(cc, c))
                 h.addWidget(btn)
-                btn_del = QPushButton("×")
+                btn_del = QPushButton()
+                btn_del.setIcon(lucide_icon("x", 13, Colors.DANGER))
                 # 删除连招按钮：红色醒目；sizePolicy 保证不被压缩
                 btn_del.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
                 btn_del.setMinimumWidth(32)
                 btn_del.setFixedHeight(28)
-                btn_del.setStyleSheet(f"color: {Colors.DANGER}; font-weight: bold;")
                 btn_del.setToolTip("删除此连招")
                 btn_del.clicked.connect(lambda _=False, c=combo:
                                         self._on_delete_combo(cc, c))
