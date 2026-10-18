@@ -1151,9 +1151,9 @@ class MoviePanel(QWidget):
 
     def _on_toggle(self):
         try:
-            if self._movie.is_playing():
-                self._movie.toggle_pause()
-                self._sync_toggle_icon()
+            # 播放中 → 暂停；暂停/停止 → 恢复（toggle 语义），随后立即同步图标
+            self._movie.toggle_pause()
+            self._sync_toggle_icon()
         except Exception as e:
             self.lbl_status.setText(f"控制失败: {e}")
 

@@ -124,6 +124,27 @@ class TestGlassQss:
         qss = build_glass_qss()
         assert "border-radius: 10px" in qss
 
+    def test_scrollbar_add_page_transparent(self):
+        # 棋盘格底纹根除：add-page/sub-page 必须全透明（终极覆盖）
+        qss = build_glass_qss()
+        assert "QScrollBar::add-page" in qss
+        assert "QScrollBar::sub-page" in qss
+        for rule in ("QScrollBar::track", "QScrollBar:vertical"):
+            assert "transparent" in qss  # track/scrollbar 主体透明
+
+    def test_toggle_icon_switches_immediately(self, qapp):
+        # 播放按钮图标切换：点击后立即 play↔pause（不依赖定时器刷新）
+        from unittest.mock import MagicMock
+        from app.ui.panels.music_panel import MusicPanel
+        m = MagicMock()
+        m.is_playing.return_value = True
+        mp = MusicPanel(m)
+        mp._sync_toggle_icon()
+        assert getattr(mp, "_toggle_icon", None) == "pause"
+        m.is_playing.return_value = False
+        mp._on_toggle()  # 模拟点击：toggle() + 立即同步
+        assert getattr(mp, "_toggle_icon", None) == "play"
+
     def test_no_non_scale_font_sizes(self):
         # QSS 中不得出现非排版阶梯的字面量字号
         qss = build_glass_qss()

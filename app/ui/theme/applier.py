@@ -213,14 +213,27 @@ QListWidget, QListView {{
     outline: none; padding: 4px;
 }}
 QListWidget:focus, QListView:focus {{ border-color: {T.ACCENT}; }}
+/* 焦点虚线框地毯式歼灭：任何获得焦点的控件都走自定义 accent 微亮/细边框，
+   绝不显示 Qt 原生 PE_FrameFocusRect 虚线（QSS 定义了 border 即由样式表接管绘制） */
+QTableView:focus, QTreeView:focus {{ border-color: {T.ACCENT}; }}
+QCheckBox:focus {{ color: {T.TEXT_PRIMARY}; }}
+QCheckBox:focus::indicator {{ border-color: {T.ACCENT}; }}
+QSlider:focus::handle {{ background: {T.ACCENT}; }}
+QMenu:focus {{ border: 1px solid rgba({T.ACCENT_RGB}, 120); }}
+QScrollArea:focus {{ border: none; }}
+QTabWidget:focus, QTabWidget:focus QTabBar::tab {{ border: 1px solid {T.ACCENT}; }}
 QListWidget::item {{ padding: 8px 10px; border-radius: {T.RADIUS_SMALL}px; margin: 2px 0; }}
 QListWidget::item:hover {{ background-color: rgba({T.BG_ELEVATED_RGB}, 200); }}
 QListWidget::item:selected {{ background-color: {T.NAV_PILL}; color: {T.TEXT_PRIMARY}; }}
 /* 卡片网格列表：由 MusicCardDelegate 自绘（此处的 item 规则不作用于卡片） */
 
-/* 滚动条：极简细线半透明（track 全透明、无箭头，仅悬浮显示滑块） */
+/* 滚动条：极简细线半透明（track/add-page/sub-page 全透明、无箭头，仅悬浮显示滑块） */
 QScrollBar:vertical, QScrollBar:horizontal {{ background: transparent; margin: 0; }}
 QScrollBar::track:vertical, QScrollBar::track:horizontal {{ background: transparent; border: none; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+    background: transparent; border: none; width: 0; height: 0;
+}}
 QScrollBar:vertical {{ width: 6px; }}
 QScrollBar::handle:vertical {{ background: {T.SCROLL_HANDLE}; border-radius: 3px; min-height: 30px; }}
 QScrollBar::handle:vertical:hover {{ background: rgba({T.ACCENT_RGB}, 150); }}

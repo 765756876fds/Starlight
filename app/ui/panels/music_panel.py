@@ -714,9 +714,22 @@ class MusicPanel(QWidget):
         try: self._music.prev()
         except Exception: pass
 
+    def _sync_toggle_icon(self):
+        """按真实播放状态立即同步 播放/暂停 图标（点击后即时反馈，不依赖定时器）。"""
+        try:
+            playing = bool(self._music.is_playing())
+        except Exception:
+            playing = None
+        if playing is not None:
+            want = "pause" if playing else "play"
+            if getattr(self, "_toggle_icon", None) != want:
+                self._toggle_icon = want
+                self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
+
     def _on_toggle(self):
         try: self._music.toggle()
         except Exception: pass
+        self._sync_toggle_icon()  # 点击后立即刷新图标（暂停↔播放）
 
     def _on_toggle_mode(self):
         self._mode_idx = (self._mode_idx + 1) % len(self._modes)
@@ -1770,17 +1783,8 @@ class MusicPanel(QWidget):
                 prefix = "[在线] " if song.get("online") else ""
                 text = f"{prefix}{title} - {artist}" if artist else f"{prefix}{title}"
                 self.lbl_track.setText(text)
-                # 播放/暂停图标随状态切换（仅变化时）
-                try:
-                    playing = bool(self._music.is_playing())
-                except Exception:
-                    playing = None
-                if playing is not None:
-                    want = "pause" if playing else "play"
-                    if getattr(self, "_toggle_icon", None) != want:
-                        self._toggle_icon = want
-                        self.btn_toggle.setIcon(
-                            lucide_icon(want, 18, "#ffffff"))
+                # 播放/暂停图标随状态切换（定时器路径，复用同一同步方法）
+                self._sync_toggle_icon()
                 # 卡片播放态同步（仅 key 变化时更新全部卡片视图）
                 pkey = self._play_key(song)
                 if pkey != self._playing_card_key:
