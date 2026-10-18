@@ -545,6 +545,13 @@ class MoviePanel(QWidget):
         row2.addWidget(self.btn_shortcut)
         root.addLayout(row2)
 
+        # 底部控制行整体裁撤：内嵌播放器自带 OSC（播放/停止/全屏/倍速/音量/字幕/连播/快捷键），
+        # 外部控制不再显示——仅 hide（保留对象与信号，防业务/测试引用崩）。
+        for _w in (self.btn_toggle, self.btn_stop, self.btn_fullscreen, self.btn_speed,
+                   self.lbl_vol, self.slider_vol, self.btn_mute, self.btn_subtitle,
+                   self.cb_autonext, self.btn_shortcut):
+            _w.hide()
+
         # 倍速档位（B站/爱奇艺标准 9 档；点按钮弹菜单选档，非循环点击）
         self._speed_steps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
         self._speed_idx = 2  # 1.0x 为默认档

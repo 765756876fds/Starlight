@@ -267,17 +267,30 @@ QCheckBox::indicator:checked {{
     background-color: {T.ACCENT}; border-color: {T.ACCENT}; image: none;
 }}
 
-/* Slider：sub-page 高亮强调色（已播放/已填充），groove 半透明深灰（未填充），handle 纯白圆点微光 */
-QSlider::groove:horizontal {{ height: 4px; background: rgba({T.TEXT_RGB}, 45); border-radius: 2px; }}
+/* Slider：左亮蓝（已走过）/ 右半透明深灰（未走过）/ 纯白圆点 handle。
+   子元素 background 用 transparent 在 Qt QSS 上不可靠（会露出原生亮色 groove），
+   因此 add-page 必须显式声明深灰背景（与 groove 同色），不能依赖 transparent。 */
+QSlider::groove:horizontal {{
+    background: rgba({T.TEXT_RGB}, 38);   /* 底槽半透明深灰 */
+    height: 6px; border-radius: 3px;
+}}
 QSlider::sub-page:horizontal {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {T.ACCENT}, stop:1 {T.ACCENT_LIGHT}); border-radius: 2px;
+    background: {T.ACCENT};               /* 已走过：亮蓝 */
+    border-radius: 3px;
+}}
+QSlider::add-page:horizontal {{
+    background: rgba({T.TEXT_RGB}, 38);   /* 未走过：显式深灰（同 groove） */
+    border-radius: 3px;
 }}
 QSlider::handle:horizontal {{
-    background: #ffffff; border: 1px solid rgba({T.ACCENT_RGB}, 230);
-    width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
+    background: #ffffff;                   /* 纯白圆点 */
+    width: 14px; height: 14px; margin: -4px 0; border-radius: 7px;
+    border: 1px solid rgba({T.ACCENT_RGB}, 200);
 }}
 QSlider::handle:horizontal:hover {{
+    background: #ffffff; border: 1px solid {T.ACCENT};
+}}
+QSlider:focus::handle {{
     background: #ffffff; border: 1px solid {T.ACCENT};
 }}
 
@@ -358,5 +371,14 @@ def apply_dark_theme(app: QApplication) -> None:
 
 
 def apply_glass_theme(app: QApplication) -> None:
-    """Glass 全局样式（覆盖 dark 主题；MainWindow.__init__ 调用）。"""
+    """Glass 全局样式（覆盖 dark 主题；MainWindow.__init__ 调用）。
+
+    Fusion 基底：Windows 原生 style 会忽略 QSlider::groove/add-page 等子元素的
+    QSS background（只画 sub-page，导致未走过区露出原生亮白/全蓝混淆），
+    Fusion 对样式表子元素支持完整，保证「左亮蓝 / 右半透明深灰 / 白点」分层可靠。
+    """
+    try:
+        app.setStyle("Fusion")
+    except Exception:
+        pass
     app.setStyleSheet(build_glass_qss())

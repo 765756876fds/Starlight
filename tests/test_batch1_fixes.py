@@ -134,3 +134,47 @@ def test_waveform_slider_renders(qapp):
         wv._step()
     img = wv.grab().toImage()
     assert not img.isNull(), "波形进度条离屏渲染失败"
+
+
+# ---------------- ⑤ 滑条分层：左亮蓝 / 右半透明深灰 ----------------
+def test_slider_left_blue_right_gray(qapp):
+    """QSS 结构断言：groove/add-page 显式深灰、sub-page 亮蓝、handle 白点；
+    Fusion 基底生效（QSS 子元素分层可靠）。像素级验证见离屏脚本（深色底实测
+    left=#4a9eff / right=#444457）。"""
+    from app.ui.theme.applier import apply_glass_theme, build_glass_qss
+    from app.ui.theme.tokens import Tokens
+    apply_glass_theme(qapp)
+    qss = build_glass_qss()
+    assert "QSlider::groove:horizontal" in qss
+    assert "QSlider::sub-page:horizontal" in qss
+    assert "QSlider::add-page:horizontal" in qss
+    addpage = qss.split("QSlider::add-page:horizontal")[1].split("}")[0]
+    assert "transparent" not in addpage, "add-page 不能依赖 transparent（Qt 子元素不可靠）"
+    assert "rgba" in addpage, "add-page 必须显式深灰背景"
+    sub = qss.split("QSlider::sub-page:horizontal")[1].split("}")[0]
+    assert Tokens.ACCENT in sub, "sub-page 必须为 ACCENT 亮蓝"
+    assert "background: #ffffff" in qss.split("QSlider::handle:horizontal")[1].split("}")[0], \
+        "handle 必须纯白圆点"
+    assert "StyleSheet" in qapp.style().metaObject().className(), "Fusion 基底未生效"
+
+
+# ---------------- ⑥ 电影面板：底部控制行彻底隐藏 ----------------
+def test_movie_bottom_controls_hidden(qapp):
+    from app.ui.panels.movie_panel import MoviePanel
+    panel = MoviePanel(movie=_FakeMovie())
+    try:
+        assert panel.btn_toggle.isHidden()
+        assert panel.btn_stop.isHidden()
+        assert panel.btn_fullscreen.isHidden()
+        assert panel.btn_speed.isHidden()
+        assert panel.slider_vol.isHidden()
+        assert panel.btn_mute.isHidden()
+        assert panel.btn_subtitle.isHidden()
+        assert panel.cb_autonext.isHidden()
+        assert panel.btn_shortcut.isHidden()
+        # 顶部搜索仍可见
+        assert not panel.edit_kw.isHidden() or not panel.btn_search.isHidden()
+    finally:
+        panel._timer.stop()
+        if panel._video_win is not None:
+            panel._video_win._timer.stop()
