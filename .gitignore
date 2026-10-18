@@ -185,3 +185,4 @@ config/music_sources.json
 /third_party/llama/
 # Inno Setup 安装包产物
 /Setup_Lite.exe
+/Setup_Full.exe
