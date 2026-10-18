@@ -659,12 +659,61 @@ class MusicController:
             self._play_song(song)
 
     def get_history(self, limit: int = 200) -> list:
-        """播放历史（最近在前）。"""
+        """播放历史（最近在前）。封面补全：本地反查 path，在线查最近封面缓存。"""
         try:
-            return self.db.get_history(limit=limit)
+            rows = self.db.get_history(limit=limit)
+            return [self._enrich_cover(dict(r)) for r in rows]
         except Exception as e:
             print(f"[Music] get_history error: {e}")
             return []
+
+    # ---- 历史/歌单封面补全（本地反查 path / 在线查最近封面缓存） ----
+    _cover_mem: dict = {}   # 在线封面内存缓存："{title}|{artist}" / "{source}|{track_id}" -> url
+
+    def remember_cover(self, title: str = "", artist: str = "",
+                       source_name: str = "", track_id: str = "",
+                       cover_url: str = "") -> None:
+        """在线歌渲染/播放时登记封面，供历史与歌单缺字段时补全。"""
+        if not cover_url:
+            return
+        if title or artist:
+            self._cover_mem[f"{title or ''}|{artist or ''}"] = cover_url
+        if source_name and track_id:
+            self._cover_mem[f"{source_name}|{track_id}"] = cover_url
+
+    def _enrich_cover(self, row: dict) -> dict:
+        """单行补封面：已有 cover_url/path 直接返回；本地按 music_id/title 反查
+        path（Delegate 走 ID3/同目录封面）；在线查最近封面缓存。"""
+        if not isinstance(row, dict):
+            return row
+        if row.get("cover_url") or row.get("path"):
+            return row
+        st = row.get("source_type", "")
+        try:
+            if st == "local":
+                mid = int(row.get("music_id") or 0)
+                song = self.db.get_song_by_id(mid) if mid > 0 else None
+                if song and song.get("path"):
+                    row["path"] = song["path"]
+                    return row
+                q = " ".join(x for x in (row.get("title"), row.get("artist")) if x)
+                for hit in self.db.search(q, limit=5):
+                    if hit.get("path"):
+                        row["path"] = hit["path"]
+                        return row
+            else:
+                url = (self._cover_mem.get(f"{row.get('title')}|{row.get('artist')}")
+                       or self._cover_mem.get(
+                           f"{row.get('source_name')}|{row.get('track_id')}"))
+                if url:
+                    row["cover_url"] = url
+        except Exception as e:
+            print(f"[Music] enrich cover error: {e}")
+        return row
+
+    def lookup_cover(self, row: dict) -> dict:
+        """面板侧兜底：返回补全后的行（不修改原字典）。"""
+        return self._enrich_cover(dict(row))
 
     def clear_history(self):
         """清空播放历史。"""
@@ -744,9 +793,10 @@ class MusicController:
             return False
 
     def get_playlist_songs(self, playlist_id: int) -> list:
-        """歌单内歌曲（按加入时间）。"""
+        """歌单内歌曲（按加入时间）。封面补全：本地反查 path，在线查最近封面缓存。"""
         try:
-            return self.db.get_playlist_songs(playlist_id)
+            rows = self.db.get_playlist_songs(playlist_id)
+            return [self._enrich_cover(dict(r)) for r in rows]
         except Exception as e:
             print(f"[Music] get_playlist_songs error: {e}")
             return []
@@ -1489,6 +1539,12 @@ class MusicController:
         except Exception as e:
             print(f"[Music] mpv loadfile fail: {e}")
             return False
+        self.remember_cover(
+            title=track.title or "",
+            artist=track.artist or "",
+            source_name=getattr(track, "source_name", "") or "",
+            track_id=getattr(track, "track_id", "") or "",
+            cover_url=getattr(track, "cover_url", None) or "")
         self._current_song = {
             "id": None,
             "title": track.title,

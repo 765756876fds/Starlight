@@ -133,6 +133,34 @@ def test_settings_nowheel_slider_is_glass(qapp):
     assert issubclass(NoWheelSlider, GlassSlider)
 
 
+def test_volume_popover_position_aligned(qapp):
+    """悬浮面板弹出位置：X = 按钮全局中心 X - 面板宽/2（左右居中）；Y = 按钮全局顶部
+    Y - 面板高 - 8px 间隙（紧贴上方）。mapToGlobal 修正父窗口 padding。"""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QHBoxLayout, QWidget
+
+    host = QWidget()
+    lay = QHBoxLayout(host)
+    lay.setContentsMargins(50, 30, 50, 30)   # 父容器 padding：mapToGlobal 必须正确扣除
+    s = GlassSlider(Qt.Vertical)
+    s.setRange(0, 100)
+    btn = VolumeButton()
+    btn.set_slider(s)
+    lay.addWidget(btn)
+    host.resize(160, 120)
+    host.show()
+    qapp.processEvents()
+    btn._show_popover()
+    qapp.processEvents()
+    p = btn._popover
+    assert p.isVisible()
+    expect_x = btn.mapToGlobal(btn.rect().center()).x() - p.width() // 2
+    expect_y = btn.mapToGlobal(QPoint(0, 0)).y() - p.height() - 8
+    assert abs(p.x() - expect_x) <= 1, f"面板 X 应居中对齐按钮, got {p.x()} expect {expect_x}"
+    assert abs(p.y() - expect_y) <= 1, f"面板 Y 应紧贴按钮上方, got {p.y()} expect {expect_y}"
+    p.hide()
+
+
 def test_music_panel_volume_uses_glass_ui(qapp):
     """MusicPanel 音量区：slider_vol 为垂直 GlassSlider，btn_volume 已装配悬浮面板，
     业务信号（valueChanged/sliderReleased）连接保持不变。"""

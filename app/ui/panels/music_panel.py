@@ -876,6 +876,16 @@ class MusicPanel(QWidget):
                 # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
                 item = QListWidgetItem(f"[{t.source_name}] {t.title} - {t.artist}")
                 sub = f"{t.artist} · {t.source_name}" if t.artist else (t.source_name or "")
+                # 登记在线封面 → 历史/歌单缺字段时补全
+                if self._music is not None and hasattr(self._music, "remember_cover"):
+                    try:
+                        self._music.remember_cover(
+                            title=t.title or "", artist=t.artist or "",
+                            source_name=t.source_name or "",
+                            track_id=t.track_id or "",
+                            cover_url=getattr(t, "cover_url", None) or "")
+                    except Exception:
+                        pass
                 item.setData(Qt.UserRole, self._card_data({
                     "title": t.title,
                     "artist": t.artist,
@@ -1016,11 +1026,22 @@ class MusicPanel(QWidget):
             print(f"[MusicPanel] get_history error: {e}")
             rows = []
         self.list_history.clear()
-        for row in rows:
+        for i, row in enumerate(rows):
             title = row.get("title", "?") or "?"
             artist = row.get("artist", "") or ""
             st = row.get("source_type", "") or ""
             sn = row.get("source_name", "") or ""
+            # 封面补全兜底：controller 已反查 path/cover_url；此处再兜底并打日志
+            if self._music is not None and hasattr(self._music, "lookup_cover"):
+                try:
+                    row = self._music.lookup_cover(row)
+                except Exception:
+                    pass
+            if i < 3:
+                print(f"[MusicPanel] history item#{i}: "
+                      f"title={title!r} artist={artist!r} source_type={st!r} "
+                      f"music_id={row.get('music_id')!r} "
+                      f"cover_url={row.get('cover_url')!r} path={row.get('path')!r}")
             if st == "local":
                 src = "本地"
             elif sn:
@@ -1123,11 +1144,22 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] get_playlist_songs error: {e}")
             rows = []
-        for row in rows:
+        for i, row in enumerate(rows):
             title = row.get("title", "?") or "?"
             artist = row.get("artist", "") or ""
             st = row.get("source_type", "") or ""
             sn = row.get("source_name", "") or ""
+            # 封面补全兜底：controller 已反查 path/cover_url；此处再兜底并打日志
+            if self._music is not None and hasattr(self._music, "lookup_cover"):
+                try:
+                    row = self._music.lookup_cover(row)
+                except Exception:
+                    pass
+            if i < 3:
+                print(f"[MusicPanel] playlist item#{i}: "
+                      f"title={title!r} artist={artist!r} source_type={st!r} "
+                      f"music_id={row.get('music_id')!r} "
+                      f"cover_url={row.get('cover_url')!r} path={row.get('path')!r}")
             src = "本地" if st == "local" else (sn or "在线")
             item = QListWidgetItem(f"{title} - {artist} [{src}]")
             mid = row.get("music_id") or row.get("id")
@@ -1348,6 +1380,15 @@ class MusicPanel(QWidget):
             item = QListWidgetItem(text)
             # extra 必须随卡携带（含 _raw 原始歌曲对象）：play_online → getUrl
             # 依赖 raw_item 构造插件 URL，缺了会 AttributeError → 榜单永远无法播放。
+            if self._music is not None and hasattr(self._music, "remember_cover"):
+                try:
+                    self._music.remember_cover(
+                        title=t.title or "", artist=t.artist or "",
+                        source_name=t.source_name or "",
+                        track_id=t.track_id or "",
+                        cover_url=getattr(t, "cover_url", None) or "")
+                except Exception:
+                    pass
             item.setData(Qt.UserRole, self._card_data({
                 "title": t.title,
                 "artist": t.artist,

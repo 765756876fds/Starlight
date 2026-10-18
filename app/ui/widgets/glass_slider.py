@@ -8,7 +8,7 @@ VolumePopover / VolumeButton：底部音量悬浮面板——平时仅一个喇�
 点击在喇叭上方弹出垂直玻璃面板（底部喇叭 + 垂直 GlassSlider + 顶部百分比），
 移开鼠标自动隐藏。
 """
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
@@ -155,12 +155,19 @@ class VolumeButton(QPushButton):
     def _show_popover(self) -> None:
         if self._popover is None or self._popover.isVisible():
             return
-        g = self.mapToGlobal(self.rect().topLeft())
-        x = g.x() + self.width() // 2 - self._popover.width() // 2
-        y = g.y() - self._popover.height() - 8
+        # 全局坐标对齐（mapToGlobal 修正父窗口 padding/嵌套布局偏移）：
+        # X = 按钮全局中心 X - 面板宽 / 2（喇叭正对下方按钮，左右居中）
+        # Y = 按钮全局顶部 Y - 面板高 - 8px 间隙（紧贴上方）
+        btn_center = self.mapToGlobal(self.rect().center())
+        btn_top = self.mapToGlobal(QPoint(0, 0))
+        x = btn_center.x() - self._popover.width() // 2
+        y = btn_top.y() - self._popover.height() - 8
         self._popover.move(x, y)
         self._popover.show()
         self._popover.raise_()
+        # 部分平台 Popup 显示时可能调整 geometry——show 后再校正一次保证紧贴
+        if self._popover.isVisible():
+            self._popover.move(x, y)
 
     def enterEvent(self, event):  # noqa: N802
         self._show_popover()
