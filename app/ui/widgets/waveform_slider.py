@@ -15,6 +15,7 @@ from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath
 from PySide6.QtWidgets import QSlider
 
 from ..theme.colors import Colors
+from ..theme.tokens import Tokens
 
 _BAR_COUNT = 30
 _TICK_MS = 60
@@ -67,9 +68,10 @@ class WaveformSlider(QSlider):
         gw = w - pad * 2.0
         fill_w = gw * ratio
 
-        # ① groove 底条（半透明深灰 = 未播放区）
+        # ① groove 底座（半透明深灰，与全局 QSlider groove 同款）
+        _rgba = [int(x) for x in str(Tokens.TEXT_RGB).split(",")]
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(255, 255, 255, 42))
+        p.setBrush(QColor(_rgba[0], _rgba[1], _rgba[2], 45))
         p.drawRoundedRect(QRectF(pad, cx - groove_h / 2, gw, groove_h),
                           groove_h / 2, groove_h / 2)
         # ② 已播放区（亮蓝渐变）

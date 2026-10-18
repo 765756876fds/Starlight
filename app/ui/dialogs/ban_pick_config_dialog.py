@@ -1,7 +1,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QLineEdit, QPushButton, QDialogButtonBox,
+    QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QLineEdit, QPushButton,
 )
 import json
 import os
@@ -68,10 +68,20 @@ class BanPickConfigDialog(GlassDialog):
         btn_del.clicked.connect(self._on_delete)
         lay.addWidget(btn_del)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        lay.addWidget(btns)
+        # 底部按钮：中文 确定/取消，确定挂 primary 蓝实底（与全站 GlassDialog 一致）
+        row = QHBoxLayout()
+        row.setSpacing(Tokens.SPACING_SM)
+        row.addStretch()
+        btn_cancel = QPushButton("取消")
+        btn_cancel.setMinimumWidth(88)
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("确定")
+        btn_ok.setProperty("class", "primary")
+        btn_ok.setMinimumWidth(88)
+        btn_ok.clicked.connect(self.accept)
+        row.addWidget(btn_cancel)
+        row.addWidget(btn_ok)
+        lay.addLayout(row)
 
         self._refresh_candidates()
 

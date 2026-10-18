@@ -478,10 +478,11 @@ class MoviePanel(QWidget):
         self.lbl_now.setAlignment(Qt.AlignCenter)
         root.addWidget(self.lbl_now)
 
-        # 进度条
+        # 进度条（外部进度条无实际用途——内嵌播放器自带进度，直接隐藏）
         self.slider_pos = QSlider(Qt.Horizontal)
         self.slider_pos.setRange(0, 1000)
         self.slider_pos.setEnabled(False)
+        self.slider_pos.hide()   # 从布局移除：不再显示空蓝条
         self.lbl_time = QLabel("0:00 / 0:00")
         self.lbl_time.setAlignment(Qt.AlignCenter)
         try:  # tabular figures：计时数字等宽不跳动（impeccable）
@@ -495,7 +496,6 @@ class MoviePanel(QWidget):
         time_row = QHBoxLayout()
         time_row.addWidget(self.lbl_time, 1)
         time_row.addWidget(self.lbl_res)
-        root.addWidget(self.slider_pos)
         root.addLayout(time_row)
 
         # 播放控制

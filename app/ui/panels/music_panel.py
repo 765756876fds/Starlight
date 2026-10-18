@@ -392,6 +392,9 @@ class MusicPanel(QWidget):
         rl.addLayout(rl_right, 3)
         tabs.addTab(rank, "榜单")
 
+        # 播放按钮图标锁定（防 mpv 异步启动期间图标闪回）
+        self._icon_locked = False
+        self._poll_ticks = 0
         # 绑定
         if music is not None:
             self.btn_prev.clicked.connect(self._on_prev)
@@ -717,7 +720,9 @@ class MusicPanel(QWidget):
         except Exception: pass
 
     def _sync_toggle_icon(self):
-        """按真实播放状态立即同步 播放/暂停 图标（点击后即时反馈，不依赖定时器）。"""
+        """按真实播放状态立即同步 播放/暂停 图标（锁定期间跳过，防止点击后闪回）。"""
+        if getattr(self, "_icon_locked", False):
+            return
         try:
             playing = bool(self._music.is_playing())
         except Exception:
@@ -735,16 +740,41 @@ class MusicPanel(QWidget):
                 self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
 
     def _on_toggle(self):
+        # 点击瞬间锁定图标并立即翻转，mpv 异步启动期间旧状态不会再把它闪回
+        cur = getattr(self, "_toggle_icon", None)
+        if cur is None:                    # 首次点击：先对齐真实状态再翻转
+            self._sync_toggle_icon()
+            cur = getattr(self, "_toggle_icon", "play")
+        self._icon_locked = True
+        want = "pause" if cur == "play" else "play"
+        self._toggle_icon = want
+        self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
         try:
             self._music.toggle()
         except Exception:
             pass
-        # 立即翻转图标（不等 mpv 异步状态反馈，保证点击即时手感）；
-        # 150ms 后用真实状态校正一次，防止本地与 mpv 状态漂移。
-        want = "play" if getattr(self, "_toggle_icon", None) == "pause" else "pause"
-        self._toggle_icon = want
-        self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
-        QTimer.singleShot(150, self._sync_toggle_icon)
+        # 轮询真实播放状态直到确认翻转（mpv 异步），最长 ~3s；切换失败则按真实状态校正
+        self._poll_ticks = 15
+        QTimer.singleShot(200, self._poll_toggle_confirm)
+
+    def _poll_toggle_confirm(self):
+        """轮询真实播放状态直到确认翻转（mpv 异步启动中 is_playing 短暂仍是旧值，
+        此时继续等待而不是误判为切换失败）；超过上限才判定失败并按真实状态校正。"""
+        target_playing = self._toggle_icon == "pause"
+        try:
+            playing = bool(self._music.is_playing())
+        except Exception:
+            playing = None
+        if playing == target_playing:
+            self._icon_locked = False
+            return
+        if self._poll_ticks > 0:
+            self._poll_ticks -= 1
+            QTimer.singleShot(200, self._poll_toggle_confirm)
+        else:
+            # 超时仍未翻转 → 切换未生效（mpv 不可用/落雪回落等）→ 解锁并按真实状态校正
+            self._icon_locked = False
+            self._sync_toggle_icon()
 
     def _on_toggle_mode(self):
         self._mode_idx = (self._mode_idx + 1) % len(self._modes)
