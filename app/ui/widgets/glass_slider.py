@@ -10,7 +10,7 @@ VolumePopover / VolumeButton：底部音量悬浮面板——平时仅一个喇�
 """
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from ..theme.tokens import Tokens
 from .icon_utils import lucide_icon
@@ -77,18 +77,26 @@ class VolumePopover(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFixedSize(64, 240)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setContentsMargins(10, 10, 10, 10)   # 上下左右等宽边距
         lay.setSpacing(8)
-        self.lbl_pct = QLabel("0%", alignment=Qt.AlignCenter)
+        self.lbl_pct = QLabel("0%")
+        self.lbl_pct.setAlignment(Qt.AlignCenter)   # 百分比文字水平居中
         self.lbl_pct.setStyleSheet(
             f"color: {Tokens.TEXT_PRIMARY}; font-size: {Tokens.FONT_SIZE_SUB}px; background: transparent;")
         self.slider = GlassSlider(Qt.Vertical)
         self.slider.setRange(0, 100)
-        self.slider.setFixedWidth(24)
-        self.lbl_icon = QLabel(alignment=Qt.AlignCenter)
+        self.slider.setFixedWidth(24)              # 禁止水平拉伸，防绘制线被撑偏
+        # 垂直滑条放入 stretch 居中容器：无论 QVBoxLayout 默认对齐如何，始终绝对水平居中
+        slider_row = QHBoxLayout()
+        slider_row.setContentsMargins(0, 0, 0, 0)
+        slider_row.addStretch(1)
+        slider_row.addWidget(self.slider)
+        slider_row.addStretch(1)
+        self.lbl_icon = QLabel()
+        self.lbl_icon.setAlignment(Qt.AlignCenter)   # 底部喇叭图标水平居中
         self.lbl_icon.setStyleSheet("background: transparent;")
         lay.addWidget(self.lbl_pct)
-        lay.addWidget(self.slider, 1)
+        lay.addLayout(slider_row, 1)
         lay.addWidget(self.lbl_icon)
         self.slider.valueChanged.connect(self._sync)
         self._sync()
