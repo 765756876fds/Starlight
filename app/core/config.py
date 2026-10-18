@@ -69,6 +69,7 @@ def _default_config() -> Dict[str, Any]:
         },
         "asr": {
             "engine": "qwen3_server",
+            "bootstrap_enabled": True,  # 轻量版：模型缺失时自动下载（hf-mirror）+ 拉起 llama-server
             "qwen3_server": {
                 "base_url": "http://127.0.0.1:8080/v1",
                 "model": "default",

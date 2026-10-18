@@ -13,6 +13,7 @@ from app.voice.asr import ASRManager
 
 CONFIG = {
     "engine": "qwen3_server",
+    "bootstrap_enabled": False,  # 测试隔离：不触发模型下载/拉起 llama-server
     "qwen3_server": {
         "base_url": "http://127.0.0.1:8080/v1",
         "timeout": 1.0,

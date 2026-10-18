@@ -253,6 +253,14 @@ class ASRManager:
         # 主引擎：Qwen3-ASR llama-server（HTTP API）
         if engine_type == "qwen3_server":
             server_config = self.config.get("qwen3_server", {})
+            # 轻量版自举（2026-10-18）：模型缺失→hf-mirror 国内镜像自动下载；
+            # 8080 无服务→自动拉起 llama-server（退出时 atexit 连带清理，不留僵尸）。
+            # 故障隔离：任何异常只打印，不阻断 ASR 使用外部服务。
+            try:
+                from app.voice.asr_bootstrap import ensure_and_launch
+                ensure_and_launch(self.config)
+            except Exception as e:
+                print(f"[ASR] 自举异常（ASR 仍可用外部 llama-server）: {e}")
             qwen_server = Qwen3ServerASR(
                 base_url=server_config.get("base_url", "http://127.0.0.1:8080/v1"),
                 model=server_config.get("model", "default"),

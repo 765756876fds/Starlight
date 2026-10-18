@@ -181,3 +181,7 @@ config/music_sources.json
 # 打包外部程序二进制（mpv ~115MB / node ~88MB，不跟踪；由 build.ps1 从本机复制）
 /third_party/mpv/
 /third_party/node/
+# 轻量版安装包内 llama-server（~30MB，由 build_lite_installer.bat 从 LM Studio 复制）
+/third_party/llama/
+# Inno Setup 安装包产物
+/Setup_Lite.exe
