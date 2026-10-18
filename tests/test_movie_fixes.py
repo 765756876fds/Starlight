@@ -294,7 +294,7 @@ def test_panel_shortcut_dialog(qapp):
     ctrl = MagicMock()
     panel = MoviePanel(movie=ctrl)
     try:
-        with patch("app.ui.panels.movie_panel.QMessageBox.information") as m_info:
+        with patch("app.ui.panels.movie_panel.glass_info") as m_info:
             panel._on_shortcut()
             m_info.assert_called_once()
             args = m_info.call_args[0]

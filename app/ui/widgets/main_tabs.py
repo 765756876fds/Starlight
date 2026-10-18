@@ -33,14 +33,12 @@ class MainTabs(QWidget):
                  snapshot_provider=None, history_repo=None,
                  combo_manager=None, tts=None, equip_toggle=None,
                  overlay_toggle=None, overlay_enabled: bool = True,
-                 pet_toggle_cb=None, parent=None):
+                 parent=None):
         super().__init__(parent)
         print("[UI] MainTabs 创建中")
         self._music = music
         self._tts = tts
         self._equip_toggle = equip_toggle
-        self._pet = None
-        self._pet_toggle_cb = pet_toggle_cb
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
                                   Tokens.SPACING_SM, Tokens.SPACING_SM)
@@ -76,34 +74,12 @@ class MainTabs(QWidget):
                 equip_toggle=equip_toggle, overlay_toggle=overlay_toggle,
                 overlay_enabled=overlay_enabled,
                 on_refresh_changed=self._apply_refresh_interval,
-                pet_toggle_cb=self._on_pet_toggle,
             ), "设置", "settings")
         layout.addWidget(tabs)
-
-        # 桌面宠物：默认关；勾选后才创建并显示（读 ui_prefs.json pet_enabled）
-        try:
-            if load_ui_prefs().get("pet_enabled", False):
-                self._on_pet_toggle(True)
-        except Exception as e:
-            print(f"[Pet] 初始化桌面宠物失败（忽略）: {e}")
 
         # 应用持久化的刷新间隔到各面板 timer（settings.yaml ui.refresh_interval 原为死配置）
         self._apply_refresh_interval(int(load_ui_prefs().get("ui_refresh_interval", 500)))
         print("[UI] MainTabs 完成")
-
-    def _on_pet_toggle(self, on: bool) -> None:
-        """创建/关闭桌宠窗口（只控制 UI 呈现；模型加载失败由 PetWindow 自行降级）。"""
-        try:
-            if on:
-                if self._pet is None:
-                    from app.ui.widgets.pet_window import PetWindow
-                    self._pet = PetWindow()
-                self._pet.set_visible_with_pet(True)
-            else:
-                if self._pet is not None:
-                    self._pet.set_visible_with_pet(False)
-        except Exception as e:
-            print(f"[Pet] 桌宠开关失败: {e}")
 
     def _apply_refresh_interval(self, ms: int) -> None:
         """把刷新间隔应用到各面板的 _timer（只改间隔，不动其他）。"""
