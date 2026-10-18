@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt, Signal
 from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit,
@@ -29,7 +30,7 @@ class LoadingPanel(QWidget):
         self._labels: dict[str, QLabel] = {}
         lay = QVBoxLayout(self)
         title = QLabel("正在启动 LoL Music Agent...")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setStyleSheet(f"font-size: {Tokens.FONT_SIZE_TITLE}px; font-weight: bold;")
         lay.addWidget(title)
         for key, name in MODULES:
             row = QHBoxLayout()
@@ -37,7 +38,7 @@ class LoadingPanel(QWidget):
             dot.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
             lbl = QLabel(name)
             lbl2 = QLabel("等待...")
-            lbl2.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            lbl2.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             row.addWidget(dot)
             row.addWidget(lbl)
             row.addStretch(1)

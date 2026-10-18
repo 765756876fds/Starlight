@@ -13,6 +13,7 @@ from app.lol.title import compute_title
 from app.lol.data.champion_catalog import ChampionCatalog
 from app.core.event_bus import Event, get_event_bus
 from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
 
 _FONT_SZ = 14          # 卡片正文主字号（px）
 _FONT_SZ_STREAK = 13   # 连胜连败标记字号（比正文略小）
@@ -176,15 +177,15 @@ class CurrentGamePanel(QWidget):
 
         # 标题
         self.lbl_title = QLabel("未在对局中")
-        self.lbl_title.setStyleSheet("font-size: 14px; font-weight: bold; color: white;")
+        self.lbl_title.setStyleSheet(f"font-size: {Tokens.FONT_SIZE_BODY}px; font-weight: bold; color: {Tokens.TEXT_PRIMARY}")
         root.addWidget(self.lbl_title)
 
         # 左右两列标题
         cols_header = QHBoxLayout()
         self.lbl_ally_title = QLabel("🟦 己方")
-        self.lbl_ally_title.setStyleSheet("color: #4a9eff; font-weight: bold; font-size: 13px;")
+        self.lbl_ally_title.setStyleSheet(f"color: {Tokens.ACCENT}; font-weight: bold; font-size: {Tokens.FONT_SIZE_BODY}px;")
         self.lbl_enemy_title = QLabel("🔴 敌方")
-        self.lbl_enemy_title.setStyleSheet(f"color: {Colors.DANGER}; font-weight: bold; font-size: 13px;")
+        self.lbl_enemy_title.setStyleSheet(f"color: {Tokens.DANGER}; font-weight: bold; font-size: {Tokens.FONT_SIZE_BODY}px;")
         cols_header.addWidget(self.lbl_ally_title)
         cols_header.addWidget(self.lbl_enemy_title)
         root.addLayout(cols_header)

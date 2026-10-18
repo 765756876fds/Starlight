@@ -9,6 +9,7 @@ from ..widgets.toggle_button import ToggleButton
 from ..dialogs.auto_queue_config_dialog import AutoQueueConfigDialog
 from ..dialogs.ban_pick_config_dialog import BanPickConfigDialog
 from ..theme.colors import Colors
+from ..theme.tokens import Tokens
 
 
 class AutomationPanel(QWidget):
@@ -25,7 +26,7 @@ class AutomationPanel(QWidget):
         self.lbl_state = QLabel("状态：?")
         self.lbl_phase = QLabel("游戏阶段：?")
         self._lbl_hint = QLabel("")
-        self._lbl_hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self._lbl_hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         self._lbl_hint.setWordWrap(True)
         form.addWidget(self.lbl_phase)
         form.addWidget(self.lbl_state)

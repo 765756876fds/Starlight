@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 import datetime, os, json
 
 from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
 
 
 def _zh_map() -> dict:
@@ -478,7 +479,7 @@ class OngoingPanel(QWidget):
         pl = QVBoxLayout(page_acct)
         pl.setContentsMargins(8, 8, 8, 8)
         self.lbl_hint = QLabel("⚠️ 战绩信息来自公开数据，仅供参考")
-        self.lbl_hint.setStyleSheet("color: #888; font-size: 11px;")
+        self.lbl_hint.setStyleSheet("color: {Tokens.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         pl.addWidget(self.lbl_hint)
 
         head = QHBoxLayout()

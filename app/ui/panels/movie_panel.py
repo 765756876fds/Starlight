@@ -153,6 +153,7 @@ def _get_poster(vod_id):
     return None
 
 from ..theme.colors import Colors
+from ..theme.tokens import Tokens
 from ...movie.movie_controller import MovieController
 
 
@@ -365,9 +366,9 @@ class MoviePanel(QWidget):
         # 状态行：搜索状态 + 当前源
         status_row = QHBoxLayout()
         self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         self.lbl_source = QLabel("")
-        self.lbl_source.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_source.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         status_row.addWidget(self.lbl_status, 1)
         status_row.addWidget(self.lbl_source)
         root.addLayout(status_row)
@@ -420,7 +421,7 @@ class MoviePanel(QWidget):
         self.lbl_time = QLabel("0:00 / 0:00")
         self.lbl_time.setAlignment(Qt.AlignCenter)
         self.lbl_res = QLabel("")
-        self.lbl_res.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_res.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         time_row = QHBoxLayout()
         time_row.addWidget(self.lbl_time, 1)
         time_row.addWidget(self.lbl_res)
@@ -1004,7 +1005,7 @@ class MoviePanel(QWidget):
         dlg.resize(320, 420)
         lay = QVBoxLayout(dlg)
         tip = QLabel(f"共 {len(eps)} 集，双击选集播放（连播开时播完自动下一集）")
-        tip.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        tip.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(tip)
         lst = QListWidget()
         for i, (name, _url) in enumerate(eps):
@@ -1256,7 +1257,7 @@ class _SubtitleDialog(QDialog):
         lay.addLayout(row)
 
         self.lbl_state = QLabel("")
-        self.lbl_state.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_state.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(self.lbl_state)
 
         self.list_subs = QListWidget()

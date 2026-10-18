@@ -52,17 +52,17 @@ def test_panel_buttons_follow_voice_state(qapp):
     panel = MusicPanel(music=fake)
     try:
         panel._sync_state_buttons()
-        assert panel.btn_mode.text() == "🔀 随机", "语音随机播放后按钮应显示随机"
+        assert panel.btn_mode.text() == "随机", "语音随机播放后按钮应显示随机（图标由 Lucide 提供）"
         assert panel.btn_highlight.isChecked() is True, "高潮开时按钮应勾选"
-        assert panel.btn_highlight.text() == "🎵 高潮模式：开"
+        assert panel.btn_highlight.text() == "高潮模式：开"
 
         # 外部（语音）再改为顺序 + 高潮关
         fake._mode = "sequential"
         fake._hl = False
         panel._sync_state_buttons()
-        assert panel.btn_mode.text() == "🔁 顺序"
+        assert panel.btn_mode.text() == "顺序"
         assert panel.btn_highlight.isChecked() is False
-        assert panel.btn_highlight.text() == "🎵 高潮模式：关"
+        assert panel.btn_highlight.text() == "高潮模式：关"
     finally:
         panel._timer.stop()
 
@@ -106,17 +106,17 @@ def test_refresh_syncs_buttons_with_real_controller(qapp, tmp_path):
     panel = MusicPanel(music=ctrl)
     try:
         panel._refresh()
-        assert panel.btn_mode.text() == "🔀 随机", "_refresh 应同步播放模式按钮"
+        assert panel.btn_mode.text() == "随机", "_refresh 应同步播放模式按钮"
         assert panel.btn_highlight.isChecked() is True, "_refresh 应同步高潮勾选"
-        assert panel.btn_highlight.text() == "🎵 高潮模式：开"
+        assert panel.btn_highlight.text() == "高潮模式：开"
 
         # 再模拟语音：顺序播放 + 高潮模式关
         ctrl.set_play_mode("sequential")
         ctrl.set_highlight_mode(False)
         panel._refresh()
-        assert panel.btn_mode.text() == "🔁 顺序"
+        assert panel.btn_mode.text() == "顺序"
         assert panel.btn_highlight.isChecked() is False
-        assert panel.btn_highlight.text() == "🎵 高潮模式：关"
+        assert panel.btn_highlight.text() == "高潮模式：关"
     finally:
         panel._timer.stop()
     db.close()

@@ -2,6 +2,7 @@
 from typing import List
 
 from PySide6.QtCore import QEvent, QThread, Qt, QTimer, QObject, Signal
+from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSlider,
@@ -10,6 +11,9 @@ from PySide6.QtWidgets import (
 
 from ..dialogs.identify_dialog import IdentifyDialog
 from ..theme.colors import Colors
+from ..theme.tokens import Tokens
+from ..widgets.icon_utils import lucide_icon
+from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles, cover_key_of
 from ...core.command_bus import CommandType, get_command_bus
 from ...core.event_bus import get_event_bus
 from ...music.humming import HummingService
@@ -122,6 +126,7 @@ class MusicPanel(QWidget):
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
+        self._playing_card_key = None   # 当前播放卡片 key（由 _refresh 同步到各 Delegate）
         # 榜单 tab 状态
         self._rank_groups = {}          # 插件名 -> [分组{title, lists}]
         self._rank_tracks = []          # 当前榜单歌曲（OnlineTrack 列表）
@@ -147,10 +152,12 @@ class MusicPanel(QWidget):
         self.btn_lyrics = QPushButton("歌词")
         self.btn_lyrics.setCheckable(True)
         self.btn_lyrics.setProperty("class", "secondary")
+        self.btn_lyrics.setIcon(lucide_icon("book-open", 16, Tokens.TEXT_SECONDARY))
         self.btn_lyrics.clicked.connect(self._on_toggle_lyrics)
         top_bar.addWidget(self.btn_lyrics)
-        self.btn_identify = QPushButton("🎤 识曲")
+        self.btn_identify = QPushButton("识曲")
         self.btn_identify.setProperty("class", "secondary")
+        self.btn_identify.setIcon(lucide_icon("mic", 16, Tokens.TEXT_SECONDARY))
         self.btn_identify.clicked.connect(self._on_identify_click)
         top_bar.addWidget(self.btn_identify)
         root.addLayout(top_bar)
@@ -168,7 +175,8 @@ class MusicPanel(QWidget):
         self.btn_scan_local.clicked.connect(self._on_scan_local)
         scan_row.addWidget(self.btn_scan_local)
         self.lbl_scan_status = QLabel("")
-        self.lbl_scan_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_scan_status.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         scan_row.addWidget(self.lbl_scan_status)
         scan_row.addStretch()
         ll.addLayout(scan_row)
@@ -189,8 +197,9 @@ class MusicPanel(QWidget):
         local_search_row.addWidget(self.btn_local_clear)
         ll.addLayout(local_search_row)
 
-        # 本地列表
+        # 本地列表（卡片网格）
         self.list_local = QListWidget()
+        self._dl_local = self._setup_card_view(self.list_local)
         ll.addWidget(self.list_local, 1)
         # 本地列表"强制跳回"优化：正在播放的歌高亮（setCurrentRow）保留，
         # 但自动滚动改为——无操作 10 秒后单次跳回；用户任何操作（移动/滚轮/点击/悬停）
@@ -203,9 +212,10 @@ class MusicPanel(QWidget):
         self.list_local.setMouseTracking(True)
         self.list_local.installEventFilter(self)
 
-        # 当前曲目
+        # 当前曲目（小标题级）
         self.lbl_track = QLabel("未播放")
         self.lbl_track.setAlignment(Qt.AlignCenter)
+        self.lbl_track.setProperty("class", "title")
         ll.addWidget(self.lbl_track)
 
         # 进度条
@@ -214,41 +224,72 @@ class MusicPanel(QWidget):
         self.slider_pos.setEnabled(False)
         self.lbl_time = QLabel("0:00 / 0:00")
         self.lbl_time.setAlignment(Qt.AlignCenter)
+        # 播放时间用 tabular figures（数字等宽，计时变化不跳动；impeccable §craft floor）
+        try:
+            f = self.lbl_time.font()
+            f.setFeature(QFont.Tag("tnum"), 1)
+            self.lbl_time.setFont(f)
+        except Exception:
+            pass  # 旧 Qt 无 QFont.Tag：忽略
         ll.addWidget(self.slider_pos)
         ll.addWidget(self.lbl_time)
 
-        # 播放控制
-        row = QHBoxLayout()
-        self.btn_prev = QPushButton("⏮")
-        self.btn_toggle = QPushButton("⏯")
-        self.btn_next = QPushButton("⏭")
-        self.btn_mode = QPushButton("🔁 顺序")
-        self.btn_clear_queue = QPushButton("🗑 清空队列")
+        # 播放控制：金字塔布局——高频操作（播放/暂停）放大居中，次要操作紧凑成行
+        row_main = QHBoxLayout()
+        self.btn_prev = QPushButton()
+        self.btn_prev.setObjectName("btn_prev")
+        self.btn_prev.setIcon(lucide_icon("skip-back", 16, Tokens.TEXT_PRIMARY))
+        self.btn_prev.setToolTip("上一首")
+        self.btn_toggle = QPushButton()
+        self.btn_toggle.setObjectName("btn_toggle")
+        self.btn_toggle.setIcon(lucide_icon("play", 18, "#ffffff"))
+        self.btn_toggle.setToolTip("播放/暂停")
+        self.btn_next = QPushButton()
+        self.btn_next.setObjectName("btn_next")
+        self.btn_next.setIcon(lucide_icon("skip-forward", 16, Tokens.TEXT_PRIMARY))
+        self.btn_next.setToolTip("下一首")
+        row_main.addStretch()
+        row_main.addWidget(self.btn_prev)
+        row_main.addWidget(self.btn_toggle)
+        row_main.addWidget(self.btn_next)
+        row_main.addStretch()
+        ll.addLayout(row_main)
+
+        # 次要操作（紧凑）+ 音量
+        row_sub = QHBoxLayout()
+        self.btn_highlight = QPushButton("高潮模式：关")
+        self.btn_highlight.setObjectName("btn_highlight")
+        self.btn_highlight.setCheckable(True)
+        self.btn_highlight.setIcon(lucide_icon("music", 14, Tokens.TEXT_SECONDARY))
+        self.btn_highlight.toggled.connect(self._on_highlight)
+        self.btn_mode = QPushButton("顺序")
+        self.btn_mode.setObjectName("btn_mode")
+        self.btn_mode.setIcon(lucide_icon("repeat", 14, Tokens.TEXT_SECONDARY))
         self._modes = [
-            ("sequential", "🔁 顺序"),
-            ("shuffle", "🔀 随机"),
-            ("repeat_all", "🔁 列表循环"),
-            ("repeat_one", "🔂 单曲循环"),
+            ("sequential", "顺序"),
+            ("shuffle", "随机"),
+            ("repeat_all", "列表循环"),
+            ("repeat_one", "单曲循环"),
         ]
         self._mode_idx = 0
-        for b in (self.btn_prev, self.btn_toggle, self.btn_next, self.btn_mode,
-                  self.btn_clear_queue):
-            row.addWidget(b)
-        row.addStretch()
-        row.addWidget(QLabel("音量"))
+        self.btn_clear_queue = QPushButton("清空队列")
+        self.btn_clear_queue.setObjectName("btn_clear_queue")
+        self.btn_clear_queue.setIcon(lucide_icon("trash", 14, Tokens.TEXT_SECONDARY))
+        row_sub.addWidget(self.btn_highlight)
+        row_sub.addWidget(self.btn_mode)
+        row_sub.addWidget(self.btn_clear_queue)
+        row_sub.addStretch()
+        row_sub.addWidget(QLabel("音量"))
         self.slider_vol = QSlider(Qt.Horizontal)
         self.slider_vol.setRange(0, 100)
-        row.addWidget(self.slider_vol, 1)
-        ll.addLayout(row)
+        row_sub.addWidget(self.slider_vol, 1)
+        ll.addLayout(row_sub)
 
-        # 高潮模式开关
-        hrow = QHBoxLayout()
-        self.btn_highlight = QPushButton("🎵 高潮模式：关")
-        self.btn_highlight.setCheckable(True)
-        self.btn_highlight.toggled.connect(self._on_highlight)
-        hrow.addWidget(self.btn_highlight)
-        hrow.addStretch()
-        ll.addLayout(hrow)
+        # 键盘优先：Ctrl+F / Ctrl+K 聚焦搜索框（窗口级快捷键）
+        self._sc_find = QShortcut(
+            QKeySequence("Ctrl+F"), self, self._focus_search, Qt.WindowShortcut)
+        self._sc_k = QShortcut(
+            QKeySequence("Ctrl+K"), self, self._focus_search, Qt.WindowShortcut)
 
         tabs.addTab(local, "本地")
 
@@ -267,6 +308,7 @@ class MusicPanel(QWidget):
         search_row.addWidget(self.btn_search)
         ol.addLayout(search_row)
         self.list_results = QListWidget()
+        self._dl_results = self._setup_card_view(self.list_results)
         ol.addWidget(self.list_results)
         self.lbl_status = QLabel("输入关键词开始搜索")
         ol.addWidget(self.lbl_status)
@@ -281,6 +323,7 @@ class MusicPanel(QWidget):
         hrow2.addStretch()
         hl2.addLayout(hrow2)
         self.list_history = QListWidget()
+        self._dl_history = self._setup_card_view(self.list_history)
         hl2.addWidget(self.list_history)
         tabs.addTab(history, "历史")
 
@@ -301,10 +344,11 @@ class MusicPanel(QWidget):
         pl.addLayout(pl_left, 2)
         pl_right = QVBoxLayout()
         self.list_playlist_songs = QListWidget()
+        self._dl_playlist_songs = self._setup_card_view(self.list_playlist_songs)
         pl_right.addWidget(self.list_playlist_songs, 1)
         self.lbl_playlist_status = QLabel("未选择歌单")
         self.lbl_playlist_status.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         pl_right.addWidget(self.lbl_playlist_status)
         pl.addLayout(pl_right, 3)
         tabs.addTab(playlist, "歌单")
@@ -314,22 +358,25 @@ class MusicPanel(QWidget):
         rl = QHBoxLayout(rank)
         rl_left = QVBoxLayout()
         lbl_src = QLabel("平台")
-        lbl_src.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        lbl_src.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         rl_left.addWidget(lbl_src)
         self.list_rank_sources = QListWidget()
         rl_left.addWidget(self.list_rank_sources, 1)
         lbl_lst = QLabel("榜单")
-        lbl_lst.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        lbl_lst.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         rl_left.addWidget(lbl_lst)
         self.list_rank_lists = QListWidget()
         rl_left.addWidget(self.list_rank_lists, 1)
         rl.addLayout(rl_left, 2)
         rl_right = QVBoxLayout()
         self.list_rank_songs = QListWidget()
+        self._dl_rank_songs = self._setup_card_view(self.list_rank_songs)
         rl_right.addWidget(self.list_rank_songs, 1)
         self.lbl_rank_status = QLabel("加载榜单中…")
         self.lbl_rank_status.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         rl_right.addWidget(self.lbl_rank_status)
         rl.addLayout(rl_right, 3)
         tabs.addTab(rank, "榜单")
@@ -396,6 +443,46 @@ class MusicPanel(QWidget):
             get_event_bus().subscribe(ONLINE_ERROR, self._on_error_event)
         except Exception as e:
             print(f"[MusicPanel] 订阅候选事件失败: {e}")
+
+    # ---- 卡片网格（只改 UI 绘制，不动数据流） ----
+    def _setup_card_view(self, w: QListWidget) -> MusicCardDelegate:
+        """歌曲类列表 → IconMode 卡片网格 + 自绘 Delegate。"""
+        w.setViewMode(QListWidget.IconMode)
+        w.setMovement(QListWidget.Static)
+        w.setResizeMode(QListWidget.Adjust)
+        w.setUniformItemSizes(True)
+        w.setSpacing(Tokens.SPACING_MD)
+        w.setMouseTracking(True)
+        d = MusicCardDelegate(w)
+        w.setItemDelegate(d)
+        return d
+
+    @staticmethod
+    def _card_data(base: dict, sub: str, play_key) -> dict:
+        """卡片 UserRole dict：附第二行文本 + 播放 key（不覆盖原数据）。"""
+        d = dict(base)
+        d["_sub"] = sub
+        d["_play_key"] = play_key
+        return d
+
+    @staticmethod
+    def _play_key(song: dict):
+        """当前播放 key（与卡片 item._play_key 对齐；本地按 music_id，在线按 track_id）。"""
+        if not song:
+            return None
+        if song.get("online"):
+            tid = song.get("track_id") or ""
+            if tid:
+                return f"net:{tid}"
+            return f"net:{song.get('title')}|{song.get('artist')}"
+        sid = song.get("id")
+        return f"local:{sid}" if sid else None
+
+    def _focus_search(self):
+        """Ctrl+F / Ctrl+K：聚焦当前 tab 的搜索框并全选。"""
+        box = self.edit_local if self.tabs.currentIndex() == 0 else self.edit_kw
+        box.setFocus()
+        box.selectAll()
 
     # ---- 本地 ----
     def _on_scan_local(self):
@@ -527,7 +614,8 @@ class MusicPanel(QWidget):
             title = s.get("title", "?")
             artist = s.get("artist", "")
             item = QListWidgetItem(f"{title} - {artist}")
-            item.setData(Qt.UserRole, s)
+            item.setData(Qt.UserRole, self._card_data(
+                s, artist, f"local:{s.get('id')}" if s.get("id") else None))
             self.list_local.addItem(item)
         self.lbl_scan_status.setText(f"歌词匹配 {len(songs)} 首")
 
@@ -545,7 +633,8 @@ class MusicPanel(QWidget):
             title = s.get("title", "?")
             artist = s.get("artist", "")
             item = QListWidgetItem(f"{title} - {artist}")
-            item.setData(Qt.UserRole, s)
+            item.setData(Qt.UserRole, self._card_data(
+                s, artist, f"local:{s.get('id')}" if s.get("id") else None))
             self.list_local.addItem(item)
 
     def _on_local_play(self, item):
@@ -559,7 +648,7 @@ class MusicPanel(QWidget):
             print(f"[UI] local play error: {e}")
 
     def _on_highlight(self, on: bool):
-        self.btn_highlight.setText(f"🎵 高潮模式：{'开' if on else '关'}")
+        self.btn_highlight.setText(f"高潮模式：{'开' if on else '关'}")
         if self._music is not None:
             try:
                 if hasattr(self._music, "set_highlight_mode"):
@@ -672,6 +761,14 @@ class MusicPanel(QWidget):
                 # 显示具体插件源名（t.source_name = 插件 platform，如"酷我音乐"），
                 # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
                 item = QListWidgetItem(f"[{t.source_name}] {t.title} - {t.artist}")
+                sub = f"{t.artist} · {t.source_name}" if t.artist else (t.source_name or "")
+                item.setData(Qt.UserRole, self._card_data({
+                    "title": t.title,
+                    "artist": t.artist,
+                    "source_name": t.source_name,
+                    "track_id": t.track_id,
+                    "cover_url": getattr(t, "cover_url", None) or None,
+                }, sub, f"net:{t.track_id}" if t.track_id else None))
                 self.list_results.addItem(item)
                 self._tracks_by_row.append(t)
                 n += 1
@@ -710,6 +807,12 @@ class MusicPanel(QWidget):
                 title = row.get("title", "")
                 artist = row.get("artist", "")
                 item = QListWidgetItem(f"[{src}] {title} - {artist}")
+                sub = f"{artist} · {src}" if artist and src else (artist or src)
+                item.setData(Qt.UserRole, self._card_data({
+                    "title": title,
+                    "artist": artist,
+                    "source_name": src,
+                }, sub, None))
                 self.list_results.addItem(item)
             n = len(display)
             if n:
@@ -812,7 +915,11 @@ class MusicPanel(QWidget):
                 src = st or "在线"
             rel = self._fmt_relative(float(row.get("played_at") or 0))
             item = QListWidgetItem(f"{title} - {artist} [{src}] {rel}")
-            item.setData(Qt.UserRole, row)
+            mid = row.get("music_id") or row.get("id")
+            item.setData(Qt.UserRole, self._card_data(
+                row,
+                f"{artist} · {rel}" if artist else rel,
+                f"local:{mid}" if mid else None))
             self.list_history.addItem(item)
 
     @staticmethod
@@ -909,7 +1016,11 @@ class MusicPanel(QWidget):
             sn = row.get("source_name", "") or ""
             src = "本地" if st == "local" else (sn or "在线")
             item = QListWidgetItem(f"{title} - {artist} [{src}]")
-            item.setData(Qt.UserRole, row)
+            mid = row.get("music_id") or row.get("id")
+            item.setData(Qt.UserRole, self._card_data(
+                row,
+                f"{artist} · {src}" if artist else src,
+                f"local:{mid}" if mid else None))
             self.list_playlist_songs.addItem(item)
         self.lbl_playlist_status.setText(f"{len(rows)} 首")
 
@@ -1121,7 +1232,13 @@ class MusicPanel(QWidget):
             if t.artist:
                 text += f" - {t.artist}"
             item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, t)
+            item.setData(Qt.UserRole, self._card_data({
+                "title": t.title,
+                "artist": t.artist,
+                "source_name": t.source_name,
+                "track_id": t.track_id,
+                "cover_url": getattr(t, "cover_url", None) or None,
+            }, t.artist, f"net:{t.track_id}" if t.track_id else None))
             self.list_rank_songs.addItem(item)
         n = len(tracks)
         self.lbl_rank_status.setText(f"共 {n} 首，双击播放" if n else "榜单无歌曲")
@@ -1368,13 +1485,13 @@ class MusicPanel(QWidget):
         key = f"{song.get('title', '')}|{song.get('artist', '')}".strip('|')
         base = None
         widget = None
-        # 定位行内标记目标：在线 tab（按 _tracks_by_row 匹配）→ 歌单列表（按文本匹配）
+        # 定位卡片标记目标：在线 tab（按 _tracks_by_row 匹配）→ 歌单列表（按 UserRole 匹配）
         try:
             for i, t in enumerate(self._tracks_by_row):
                 if t.title == song.get("title") and t.artist == song.get("artist"):
                     item = self.list_results.item(i)
                     if item is not None:
-                        base = item.text()
+                        base = t.title
                         widget = "online"
                     break
         except Exception:
@@ -1382,8 +1499,9 @@ class MusicPanel(QWidget):
         if widget is None:
             for i in range(self.list_playlist_songs.count()):
                 item = self.list_playlist_songs.item(i)
-                if item is not None and song.get("title") in item.text():
-                    base = item.text()
+                row = item.data(Qt.UserRole) if item is not None else None
+                if row is not None and row.get("title") == song.get("title"):
+                    base = song.get("title")
                     widget = "playlist"
                     break
         self._dl_markers[key] = {"base": base, "widget": widget}
@@ -1414,7 +1532,7 @@ class MusicPanel(QWidget):
         })
 
     def _on_dl_progress(self, key, pct):
-        """主线程：更新行内标记（跨线程 Signal 桥）。"""
+        """主线程：更新卡片状态徽标（跨线程 Signal 桥；不拼接列表文本）。"""
         if pct in (-1, -2):
             self._restore_marker(key)
             return
@@ -1424,38 +1542,46 @@ class MusicPanel(QWidget):
             return
         try:
             if m.get("widget") == "online":
-                for i in range(self.list_results.count()):
-                    item = self.list_results.item(i)
-                    if item is not None and item.text() == m["base"]:
-                        item.setText(f"{m['base']}（{label}）")
+                for i, t in enumerate(self._tracks_by_row):
+                    if t.title == m["base"]:
+                        item = self.list_results.item(i)
+                        if item is not None:
+                            item.setData(MusicCardRoles.StatusRole, label)
+                            self.list_results.viewport().update()
                         return
             elif m.get("widget") == "playlist":
                 for i in range(self.list_playlist_songs.count()):
                     item = self.list_playlist_songs.item(i)
-                    if item is not None and item.text() == m["base"]:
-                        item.setText(f"{m['base']}（{label}）")
+                    row = item.data(Qt.UserRole)
+                    if row is not None and row.get("title") == m["base"]:
+                        item.setData(MusicCardRoles.StatusRole, label)
+                        self.list_playlist_songs.viewport().update()
                         return
         except Exception:
             pass
 
     def _restore_marker(self, key):
-        """完成/失败：恢复行内原文本，移除标记。"""
+        """完成/失败：清除卡片状态徽标，移除标记。"""
         m = self._dl_markers.get(key)
         if not m or not m.get("base"):
             self._dl_markers.pop(key, None)
             return
         try:
             if m.get("widget") == "online":
-                for i in range(self.list_results.count()):
-                    item = self.list_results.item(i)
-                    if item is not None and m["base"] in item.text():
-                        item.setText(m["base"])
+                for i, t in enumerate(self._tracks_by_row):
+                    if t.title == m["base"]:
+                        item = self.list_results.item(i)
+                        if item is not None:
+                            item.setData(MusicCardRoles.StatusRole, None)
+                            self.list_results.viewport().update()
                         break
             elif m.get("widget") == "playlist":
                 for i in range(self.list_playlist_songs.count()):
                     item = self.list_playlist_songs.item(i)
-                    if item is not None and m["base"] in item.text():
-                        item.setText(m["base"])
+                    row = item.data(Qt.UserRole)
+                    if row is not None and row.get("title") == m["base"]:
+                        item.setData(MusicCardRoles.StatusRole, None)
+                        self.list_playlist_songs.viewport().update()
                         break
         except Exception:
             pass
@@ -1591,6 +1717,27 @@ class MusicPanel(QWidget):
                 prefix = "[在线] " if song.get("online") else ""
                 text = f"{prefix}{title} - {artist}" if artist else f"{prefix}{title}"
                 self.lbl_track.setText(text)
+                # 播放/暂停图标随状态切换（仅变化时）
+                try:
+                    playing = bool(self._music.is_playing())
+                except Exception:
+                    playing = None
+                if playing is not None:
+                    want = "pause" if playing else "play"
+                    if getattr(self, "_toggle_icon", None) != want:
+                        self._toggle_icon = want
+                        self.btn_toggle.setIcon(
+                            lucide_icon(want, 18, "#ffffff"))
+                # 卡片播放态同步（仅 key 变化时更新全部卡片视图）
+                pkey = self._play_key(song)
+                if pkey != self._playing_card_key:
+                    self._playing_card_key = pkey
+                    for d in (self._dl_local, self._dl_results, self._dl_history,
+                              self._dl_playlist_songs, self._dl_rank_songs):
+                        d.playing_key = pkey
+                    for w in (self.list_local, self.list_results, self.list_history,
+                              self.list_playlist_songs, self.list_rank_songs):
+                        w.viewport().update()
                 # 自动定位到本地列表中正在播放的歌曲：只高亮（setCurrentRow），
                 # 滚动交给 _local_jump_timer（无操作 10s 后单次跳回；用户操作期间绝不滚）
                 if not song.get("online"):
@@ -1637,7 +1784,7 @@ class MusicPanel(QWidget):
         except Exception:
             hl = None
         if hl is not None:
-            label = "🎵 高潮模式：开" if hl else "🎵 高潮模式：关"
+            label = "高潮模式：开" if hl else "高潮模式：关"
             if self.btn_highlight.isChecked() != hl:
                 self.btn_highlight.setChecked(hl)
             if self.btn_highlight.text() != label:

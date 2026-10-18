@@ -1,13 +1,23 @@
-"""Glass 全局主题 Token（GlassMusicPlayer 风格 · 第一阶段）。
+"""Glass 全局主题 Token（GlassMusicPlayer 风格 · 单一事实来源）。
 
-单一事实来源：颜色引用自 colors.Colors（既有深色板），本模块追加
-玻璃质感相关 Token（半透明背景 / 卡片 / 高亮胶囊 / 圆角 / 字体 / 透明度）。
+排版阶梯：12 辅助字 / 14 正文 / 16 小标题 / 24 大标题。
+间距网格：8px 基准（4 / 8 / 16 / 24 / 32）。
+对比度：正文与辅助文字在深色底上均 ≥ WCAG AA 4.5:1
+（TEXT_PRIMARY #e0e0e8 / TEXT_SECONDARY #a8a8c0，核算见 colors.py 注释）。
+QSS 由 applier.build_glass_qss() 从本模块插值生成——禁止在 QSS 模板中
+出现字面量颜色 / 字号 / 圆角 / 间距，一律取 Tokens。
 """
 from .colors import Colors
 
 
+def _rgb_of(hex_color: str) -> str:
+    """'#rrggbb' → 'r, g, b'（供 rgba() 字符串插值，保持单一来源）。"""
+    h = hex_color.lstrip("#")
+    return f"{int(h[0:2], 16)}, {int(h[2:4], 16)}, {int(h[4:6], 16)}"
+
+
 class Tokens:
-    # ---- 基础色（引用既有色板，保持单一来源） ----
+    # ---- 基础色（引用 colors.Colors，单一来源） ----
     BG_DEEPEST = Colors.BG_DEEPEST        # 窗口最深底
     BG_BASE = Colors.BG_BASE              # 常规底
     BG_ELEVATED = Colors.BG_ELEVATED      # 卡片/输入框底
@@ -26,34 +36,86 @@ class Tokens:
     DANGER = Colors.DANGER
     INFO = Colors.INFO
 
+    # ---- RGB 派生（rgba() 插值用，全部来自 colors，无手写字面量） ----
+    BG_DEEPEST_RGB = _rgb_of(Colors.BG_DEEPEST)       # 22, 22, 30
+    BG_BASE_RGB = _rgb_of(Colors.BG_BASE)             # 30, 30, 46
+    BG_ELEVATED_RGB = _rgb_of(Colors.BG_ELEVATED)     # 42, 42, 62
+    BG_HOVER_RGB = _rgb_of(Colors.BG_HOVER)           # 51, 51, 74
+    BG_ACTIVE_RGB = _rgb_of(Colors.BG_ACTIVE)         # 62, 62, 92
+    BORDER_RGB = _rgb_of(Colors.BORDER)               # 58, 58, 78
+    BORDER_LIGHT_RGB = _rgb_of(Colors.BORDER_LIGHT)   # 74, 74, 98
+    TEXT_DISABLED_RGB = _rgb_of(Colors.TEXT_DISABLED)  # 90, 90, 114
+    ACCENT_RGB = _rgb_of(Colors.ACCENT)               # 74, 158, 255
+
     # ---- 玻璃质感（半透明 / 卡片 / 高亮） ----
-    # 主窗口底色：深色半透明（配合 WA_TranslucentBackground + paintEvent 圆角）
-    GLASS_BG_RGB = "30, 30, 46"            # = BG_BASE
+    GLASS_BG_RGB = BG_BASE_RGB
     GLASS_BG_ALPHA = 0.86                  # 主窗口不透明度
     GLASS_BG = f"rgba({GLASS_BG_RGB}, {int(255 * GLASS_BG_ALPHA)})"
 
-    # 导航胶囊高亮（半透明强调块，类似 GlassMusicPlayer 左侧高亮胶囊）
-    NAV_PILL_RGB = "74, 158, 255"          # = ACCENT
+    NAV_PILL_RGB = ACCENT_RGB              # 导航/选中胶囊高亮
     NAV_PILL_ALPHA = 0.24
     NAV_PILL = f"rgba({NAV_PILL_RGB}, {int(255 * NAV_PILL_ALPHA)})"
-    NAV_PILL_BORDER = "rgba(74, 158, 255, 0.55)"
+    NAV_PILL_BORDER = f"rgba({ACCENT_RGB}, 0.55)"
 
-    # 卡片底色（面板/弹窗）
-    CARD_RGB = "42, 42, 62"
-    CARD_ALPHA = 0.92
+    CARD_RGB = BG_ELEVATED_RGB
+    CARD_ALPHA = 0.74                  # 卡片常态不透明度（通透玻璃感）
+    CARD_HOVER_ALPHA = 0.86            # hover 时略实（呼吸）
     CARD = f"rgba({CARD_RGB}, {int(255 * CARD_ALPHA)})"
     CARD_HOVER = Colors.BG_HOVER
     CARD_ACTIVE = Colors.BG_ACTIVE
 
-    # 输入框/滚动条
-    INPUT_RGB = "42, 42, 62"
+    # 卡片渐变（顶部受光 → 底部渐沉，替代纯平底色，Glass 层次）
+    CARD_TOP_RGB = BG_HOVER_RGB        # 渐变顶部（受光）
+    CARD_BOTTOM_RGB = BG_ELEVATED_RGB  # 渐变底部
+    CARD_HOVER_TOP_RGB = BG_HOVER_RGB
+    CARD_HOVER_BOTTOM_RGB = BG_ACTIVE_RGB
+
+    # 玻璃高光：顶部 1px 受光 / 底部 1px 暗线（极细层次，非粗重阴影）
+    GLASS_TOP_LINE = "rgba(255, 255, 255, 26)"
+    GLASS_TOP_LINE_HOVER = "rgba(255, 255, 255, 44)"
+    GLASS_BOTTOM_LINE = "rgba(0, 0, 0, 60)"
+
+    # 占位符文字（impeccable：placeholder 也在 WCAG 覆盖内）
+    PLACEHOLDER = Colors.TEXT_SECONDARY   # #a8a8c0，对输入框底 6.0:1
+
+    # 骨架微光扫描线（ui-ux-pro-max motion：#15 gradient sweep）
+    SHIMMER_LINE = "rgba(255, 255, 255, 30)"
+
+    INPUT_RGB = BG_ELEVATED_RGB
     INPUT_ALPHA = 0.78
     INPUT_BG = f"rgba({INPUT_RGB}, {int(255 * INPUT_ALPHA)})"
-    SCROLL_HANDLE = "rgba(90, 90, 114, 150)"   # 极简细线半透明
+    SCROLL_HANDLE = f"rgba({TEXT_DISABLED_RGB}, 150)"   # 极简细线半透明
 
-    # ---- 圆角 / 字体 ----
-    RADIUS = 12          # 全局圆角（按钮/输入/卡片）
-    RADIUS_SMALL = 8     # 小控件
-    WINDOW_RADIUS = 16   # 主窗口外框圆角
+    # ---- 圆角（克制化：10 全局 / 8 小控件 / 12 窗口） ----
+    RADIUS = 10
+    RADIUS_SMALL = 8
+    WINDOW_RADIUS = 12
+
+    # ---- 排版阶梯（12 / 14 / 16 / 24） ----
     FONT_FAMILY = "Microsoft YaHei UI, Microsoft YaHei, sans-serif"
-    FONT_SIZE = 13
+    FONT_SIZE_SUB = 12      # 辅助字：元信息/歌手/状态
+    FONT_SIZE_BODY = 14     # 正文：歌名/常规文字/按钮
+    FONT_SIZE_TITLE = 16    # 小标题：当前曲目/区块标题
+    FONT_SIZE_HERO = 24     # 大标题：启动页
+    FONT_SIZE = FONT_SIZE_BODY   # 正文别名（兼容既有引用）
+
+    # ---- 间距网格（8px 基准） ----
+    SPACING_XS = 4
+    SPACING_SM = 8
+    SPACING_MD = 16
+    SPACING_LG = 24
+    SPACING_XL = 32
+
+    # ---- 卡片（网格） ----
+    CARD_WIDTH = 160
+    CARD_HEIGHT = 200
+    CARD_PADDING = 6                 # 卡片内边距（封面缩进）
+    COVER_SIZE = CARD_WIDTH - 2 * CARD_PADDING   # 148（正方形封面）
+
+    # ---- 高亮边框 ----
+    BORDER_HIGHLIGHT = f"rgba({ACCENT_RGB}, 0.45)"   # hover 细高光
+    BORDER_FOCUS = Colors.ACCENT                     # focus 发光轮廓
+
+    # ---- 按钮尺寸 ----
+    BTN_MAIN = 44          # 播放/暂停主按钮直径（高频操作，放大）
+    BTN_SUB = 36           # 上一首/下一首

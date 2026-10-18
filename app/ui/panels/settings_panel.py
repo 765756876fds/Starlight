@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
 
 
 from PySide6.QtCore import Qt, QThread, QObject, Signal
@@ -328,7 +329,7 @@ class SettingsPanel(QWidget):
         self.btn_source_manage = QPushButton("音源管理…")
         self.btn_source_manage.clicked.connect(self._on_source_manage)
         self.lbl_scan_status = QLabel("")
-        self.lbl_scan_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_scan_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         btns.addWidget(self.btn_add_dir)
         btns.addWidget(self.btn_scan_all)
         btns.addWidget(self.btn_source_manage)
@@ -353,7 +354,7 @@ class SettingsPanel(QWidget):
         dl_row.addWidget(btn_dl_save)
         dl_lay.addLayout(dl_row)
         self.lbl_dl_status = QLabel("")
-        self.lbl_dl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_dl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         dl_lay.addWidget(self.lbl_dl_status)
         root.addWidget(dl_box)
         self._dirs: list = load_music_dirs()
@@ -415,7 +416,7 @@ class SettingsPanel(QWidget):
         lay.addLayout(row3)
 
         self.lbl_movie_status = QLabel("")
-        self.lbl_movie_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_movie_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(self.lbl_movie_status)
         root.addWidget(box)
 
@@ -543,7 +544,7 @@ class SettingsPanel(QWidget):
         lay.addLayout(row_reset)
 
         self.lbl_lyrics_status = QLabel("")
-        self.lbl_lyrics_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_lyrics_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(self.lbl_lyrics_status)
         root.addWidget(box)
         self._lyrics_group_ready = True   # 构造完成，此后 *Changed 才触发保存
@@ -606,7 +607,7 @@ class SettingsPanel(QWidget):
         lay.addWidget(self._plugins_container)
 
         hint = QLabel("在线搜索自动遍历全部 MusicFree 插件；点「测试」验证单源（搜索+URL+能否播）")
-        hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         hint.setWordWrap(True)
         lay.addWidget(hint)
         btns = QHBoxLayout()
@@ -617,7 +618,7 @@ class SettingsPanel(QWidget):
         self.btn_check_updates.setToolTip("拉取全部 MusicFree 插件更新源，对比版本；有新版的行会显示「更新」按钮")
         self.btn_check_updates.clicked.connect(self._on_check_updates)
         self.lbl_plugin_status = QLabel("")
-        self.lbl_plugin_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_plugin_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         btns.addWidget(self.btn_refresh_plugins)
         btns.addWidget(self.btn_check_updates)
         btns.addWidget(self.lbl_plugin_status)
@@ -650,14 +651,14 @@ class SettingsPanel(QWidget):
         self._delete_btns = {}
         if self._js_source is None:
             lbl = QLabel("JS 桥接未启用（node 缺失或初始化失败）")
-            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._plugins_layout.addWidget(lbl)
             self.btn_refresh_plugins.setEnabled(False)
             return
         plugins = self._js_source.list_plugins() or []
         if not plugins:
             lbl = QLabel("无插件（目录为空）")
-            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._plugins_layout.addWidget(lbl)
             return
         for p in plugins:
@@ -932,7 +933,7 @@ class SettingsPanel(QWidget):
                 w.deleteLater()
         if not self._dirs:
             lbl = QLabel("暂无音乐目录，点击「+ 添加目录」添加")
-            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._dirs_layout.addWidget(lbl)
             return
         for i, d in enumerate(self._dirs):
@@ -1083,7 +1084,7 @@ class SettingsPanel(QWidget):
         self._rate_slider = NoWheelSlider(Qt.Horizontal)
         self._rate_slider.setValue(0)
         self.lbl_rate = QLabel("语速：")
-        self.lbl_rate.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_rate.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(self.lbl_rate)
         lay.addWidget(self._rate_slider)
 
@@ -1091,7 +1092,7 @@ class SettingsPanel(QWidget):
         self._vol_slider = NoWheelSlider(Qt.Horizontal)
         self._vol_slider.setValue(0)
         self.lbl_vol = QLabel("音量：")
-        self.lbl_vol.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_vol.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(self.lbl_vol)
         lay.addWidget(self._vol_slider)
 
@@ -1099,7 +1100,7 @@ class SettingsPanel(QWidget):
         krow = QHBoxLayout()
         krow.addWidget(QLabel("API Key："))
         self.lbl_key_status = QLabel("")
-        self.lbl_key_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_key_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         krow.addWidget(self.lbl_key_status)
         self._key_edit = QLineEdit()
         self._key_edit.setEchoMode(QLineEdit.Password)
@@ -1266,10 +1267,10 @@ class SettingsPanel(QWidget):
                 configured = False
         if configured:
             self.lbl_key_status.setText("已配置 ✓")
-            self.lbl_key_status.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 11px;")
+            self.lbl_key_status.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         else:
             self.lbl_key_status.setText("未配置")
-            self.lbl_key_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            self.lbl_key_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
 
     def _on_key_save(self) -> None:
         """保存 API Key 到 tools/.qwen_key（gitignore），不碰 settings.yaml。"""
@@ -1316,7 +1317,7 @@ class SettingsPanel(QWidget):
         h_data.addWidget(self.btn_update_data)
         self.lbl_update_status = QLabel("")
         self.lbl_update_status.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
+            f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         self.lbl_update_status.setWordWrap(True)
         h_data.addWidget(self.lbl_update_status, 1)
         lay.addLayout(h_data)

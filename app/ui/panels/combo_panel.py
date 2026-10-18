@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
 
 import os
 from typing import Dict, List, Optional, Tuple
@@ -79,7 +80,7 @@ class ComboPanel(QWidget):
         layout.addLayout(body, 1)
 
         self.lbl_current = QLabel("当前对局英雄：-（自动识别）")
-        self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         layout.addWidget(self.lbl_current)
 
         self._timer = QTimer(self)
@@ -189,14 +190,14 @@ class ComboPanel(QWidget):
             else:
                 hint = QLabel("该英雄暂无连招配置\n（点击上方 [+ 添加英雄] 加入连招库）")
             hint.setWordWrap(True)
-            hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._detail_layout.addWidget(hint)
             self._detail_layout.addStretch(1)  # 剩余空间留在底部，内容顶对齐
             return
         self.lbl_detail_champ.setText(f"当前英雄：{cc.name}")
         if not cc.combos:
             hint = QLabel("暂无连招，点击下方 [+ 添加连招] 创建")
-            hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+            hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._detail_layout.addWidget(hint)
         else:
             for combo in cc.combos:
@@ -207,7 +208,7 @@ class ComboPanel(QWidget):
                 lbl = QLabel(f"[{combo.trigger.upper()}] {combo.note}"
                              f"（{combo.summary}）")
                 lbl.setWordWrap(True)
-                lbl.setStyleSheet("font-size: 11px;")
+                lbl.setStyleSheet("font-size: {Tokens.FONT_SIZE_SUB}px;")
                 h.addWidget(lbl, 1)
                 btn = QPushButton("编辑")
                 # 显式 sizePolicy：水平 Minimum（最小宽度被尊重），不被容器压缩
