@@ -8,7 +8,7 @@ try:
 except Exception:
     _WIN32 = False
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget,
@@ -94,7 +94,6 @@ class MainWindow(QMainWindow):
         self._shell_layout.addWidget(self._title_bar)
 
         # 自动恢复上次窗口大小和位置
-        from PySide6.QtCore import QSettings
         self._settings = QSettings("LoLMusicAgent", "MainWindow")
         geom = self._settings.value("geometry")
         if geom:
@@ -217,6 +216,12 @@ class MainWindow(QMainWindow):
         super().paintEvent(event)
 
     def closeEvent(self, event):
+        # 记忆窗口几何与尺寸（隐藏到托盘/关闭前保存，重启后恢复）
+        try:
+            self._settings.setValue("geometry", self.saveGeometry())
+            self._settings.setValue("size", self.size())
+        except Exception as e:
+            print(f"[UI] 保存窗口尺寸失败（忽略）: {e}")
         event.ignore()
         self.hide()
 
@@ -228,7 +233,13 @@ class MainWindow(QMainWindow):
         """
         if _WIN32:
             try:
-                if str(eventType) == "windows_generic_MSG":
+                # PySide6 各版本 eventType 可能是 QByteArray/bytes/str，兼容处理
+                et = eventType
+                if hasattr(et, "data"):       # QByteArray
+                    et = et.data()
+                if isinstance(et, bytes):
+                    et = et.decode("latin-1")
+                if et == "windows_generic_MSG":
                     msg = wintypes.MSG.from_address(int(message))
                     if msg.message == _WM_NCHITTEST:
                         if self.isMaximized():
@@ -236,8 +247,12 @@ class MainWindow(QMainWindow):
                         # lParam 低/高 16 位为鼠标屏幕坐标（物理像素，有符号）
                         sx = ctypes.c_short(msg.lParam & 0xFFFF).value
                         sy = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                        # ctypes.wintypes.MSG 的句柄字段名跨版本不同（hWnd / hwnd）
+                        hwnd = getattr(msg, "hwnd", None)
+                        if hwnd is None:
+                            hwnd = getattr(msg, "hWnd", 0)
                         rect = wintypes.RECT()
-                        windll.user32.GetWindowRect(msg.hwnd, ctypes.byref(rect))
+                        windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
                         hit = _nchit_edge(
                             sx - rect.left, sy - rect.top,
                             rect.right - rect.left, rect.bottom - rect.top,
@@ -245,7 +260,11 @@ class MainWindow(QMainWindow):
                         return True, hit
             except Exception:
                 pass
-        return super().nativeEvent(eventType, message)
+        try:
+            return super().nativeEvent(eventType, message)
+        except Exception:
+            # 解析/转发异常时降级为未处理，绝不阻断事件流
+            return False, 0
 
 
 
