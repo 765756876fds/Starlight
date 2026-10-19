@@ -97,7 +97,7 @@ def _make_detect_runtime():
 
 
 def test_detect_interrupt_keyword_triggers_stop():
-    """无锁引擎识别出打断词 → 立即 _stop_tts_now。"""
+    """无锁引擎识别出明确打断词 → 立即 _stop_tts_now。"""
     rt = _make_detect_runtime()
     engine = MagicMock()
     engine.transcribe.return_value = "停止播放"
@@ -105,6 +105,39 @@ def test_detect_interrupt_keyword_triggers_stop():
     rt._detect_interrupt(b"\x00" * 48000, 16000)
     rt._stop_tts_now.assert_called_once()
     engine.transcribe.assert_called_once()
+
+
+def test_detect_interrupt_explicit_words_trigger():
+    """明确指令词（闭嘴/安静/别说了）都触发打断。"""
+    for kw_text in ("闭嘴", "安静", "别说了", "停止"):
+        rt = _make_detect_runtime()
+        engine = MagicMock()
+        engine.transcribe.return_value = kw_text
+        rt.asr._active_engine = engine
+        rt._detect_interrupt(b"\x00" * 48000, 16000)
+        rt._stop_tts_now.assert_called_once()
+
+
+def test_detect_interrupt_single_char_no_trigger():
+    """单字"停"/"别"不再触发（防误触：日常语流高频出现）。"""
+    for kw_text in ("停", "别"):
+        rt = _make_detect_runtime()
+        engine = MagicMock()
+        engine.transcribe.return_value = kw_text
+        rt.asr._active_engine = engine
+        rt._detect_interrupt(b"\x00" * 48000, 16000)
+        rt._stop_tts_now.assert_not_called()
+
+
+def test_detect_interrupt_negation_ignored():
+    """否定词拦截：不要停/别停止（即使含"停止播放"关键词）→ 不打断。"""
+    for text in ("不要停", "别停", "别停止播放", "不要停止播放", "别停止"):
+        rt = _make_detect_runtime()
+        engine = MagicMock()
+        engine.transcribe.return_value = text
+        rt.asr._active_engine = engine
+        rt._detect_interrupt(b"\x00" * 48000, 16000)
+        rt._stop_tts_now.assert_not_called()
 
 
 def test_detect_interrupt_no_keyword_no_stop():
@@ -115,6 +148,19 @@ def test_detect_interrupt_no_keyword_no_stop():
     rt.asr._active_engine = engine
     rt._detect_interrupt(b"\x00" * 48000, 16000)
     rt._stop_tts_now.assert_not_called()
+
+
+def test_transcribe_interrupt_forces_timeout():
+    """旁路转写强制 timeout=2.0（防阻塞：2s 无结果即放弃）。"""
+    rt = _make_detect_runtime()
+    engine = MagicMock()
+    engine.transcribe.return_value = "停止播放"
+    rt.asr._active_engine = engine
+    rt._transcribe_interrupt(b"\x00" * 48000, 16000)
+    engine.transcribe.assert_called_once()
+    kwargs = engine.transcribe.call_args.kwargs
+    assert kwargs.get("timeout") == 2.0
+    rt._stop_tts_now.assert_not_called()  # 只测转写层，不触发停止
 
 
 def test_detect_interrupt_locked_engine_skipped():

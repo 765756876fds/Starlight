@@ -289,10 +289,14 @@ class TTSController:
 
         # 检查是否被停止（如果是 stop 触发的，状态已经被 stop_playback 设置为 IDLE）
         if not self._stop_flag.is_set():
-            self._set_state(TTSState.IDLE)
-            # 正常播放完成，发布 finished（防止重复）
-            if not self._finished_published:
-                self._finished_published = True
+            # _finished_published 加锁保护（与 tts-stop 异步收尾线程互斥）
+            publish_done = False
+            with self._lock:
+                self._set_state(TTSState.IDLE)
+                if not self._finished_published:
+                    self._finished_published = True
+                    publish_done = True
+            if publish_done:
                 self._publish_event(EventType.SPEECH_FINISHED, {"reason": "completed"})
 
     def has_qwen_key(self) -> bool:
@@ -571,14 +575,18 @@ class TTSController:
             if self._current_file is cur_file:
                 self._current_file = None
 
-        # 代际未变（没有被新 speak 取代）才收尾置 IDLE + 发布 finished，
-        # 防止覆盖新播报状态 / 误发 finished。
-        if self._generation != gen:
-            return
+        # 代际未变（没有被新 speak 取代）才收尾置 IDLE + 发布 finished。
+        # 代际检查与状态修改合并进锁内（防检查后、进锁前新 speak 启动 →
+        # 旧线程误置 IDLE 覆盖新状态）；_finished_published 同锁保护。
+        publish_stopped = False
         with self._lock:
+            if self._generation != gen:
+                return
             self._set_state(TTSState.IDLE)
-        if not self._finished_published:
-            self._finished_published = True
+            if not self._finished_published:
+                self._finished_published = True
+                publish_stopped = True
+        if publish_stopped:
             self._publish_event(EventType.SPEECH_FINISHED, {"reason": "stopped"})
 
     def is_playing(self) -> bool:

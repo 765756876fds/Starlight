@@ -154,6 +154,9 @@ def ensure_and_launch(asr_config: dict) -> Optional[subprocess.Popen]:
         args = [server_bin, "-m", model, "--port", str(PORT), "--host", "127.0.0.1"]
         if mmproj and os.path.isfile(mmproj):
             args += ["--mmproj", mmproj]
+        # --parallel 2：允许 2 个并发请求——主 ASR 转写长语音时，
+        # 打断旁路的无锁转写可在服务端并行处理，不再排队等主请求完成。
+        args += ["--parallel", "2"]
         print(f"[ASR] 拉起 llama-server（模型 {Path(model).name}，端口 {PORT}）…")
         try:
             _server_proc = subprocess.Popen(

@@ -60,6 +60,30 @@ def test_load_single_probe_by_default():
     assert m.call_count == 1
 
 
+def test_transcribe_custom_timeout():
+    """transcribe(timeout=...)：旁路可传独立短超时（如 2s），默认用实例 30s。
+
+    打断旁路 _transcribe_interrupt 强制 timeout=2.0 → 2s 无结果即放弃，
+    绝不卡死旁路线程；主 ASR 路径不传 → 仍用实例默认超时。
+    """
+    from app.voice.asr import Qwen3ServerASR
+    engine = Qwen3ServerASR(base_url="http://127.0.0.1:8080/v1")
+    engine._loaded = True
+    audio = b"\x00" * 3200
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"text": "<asr_text>停止播放</asr_text>"}
+
+    with mock.patch("requests.post", return_value=resp) as m:
+        out = engine.transcribe(audio, 16000, timeout=2.0)
+        assert m.call_args.kwargs["timeout"] == 2.0
+        assert out == "停止播放"
+
+    with mock.patch("requests.post", return_value=resp) as m:
+        engine.transcribe(audio, 16000)
+        assert m.call_args.kwargs["timeout"] == 30.0  # 默认 self.timeout
+
+
 # ---------- 改动 3：TTS 403 重试 ----------
 
 class Fake403(Exception):

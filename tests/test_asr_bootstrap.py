@@ -155,6 +155,8 @@ class TestEnsureAndLaunch:
         assert "llama-server.exe" in calls["args"][0]
         assert "--mmproj" in calls["args"] and mm in calls["args"]
         assert "--port" in calls["args"] and "8080" in calls["args"]
+        # --parallel 2：允许 2 个并发请求（主 ASR 与打断旁路并行转写）
+        assert "--parallel" in calls["args"] and "2" in calls["args"]
         ab._server_proc = None  # 清理，防 atexit 误杀测试进程
 
     def test_no_server_bin_returns_none(self, monkeypatch):

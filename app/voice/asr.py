@@ -180,8 +180,13 @@ class Qwen3ServerASR(ASREngine):
                 return
             time.sleep(2)
 
-    def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
-        """转录音频"""
+    def transcribe(self, audio_data: bytes, sample_rate: int = 16000,
+                   timeout: Optional[float] = None) -> str:
+        """转录音频。
+
+        timeout：本次请求超时（秒）。None = 用实例默认 self.timeout（30s）。
+        旁路打断识别可传更短超时（如 2s）独立控制，不影响主 ASR 请求。
+        """
         if not self._loaded:
             return ""
 
@@ -206,7 +211,7 @@ class Qwen3ServerASR(ASREngine):
                 f"{self.base_url}/audio/transcriptions",
                 files=files,
                 data=data,
-                timeout=self.timeout,
+                timeout=self.timeout if timeout is None else timeout,
             )
 
             if resp.status_code == 200:

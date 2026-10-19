@@ -95,7 +95,15 @@ class VoiceRuntime:
         # 打断旁路（Side-channel）参数：
         # TTS 播放期间采集的段走独立队列与独立检测线程（不挤占主 ASR 队列）。
         self._INTERRUPT_SLICE_SECONDS = 1.5  # 旁路只截取音频前 1.5s 识别（缩短耗时）
-        self._INTERRUPT_KEYWORDS = ("停", "别", "闭嘴", "安静", "停止", "别说了", "别讲")
+        self._INTERRUPT_EARLY_SECONDS = 0.8  # VAD 旁路提前截断：采集约 0.8s 立即投递，不等尾部静音
+        self._INTERRUPT_KEYWORDS = (
+            "停止播放", "停止", "闭嘴", "安静", "安静点", "别说了", "别讲",
+            "别播", "不要说了", "别吵", "停播", "不听了", "不想听了", "太吵了",
+        )
+        # 否定词拦截：文本含这些词 → 视为"不要停"，忽略不打断
+        self._INTERRUPT_NEGATIONS = ("不要停", "不要停止", "别停", "别停止")
+        # 旁路识别超时（秒）：2s 无结果即放弃，绝不卡死旁路线程
+        self._INTERRUPT_TIMEOUT_SECONDS = 2.0
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -266,6 +274,7 @@ class VoiceRuntime:
         speech_frames = []
         in_speech = False
         speech_count = 0
+        is_interrupt = False  # 当前 VAD 段的打断标记（上升沿由 _speech_gate 决定）
 
         while self._running and self._listening:
             try:
@@ -277,7 +286,7 @@ class VoiceRuntime:
                     silence_duration = 0
                     if not in_speech:
                         # 回声抑制（放宽版）：TTS 播放中也允许采集，
-                        # 但该段标记 is_interrupt（打断候选），由 _process_speech 时长过滤。
+                        # 但该段标记 is_interrupt（打断候选），走独立旁路。
                         collect, is_interrupt = self._speech_gate()
                         if not collect:
                             continue
@@ -285,6 +294,17 @@ class VoiceRuntime:
                         speech_count = 0
                     speech_frames.append(data)
                     speech_count += 1
+
+                    # 旁路提前截断（绝杀延迟）：TTS 播放期间（is_interrupt 段）
+                    # 不等尾部静音——持续采集约 0.8s 立即投递打断旁路，
+                    # 用户喊"停止播放"只需 0.8s 音频就进 _interrupt_queue。
+                    if is_interrupt and speech_count * chunk_size >= int(
+                            self._INTERRUPT_EARLY_SECONDS * sample_rate):
+                        self._enqueue_speech(b"".join(speech_frames), sample_rate, is_interrupt)
+                        in_speech = False
+                        speech_frames = []
+                        speech_count = 0
+                        silence_duration = 0
                 else:
                     # 静音
                     if in_speech:
@@ -409,6 +429,11 @@ class VoiceRuntime:
         text = self._transcribe_interrupt(audio, sample_rate)
         if not text:
             return
+        # 否定词拦截（必须在关键词匹配之前）："不要停/别停止"等 → 视为不打断
+        for neg in self._INTERRUPT_NEGATIONS:
+            if neg in text:
+                print(f"[Voice] 打断旁路否定词命中: {text!r} → 忽略")
+                return
         for kw in self._INTERRUPT_KEYWORDS:
             if kw in text:
                 print(f"[Voice] 打断旁路命中: {text!r} → 停止 TTS")
@@ -433,7 +458,9 @@ class VoiceRuntime:
         if type(engine).__name__ == "Qwen3ASR":
             return ""
         try:
-            return engine.transcribe(audio_data, sample_rate)
+            # 强制独立超时：2s 无结果即放弃，绝不卡死旁路线程
+            return engine.transcribe(audio_data, sample_rate,
+                                     timeout=self._INTERRUPT_TIMEOUT_SECONDS)
         except Exception as e:
             print(f"[Voice] 旁路转写失败: {e}")
             return ""
