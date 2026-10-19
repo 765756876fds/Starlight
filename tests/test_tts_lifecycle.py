@@ -355,3 +355,100 @@ class TestTTSSpeakThreadGenerationGuard:
         assert len(finished_calls) == 1
         assert finished_calls[0].data["reason"] == "completed"
 
+
+class TestTTSAsyncStopGenerationGuard:
+    """连续打断代际竞态（极端并发③）：A 被 stop → B 立即开始 → A 的异步清理收尾不破坏 B。
+
+    _async_stop_playback 收尾的代际检查已合并进锁内：gen=1 的清理在
+    self._generation==2 时直接 return，绝不把 B 置 IDLE、绝不错发 finished(stopped)。
+    """
+
+    def _create_tts(self):
+        from app.speech.tts import TTSController
+
+        config = {
+            "engine": "edge",
+            "edge_voice": "zh-CN-XiaoxiaoNeural",
+            "rate": "+0%",
+            "volume": "+0%",
+            "output_dir": "./data/tts",
+            "enabled": True,
+            "mpv_path": "D:\\新建文件夹 (2)\\mpv.exe",
+        }
+        with patch("app.speech.tts.get_event_bus") as mock_get_bus, \
+             patch("app.speech.tts.os.makedirs"), \
+             patch("app.speech.tts.threading.Thread"):
+            mock_bus = MagicMock()
+            mock_get_bus.return_value = mock_bus
+            tts = TTSController(config)
+            tts._event_bus = mock_bus
+        return tts, mock_bus
+
+    def test_stale_async_stop_cleanup_does_not_touch_new_generation(self):
+        """确定性场景：A 的异步清理线程（gen=1）收尾时 B（gen=2）正在播 → 直接 return。"""
+        from app.speech.tts import TTSState
+
+        tts, mock_bus = self._create_tts()
+
+        # 模拟 B 正在播放（generation=2）
+        tts._generation = 2
+        tts._set_state(TTSState.PLAYING)
+        tts._current_file = "/fake/b.mp3"
+        tts._finished_published = False
+        tts._stop_flag.clear()
+
+        # A 的异步清理线程（gen=1）收尾 → 代际已变，必须直接 return
+        tts._async_stop_playback(proc=None, cur_file=None, gen=1)
+
+        # 1. B 的 state 仍是 PLAYING（未被置 IDLE）
+        assert tts.get_state() == TTSState.PLAYING, \
+            f"旧收尾覆盖了 B 的状态: {tts.get_state()}"
+        # 2. 未置位 _finished_published、未发布任何 finished(stopped)
+        assert tts._finished_published is False
+        stopped_calls = [
+            call[0][0] for call in mock_bus.publish.call_args_list
+            if call[0][0].event_type == "speech.finished"
+            and call[0][0].data.get("reason") == "stopped"
+        ]
+        assert len(stopped_calls) == 0, f"旧收尾错误发布了 {len(stopped_calls)} 个 stopped finished"
+
+    def test_stop_then_speak_async_cleanup_keeps_b_playing(self):
+        """真实时序：A 播放 → stop_playback(A) → A 清理未完成时 speak(B) → B 不被置 IDLE。"""
+        import threading
+        from app.speech.tts import TTSState
+
+        tts, mock_bus = self._create_tts()
+
+        # A 正在播放（generation=1），A 的 mpv 进程用慢 wait 拖住清理线程，
+        # 保证测试主线程在 A 清理线程跑到代际检查前完成 generation 递增（确定性）。
+        class SlowProc:
+            def terminate(self):
+                pass
+            def wait(self, timeout=None):
+                time.sleep(0.05)
+                return 0
+        tts._generation = 1
+        tts._set_state(TTSState.PLAYING)
+        tts._current_file = "/fake/a.mp3"
+        tts._play_process = SlowProc()
+        tts._finished_published = False
+        tts._stop_flag.clear()
+
+        # 用户打断 A → 异步清理线程启动（捕获 gen=1）
+        tts.stop_playback()
+
+        # === 立即模拟 speak(B) ===
+        tts._generation = 2
+        tts._stop_flag.clear()
+        tts._finished_published = False
+        tts._current_file = "/fake/b.mp3"
+        tts._set_state(TTSState.PLAYING)
+
+        # 等 A 的异步清理线程收尾（terminate + wait 0.05s + 收尾逻辑）
+        time.sleep(0.3)
+
+        # B 状态不被 A 的清理置 IDLE；B 的 finished 未被提前消费
+        assert tts.get_state() == TTSState.PLAYING, \
+            f"A 的清理线程把 B 置为了 {tts.get_state()}"
+        assert tts._finished_published is False
+

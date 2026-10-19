@@ -62,9 +62,10 @@ def test_interrupt_segment_goes_to_side_queue():
     rt._enqueue_speech(b"\x00" * 3200, 16000, is_interrupt=True)
     assert rt._speech_queue.empty()
     assert rt._interrupt_queue.qsize() == 1
-    audio, sr = rt._interrupt_queue.get_nowait()
+    audio, sr, t_enter = rt._interrupt_queue.get_nowait()
     assert sr == 16000
     assert len(audio) == 3200
+    assert t_enter > 0  # 延迟打点时间戳已附带
 
 
 def test_interrupt_side_queue_offer_latest():
@@ -188,3 +189,60 @@ def test_detect_interrupt_slices_first_seconds():
     sent_audio = engine.transcribe.call_args[0][0]
     assert len(sent_audio) <= int(1.5 * 16000 * 2)
     rt._stop_tts_now.assert_called_once()
+
+
+def test_negation_versus_trigger_pair():
+    """配对验证："不要停止播放"（否定词）不触发；"停止播放"（明确指令）触发。"""
+    rt = _make_detect_runtime()
+    engine = MagicMock()
+    engine.transcribe.return_value = "不要停止播放"
+    rt.asr._active_engine = engine
+    rt._detect_interrupt(b"\x00" * 48000, 16000)
+    rt._stop_tts_now.assert_not_called()
+
+    rt = _make_detect_runtime()
+    engine = MagicMock()
+    engine.transcribe.return_value = "停止播放"
+    rt.asr._active_engine = engine
+    rt._detect_interrupt(b"\x00" * 48000, 16000)
+    rt._stop_tts_now.assert_called_once()
+
+
+def test_interrupt_not_blocked_by_main_asr():
+    """极端并发①：主 ASR 转写被阻塞（模拟长语音卡死）时，旁路打断不被拖住。
+
+    若旁路误走 ASRManager.transcribe（持锁），会被 10s 阻塞的假转写卡住 →
+    stop 不会在 1.5s 内触发；正确实现（直调无锁引擎）应立即命中"闭嘴"并停止。
+    """
+    import threading
+    import time
+
+    rt = _make_detect_runtime()
+    engine = MagicMock()
+    engine.transcribe.return_value = "闭嘴"  # 旁路直调引擎 → 立即返回
+    rt.asr._active_engine = engine
+
+    main_asr_blocked = threading.Event()
+    def blocking_transcribe(*a, **k):
+        main_asr_blocked.wait(10)  # 模拟主 ASR 转写长语音卡住
+        return ""
+    rt.asr.transcribe = blocking_transcribe
+
+    stop_called = threading.Event()
+    def stop_now():
+        stop_called.set()
+    rt._stop_tts_now = stop_now
+
+    rt._running = True  # 旁路 worker 循环依赖 _running
+    worker = threading.Thread(target=rt._interrupt_worker, daemon=True)
+    worker.start()
+    try:
+        t0 = time.monotonic()
+        rt._interrupt_queue.put((b"\x00" * 48000, 16000, time.monotonic()))
+        got = stop_called.wait(timeout=1.5)
+        elapsed = time.monotonic() - t0
+        assert got, f"旁路打断被主 ASR 拖住：{elapsed:.2f}s 内未触发停止"
+        assert elapsed < 1.5, f"旁路打断耗时过长：{elapsed:.2f}s"
+    finally:
+        rt._interrupt_stop.set()
+        worker.join(timeout=1.0)

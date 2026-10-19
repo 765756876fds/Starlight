@@ -95,7 +95,9 @@ class VoiceRuntime:
         # 打断旁路（Side-channel）参数：
         # TTS 播放期间采集的段走独立队列与独立检测线程（不挤占主 ASR 队列）。
         self._INTERRUPT_SLICE_SECONDS = 1.5  # 旁路只截取音频前 1.5s 识别（缩短耗时）
-        self._INTERRUPT_EARLY_SECONDS = 0.8  # VAD 旁路提前截断：采集约 0.8s 立即投递，不等尾部静音
+        # TTS 播放期间（is_interrupt 段）的静音切段阈值：10 帧 ≈ 0.64s（保留完整句子，
+        # 不强行截断语音；正常段仍用 mic_loop 的 max_silence=30 帧 ≈ 1.92s）
+        self._INTERRUPT_MAX_SILENCE = 10
         self._INTERRUPT_KEYWORDS = (
             "停止播放", "停止", "闭嘴", "安静", "安静点", "别说了", "别讲",
             "别播", "不要说了", "别吵", "停播", "不听了", "不想听了", "太吵了",
@@ -294,25 +296,18 @@ class VoiceRuntime:
                         speech_count = 0
                     speech_frames.append(data)
                     speech_count += 1
-
-                    # 旁路提前截断（绝杀延迟）：TTS 播放期间（is_interrupt 段）
-                    # 不等尾部静音——持续采集约 0.8s 立即投递打断旁路，
-                    # 用户喊"停止播放"只需 0.8s 音频就进 _interrupt_queue。
-                    if is_interrupt and speech_count * chunk_size >= int(
-                            self._INTERRUPT_EARLY_SECONDS * sample_rate):
-                        self._enqueue_speech(b"".join(speech_frames), sample_rate, is_interrupt)
-                        in_speech = False
-                        speech_frames = []
-                        speech_count = 0
-                        silence_duration = 0
                 else:
                     # 静音
                     if in_speech:
                         silence_duration += 1
                         speech_frames.append(data)
 
-                        if silence_duration >= max_silence:
-                            # 语音结束
+                        # TTS 播放期间（is_interrupt 段）缩短静音切段阈值：
+                        # 10 帧 ≈ 0.64s 静音即切段（保留完整句子，无需强行截断；
+                        # 正常段仍用 max_silence=30 帧 ≈ 1.92s）
+                        effective_max_silence = self._INTERRUPT_MAX_SILENCE if is_interrupt else max_silence
+                        if silence_duration >= effective_max_silence:
+                            # 语音结束（min_speech 至少 5 帧 ≈ 0.32s 有效声音才认指令）
                             if speech_count >= min_speech:
                                 self._enqueue_speech(b"".join(speech_frames), sample_rate, is_interrupt)
                             in_speech = False
@@ -339,15 +334,18 @@ class VoiceRuntime:
         is_interrupt=False → 主 ASR 队列（满丢最旧，用户最新指令优先）。
         """
         if is_interrupt:
+            # 打点：入队时刻（worker 取到后计算排队耗时 [Interrupt-Perf] Queue）
+            t_enter = time.monotonic()
+            item = (audio_data, sample_rate, t_enter)
             try:
-                self._interrupt_queue.put_nowait((audio_data, sample_rate))
+                self._interrupt_queue.put_nowait(item)
             except queue.Full:
                 try:
                     self._interrupt_queue.get_nowait()  # 丢旧
                 except queue.Empty:
                     pass
                 try:
-                    self._interrupt_queue.put_nowait((audio_data, sample_rate))
+                    self._interrupt_queue.put_nowait(item)
                 except queue.Full:
                     pass
             return
@@ -412,13 +410,17 @@ class VoiceRuntime:
         """
         while self._running and not self._interrupt_stop.is_set():
             try:
-                audio_data, sample_rate = self._interrupt_queue.get(timeout=0.5)
+                audio_data, sample_rate, t_enter = self._interrupt_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+            t_start = time.monotonic()
             try:
                 self._detect_interrupt(audio_data, sample_rate)
             except Exception as e:
                 print(f"[Voice] 打断检测异常: {e}")
+            t_end = time.monotonic()
+            # 延迟打点：排队耗时（入队→worker 取到）与识别耗时（请求→结果）
+            print(f"[Interrupt-Perf] Queue: {t_start - t_enter:.2f}s, ASR: {t_end - t_start:.2f}s")
         print("[Voice] 打断旁路线程退出")
 
     def _detect_interrupt(self, audio_data: bytes, sample_rate: int):
@@ -459,8 +461,13 @@ class VoiceRuntime:
             return ""
         try:
             # 强制独立超时：2s 无结果即放弃，绝不卡死旁路线程
-            return engine.transcribe(audio_data, sample_rate,
-                                     timeout=self._INTERRUPT_TIMEOUT_SECONDS)
+            t0 = time.monotonic()
+            try:
+                return engine.transcribe(audio_data, sample_rate,
+                                         timeout=self._INTERRUPT_TIMEOUT_SECONDS)
+            finally:
+                # HTTP 端到端总耗时打点（成功/失败都记录）
+                print(f"[Interrupt-Perf] HTTP total: {time.monotonic() - t0:.2f}s")
         except Exception as e:
             print(f"[Voice] 旁路转写失败: {e}")
             return ""
