@@ -1,0 +1,171 @@
+# LoL Music Agent 配置模板（安全参考版）
+# 复制本文件为 config/settings.yaml 后按需填写；真实 settings.yaml 已被 .gitignore 忽略，不会提交。
+# 任何 API Key / Token / Cookie 请勿写入本文件。
+
+app:
+  name: LoL Music Agent
+  version: 0.1.0
+  log_level: INFO
+  data_dir: ./data
+  log_dir: ./logs
+music:
+  scan_dirs: []
+  extensions:
+  - .mp3
+  - .flac
+  - .wav
+  - .m4a
+  - .ogg
+  - .ape
+  database: ./data/music.db
+  download_dir: ""
+  mpv_path: ""
+  mpv_ipc_pipe: \\.\pipe\lol_music_mpv
+  default_volume: 53
+  queue_size: 50
+  lyrics:
+    font: 黑体
+    font_size: 36
+    color: '#FF0000'
+    bg_opacity: 0
+    mode: triple
+    locked: true
+    pos_x: 1138
+    pos_y: 19
+  play_mode: repeat_all
+asr:
+  engine: qwen3_server
+  qwen3_server:
+    base_url: http://127.0.0.1:8080/v1
+    model: default
+    timeout: 30.0
+  qwen3_asr_model: ""
+  qwen3_asr_mmproj: ""
+  vad_enabled: true
+  vad_silence_duration: 500
+  sample_rate: 16000
+  ptt_key: null
+intent: null
+lcu:
+  enabled: true
+  reconnect_interval: 5
+  process_name: LeagueClientUx.exe
+  lockfile_path: null
+live_client:
+  enabled: true
+  base_url: https://127.0.0.1:2999
+  poll_interval: 1.0
+  verify_ssl: false
+game_alarm:
+  enabled: true
+  rift_herald_lead: 60
+  dragon_lead: 40
+  baron_lead: 40
+  flash_cooldown: 300
+  ward_duration: 120
+  tolerance: 10
+player:
+  enabled: true
+  database: ./data/player.db
+  cache_hours: 24
+  lobby_preload: true
+tts:
+  enabled: true
+  engine: qwen
+  edge_voice: zh-CN-XiaoxiaoNeural
+  rate: +0%
+  volume: +0%
+  output_dir: ./data/tts
+  qwen_api_key: ''
+  qwen_base_url: https://dashscope.aliyuncs.com/api/v1
+  qwen_model: qwen-audio-3.1-tts-flash
+  qwen_voice: longanlingxin_v3.1
+  qwen_rate: 1.0
+  qwen_volume: 50
+speech_judge:
+  intensity: sparse
+  min_level: B
+  kill_aggregate_window: 3.0
+  min_interval: 5.0
+resource:
+  p0_priority: high
+  p1_priority: above_normal
+  p2_priority: normal
+  p3_priority: below_normal
+  qwen_max_threads: 6
+  asr_max_threads: 4
+ui:
+  enabled: true
+  title: LoL Music Agent
+  width: 1200
+  height: 800
+  theme: dark
+  refresh_interval: 500
+automation:
+  enabled: false
+  auto_queue: false
+  auto_accept: false
+  auto_ban: false
+  auto_pick: false
+  accept_delay: 0.0
+  max_action_attempts: 3
+  polling_interval: 0.5
+  presets:
+    bot:
+      ban_priority: []
+      pick_priority: []
+      primary_role: null
+      secondary_role: null
+    normal:
+      ban_priority: []
+      pick_priority: []
+      primary_role: null
+      secondary_role: null
+    flex:
+      ban_priority: []
+      pick_priority: []
+      primary_role: null
+      secondary_role: null
+    solo_duo:
+      ban_priority: []
+      pick_priority: []
+      primary_role: null
+      secondary_role: null
+  auto_queue_mode: bot
+  auto_queue_primary_role: 不限
+  auto_queue_secondary_role: 不限
+  pick_priority:
+  - 412
+  ban_priority: []
+online_music:
+  enabled: true
+  js_bridge:
+    enabled: true
+    musicfree_dir: data/music_sources/musicfree
+    lx_dir: data/music_sources/lx
+    user_variables:
+      kg:
+        userid: ''
+        token: ''
+      tx:
+        cookie: ''
+      wy:
+        cookie: ''
+movie:
+  source_url: ""
+  mpv_ipc_pipe: \\.\pipe\lol_movie_mpv
+  assrt_token: ''
+  auto_subtitle: false
+  auto_next: true
+  sources:
+  - name: 示例资源（请替换为你自己的源）
+    url: https://example.com/api.php/provide/vod/
+    enabled: true
+  active_source: ""
+  embed: true
+  mpv_buffer:
+    demuxer_max_bytes: 256MiB
+    readahead_secs: 15
+    pause_initial: true
+    pause_wait: 2
+    network_timeout: 15
