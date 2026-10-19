@@ -118,6 +118,14 @@ class EventType:
     SYSTEM_ERROR = "system.error"
 
 
+# 高频状态事件：可合并、可丢弃（拥堵时丢新保旧，最新值才重要）
+_STATE_POOL_EVENTS = frozenset({
+    EventType.GAME_TIME_UPDATE,
+    EventType.GAME_SNAPSHOT,
+    EventType.MUSIC_STATE_CHANGED,
+})
+
+
 class EventBus:
     """
     线程安全的事件总线
@@ -133,9 +141,22 @@ class EventBus:
         self._event_history: List[Event] = []
         self._max_history = 1000
         self._running = True
-        self._async_executor = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="eventbus"
+        # ---- 异步事件物理隔离：双池 ----
+        # 状态池：高频可丢弃事件（time_update/snapshot 等），容量小、拥堵丢新
+        self._state_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="eventbus-state"
         )
+        # 临界池：不可丢弃事件（击杀/提醒/系统错误等），容量大、拥堵记录但不丢
+        self._critical_executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="eventbus-critical"
+        )
+        # 兼容别名（历史测试/调用方按 _async_executor 断言行为）
+        self._async_executor = self._critical_executor
+        self._pool_lock = threading.Lock()
+        self._state_pending = 0
+        self._critical_pending = 0
+        self._STATE_MAX_PENDING = 4   # 状态池拥堵阈值：超则丢弃新事件（合并语义）
+        self._CRITICAL_MAX_PENDING = 32  # 临界池告警阈值：超则记录 ERROR，绝不丢弃
 
     def subscribe(self, event_type: str, handler: Callable[[Event], None]):
         """订阅特定事件类型"""
@@ -203,14 +224,58 @@ class EventBus:
                     logger.error("发布 SYSTEM_ERROR 失败（源事件 %s）", event.event_type, exc_info=True)
 
     def publish_async(self, event: Event):
-        """异步发布事件（有界线程池 ≤4；池关闭竞态降级同步发布，事件不丢）"""
+        """异步发布事件（按事件类型路由到隔离双池）"""
         if not self._running:
             logger.warning("EventBus 已关闭，丢弃异步事件 %s", event.event_type)
             return
+        if event.event_type in _STATE_POOL_EVENTS:
+            self._submit_state(event)
+        else:
+            self._submit_critical(event)
+
+    def _submit_state(self, event: Event):
+        """状态池：拥堵时丢弃新事件（高频状态合并语义，最新值才重要）。"""
+        with self._pool_lock:
+            if self._state_pending >= self._STATE_MAX_PENDING:
+                logger.warning(
+                    "状态事件池拥堵，丢弃事件 %s（pending=%d）",
+                    event.event_type, self._state_pending,
+                )
+                return
+            self._state_pending += 1
         try:
-            self._async_executor.submit(self.publish, event)
+            future = self._state_executor.submit(self.publish, event)
         except RuntimeError:
+            with self._pool_lock:
+                self._state_pending -= 1
             self.publish(event)  # shutdown 竞态兜底
+            return
+        future.add_done_callback(lambda _f: self._dec_pending("state"))
+
+    def _submit_critical(self, event: Event):
+        """临界池：容量足够大，拥堵时记录 ERROR 但绝不静默丢弃。"""
+        with self._pool_lock:
+            if self._critical_pending >= self._CRITICAL_MAX_PENDING:
+                logger.error(
+                    "临界事件池拥堵（pending=%d），事件 %s 已提交但可能延迟",
+                    self._critical_pending, event.event_type,
+                )
+            self._critical_pending += 1
+        try:
+            future = self._critical_executor.submit(self.publish, event)
+        except RuntimeError:
+            with self._pool_lock:
+                self._critical_pending -= 1
+            self.publish(event)  # shutdown 竞态兜底
+            return
+        future.add_done_callback(lambda _f: self._dec_pending("critical"))
+
+    def _dec_pending(self, pool: str):
+        with self._pool_lock:
+            if pool == "state":
+                self._state_pending -= 1
+            else:
+                self._critical_pending -= 1
 
     def get_history(self, event_type: Optional[str] = None, limit: int = 100) -> List[Event]:
         """获取事件历史"""
@@ -234,7 +299,8 @@ class EventBus:
         流程会一直等待。
         """
         self._running = False
-        self._async_executor.shutdown(wait=True, cancel_futures=True)
+        self._state_executor.shutdown(wait=True, cancel_futures=True)
+        self._critical_executor.shutdown(wait=True, cancel_futures=True)
         with self._lock:
             self._subscribers.clear()
             self._wildcard_subscribers.clear()
