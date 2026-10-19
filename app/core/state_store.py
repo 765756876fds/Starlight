@@ -2,7 +2,12 @@
 全局状态存储 - 保存系统运行时的共享状态
 
 各模块读写自己的状态命名空间，避免直接互相调用。
+
+【更新约定】状态值一律通过 set() 写入“全新对象”（不可变更新）；
+不要 get() 后原地修改 list/dict（get 返回浅拷贝，原地修改不会
+触发 on_change 通知，且会造成跨线程共享可变对象）。
 """
+import copy
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -35,10 +40,20 @@ class StateStore:
             self._notify(namespace, key, old_value, value)
 
     def get(self, namespace: str, key: str, default: Any = None) -> Any:
-        """获取状态值"""
+        """
+        获取状态值
+
+        list/dict 返回浅拷贝（防跨线程原地修改）；约定：更新一律
+        通过 set() 写入新对象（不可变更新）。
+        """
         with self._lock:
             ns_data = self._data.get(namespace, {})
-            return ns_data.get(key, default)
+            if key in ns_data:
+                value = ns_data[key]
+                if isinstance(value, (list, dict)):
+                    return copy.copy(value)
+                return value
+        return default
 
     def get_namespace(self, namespace: str) -> Dict[str, Any]:
         """获取整个命名空间的状态（过滤内部 {key}__updated_at，与 snapshot() 一致）"""
@@ -53,10 +68,17 @@ class StateStore:
             return key in self._data.get(namespace, {})
 
     def delete(self, namespace: str, key: str):
-        """删除状态值"""
+        """删除状态值（发变更通知，new_value 为 None 表示已删除）"""
         with self._lock:
             if namespace in self._data and key in self._data[namespace]:
+                old_value = self._data[namespace][key]
                 del self._data[namespace][key]
+                self._data[namespace].pop(f"{key}__updated_at", None)
+            else:
+                return
+
+        # 通知监听器（在锁外执行）
+        self._notify(namespace, key, old_value, None)
 
     def clear_namespace(self, namespace: str):
         """清空命名空间"""

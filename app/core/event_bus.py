@@ -226,9 +226,15 @@ class EventBus:
             self._event_history.clear()
 
     def shutdown(self):
-        """关闭事件总线"""
+        """
+        关闭事件总线（优雅关闭）
+
+        先拒绝新事件，再等待已提交的异步 handler 全部执行完毕
+        （wait=True）。注意：订阅者 handler 应避免无限阻塞，否则退出
+        流程会一直等待。
+        """
         self._running = False
-        self._async_executor.shutdown(wait=False, cancel_futures=True)
+        self._async_executor.shutdown(wait=True, cancel_futures=True)
         with self._lock:
             self._subscribers.clear()
             self._wildcard_subscribers.clear()

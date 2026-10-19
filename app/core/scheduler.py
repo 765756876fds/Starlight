@@ -10,6 +10,7 @@
 """
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
 
@@ -17,18 +18,21 @@ class ScheduledTask:
     """定时任务"""
 
     def __init__(self, task_id: str, func: Callable, interval: float,
-                 immediate: bool = False, enabled: bool = True):
+                 immediate: bool = False, enabled: bool = True,
+                 run_async: bool = False):
         self.task_id = task_id
         self.func = func
         self.interval = interval  # 秒
         self.immediate = immediate
         self.enabled = enabled
+        self.run_async = run_async  # 耗时任务：提交线程池执行，不阻塞主循环
         self.last_run: Optional[float] = None
         self.next_run: Optional[float] = None
         self.run_count = 0
         self.error_count = 0
         self.last_error: Optional[str] = None
         self._lock = threading.Lock()
+        self._running = False  # 防重入：同一任务不允许并发执行
 
     def should_run(self, now: float) -> bool:
         if not self.enabled:
@@ -40,8 +44,11 @@ class ScheduledTask:
         return now - self.last_run >= self.interval
 
     def run(self):
-        """执行任务"""
+        """执行任务（防重入：同一任务已在运行时直接跳过）"""
         with self._lock:
+            if self._running:
+                return
+            self._running = True
             now = time.time()
             self.last_run = now
             self.next_run = now + self.interval
@@ -54,6 +61,9 @@ class ScheduledTask:
                 self.error_count += 1
                 self.last_error = str(e)
             print(f"[Scheduler] 任务 {self.task_id} 异常: {e}")
+        finally:
+            with self._lock:
+                self._running = False
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
@@ -84,11 +94,16 @@ class Scheduler:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._tick_interval = tick_interval
+        self._stop_event = threading.Event()  # stop() 置位以立即唤醒主循环
+        # run_async 任务的有界线程池（进程退出时由解释器 atexit 收尾）
+        self._async_executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="sched-task"
+        )
 
     def add_task(self, task_id: str, func: Callable, interval: float,
-                 immediate: bool = False) -> ScheduledTask:
+                 immediate: bool = False, run_async: bool = False) -> ScheduledTask:
         """添加定时任务"""
-        task = ScheduledTask(task_id, func, interval, immediate)
+        task = ScheduledTask(task_id, func, interval, immediate, run_async=run_async)
         with self._lock:
             self._tasks[task_id] = task
         return task
@@ -154,23 +169,29 @@ class Scheduler:
             return {tid: task.status() for tid, task in self._tasks.items()}
 
     def start(self):
-        """启动调度器"""
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._loop, daemon=True, name="scheduler"
-        )
-        self._thread.start()
+        """启动调度器（旧线程未退出时拒绝重启，杜绝双 _loop）"""
+        with self._lock:
+            if self._running:
+                return
+            if self._thread is not None and self._thread.is_alive():
+                print("[Scheduler] 上一个调度线程仍在运行，拒绝重复启动")
+                return
+            self._running = True
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._loop, daemon=True, name="scheduler"
+            )
+            self._thread.start()
 
     def stop(self):
-        """停止调度器"""
+        """停止调度器（立即唤醒主循环，等待当前任务完成，最多 5 秒）"""
         self._running = False
+        self._stop_event.set()
         if self._thread:
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=5)
 
     def _loop(self):
-        """主循环"""
+        """主循环（run_async 任务提交线程池执行，不阻塞主循环）"""
         while self._running:
             now = time.time()
 
@@ -180,9 +201,15 @@ class Scheduler:
 
             # 执行任务
             for task in to_run:
-                task.run()
+                if task.run_async:
+                    try:
+                        self._async_executor.submit(task.run)
+                    except RuntimeError:
+                        task.run()  # 池关闭竞态兜底：降级同步执行，不丢任务
+                else:
+                    task.run()
 
-            time.sleep(self._tick_interval)
+            self._stop_event.wait(self._tick_interval)
 
     def run_once(self, task_id: str):
         """立即执行一次任务"""

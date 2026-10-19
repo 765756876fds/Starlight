@@ -143,7 +143,24 @@ class CommandBus:
                     print(f"[CommandBus] 命令被中间件中止: {command.command_type}")
                     return None
             except Exception as e:
-                print(f"[CommandBus] 中间件异常: {e}")
+                # fail-closed：中间件异常视为拒绝执行，绝不静默放行
+                print(f"[CommandBus] 中间件异常，命令中止: {command.command_type}: {e}")
+                logger.error("中间件异常，命令中止 %s: %s", command.command_type, e)
+                try:
+                    from .event_bus import Event, EventType, get_event_bus
+                    get_event_bus().publish(Event(
+                        event_type=EventType.SYSTEM_ERROR,
+                        data={
+                            "source": "command_bus",
+                            "command_type": command.command_type,
+                            "error_type": type(e).__name__,
+                            "error_msg": str(e),
+                        },
+                        source="command_bus",
+                    ))
+                except Exception:
+                    logger.error("发布中间件 SYSTEM_ERROR 失败", exc_info=True)
+                return None
 
         # 查找处理器
         with self._lock:
