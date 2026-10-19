@@ -163,6 +163,10 @@ _trash/
 # 已清理的历史归档目录（防意外重建；原内容见 docs/history/LEGACY_SUMMARY.md，git 历史 db5937e 可追溯）
 /archive/
 
+# 历史临时产物（大扫除已清理，防重建）
+/tools/ai1_poc_output/
+/viz/
+
 # 运行时界面偏好（每台电脑不同，不跟踪）
 config/ui_prefs.json
 
