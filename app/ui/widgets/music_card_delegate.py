@@ -251,6 +251,10 @@ class MusicCardDelegate(QStyledItemDelegate):
         self.setProperty("hover_t", 0.0)
         self._anim = QPropertyAnimation(self, b"hover_t", self)
         self._anim.setDuration(motion.DUR_HOVER)
+        # 显式设置起止值：hover_t 0.0→1.0（正向进入）/ 1.0→0.0（反向离开），
+        # 消除 Qt 控制台 "you must set a start and end value" 警告刷屏
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
         self._anim.setEasingCurve(motion.EASE_OUT)
         self._anim.valueChanged.connect(self._on_anim_step)
         self._anim.finished.connect(self._on_anim_finished)

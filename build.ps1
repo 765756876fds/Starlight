@@ -73,8 +73,30 @@ if (-not (Test-Path (Join-Path $dist 'data'))) {
 if (-not (Test-Path (Join-Path $dist 'data\lol_data'))) {
     Move-Item (Join-Path $internal 'data\lol_data') (Join-Path $dist 'data\lol_data') -Force
 }
+# JS 音源插件（musicfree/ lx/ 的 .js）：PROJECT_ROOT/data/music_sources →
+# 与 lol_data 同规则移到 exe 目录（frozen 态代码按 PROJECT_ROOT 定位）
+if (-not (Test-Path (Join-Path $dist 'data\music_sources'))) {
+    Move-Item (Join-Path $internal 'data\music_sources') (Join-Path $dist 'data\music_sources') -Force
+}
 
-Write-Host '[4/4] Verify ...'
+Write-Host '[4/4] Verify + integrity assertions ...'
+# ===== 打包完整性断言（防呆）：缺失任何关键资源 → 抛异常中断，绝不生成安装包 =====
+$missing = @()
+$qss = Join-Path $internal 'app\ui\theme\dark.qss'
+$iconsDir = Join-Path $internal 'app\ui\theme\icons'
+$msDir = Join-Path $dist 'data\music_sources'
+$lolDir = Join-Path $dist 'data\lol_data'
+if (-not (Test-Path $qss)) { $missing += "UI 主题 QSS: $qss" }
+if (-not (Get-ChildItem $iconsDir -Filter *.svg -ErrorAction SilentlyContinue)) { $missing += "UI 图标 SVG: $iconsDir" }
+if (-not (Get-ChildItem $msDir -Recurse -Filter *.js -ErrorAction SilentlyContinue)) { $missing += "JS 音源插件: $msDir" }
+if (-not (Get-ChildItem $lolDir -Filter *.json -ErrorAction SilentlyContinue)) { $missing += "游戏静态数据: $lolDir" }
+if ($missing.Count -gt 0) {
+    Write-Host '[BUILD FAILED] 打包完整性断言未通过：'
+    foreach ($m in $missing) { Write-Host "  MISSING: $m" }
+    throw '打包资源缺失，中断构建——不生成安装包（请检查 build.spec 的 datas 收集规则）'
+}
+Write-Host '    integrity: theme(QSS+SVG) / js-plugins / lol_data 全部就位'
+
 $exe = Join-Path $dist 'LoL_Music_Agent.exe'
 if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
 $mpv = Join-Path $dist 'third_party\mpv\mpv.exe'

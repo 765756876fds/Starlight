@@ -41,6 +41,12 @@ hiddenimports = [
 ] + pyside_hidden
 
 datas = [
+    # UI 主题（dark.qss + icons/*.svg）：applier.py 用 __file__ 相对定位，
+    # 打包态命中 _internal/app/ui/theme/ —— 缺失则新电脑 UI 崩溃（QSS 加载失败）
+    ('app/ui/theme', 'app/ui/theme'),
+    # JS 音源插件（musicfree/ lx/ 的 .js）：PROJECT_ROOT/data/music_sources，
+    # 打包态 PROJECT_ROOT=exe 目录 → build.ps1 后处理移到 exe 目录（与 lol_data 同规则）
+    ('data/music_sources', 'data/music_sources'),
     # JS 桥接模块整目录（桥接运行必需：bridge.js + lib/*.js + package.json +
     # node_modules；只收 node_modules 会漏 bridge.js 导致在线音乐桥接启动失败）
     ('app/music/online/js_bridge', 'app/music/online/js_bridge'),
