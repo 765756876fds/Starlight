@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import QObject, QRect, QSize, QThread, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListView, QListWidgetItem, QMenu, QPushButton, QScrollArea,
     QSlider, QStackedWidget, QStyledItemDelegate, QStyle, QVBoxLayout, QWidget,
 )
@@ -20,6 +20,7 @@ from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import glass_info
 from ...movie import douban_rank
+from ...movie.rank_providers import BaseRankProvider, default_provider
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
 _POSTER_DIR = Path("data/movie/posters")
@@ -333,16 +334,20 @@ class _DbPosterBatchWorker(QObject):
 
 
 class _RankTagsWorker(QObject):
-    """后台拉豆瓣标签列表（失败降级 failed → 状态栏提示不崩）。"""
+    """后台拉榜单标签列表（provider 化；失败降级 failed → 状态栏提示不崩）。"""
 
     done = Signal(list)
     failed = Signal(str)
 
+    def __init__(self, provider):
+        super().__init__()
+        self._provider = provider
+
     def run(self):
         try:
-            tags = douban_rank.get_tags()
+            tags = self._provider.get_tags()
             if not tags:
-                self.failed.emit("豆瓣标签为空")
+                self.failed.emit(f"{self._provider.name}标签为空")
             else:
                 self.done.emit(tags)
         except Exception as e:
@@ -350,21 +355,22 @@ class _RankTagsWorker(QObject):
 
 
 class _RankSubjectsWorker(QObject):
-    """后台拉某标签的榜单条目（失败降级 failed → 状态栏提示不崩）。"""
+    """后台拉某标签的榜单条目（provider 化；失败降级 failed → 状态栏提示不崩）。"""
 
     done = Signal(list, str)  # (subjects, tag)
     failed = Signal(str)
 
-    def __init__(self, tag, page_start=0, page_limit=20):
+    def __init__(self, tag, provider, page_start=0, page_limit=20):
         super().__init__()
         self._tag = tag
+        self._provider = provider
         self._page_start = page_start
         self._page_limit = page_limit
 
     def run(self):
         try:
-            subs = douban_rank.get_subjects(self._tag, page_start=self._page_start,
-                                            page_limit=self._page_limit)
+            subs = self._provider.get_subjects(self._tag, page_start=self._page_start,
+                                               page_limit=self._page_limit)
             self.done.emit(subs, self._tag)
         except Exception as e:
             self.failed.emit(str(e))
@@ -392,6 +398,8 @@ class MoviePanel(QWidget):
         self._rank_thread = None
         self._rank_worker = None
         self._rank_tag = None
+        # 多平台榜单源（默认豆瓣，体验不变）
+        self._rank_provider = default_provider()
         # 海报下载线程：同款防重入 + 待处理补偿（旧线程结束后自动补最新一批）
         self._poster_thread = None
         self._poster_worker = None
@@ -449,14 +457,22 @@ class MoviePanel(QWidget):
         self.list_posters.setMouseTracking(True)
         self.stack_results.addWidget(self.list_results)
         self.stack_results.addWidget(self.list_posters)
-        # 榜单视图（第 3 页）：左标签竖列 + 右海报网格（对齐豆瓣 App 榜单页）
+        # 榜单视图（第 3 页）：左上平台选择 + 左标签竖列 + 右海报网格（对齐豆瓣 App 榜单页）
         self.page_rank = QWidget()
         rank_lay = QHBoxLayout(self.page_rank)
         rank_lay.setContentsMargins(0, 0, 0, 0)
         rank_lay.setSpacing(Tokens.SPACING_SM)
+        rank_left = QVBoxLayout()
+        rank_left.setContentsMargins(0, 0, 0, 0)
+        rank_left.setSpacing(Tokens.SPACING_SM)
+        self.combo_rank_platform = QComboBox()
+        self.combo_rank_platform.addItem(default_provider().name, default_provider())
+        self.combo_rank_platform.setToolTip("榜单平台（豆瓣默认）")
         self.list_rank_tags = QListWidget()
         self.list_rank_tags.setFixedWidth(96)
-        self.list_rank_tags.setToolTip("豆瓣榜单标签")
+        self.list_rank_tags.setToolTip("榜单标签")
+        rank_left.addWidget(self.combo_rank_platform)
+        rank_left.addWidget(self.list_rank_tags)
         self.list_rank = QListWidget()
         self.list_rank.setViewMode(QListWidget.IconMode)
         self.list_rank.setIconSize(QSize(*_POSTER_SIZE))
@@ -466,7 +482,7 @@ class MoviePanel(QWidget):
         self.list_rank.setWordWrap(True)
         self.list_rank.setItemDelegate(_RankItemDelegate(self.list_rank))
         self.list_rank.setToolTip("双击条目 → 按片名搜源内并显示结果（不自动播）")
-        rank_lay.addWidget(self.list_rank_tags)
+        rank_lay.addLayout(rank_left)
         rank_lay.addWidget(self.list_rank, 1)
         self.stack_results.addWidget(self.page_rank)
         root.addWidget(self.stack_results, 1)
@@ -561,6 +577,7 @@ class MoviePanel(QWidget):
         self.btn_clear.clicked.connect(self._do_clear)
         self.edit_kw.returnPressed.connect(self._do_search)
         self.btn_rank.clicked.connect(self._enter_rank_view)
+        self.combo_rank_platform.currentIndexChanged.connect(self._on_rank_platform_changed)
         self.list_rank_tags.itemClicked.connect(self._on_rank_tag_clicked)
         self.list_rank.itemDoubleClicked.connect(self._on_rank_item_activated)
         self.list_results.itemDoubleClicked.connect(self._on_item_activated)
@@ -786,13 +803,13 @@ class MoviePanel(QWidget):
             self._load_rank_tags()
 
     def _load_rank_tags(self):
-        """拉豆瓣标签列表；完成后自动拉第一个标签的榜单。防重入（运行中忽略）。"""
+        """拉当前 provider 的榜单标签；完成后自动拉第一个标签的榜单。防重入（运行中忽略）。"""
         if self._rank_thread is not None and self._rank_thread.isRunning():
             return
-        self.lbl_status.setText("加载榜单标签…")
+        self.lbl_status.setText(f"加载榜单标签（{self._rank_provider.name}）…")
         try:
             self._rank_thread = QThread()
-            self._rank_worker = _RankTagsWorker()
+            self._rank_worker = _RankTagsWorker(self._rank_provider)
             self._rank_worker.moveToThread(self._rank_thread)
             self._rank_thread.started.connect(self._rank_worker.run)
             self._rank_worker.done.connect(self._on_rank_tags_done)
@@ -802,6 +819,19 @@ class MoviePanel(QWidget):
             self._rank_thread.start()
         except Exception as e:
             self.lbl_status.setText(f"榜单加载失败: {e}")
+
+    def _on_rank_platform_changed(self, index: int):
+        """平台切换：换 provider → 清空标签/海报 → 重载标签。"""
+        if index < 0:
+            return
+        provider = self.combo_rank_platform.itemData(index)
+        if provider is None:
+            return
+        self._rank_provider = provider
+        self._rank_tag = None
+        self.list_rank_tags.clear()
+        self.list_rank.clear()
+        self._load_rank_tags()
 
     def _on_rank_tags_done(self, tags: list):
         self.list_rank_tags.clear()
@@ -835,7 +865,7 @@ class MoviePanel(QWidget):
         self.lbl_status.setText(f"加载榜单「{tag}」…")
         try:
             self._rank_thread = QThread()
-            self._rank_worker = _RankSubjectsWorker(tag, 0, 20)
+            self._rank_worker = _RankSubjectsWorker(tag, self._rank_provider, 0, 20)
             self._rank_worker.moveToThread(self._rank_thread)
             self._rank_thread.started.connect(self._rank_worker.run)
             self._rank_worker.done.connect(self._on_rank_subjects_done)
