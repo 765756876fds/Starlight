@@ -1,4 +1,4 @@
-# build.ps1 - LoL_Music_Agent one-click packaging (onedir portable folder)
+﻿# build.ps1 - LoL_Music_Agent one-click packaging (onedir portable folder)
 # Usage: powershell -ExecutionPolicy Bypass -File build.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
