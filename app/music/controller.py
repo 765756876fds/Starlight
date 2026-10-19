@@ -177,7 +177,7 @@ class MusicController:
         if self.lx_connected:
             print('[音乐] 落雪音乐已连接，语音控制将优先控制落雪')
         else:
-            print('[音乐] 落雪音乐未连接，使用本地mpv播放')
+            print('[音乐] 本地 mpv 播放引擎已就绪')
 
         # Online sources（延迟构造，可选）
         self.online_manager = None
