@@ -20,7 +20,7 @@ from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import glass_info
 from ...movie import douban_rank
-from ...movie.rank_providers import BaseRankProvider, default_provider
+from ...movie.rank_providers import BaseRankProvider, TgmengProvider, default_provider
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
 _POSTER_DIR = Path("data/movie/posters")
@@ -466,7 +466,10 @@ class MoviePanel(QWidget):
         rank_left.setContentsMargins(0, 0, 0, 0)
         rank_left.setSpacing(Tokens.SPACING_SM)
         self.combo_rank_platform = QComboBox()
-        self.combo_rank_platform.addItem(default_provider().name, default_provider())
+        _dp = default_provider()
+        self.combo_rank_platform.addItem(_dp.name, _dp)
+        _tp = TgmengProvider()
+        self.combo_rank_platform.addItem(_tp.name, _tp)
         self.combo_rank_platform.setToolTip("榜单平台（豆瓣默认）")
         self.list_rank_tags = QListWidget()
         self.list_rank_tags.setFixedWidth(96)
