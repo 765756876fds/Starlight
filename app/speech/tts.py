@@ -519,7 +519,13 @@ class TTSController:
             self.stop_playback()
 
     def stop_playback(self):
-        """停止当前播放"""
+        """停止当前播放（非阻塞，瞬间返回）。
+
+        锁内只置 STOPPING + 发 _stop_flag 信号；真正的进程终止、
+        文件清理与收尾置 IDLE 放到独立 daemon 线程（tts-stop）异步执行。
+        → 无论谁调用（UI 线程 / 识别线程 / SpeechQueue worker）都不会被
+        mpv terminate/wait 阻塞。
+        """
         with self._lock:
             if self._state not in (TTSState.PLAYING, TTSState.GENERATING):
                 return
@@ -527,30 +533,50 @@ class TTSController:
             self._set_state(TTSState.STOPPING)
             self._stop_flag.set()
 
-        # 停止 mpv 进程
-        if self._play_process:
+        # 捕获当前进程/文件引用 + 代际：异步线程只清理自己的，
+        # 新 speak 若已复用这些引用则不动（防覆盖新状态）。
+        proc = self._play_process
+        cur_file = self._current_file
+        gen = self._generation
+        threading.Thread(
+            target=self._async_stop_playback,
+            args=(proc, cur_file, gen),
+            daemon=True,
+            name="tts-stop",
+        ).start()
+
+    def _async_stop_playback(self, proc, cur_file, gen):
+        """异步执行真正的终止 / 清理 / 收尾（不阻塞任何调用方）。"""
+        if proc is not None:
             try:
-                self._play_process.terminate()
-                # 等待进程完全退出
+                proc.terminate()
                 try:
-                    self._play_process.wait(timeout=2)
+                    proc.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    self._play_process.kill()
-                    self._play_process.wait(timeout=1)
+                    proc.kill()
+                    proc.wait(timeout=1)
             except Exception as e:
                 print(f"[TTS] 停止播放失败: {e}")
-            finally:
-                self._play_process = None
 
-        # 清理当前文件
-        if self._current_file:
-            self._cleanup_file(self._current_file)
-            self._current_file = None
+        if cur_file:
+            try:
+                self._cleanup_file(cur_file)
+            except Exception:
+                pass
 
         with self._lock:
-            self._set_state(TTSState.IDLE)
+            # 只清理本线程捕获的引用（新 speak 已复用的不碰）
+            if self._play_process is proc:
+                self._play_process = None
+            if self._current_file is cur_file:
+                self._current_file = None
 
-        # 发布 finished（防止重复）
+        # 代际未变（没有被新 speak 取代）才收尾置 IDLE + 发布 finished，
+        # 防止覆盖新播报状态 / 误发 finished。
+        if self._generation != gen:
+            return
+        with self._lock:
+            self._set_state(TTSState.IDLE)
         if not self._finished_published:
             self._finished_published = True
             self._publish_event(EventType.SPEECH_FINISHED, {"reason": "stopped"})

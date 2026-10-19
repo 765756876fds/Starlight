@@ -27,7 +27,6 @@ class TestTTSController(unittest.TestCase):
     """TTS 控制器测试"""
 
     def setUp(self):
-        """每个测试前初始化"""
         self.config = {
             "engine": "edge",
             "edge_voice": "zh-CN-XiaoxiaoNeural",
@@ -48,6 +47,20 @@ class TestTTSController(unittest.TestCase):
         self.tts.stop()
         time.sleep(0.5)
         self._edge_patcher.stop()
+
+    def _wait_state(self, state, timeout=3.0):
+        """轮询等待 TTS 进入指定状态。
+
+        stop_playback 已异步化：锁内置 STOPPING 后瞬间返回，
+        真正的进程终止/清理/收尾在后台线程（tts-stop）完成 →
+        测试用轮询代替同步断言。
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.tts.get_state() == state:
+                return
+            time.sleep(0.05)
+        self.assertEqual(self.tts.get_state(), state)
 
     def test_1_initial_state(self):
         """测试初始状态"""
@@ -94,8 +107,7 @@ class TestTTSController(unittest.TestCase):
         # 确认正在播放
         if self.tts.is_playing():
             self.tts.stop_playback()
-            time.sleep(0.5)
-            self.assertEqual(self.tts.get_state(), TTSState.IDLE)
+            self._wait_state(TTSState.IDLE)
             self.assertFalse(self.tts.is_playing())
 
     def test_6_consecutive_speak(self):
@@ -119,7 +131,7 @@ class TestTTSController(unittest.TestCase):
             self.tts.stop_playback()
             time.sleep(0.2)
 
-        self.assertEqual(self.tts.get_state(), TTSState.IDLE)
+        self._wait_state(TTSState.IDLE)
 
     def _qwen_config(self, **overrides):
         cfg = {

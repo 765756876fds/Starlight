@@ -1,9 +1,9 @@
 """
-INTENT-NEGATION-01: "停止播放"误命中搜歌修复测试（修3）
+INTENT-NEGATION-01: "停止播放"意图修复测试（修3 + 打断路由）
 
 场景：
-① 停止播放 → system.unknown（不再搜"停止"）
-② 播放停止 → system.unknown
+① 停止播放 → system.stop_tts（独立打断路由：最高优先级，不再是 unknown）
+② 播放停止 → system.unknown（非打断词，保持 unknown，不搜"停止"）
 ③ 播放停止吧 → 句尾语气词清理后 → system.unknown
 ④ 不要播放 → system.unknown（现状回归，不破坏）
 ⑤ 播放不要说话 → MUSIC_SEARCH_PLAY query="不要说话"（歌名不误伤）
@@ -23,8 +23,8 @@ def _parse(text):
     return router.parse(text)
 
 
-def test_stop_play_unknown():
-    assert _parse("停止播放").intent_type == "system.unknown"
+def test_stop_play_stop_tts():
+    assert _parse("停止播放").intent_type == "system.stop_tts"
 
 
 def test_play_stop_unknown():

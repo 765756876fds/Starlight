@@ -74,7 +74,8 @@ class VoiceRuntime:
     整合语音输入全流程。
     """
 
-    def __init__(self, config: Dict[str, Any], tts_provider=None):
+    def __init__(self, config: Dict[str, Any], tts_provider=None,
+                 speech_queue_provider=None):
         self.config = config
         self.asr_config = config.get("asr", {})
         self.intent_config = config.get("intent", {})
@@ -86,6 +87,15 @@ class VoiceRuntime:
         # TTS 状态提供者（回声抑制用；惰性调用，避免构造期依赖）
         # 约定：返回带 is_playing() 方法的对象，或 None（不启用回声抑制）
         self.tts_provider = tts_provider
+
+        # SpeechQueue 提供者（system.stop_tts 独立打断路由用；惰性调用）
+        # 约定：返回带 stop_current() 方法的对象，或 None（降级：只停 TTS）
+        self.speech_queue_provider = speech_queue_provider
+
+        # 打断旁路（Side-channel）参数：
+        # TTS 播放期间采集的段走独立队列与独立检测线程（不挤占主 ASR 队列）。
+        self._INTERRUPT_SLICE_SECONDS = 1.5  # 旁路只截取音频前 1.5s 识别（缩短耗时）
+        self._INTERRUPT_KEYWORDS = ("停", "别", "闭嘴", "安静", "停止", "别说了", "别讲")
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -110,6 +120,12 @@ class VoiceRuntime:
         # 代际标记：stop 后立即 start 时，旧识别线程（若 transcribe 卡住未及时退出）
         # 发现代际过期后自动退出 → 防止双消费者同时取队列。
         self._asr_generation = 0
+
+        # 打断旁路队列（Side-channel）：TTS 播放期间采集的段（is_interrupt=True）
+        # 绝不进主 ASR 队列，只进这里；offer_latest 语义（满丢旧塞新，最新打断意图优先）。
+        self._interrupt_queue: "queue.Queue" = queue.Queue(maxsize=2)
+        self._interrupt_thread: Optional[threading.Thread] = None
+        self._interrupt_stop = threading.Event()
 
     def start(self):
         """启动语音运行时"""
@@ -139,6 +155,11 @@ class VoiceRuntime:
                 self._speech_queue.get_nowait()
             except queue.Empty:
                 break
+        while not self._interrupt_queue.empty():
+            try:
+                self._interrupt_queue.get_nowait()
+            except queue.Empty:
+                break
 
         # ③ 代际递增 + 创建新识别线程（捕获 my_gen；旧线程见代际过期自动退出）
         self._asr_generation += 1
@@ -147,6 +168,13 @@ class VoiceRuntime:
             target=self._asr_loop, args=(my_gen,), daemon=True, name="voice-asr"
         )
         self._asr_thread.start()
+
+        # ④ 打断旁路检测线程（独立于主 ASR 循环；stop 时经 _interrupt_stop 退出）
+        self._interrupt_stop.clear()
+        self._interrupt_thread = threading.Thread(
+            target=self._interrupt_worker, daemon=True, name="voice-interrupt"
+        )
+        self._interrupt_thread.start()
 
         # Intent 为纯规则实现，无状态，无需 initialize
 
@@ -161,7 +189,7 @@ class VoiceRuntime:
         self._running = False
         self._listening = False
 
-        # 排空队列 + put sentinel：让识别线程处理完当前段后退出。
+        # 排空主队列 + put sentinel：让识别线程处理完当前段后退出。
         # 采集线程可能仍在并发 put（stop 后新段落在 sentinel 之后）→
         # 这些残留段由下次 start() 清空，不会被本会话处理。
         while not self._speech_queue.empty():
@@ -170,6 +198,24 @@ class VoiceRuntime:
             except queue.Empty:
                 break
         self._speech_queue.put_nowait(None)  # sentinel
+
+        # 退出打断旁路线程（Event 置位 → worker 下一轮退出；join 带超时）
+        self._interrupt_stop.set()
+        if self._interrupt_thread is not None and self._interrupt_thread.is_alive():
+            self._interrupt_thread.join(timeout=1.0)
+            self._interrupt_thread = None
+
+        # 等主识别线程退出（可能正处理当前段；join 带超时，daemon 兜底）
+        if self._asr_thread is not None and self._asr_thread.is_alive():
+            self._asr_thread.join(timeout=1.0)
+
+        # 收尾清空：识别线程可能因 _running=False 在消费 sentinel 前退出，
+        # 残留 sentinel 一并清掉，保证 stop 后队列干净。
+        while not self._speech_queue.empty():
+            try:
+                self._speech_queue.get_nowait()
+            except queue.Empty:
+                break
 
         self.asr.unload_all()
         print("[Voice] 运行时已停止")
@@ -230,8 +276,10 @@ class VoiceRuntime:
                     # 检测到语音
                     silence_duration = 0
                     if not in_speech:
-                        # 回声抑制：TTS 正在播放/生成，本段视为回声，丢弃不采集
-                        if not self._should_collect_speech():
+                        # 回声抑制（放宽版）：TTS 播放中也允许采集，
+                        # 但该段标记 is_interrupt（打断候选），由 _process_speech 时长过滤。
+                        collect, is_interrupt = self._speech_gate()
+                        if not collect:
                             continue
                         in_speech = True
                         speech_count = 0
@@ -246,7 +294,7 @@ class VoiceRuntime:
                         if silence_duration >= max_silence:
                             # 语音结束
                             if speech_count >= min_speech:
-                                self._enqueue_speech(b"".join(speech_frames), sample_rate)
+                                self._enqueue_speech(b"".join(speech_frames), sample_rate, is_interrupt)
                             in_speech = False
                             speech_frames = []
                             speech_count = 0
@@ -261,11 +309,29 @@ class VoiceRuntime:
         audio.terminate()
         self._listening = False
 
-    def _enqueue_speech(self, audio_data: bytes, sample_rate: int):
+    def _enqueue_speech(self, audio_data: bytes, sample_rate: int,
+                        is_interrupt: bool = False):
         """语音段入队（采集线程调用，永不阻塞）。
 
-        队列满时丢最旧一段（FIFO 最前）→ 语义 = 用户最新指令优先。
+        is_interrupt=True（TTS 播放期间的段）→ 打断旁路队列 _interrupt_queue：
+          - 绝不进主 ASR 队列（不挤占主 ASR，主 ASR 转写长语音时打断不被卡）；
+          - offer_latest 语义：队列满丢旧塞新（最新打断意图优先）。
+        is_interrupt=False → 主 ASR 队列（满丢最旧，用户最新指令优先）。
         """
+        if is_interrupt:
+            try:
+                self._interrupt_queue.put_nowait((audio_data, sample_rate))
+            except queue.Full:
+                try:
+                    self._interrupt_queue.get_nowait()  # 丢旧
+                except queue.Empty:
+                    pass
+                try:
+                    self._interrupt_queue.put_nowait((audio_data, sample_rate))
+                except queue.Full:
+                    pass
+            return
+
         item = (audio_data, sample_rate)
         try:
             self._speech_queue.put_nowait(item)
@@ -297,19 +363,80 @@ class VoiceRuntime:
                 print(f"[Voice] 识别线程异常: {e}")
         print(f"[Voice] 识别线程 gen={my_gen} 退出")
 
-    def _should_collect_speech(self) -> bool:
-        """回声抑制闸门：TTS 正在生成/播放期间，麦克风新语音段不采集。
+    def _speech_gate(self):
+        """采集闸门（放宽版）：TTS 播放中允许采集，但标记打断候选。
 
-        返回 False = 丢弃本段语音（不进入 ASR）。
-        在 VAD 上升沿调用（回声到达麦克风时 TTS 大概率仍在播）。
+        返回 (collect, is_interrupt)：
+        - TTS 空闲 / 未注入 / 异常 → (True, False)：正常采集，不标记。
+        - TTS 播放中 → (True, True)：不再"装聋"拒收，该段标记为打断候选；
+          短促回声/杂音由 _process_speech 的时长过滤（<= 1.5s）丢弃，
+          长段（可能是用户指令，如"停止播放"）照常送入 ASR 识别。
         """
         try:
             tts = self.tts_provider() if self.tts_provider else None
         except Exception:
             tts = None
         if tts is not None and tts.is_playing():
-            return False
-        return True
+            return True, True
+        return True, False
+
+    # ===== 打断旁路（Side-channel）：独立队列 + 独立检测线程 =====
+
+    def _interrupt_worker(self):
+        """打断旁路检测线程（独立于主 _asr_loop）。
+
+        从 _interrupt_queue 取段（offer_latest 已保证队列里是最新打断意图），
+        截取前 1.5s 音频做无锁识别；文本含打断关键词 → 立即 _stop_tts_now()。
+        - 绝不阻塞主 ASR 的锁（见 _transcribe_interrupt：直调无锁引擎，绕开 ASRManager._lock）；
+        - 主 ASR 正在转写长语音时，本线程照常取队列并发检测，打断不被排队卡住。
+        """
+        while self._running and not self._interrupt_stop.is_set():
+            try:
+                audio_data, sample_rate = self._interrupt_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self._detect_interrupt(audio_data, sample_rate)
+            except Exception as e:
+                print(f"[Voice] 打断检测异常: {e}")
+        print("[Voice] 打断旁路线程退出")
+
+    def _detect_interrupt(self, audio_data: bytes, sample_rate: int):
+        """识别一段打断候选音频，命中打断词 → 停止 TTS。"""
+        # 截取前 1.5s（打断词通常在句首；缩短识别耗时）
+        slice_bytes = int(self._INTERRUPT_SLICE_SECONDS * sample_rate * 2)
+        audio = audio_data[:slice_bytes] if len(audio_data) > slice_bytes else audio_data
+        text = self._transcribe_interrupt(audio, sample_rate)
+        if not text:
+            return
+        for kw in self._INTERRUPT_KEYWORDS:
+            if kw in text:
+                print(f"[Voice] 打断旁路命中: {text!r} → 停止 TTS")
+                self._stop_tts_now()
+                return
+
+    def _transcribe_interrupt(self, audio_data: bytes, sample_rate: int) -> str:
+        """无锁转写：直调 active 引擎，绕开 ASRManager._lock。
+
+        ASRManager.transcribe 全程持锁（锁内做完整 HTTP 转写），旁路若走它
+        会在主 ASR 转写长语音时被卡住 → 这里直接读 _active_engine 并调引擎
+        自己的 transcribe（Qwen3ServerASR 纯 HTTP、无内部锁，可与主 ASR 并发
+        请求 llama-server）。有内部锁的引擎（本地 llama 模型）跳过旁路识别，
+        绝不与主 ASR 抢锁。
+        """
+        mgr = self.asr
+        engine = getattr(mgr, "_active_engine", None)
+        if engine is None or not engine.is_available():
+            return ""
+        # 本地 llama 模型引擎（Qwen3ASR，带模型级锁）跳过旁路识别，
+        # 绝不与主 ASR 抢锁。HTTP 引擎（Qwen3ServerASR）无锁，可旁路并发。
+        if type(engine).__name__ == "Qwen3ASR":
+            return ""
+        try:
+            return engine.transcribe(audio_data, sample_rate)
+        except Exception as e:
+            print(f"[Voice] 旁路转写失败: {e}")
+            return ""
 
     def _calculate_volume(self, data: bytes) -> int:
         """计算音频音量（RMS）"""
@@ -322,11 +449,12 @@ class VoiceRuntime:
         return int(sum(abs(s) for s in samples) / len(samples))
 
     def _process_speech(self, audio_data: bytes, sample_rate: int):
-        """处理一段语音"""
+        """处理一段语音（主 ASR 链：转写 → 意图 → 命令执行）。
+
+        打断候选段的时长过滤已移除：TTS 播放期间的段走独立旁路
+        （_interrupt_queue + _interrupt_worker），主队列不再区分。
+        """
         if not self._asr_enabled:
-            return
-        # 防御：上升沿闸门通过但识别开始时 TTS 仍在播（长播报场景）→ 丢弃
-        if not self._should_collect_speech():
             return
 
         # ASR 识别
@@ -395,13 +523,49 @@ class VoiceRuntime:
             return CommandType.MOVIE_RESUME
         return CommandType.MUSIC_RESUME
 
+    def _stop_tts_now(self):
+        """立即停止 TTS 播报（独立打断路由，不走 CommandBus）。
+
+        1) TTSController.stop_playback()：物理停止 mpv 播放（异步内部，瞬间返回）；
+        2) SpeechQueue.stop_current()：标记当前播报项 cancelled + 通知队列收尾。
+        两个提供者均为惰性可选的：缺省时降级为"只停 TTS"或 no-op，
+        任何异常都只打日志，绝不影响识别线程。
+        """
+        tts = None
+        try:
+            tts = self.tts_provider() if self.tts_provider else None
+        except Exception:
+            tts = None
+        if tts is not None:
+            try:
+                tts.stop_playback()
+            except Exception as e:
+                print(f"[Voice] 停止 TTS 失败: {e}")
+
+        sq = None
+        try:
+            sq = self.speech_queue_provider() if self.speech_queue_provider else None
+        except Exception:
+            sq = None
+        if sq is not None:
+            try:
+                sq.stop_current()
+            except Exception as e:
+                print(f"[Voice] 停止语音队列失败: {e}")
+
     def _execute_intent(self, intent: Intent, original_text: str):
         """执行意图对应的命令"""
         intent_type = intent.intent_type
         params = intent.params
 
+        # 独立打断路由（system.stop_tts）：不走 CommandBus，
+        # 直接停止 TTS 播报（物理停止 + 队列当前项标记取消），
+        # 保证语音打断即时生效且不经过业务中间件。
+        if intent_type == "system.stop_tts":
+            self._stop_tts_now()
+
         # 音乐命令（暂停/继续：谁在播谁响应——电影在播时路由给电影，包2b）
-        if intent_type == CommandType.MUSIC_PAUSE:
+        elif intent_type == CommandType.MUSIC_PAUSE:
             self.command_bus.execute(Command(
                 command_type=self._route_pause_cmd(),
                 params=params,

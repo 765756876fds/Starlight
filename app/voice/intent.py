@@ -42,6 +42,16 @@ class RuleBasedIntent:
     写操作（alarm.* / cooldown.*）要求明确动词，裸陈述不命中。
     """
 
+    # ===== 独立打断路由（最高优先级，在 parse 中最先匹配）=====
+    # TTS 播报打断词 → system.stop_tts（runtime 直接停止播放，不走 CommandBus）。
+    # 注意：不吞 MUSIC_PAUSE 词（暂停/停一下/别放了等保留音乐语义）。
+    SYSTEM_STOP_TTS_RULES = [
+        (r"^(停止播放|停止|闭嘴|别说了|别讲了|别播了|不要说了|别哔哔|别啰嗦|"
+         r"别叭叭|别吵了|别吵|太吵了|吵死了|安静|安静点|安静一下|停播|"
+         r"不听了|不想听了)$",
+         "system.stop_tts", {}),
+    ]
+
     # 音乐控制规则
     MUSIC_RULES = [
         # 下一首（同义表达扩充）
@@ -259,6 +269,11 @@ class RuleBasedIntent:
         text = re.sub(r"[啊呢呀哦吧哈嘛噢呗啦哟诶]+$", "", text)
         if not text:
             text = _tail
+
+        # 独立打断路由（最高优先级）：TTS 播报打断词 → system.stop_tts
+        for pattern, intent_type, _bp in cls.SYSTEM_STOP_TTS_RULES:
+            if re.match(pattern, text):
+                return Intent(intent_type, confidence=0.99, params={})
 
         # 音乐控制
         for pattern, command, base_params in cls.MUSIC_RULES:
