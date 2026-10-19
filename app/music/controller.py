@@ -891,7 +891,8 @@ class MusicController:
         gen = self._candidate_generation
         self._active_candidates = list(candidates)
         display = [
-            {"idx": i, "source": c.source_name, "title": c.title, "artist": c.artist}
+            {"idx": i, "source": c.source_name, "title": c.title, "artist": c.artist,
+             "cover_url": getattr(c, "cover_url", None) or None}
             for i, c in enumerate(candidates)
         ]
         self.event_bus.publish(Event(

@@ -44,12 +44,24 @@ def test_publish_candidates_event_payload(tmp_path):
     assert d["query"] == "q"
     assert d["generation"] == 1
     assert d["display"] == [
-        {"idx": 0, "source": "kw", "title": "A", "artist": "A"},
-        {"idx": 1, "source": "wy", "title": "B", "artist": "A"},
+        {"idx": 0, "source": "kw", "title": "A", "artist": "A", "cover_url": None},
+        {"idx": 1, "source": "wy", "title": "B", "artist": "A", "cover_url": None},
     ]
     for item in d["display"]:
         assert isinstance(item, dict)
     assert len(c._active_candidates) == 2
+
+
+def test_publish_candidates_carries_cover_url(tmp_path):
+    """语音候选 payload 携带 cover_url（纯 str，EventLog 序列化安全）。"""
+    c = _make_controller(tmp_path)
+    from app.music.online.models import OnlineTrack
+    track = OnlineTrack(source_name="kw", track_id="1", title="A", artist="A",
+                        cover_url="http://x/c.jpg")
+    with patch.object(c.event_bus, "publish") as pub:
+        c._publish_candidates("q", [track])
+    d = pub.call_args[0][0].data
+    assert d["display"][0]["cover_url"] == "http://x/c.jpg"
 
 
 def test_publish_candidates_generation_increments(tmp_path):

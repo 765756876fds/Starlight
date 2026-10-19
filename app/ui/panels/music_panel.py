@@ -905,6 +905,7 @@ class MusicPanel(QWidget):
                     "title": title,
                     "artist": artist,
                     "source_name": src,
+                    "cover_url": row.get("cover_url"),
                 }, sub, None))
                 self.list_results.addItem(item)
             n = len(display)
