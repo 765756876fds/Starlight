@@ -25,6 +25,14 @@ class ParseLinkDialog(GlassDialog):
         self.edit_url.setPlaceholderText("https://www.iqiyi.com/v_xxx.html …")
         lay.addWidget(self.edit_url)
 
+        # 第三方解析接口（可选）：填了则直接用「接口地址 + 视频链接」交给播放器，跳过本地 videodl
+        tip2 = QLabel("自定义解析接口（可选，遇到 VIP 解析失败时可填）")
+        tip2.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
+        lay.addWidget(tip2)
+        self.edit_api = QLineEdit()
+        self.edit_api.setPlaceholderText("https://jx.xxx.com/?url=")
+        lay.addWidget(self.edit_api)
+
         row = QHBoxLayout()
         row.addStretch()
         self.btn_parse = QPushButton("解析")
@@ -43,3 +51,6 @@ class ParseLinkDialog(GlassDialog):
 
     def url(self) -> str:
         return self.edit_url.text().strip()
+
+    def third_party_api(self) -> str:
+        return self.edit_api.text().strip()

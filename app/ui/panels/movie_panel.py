@@ -3,7 +3,9 @@
 from pathlib import Path
 import functools
 import html as _html_mod
+import os
 import re
+import tempfile
 import urllib.request
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +21,7 @@ from PySide6.QtWidgets import (
 from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..dialogs.parse_link_dialog import ParseLinkDialog
 from ..widgets.glass_dialog import GlassDialog
-from ..widgets.glass_msg import glass_info
+from ..widgets.glass_msg import _GlassMsgBox, glass_info
 from ...movie import douban_rank
 from ...movie.rank_providers import BaseRankProvider, TgmengProvider, default_provider
 
@@ -378,14 +380,74 @@ class _RankSubjectsWorker(QObject):
 
 
 class _ParseLinkWorker(QObject):
-    """后台解析视频网页链接（videodl 本地解析库，延迟 import 不拖慢启动）。"""
+    """后台解析视频网页链接（videodl 本地解析库，延迟 import 不拖慢启动）。
 
-    done = Signal(str, str)   # (title, download_url)
+    done 信号携带 (title, play_url, display_url)：
+      - play_url：可直接交给播放器的地址（videodl 的 download_url 是本地 m3u8 清单
+        文件，内容为真实网络 http ts 分段；优先把 raw_data.highest_defns_original
+        （真实网络清单文本）落到 %TEMP% 缓存，避免污染项目目录）；
+      - display_url：真实网络流地址示例（首个 http ts 链接），供弹窗展示。
+    """
+
+    done = Signal(str, str, str)   # (title, play_url, display_url)
     failed = Signal(str)
 
     def __init__(self, url):
         super().__init__()
         self._url = url
+
+    @staticmethod
+    def _extract_real_playlist(info) -> str:
+        """提取真实网络 m3u8 清单文本（优先完整清单，回退从底层分段 URL 自建）。"""
+        raw = getattr(info, "raw_data", {}) or {}
+        m3u8_text = str(raw.get("highest_defns_original") or "").strip()
+        if m3u8_text:
+            return m3u8_text
+        # 回退：normal_ids[].defns.{shd|...}[] .urls 是真实 http 分段（每次解析都有）
+        try:
+            for n in (raw.get("normal_ids") or []):
+                defns = (n or {}).get("defns") or {}
+                for _key, segs in defns.items():
+                    for seg in (segs or []):
+                        urls = (seg or {}).get("urls") or []
+                        if urls and str(urls[0]).startswith("http"):
+                            lines = ["#EXTM3U"]
+                            for u in urls:
+                                lines.append("#EXTINF:10,")
+                                lines.append(str(u))
+                            lines.append("#EXT-X-ENDLIST")
+                            return "\n".join(lines)
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _cache_m3u8(info) -> tuple:
+        """把真实网络 m3u8 文本写到 %TEMP%/lol_music_parse/<source>_<id>.m3u8。
+        返回 (play_url, display_url)：播放地址 + 首个 http 流示例。"""
+        download_url = str(getattr(info, "download_url", "") or "")
+        m3u8_text = _ParseLinkWorker._extract_real_playlist(info)
+        if m3u8_text:
+            source = str(getattr(info, "source", "") or "parse")
+            ident = str(getattr(info, "identifier", "") or (hash(m3u8_text) & 0xFFFFFF))
+            cache_dir = os.path.join(tempfile.gettempdir(), "lol_music_parse")
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                play_path = os.path.join(cache_dir, f"{source}_{ident}.m3u8")
+                with open(play_path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(m3u8_text)
+                # 展示用真实网络流：取清单第一条 http 链接
+                display = download_url
+                for line in m3u8_text.splitlines():
+                    line = line.strip()
+                    if line.startswith("http"):
+                        display = line
+                        break
+                return play_path, display
+            except Exception:
+                pass
+        # 降级：用库返回的本地清单文件（内容同样为真实 http 分段）
+        return download_url, download_url
 
     def run(self):
         try:
@@ -393,8 +455,9 @@ class _ParseLinkWorker(QObject):
             client = videodl.VideoClient(allowed_video_sources=[])
             infos = client.parsefromurl(self._url)
             if infos and getattr(infos[0], "download_url", None):
+                play_url, display_url = self._cache_m3u8(infos[0])
                 self.done.emit(str(getattr(infos[0], "title", "") or ""),
-                               str(infos[0].download_url))
+                               play_url, display_url)
             else:
                 self.failed.emit("未返回任何流信息")
         except Exception as e:
@@ -406,6 +469,10 @@ class MoviePanel(QWidget):
     # QTimer.singleShot 从工作线程排队会永不执行（无事件循环，根因）；经信号
     # QueuedConnection 投递到本窗口所在线程（主线程）后再延后接管。
     _voice_attach_requested = Signal()
+    # 链接解析结果转发（worker 在子线程 emit → Python callable 槽默认 Direct 同线程执行，
+    # 弹窗/UI 必须在主线程 → 经本窗口信号 QueuedConnection 转投主线程）。
+    _parse_done = Signal(str, str, str)    # (title, play_url, display_url)
+    _parse_failed = Signal(str)
 
     def __init__(self, movie=None, music=None, parent=None):
         super().__init__(parent)
@@ -416,6 +483,8 @@ class MoviePanel(QWidget):
         except Exception:
             pass
         self._voice_attach_requested.connect(self._on_voice_attach_requested)
+        self._parse_done.connect(self._on_parse_done)
+        self._parse_failed.connect(self._on_parse_failed)
         self._thread = None
         self._worker = None
         self._items_by_row = []
@@ -1056,13 +1125,13 @@ class MoviePanel(QWidget):
         dlg.exec()
         self._refresh_source_label()
 
-    # ---- 链接解析（第一阶段：UI 入口 + 后台解析 + 弹窗结果，不接播放器）----
+    # ---- 链接解析（第一/二阶段：入口 + 后台解析 + 结果弹窗 + 一键播放）----
 
     def _on_parse_link(self):
-        """「链接解析」→ 弹输入框 → 后台 videodl 解析 → 结果弹窗。防重入。"""
-        if self._parse_thread is not None and self._parse_thread.isRunning():
-            glass_info(self, "解析中…", "已有解析任务在后台运行，请稍候。")
-            return
+        """「链接解析」→ 弹输入框 → 后台 videodl 解析 → 结果弹窗。
+
+        用户填了「自定义解析接口」时跳过 videodl：直接用「接口 + 视频链接」交给播放器。
+        """
         dlg = ParseLinkDialog(self)
         if dlg.exec() != ParseLinkDialog.Accepted:
             return
@@ -1070,25 +1139,57 @@ class MoviePanel(QWidget):
         if not url.strip():
             glass_info(self, "链接为空", "请输入视频网页链接后再解析。")
             return
+        api = dlg.third_party_api()
+        if api.strip():
+            # 第三方接口备用方案：接口地址 + 视频链接，直接播放
+            full = api.strip() + url
+            self.lbl_status.setText(f"使用第三方接口播放…")
+            self._play_parsed_url(full, title="第三方接口")
+            return
+        if self._parse_thread is not None and self._parse_thread.isRunning():
+            glass_info(self, "解析中…", "已有解析任务在后台运行，请稍候。")
+            return
         self.lbl_status.setText("正在解析链接…（后台）")
         try:
             self._parse_thread = QThread()
             self._parse_worker = _ParseLinkWorker(url)
             self._parse_worker.moveToThread(self._parse_thread)
             self._parse_thread.started.connect(self._parse_worker.run)
-            self._parse_worker.done.connect(self._on_parse_done)
-            self._parse_worker.failed.connect(self._on_parse_failed)
+            # worker 信号 → 本窗口转发信号（QueuedConnection 回主线程）→ 弹窗/播放
+            self._parse_worker.done.connect(self._parse_done)
+            self._parse_worker.failed.connect(self._parse_failed)
             self._parse_worker.done.connect(self._parse_thread.quit)
             self._parse_worker.failed.connect(self._parse_thread.quit)
             self._parse_thread.start()
         except Exception as e:
             self.lbl_status.setText(f"解析启动失败: {e}")
 
-    def _on_parse_done(self, title: str, download_url: str):
+    def _play_parsed_url(self, url: str, title: str = "解析流"):
+        """直接调现有电影 mpv 实例播放（不经过 movie_controller 的 SGP/资源站逻辑）。"""
+        try:
+            mpv = self._movie.mpv
+            alive = bool(getattr(mpv, "_process", None) and mpv._process.poll() is None)
+            if not alive:
+                if not mpv.start(taskkill=False, pipe_timeout=5.0, prop_timeout=0.5):
+                    raise RuntimeError("mpv 启动失败（未找到 mpv 可执行文件）")
+            mpv.loadfile(url)
+            mpv.play()
+            self.lbl_status.setText(f"正在播放：{title}")
+            self.lbl_status.setToolTip(url)
+        except Exception as e:
+            self.lbl_status.setText("播放失败")
+            glass_info(self, "播放失败", f"{type(e).__name__}: {e}")
+
+    def _on_parse_done(self, title: str, play_url: str, display_url: str):
         self.lbl_status.setText("链接解析成功")
-        self.lbl_status.setToolTip(download_url)
-        glass_info(self, "解析成功",
-                   f"标题：{title or '未知'}\n\n视频地址：\n{download_url}")
+        self.lbl_status.setToolTip(play_url)
+        box = _GlassMsgBox(self, "解析成功",
+                           f"标题：{title or '未知'}\n\n真实网络流：\n{display_url}\n\n"
+                           f"播放地址：\n{play_url}",
+                           [("确定", False), ("▶ 立即播放", True)])
+        box.exec()
+        if box._result == "▶ 立即播放":
+            self._play_parsed_url(play_url, title=title or "解析流")
 
     def _on_parse_failed(self, err: str):
         self.lbl_status.setText("链接解析失败")

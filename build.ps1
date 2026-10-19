@@ -33,6 +33,17 @@ if (-not (Test-Path 'third_party\node\node.exe')) {
     }
     if (-not $copied) { Write-Host '    [WARN] node.exe not found; online music JS bridge will be unavailable' }
 }
+if (-not (Test-Path 'third_party\ffmpeg\ffmpeg.exe')) {
+    $ff = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
+    if (-not $ff) { $ff = 'D:\ffmpeg\ffmpeg.exe' }
+    if ($ff -and (Test-Path $ff)) {
+        New-Item -ItemType Directory -Force 'third_party\ffmpeg' | Out-Null
+        Copy-Item $ff 'third_party\ffmpeg\ffmpeg.exe'
+        Write-Host "    ffmpeg copied from $ff"
+    } else {
+        Write-Host '    [WARN] ffmpeg.exe not found; videofetch m3u8 解析依赖的 ffmpeg 将缺失'
+    }
+}
 
 Write-Host '[2/4] Running PyInstaller (build.spec) ...'
 # Start-Process 重定向：避开 PS 5.1 对 native stderr 的 NativeCommandError 误报
