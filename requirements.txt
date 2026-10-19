@@ -37,3 +37,5 @@ PySide6>=6.6.0,<6.10.0
 # ===== 工具 =====
 psutil>=5.9.6
 loguru>=0.7.2
+# 影视网页链接解析（videofetch 是 pip 包名，import 名为 videodl；0.9.1 起含 m3u8/curl-cffi 依赖）
+videofetch>=0.9.1

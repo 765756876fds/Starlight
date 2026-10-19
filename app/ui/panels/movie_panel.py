@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..dialogs.movie_source_dialog import MovieSourceDialog
+from ..dialogs.parse_link_dialog import ParseLinkDialog
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import glass_info
 from ...movie import douban_rank
@@ -376,6 +377,30 @@ class _RankSubjectsWorker(QObject):
             self.failed.emit(str(e))
 
 
+class _ParseLinkWorker(QObject):
+    """后台解析视频网页链接（videodl 本地解析库，延迟 import 不拖慢启动）。"""
+
+    done = Signal(str, str)   # (title, download_url)
+    failed = Signal(str)
+
+    def __init__(self, url):
+        super().__init__()
+        self._url = url
+
+    def run(self):
+        try:
+            from videodl import videodl  # 延迟 import；库 bug：默认参数 None 会崩，必须传 []
+            client = videodl.VideoClient(allowed_video_sources=[])
+            infos = client.parsefromurl(self._url)
+            if infos and getattr(infos[0], "download_url", None):
+                self.done.emit(str(getattr(infos[0], "title", "") or ""),
+                               str(infos[0].download_url))
+            else:
+                self.failed.emit("未返回任何流信息")
+        except Exception as e:
+            self.failed.emit(f"{type(e).__name__}: {e}")
+
+
 class MoviePanel(QWidget):
     # 语音"开始播放"接管请求——跨线程安全：语音命令在工作线程 execute_async，
     # QTimer.singleShot 从工作线程排队会永不执行（无事件循环，根因）；经信号
@@ -407,6 +432,9 @@ class MoviePanel(QWidget):
         self._rank_db_worker = None
         self._pending_poster_jobs = None
         self._pending_db_jobs = None
+        # 链接解析线程（防重入：同一时刻只持一个引用，运行中忽略新任务）
+        self._parse_thread = None
+        self._parse_worker = None
 
         root = QVBoxLayout(self)
 
@@ -431,6 +459,9 @@ class MoviePanel(QWidget):
         self.btn_source = QPushButton("源")
         self.btn_source.setToolTip("电影源管理（多源 / 测源 / 增删 / 设当前）")
         search_row.addWidget(self.btn_source)
+        self.btn_parse_link = QPushButton("🔗 链接解析")
+        self.btn_parse_link.setToolTip("粘贴视频网页链接（爱奇艺/腾讯等）→ 后台解析出 m3u8 地址")
+        search_row.addWidget(self.btn_parse_link)
         root.addLayout(search_row)
 
         # 状态行：搜索状态 + 当前源
@@ -589,6 +620,7 @@ class MoviePanel(QWidget):
         self.list_posters.itemDoubleClicked.connect(self._on_item_activated)
         self.btn_view.clicked.connect(self._on_toggle_view)
         self.btn_source.clicked.connect(self._on_source_manage)
+        self.btn_parse_link.clicked.connect(self._on_parse_link)
         self.btn_toggle.clicked.connect(self._on_toggle)
         self.btn_stop.clicked.connect(self._on_stop)
         self.slider_pos.sliderReleased.connect(self._on_seek)
@@ -660,7 +692,7 @@ class MoviePanel(QWidget):
                     except Exception:
                         pass
             for t in (self._thread, self._rank_thread, self._poster_thread,
-                      self._rank_db_thread):
+                      self._rank_db_thread, self._parse_thread):
                 if t is not None and t.isRunning():
                     t.quit()
                     t.wait(9000)
@@ -1023,6 +1055,44 @@ class MoviePanel(QWidget):
                                 on_sources_changed=self._refresh_source_label)
         dlg.exec()
         self._refresh_source_label()
+
+    # ---- 链接解析（第一阶段：UI 入口 + 后台解析 + 弹窗结果，不接播放器）----
+
+    def _on_parse_link(self):
+        """「链接解析」→ 弹输入框 → 后台 videodl 解析 → 结果弹窗。防重入。"""
+        if self._parse_thread is not None and self._parse_thread.isRunning():
+            glass_info(self, "解析中…", "已有解析任务在后台运行，请稍候。")
+            return
+        dlg = ParseLinkDialog(self)
+        if dlg.exec() != ParseLinkDialog.Accepted:
+            return
+        url = dlg.url()
+        if not url.strip():
+            glass_info(self, "链接为空", "请输入视频网页链接后再解析。")
+            return
+        self.lbl_status.setText("正在解析链接…（后台）")
+        try:
+            self._parse_thread = QThread()
+            self._parse_worker = _ParseLinkWorker(url)
+            self._parse_worker.moveToThread(self._parse_thread)
+            self._parse_thread.started.connect(self._parse_worker.run)
+            self._parse_worker.done.connect(self._on_parse_done)
+            self._parse_worker.failed.connect(self._on_parse_failed)
+            self._parse_worker.done.connect(self._parse_thread.quit)
+            self._parse_worker.failed.connect(self._parse_thread.quit)
+            self._parse_thread.start()
+        except Exception as e:
+            self.lbl_status.setText(f"解析启动失败: {e}")
+
+    def _on_parse_done(self, title: str, download_url: str):
+        self.lbl_status.setText("链接解析成功")
+        self.lbl_status.setToolTip(download_url)
+        glass_info(self, "解析成功",
+                   f"标题：{title or '未知'}\n\n视频地址：\n{download_url}")
+
+    def _on_parse_failed(self, err: str):
+        self.lbl_status.setText("链接解析失败")
+        glass_info(self, "解析失败", f"请检查链接或稍后再试。\n\n{err}")
 
     def _start_poster_jobs(self, jobs):
         """搜索海报墙下载。防重入（存量同款缺陷修复）：旧线程运行中 →
