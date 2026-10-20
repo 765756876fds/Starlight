@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QLabel
 
 from app.ui.panels.automation_panel import AutomationPanel
 from app.ui.panels.cooldown_panel import CooldownPanel
+from app.ui.panels.console_panel import ConsolePanel
 from app.ui.panels.current_game_panel import CurrentGamePanel
 from app.ui.panels.movie_panel import MoviePanel
 from app.ui.panels.music_panel import MusicPanel
@@ -69,6 +70,7 @@ class MainTabs(QWidget):
         # _add(lambda: CooldownPanel(cooldown_manager), "计时器")  # 隐藏计时器tab
         _add(lambda: MusicPanel(music), "音乐", "music")
         _add(lambda: MoviePanel(movie=None, music=self._music), "电影", "movie")
+        _add(lambda: ConsolePanel(), "控制台", "console")
         _add(lambda: SettingsPanel(
                 music=music, tts=tts, combo_manager=combo_manager,
                 equip_toggle=equip_toggle, overlay_toggle=overlay_toggle,

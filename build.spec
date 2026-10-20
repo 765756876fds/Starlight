@@ -92,7 +92,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,        # 禁用 UPX（杀软误报 + 无体积收益）
-    console=True,     # 保留控制台日志（对齐启动.bat 习惯，便于实机诊断）
+    console=False,    # 无黑窗：日志走控制台 Tab（LogBus.sig_log）+ 落盘，不弹外部控制台
     icon='assets/icon/app.ico',
 )
 

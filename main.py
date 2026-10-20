@@ -27,6 +27,13 @@ else:
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
+# 无黑窗兜底（PyInstaller console=False / pythonw 下 sys.stdout/stderr 可能为 None，
+# print 会直接抛异常 —— 接到 devnull 保证永不崩溃）
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 # 原始 stderr：绕过 TeeStream 劫持，供 LogRedirect 初始化失败时留原始痕迹
 origin_stderr = sys.__stderr__
 try:

@@ -1292,11 +1292,14 @@ class SettingsPanel(QWidget):
         if not key:
             QMessageBox.warning(self, "API Key", "请输入 Key（sk-...）")
             return
-        from pathlib import Path
-        key_path = Path(__file__).resolve().parents[3] / "tools" / ".qwen_key"
+        from app.core.path_resolve import PROJECT_ROOT
+        import os as _os
+        # 统一外部读写路径：frozen 下 = exe 同级 tools/.qwen_key（绝不再写 _internal）
+        key_path = _os.path.join(str(PROJECT_ROOT), "tools", ".qwen_key")
         try:
-            key_path.parent.mkdir(parents=True, exist_ok=True)
-            key_path.write_text(key + "\n", encoding="utf-8")
+            _os.makedirs(_os.path.dirname(key_path), exist_ok=True)
+            with open(key_path, "w", encoding="utf-8") as _f:
+                _f.write(key + "\n")
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"写入 {key_path} 失败: {e}")
             return

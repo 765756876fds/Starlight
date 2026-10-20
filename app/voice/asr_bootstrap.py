@@ -160,7 +160,8 @@ def ensure_and_launch(asr_config: dict) -> Optional[subprocess.Popen]:
         print(f"[ASR] 拉起 llama-server（模型 {Path(model).name}，端口 {PORT}）…")
         try:
             _server_proc = subprocess.Popen(
-                args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW)  # 关黑窗：llama-server 不弹控制台
         except Exception as e:
             print(f"[ASR] llama-server 启动失败: {e}")
             return None

@@ -761,7 +761,8 @@ class MovieController:
                 f.write(data)
             tmp_dir = tempfile.mkdtemp(prefix="movie_sub_")
             subprocess.run([tar, "-xf", tmp_rar, "-C", tmp_dir],
-                           timeout=15, capture_output=True)
+                           timeout=15, capture_output=True,
+                           creationflags=subprocess.CREATE_NO_WINDOW)  # 关黑窗：tar 解压不弹控制台
             out = []
             for root, _dirs, files in os.walk(tmp_dir):
                 for fn in files:

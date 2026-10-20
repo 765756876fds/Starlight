@@ -176,6 +176,7 @@ class MusicScanner:
                  "--ao=null", "--frames=1", "--msg-level=all=error", "--", filepath],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,  # 关黑窗：试播 mpv 不弹控制台
             )
             try:
                 rc = proc.wait(timeout=self.VERIFY_TIMEOUT)
