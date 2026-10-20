@@ -13,13 +13,24 @@ if not exist "dist\Starlight\Starlight.exe" (
     exit /b 1
 )
 
+
+REM [0/2] Verify ASR models (Full installer bundles them; missing = build fails)
+if not exist "models\Qwen3-ASR-0.6B-Q8_0.gguf" (
+    echo [ERROR] models\Qwen3-ASR-0.6B-Q8_0.gguf not found.
+    echo         Full installer requires local ASR models in .\models\ or use Lite.
+    exit /b 1
+)
+if not exist "models\mmproj-Qwen3-ASR-0.6B-bf16.gguf" (
+    echo [ERROR] models\mmproj-Qwen3-ASR-0.6B-bf16.gguf not found.
+    exit /b 1
+)
 REM [1/2] Prepare bundled llama-server.exe (~30MB, copied from latest LM Studio backend)
 if not exist "dist\Starlight\third_party\llama\llama-server.exe" (
     for /f "delims=" %%d in ('dir /b /ad "%USERPROFILE%\.lmstudio\extensions\backends\llama.cpp-win-*" 2^>nul ^| sort /r') do (
         if exist "%USERPROFILE%\.lmstudio\extensions\backends\%%d\llama-server.exe" (
             mkdir "dist\Starlight\third_party\llama" 2>nul
-            copy /y "%USERPROFILE%\.lmstudio\extensions\backends\%%d\llama-server.exe" "dist\Starlight\third_party\llama\llama-server.exe" >nul
-            echo [1/2] llama-server.exe copied from LM Studio backend %%d
+            copy /y "%USERPROFILE%\.lmstudio\extensions\backends\%%d\*" "dist\Starlight\third_party\llama\" >nul
+            echo [1/2] llama backend exe + dlls copied from LM Studio backend %%d
             goto :copied
         )
     )

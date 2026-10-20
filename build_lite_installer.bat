@@ -16,8 +16,8 @@ if not exist "dist\Starlight\third_party\llama\llama-server.exe" (
     for /f "delims=" %%d in ('dir /b /ad "%USERPROFILE%\.lmstudio\extensions\backends\llama.cpp-win-*" 2^>nul ^| sort /r') do (
         if exist "%USERPROFILE%\.lmstudio\extensions\backends\%%d\llama-server.exe" (
             mkdir "dist\Starlight\third_party\llama" 2>nul
-            copy /y "%USERPROFILE%\.lmstudio\extensions\backends\%%d\llama-server.exe" "dist\Starlight\third_party\llama\llama-server.exe" >nul
-            echo [1/2] llama-server.exe copied from LM Studio backend %%d
+            copy /y "%USERPROFILE%\.lmstudio\extensions\backends\%%d\*" "dist\Starlight\third_party\llama\" >nul
+            echo [1/2] llama backend exe + dlls copied from LM Studio backend %%d
             goto :copied
         )
     )

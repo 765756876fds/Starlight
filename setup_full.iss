@@ -6,7 +6,8 @@
 #define MyAppExeName "Starlight.exe"
 #define SourceDir "dist\Starlight"
 #ifndef ModelsDir
-#define ModelsDir "D:\迅雷下载\ggml-org\Qwen3-ASR-0.6B-GGUF"
+; 模型目录：项目根 models/（相对 iss 文件所在目录），换机可打包
+#define ModelsDir "models"
 #endif
 
 [Setup]
