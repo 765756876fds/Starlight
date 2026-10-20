@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -45,10 +46,18 @@ _lock = threading.Lock()
 
 
 def _is_server_up(timeout: float = 0.8) -> bool:
-    """8080 是否已有可用 llama-server（外部常驻服务 → 直接复用不重复拉起）。"""
+    """8080 是否已有可用 llama-server（外部常驻服务 → 直接复用不重复拉起）。
+    必须 /v1/models 的 data 非空才算就绪——llama-server 在 router 模式（-m ""）
+    下 HTTP 200 但 data 为空，若只看 200 会误判复用坏服务（历史 400 事故根因）。
+    加载窗口期（200 但 data 空）不会导致双开：ensure_and_launch 有 _server_proc
+    防重入守卫，本进程拉起过的服务不会重复 Popen。
+    """
     try:
         r = requests.get(HEALTH_URL, timeout=timeout)
-        return r.status_code == 200
+        if r.status_code != 200:
+            return False
+        payload = r.json()
+        return bool((payload.get("data") or []))
     except Exception:
         return False
 
@@ -148,6 +157,14 @@ def ensure_and_launch(asr_config: dict) -> Optional[subprocess.Popen]:
         print("[ASR] 未找到 llama-server.exe（请安装 LM Studio，或放置到 third_party/llama/）")
         return None
     model, mmproj = resolve_model_paths(asr_config)
+    if not model or not os.path.isfile(model):
+        # 防御（曾出事故）：模型缺失绝不带 -m "" 启动——空模型会进入 llama-server
+        # router 模式（Loaded 0 models），所有转录请求静默 400。打印实际检查目录便于诊断。
+        _probe = MODEL_DIR / "Qwen3-ASR-0.6B-Q8_0.gguf"
+        _cfg = str((asr_config or {}).get("qwen3_asr_model") or "").strip()
+        print(f"[ASR] 模型缺失，跳过启动 llama-server：MODEL_DIR={MODEL_DIR} "
+              f"(Q8_0 存在={_probe.is_file()}) 配置显式路径={_cfg or '无'}")
+        return None
     with _lock:
         if _server_proc is not None and _server_proc.poll() is None:
             return _server_proc  # 防重入：已拉起且存活，直接复用
@@ -157,7 +174,7 @@ def ensure_and_launch(asr_config: dict) -> Optional[subprocess.Popen]:
         # --parallel 2：允许 2 个并发请求——主 ASR 转写长语音时，
         # 打断旁路的无锁转写可在服务端并行处理，不再排队等主请求完成。
         args += ["--parallel", "2"]
-        print(f"[ASR] 拉起 llama-server（模型 {Path(model).name}，端口 {PORT}）…")
+        print(f"[ASR] 拉起 llama-server（模型 {model}，端口 {PORT}）…")
         try:
             _server_proc = subprocess.Popen(
                 args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -168,6 +185,19 @@ def ensure_and_launch(asr_config: dict) -> Optional[subprocess.Popen]:
         if not _atexit_registered:
             _atexit_registered = True
             atexit.register(_kill_server)
+    # 启动后校验：模型必须真的加载（防"进程活着但零模型"的静默 400）。
+    # 短轮询最多 ~6s（大模型加载需数秒）；未加载完只告警不阻塞启动。
+    for _ in range(3):
+        time.sleep(2)
+        try:
+            r = requests.get(HEALTH_URL, timeout=3)
+            if r.status_code == 200 and r.json().get("data"):
+                print("[ASR] 模型已加载就绪")
+                return _server_proc
+        except Exception:
+            continue
+    print("[ASR] 警告: llama-server 已启动但暂未探测到已加载模型"
+          "（若转录报 400，请检查 models/ 模型文件与磁盘空间）")
     return _server_proc
 
 

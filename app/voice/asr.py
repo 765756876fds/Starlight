@@ -224,7 +224,10 @@ class Qwen3ServerASR(ASREngine):
                     text = match.group(1).strip()
                 return text
             else:
-                print(f"[ASR] 转录失败: HTTP {resp.status_code}")
+                hint = ("（服务器未加载任何模型——请检查安装目录 models/ 下模型文件，"
+                        "或查看启动日志 [ASR] 模型缺失/警告行）"
+                        if resp.status_code == 400 else "")
+                print(f"[ASR] 转录失败: HTTP {resp.status_code}{hint}")
                 return ""
 
         except Exception as e:

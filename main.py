@@ -136,6 +136,16 @@ class Application:
 
     def _ensure_asr_running(self):
         """自动拉起 ASR llama-server（如果端口 8080 未运行）"""
+        # 优先走 asr_bootstrap（内置模型发现 + 空模型拦截 + 启动校验）
+        # 开关 asr.bootstrap_enabled 默认 True；关闭时保持旧行为
+        try:
+            if self.config_data.get("asr", {}).get("bootstrap_enabled", True):
+                from app.voice.asr_bootstrap import ensure_and_launch
+                ensure_and_launch(self.config_data.get("asr", {}))
+                return
+        except Exception as _e:
+            print(f"[ASR] asr_bootstrap 异常，回退内置拉起逻辑: {_e}")
+        # 以下为旧逻辑（bootstrap_enabled=False 或 asr_bootstrap 异常时执行）
         import socket
         import subprocess
         import time
@@ -164,6 +174,9 @@ class Application:
         # 需要启动 ASR
         model_path = asr_config.get("qwen3_asr_model", "")
         mmproj_path = asr_config.get("qwen3_asr_mmproj", "")
+        if not model_path:
+            print("[ASR] WARNING: 模型路径为空且内置模型未发现，跳过拉起（避免 router 模式）")
+            return
 
         # llama-server 路径：配置 → 自动搜索（PATH / LM Studio 扩展目录）→ 降级
         llama_server = find_llama_server(asr_config)
