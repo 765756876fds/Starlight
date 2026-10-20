@@ -1,5 +1,5 @@
 """对局信息面板：展示 ChampSelect 10 玩家快照。"""
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
@@ -456,6 +456,8 @@ def _card(snap, is_enemy: bool) -> QFrame:
     return card
 
 class OngoingPanel(QWidget):
+    search_completed = Signal(object)
+
     def __init__(self, ongoing_service=None, account_history_service=None, parent=None):
         super().__init__(parent)
         self._svc = ongoing_service
@@ -513,6 +515,7 @@ class OngoingPanel(QWidget):
         pl.addLayout(srow)
         self._search_status = QLabel("")
         pl.addWidget(self._search_status)
+        self.search_completed.connect(self._on_search_completed)
         self._search_box = QVBoxLayout()
         pl.addLayout(self._search_box)
         self._acct_box = QVBoxLayout()
@@ -614,20 +617,36 @@ class OngoingPanel(QWidget):
         if not gn:
             self._search_status.setText("请输入 名称#标签"); return
         self._search_status.setText("正在查询玩家…")
-        try:
-            svc = PlayerSearchService(self._acct._lcu_get, self._acct._lcu_post)
-            r = svc.search(txt)
-        except Exception as e:
-            self._search_status.setText(f"查询失败：{e}"); return
+        if hasattr(self, '_search_btn'): self._search_btn.setEnabled(False)
+
+        def _worker():
+            try:
+                svc = PlayerSearchService(self._acct._lcu_get, self._acct._lcu_post)
+                r = svc.search(txt)
+            except Exception as e:
+                from app.lol.ongoing.player_search import PlayerSearchResult
+                r = PlayerSearchResult(status="SERVICE_ERROR", message=str(e))
+            self.search_completed.emit(r)
+
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_search_completed(self, r):
+        if hasattr(self, '_search_btn'): self._search_btn.setEnabled(True)
         while self._search_box.count():
-            it = self._search_box.takeAt(0); w=it.widget()
+            it = self._search_box.takeAt(0); w = it.widget()
             if w: w.deleteLater()
-        if r.status == "NOT_FOUND":
-            self._search_status.setText("未找到玩家，请检查 Riot ID")
-        elif r.status == "INVALID_RIOT_ID":
+
+        if r.status == "INVALID_RIOT_ID":
             self._search_status.setText("请输入 名称#标签")
-        elif r.status == "SEARCH_UNAVAILABLE":
-            self._search_status.setText("战绩数据源暂时不可用")
+        elif r.status == "NOT_FOUND":
+            self._search_status.setText("未找到该玩家，请检查名称和 #标签")
+        elif r.status == "NETWORK_ERROR":
+            self._search_status.setText(r.message or "网络连接失败，请稍后重试")
+        elif r.status == "AUTH_ERROR":
+            self._search_status.setText(r.message or "游戏客户端认证失效，请重启客户端")
+        elif r.status == "SERVICE_ERROR":
+            self._search_status.setText(r.message or "战绩服务返回异常，可稍后重试或反馈日志")
         elif not r.matches:
             self._search_status.setText("该玩家暂无可查询的近期战绩")
         else:

@@ -55,7 +55,7 @@ def test_body_is_aliases_endpoint():
     class _P:
         def __init__(self, *a): pass
         def recent(self, *a, **k):
-            class R: records = []; ok = True
+            class R: records = []; ok = True; state = "AVAILABLE"
             return R()
     sgp_provider.SgpMatchHistoryProvider = _P
     try:
@@ -87,7 +87,7 @@ def test_unavailable_on_exception():
     lcu = FakeLcu(post_exc=RuntimeError("boom"))
     svc = PlayerSearchService(lcu.get, lcu.post)
     r = svc.search("果子#48230")
-    assert r.status == SEARCH_UNAVAILABLE
+    assert r.status == "SERVICE_ERROR"
 
 
 def test_invalid_input():

@@ -156,7 +156,7 @@ class OngoingGameLoader:
                 pending_puuid.append(p["puuid"])
 
         # 新增：SGP 批量查询玩家名字（腾讯服 LCU 拿不到名字时的稳定兜底通道）
-        puuids_to_check = [p.get("puuid") for p in players if p.get("puuid")]
+        puuids_to_check = [p.get("puuid") for p in players if p.get("puuid") in pending_puuid]
         self._sgp_info_cache = {}
         if puuids_to_check:
             try:

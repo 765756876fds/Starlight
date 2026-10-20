@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Optional, List
+import requests
 
 from .match_model import MatchRecord, MatchHistoryResult, AVAILABLE, NO_DATA, ERROR
 from .sgp_server import SgpServerResolver
@@ -15,7 +16,6 @@ FOUND = "FOUND"
 NOT_FOUND = "NOT_FOUND"
 INVALID_RIOT_ID = "INVALID_RIOT_ID"
 SEARCH_UNAVAILABLE = "SEARCH_UNAVAILABLE"
-SERVICE_ERROR = "ERROR"
 
 
 @dataclass
@@ -62,8 +62,12 @@ class PlayerSearchService:
                 "/lol-summoner/v1/summoners/aliases",
                 [{"gameName": gn, "tagLine": tag}],
             )
-        except Exception:
-            return PlayerSearchResult(status=SEARCH_UNAVAILABLE, message="搜索服务不可用")
+        except requests.exceptions.Timeout:
+            return PlayerSearchResult(status="NETWORK_ERROR", message="网络请求超时，请稍后重试")
+        except requests.exceptions.ConnectionError:
+            return PlayerSearchResult(status="NETWORK_ERROR", message="网络连接失败，请确认游戏客户端在运行")
+        except Exception as e:
+            return PlayerSearchResult(status="SERVICE_ERROR", message=f"查询失败: {e}")
 
         if rows is None:
             # LCU HTTP / 认证 / 连接异常，不是“玩家不存在”
@@ -88,6 +92,10 @@ class PlayerSearchService:
             return PlayerSearchResult(status=SEARCH_UNAVAILABLE, message="战绩源不可用")
         prov = SgpMatchHistoryProvider(lambda: token, lambda: base)
         res = prov.recent(puuid, start_index=0, count=self._n)
+        if res.state == "AUTH_REQUIRED":
+            return PlayerSearchResult(status="AUTH_ERROR", message="游戏客户端认证失效，请重启客户端")
+        if res.state in ("SGP_UNAVAILABLE", "ERROR"):
+            return PlayerSearchResult(status="SERVICE_ERROR", message="战绩数据源暂时不可用（SGP接口异常）")
         from .account_history import queue_label
         recs = sorted(res.records, key=lambda m: m.game_creation, reverse=True)
         for m in recs:
