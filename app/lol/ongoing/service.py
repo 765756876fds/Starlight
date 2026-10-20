@@ -590,7 +590,21 @@ class OngoingGameService:
             for cell in (session.get(team_key) or []):
                 p = live_by_key.get((team_key, cell.get("championId") or 0))
                 if p is None:
+                    # 腾讯服 gameflow championId 恒 0 时无法按 cid 匹配：
+                    # 用 2999 summonerName 与 gameflow riotIdGameName 兜底配对
+                    cell_name = (cell.get("riotIdGameName") or "").strip()
+                    if cell_name:
+                        for (_team_k, _cid_k), _lp in live_by_key.items():
+                            if _team_k == team_key and (
+                                    getattr(_lp, "summoner_name", "") or "").strip() == cell_name:
+                                p = _lp
+                                break
+                if p is None:
                     continue
+                cid = _resolve_live_champion_id(p)
+                if cid:
+                    # 回填 2999 真实英雄 ID：UI 本局英雄/绝活判定的数据源
+                    cell["championId"] = cid
                 cell["live_kills"] = getattr(p, "kills", 0) or 0
                 cell["live_deaths"] = getattr(p, "deaths", 0) or 0
                 cell["live_assists"] = getattr(p, "assists", 0) or 0

@@ -615,7 +615,7 @@ class OngoingPanel(QWidget):
         txt = self.in_search.text()
         gn, tag = parse_riot_id(txt)
         if not gn:
-            self._search_status.setText("请输入 名称#标签"); return
+            self._search_status.setText("格式错误：必须包含 # 标签，例如 名字#12345"); return
         self._search_status.setText("正在查询玩家…")
         if hasattr(self, '_search_btn'): self._search_btn.setEnabled(False)
 
