@@ -1,10 +1,10 @@
-; LoL_Music_Agent 离线全量版安装包（Inno Setup 6）
-; 源 = build.ps1 产物 dist\LoL_Music_Agent + 本地 ASR 模型（打包进 {app}\models，断网可用）
+; 星芒（Starlight）离线全量版安装包（Inno Setup 6）
+; 源 = build.ps1 产物 dist\Starlight + 本地 ASR 模型（打包进 {app}\models，断网可用）
 ; 模型目录可在命令行覆盖：ISCC.exe /DModelsDir="D:\path\to\model" setup_full.iss
-#define MyAppName "LoL_Music_Agent"
+#define MyAppName "星芒"
 #define MyAppVersion "0.1.0"
-#define MyAppExeName "LoL_Music_Agent.exe"
-#define SourceDir "dist\LoL_Music_Agent"
+#define MyAppExeName "Starlight.exe"
+#define SourceDir "dist\Starlight"
 #ifndef ModelsDir
 #define ModelsDir "D:\迅雷下载\ggml-org\Qwen3-ASR-0.6B-GGUF"
 #endif
@@ -13,7 +13,7 @@
 AppId={{C8E4F3B2-5D6E-4F70-9BAC-1E2F304A5C6D}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=LoL Music Agent
+AppPublisher=星芒
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -21,7 +21,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ; 全量版：含 ASR 模型（Q8_0 ~767MB + mmproj-bf16 ~361MB），断网可用，无需下载
 OutputDir=.
-OutputBaseFilename=Setup_Full
+OutputBaseFilename=Starlight_Setup_Full
+SetupIconFile=assets\icon\app.ico
 Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern

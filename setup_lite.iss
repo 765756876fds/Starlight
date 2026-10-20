@@ -1,15 +1,15 @@
-; LoL_Music_Agent 轻量版安装包（Inno Setup 6）
-; 源 = build.ps1 产物 dist\LoL_Music_Agent（不含 1.2G ASR 模型；模型首次运行自动下载）
-#define MyAppName "LoL_Music_Agent"
+; 星芒（Starlight）轻量版安装包（Inno Setup 6）
+; 源 = build.ps1 产物 dist\Starlight（不含 1.2G ASR 模型；模型首次运行自动下载）
+#define MyAppName "星芒"
 #define MyAppVersion "0.1.0"
-#define MyAppExeName "LoL_Music_Agent.exe"
-#define SourceDir "dist\LoL_Music_Agent"
+#define MyAppExeName "Starlight.exe"
+#define SourceDir "dist\Starlight"
 
 [Setup]
 AppId={{B7E3F2A1-4C5D-4E6F-8A9B-0D1E2F3A4B5C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=LoL Music Agent
+AppPublisher=星芒
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -17,7 +17,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ; 轻量版：不含 ASR 模型，包体仅应用本体（~1.1GB 资源；模型首次运行从国内镜像下载）
 OutputDir=.
-OutputBaseFilename=Setup_Lite
+OutputBaseFilename=Starlight_Setup_Lite
+SetupIconFile=assets\icon\app.ico
 Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern

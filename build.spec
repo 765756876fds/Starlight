@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""LoL_Music_Agent 打包 spec（onedir 绿色文件夹）。
+"""星芒（Starlight）打包 spec（onedir 绿色文件夹）。
 
 布局说明（PyInstaller 6.x，contents dir = _internal）：
-- 代码 + Python 库 → dist/LoL_Music_Agent/_internal/
+- 代码 + Python 库 → dist/Starlight/_internal/
 - 以下资源初始落 _internal/ 对应路径，build.ps1 后处理移到 exe 目录
   （frozen 态 PROJECT_ROOT = exe 目录，代码按 PROJECT_ROOT/third_party|data 查找）：
     _internal/third_party/mpv/*   → dist/third_party/mpv/   （bundled_tool("mpv")）
@@ -57,6 +57,9 @@ datas = [
     # config.py（P2）在 exe 同级 config/ 自动生成默认 settings.yaml。
     # tools/.qwen_key 由 build.ps1 后处理创建空模板（避免误收开发目录真实 Key）。
     ('config/settings.example.yaml', 'config'),
+    # 应用图标（运行时 QIcon 加载：main_window/tray 用 __file__ 相对定位，
+    # 打包态命中 _internal/assets/icon/app.ico；EXE 图标通过 icon= 参数嵌入）
+    ('assets/icon', 'assets/icon'),
 ] + pyside_datas
 
 binaries = [
@@ -84,12 +87,13 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='LoL_Music_Agent',
+    name='Starlight',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,        # 禁用 UPX（杀软误报 + 无体积收益）
     console=True,     # 保留控制台日志（对齐启动.bat 习惯，便于实机诊断）
+    icon='assets/icon/app.ico',
 )
 
 coll = COLLECT(
@@ -98,5 +102,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name='LoL_Music_Agent',
+    name='Starlight',
 )

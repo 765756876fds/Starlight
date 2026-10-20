@@ -56,13 +56,13 @@ try {
     if ($proc.ExitCode -ne 0) { throw "PyInstaller build failed (see pyi_log.txt / pyi_err.txt), exit=$($proc.ExitCode)" }
 } catch {
     if ($_.Exception.Message -match 'WinError 5|Access is denied|denied') {
-        throw 'PyInstaller cannot delete old dist (files locked). Close running LoL_Music_Agent / mpv processes and retry.'
+        throw 'PyInstaller cannot delete old dist (files locked). Close running Starlight / mpv processes and retry.'
     }
     throw
 }
 
 Write-Host '[3/4] Post-process: move third_party/ and data/lol_data to exe dir (frozen PROJECT_ROOT = exe dir) ...'
-$dist = Join-Path $root 'dist\LoL_Music_Agent'
+$dist = Join-Path $root 'dist\Starlight'
 $internal = Join-Path $dist '_internal'
 if (-not (Test-Path (Join-Path $dist 'third_party'))) {
     Move-Item (Join-Path $internal 'third_party') (Join-Path $dist 'third_party') -Force
@@ -105,20 +105,24 @@ $msDir = Join-Path $dist 'data\music_sources'
 $lolDir = Join-Path $dist 'data\lol_data'
 $cfgDir = Join-Path $dist 'config'
 $cfgTpl = Join-Path $dist 'config\settings.example.yaml'
+$appIco = Join-Path $internal 'assets\icon\app.ico'
+$starlightExe = Join-Path $dist 'Starlight.exe'
 if (-not (Test-Path $qss)) { $missing += "UI 主题 QSS: $qss" }
 if (-not (Get-ChildItem $iconsDir -Filter *.svg -ErrorAction SilentlyContinue)) { $missing += "UI 图标 SVG: $iconsDir" }
 if (-not (Get-ChildItem $msDir -Recurse -Filter *.js -ErrorAction SilentlyContinue)) { $missing += "JS 音源插件: $msDir" }
 if (-not (Get-ChildItem $lolDir -Filter *.json -ErrorAction SilentlyContinue)) { $missing += "游戏静态数据: $lolDir" }
 if (-not (Test-Path $cfgTpl)) { $missing += "配置模板 settings.example.yaml: $cfgTpl" }
 if (-not (Test-Path $qwenTpl)) { $missing += "Qwen Key 空模板: $qwenTpl" }
+if (-not (Test-Path $appIco)) { $missing += "应用图标 app.ico: $appIco" }
+if (-not (Test-Path $starlightExe)) { $missing += "主程序 Starlight.exe: $starlightExe" }
 if ($missing.Count -gt 0) {
     Write-Host '[BUILD FAILED] 打包完整性断言未通过：'
     foreach ($m in $missing) { Write-Host "  MISSING: $m" }
     throw '打包资源缺失，中断构建——不生成安装包（请检查 build.spec 的 datas 收集规则）'
 }
-Write-Host '    integrity: theme(QSS+SVG) / js-plugins / lol_data / config模板 / qwen_key模板 全部就位'
+Write-Host '    integrity: theme(QSS+SVG) / js-plugins / lol_data / config模板 / qwen_key模板 / app.ico / Starlight.exe 全部就位'
 
-$exe = Join-Path $dist 'LoL_Music_Agent.exe'
+$exe = Join-Path $dist 'Starlight.exe'
 if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
 $mpv = Join-Path $dist 'third_party\mpv\mpv.exe'
 $node = Join-Path $dist 'third_party\node\node.exe'

@@ -1,5 +1,7 @@
 ﻿"""主窗口（Glass 无边框 + 半透明圆角 + 自定义顶栏）。"""
+import os
 import sys
+from pathlib import Path
 
 try:
     import ctypes
@@ -9,7 +11,7 @@ except Exception:
     _WIN32 = False
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget,
     QWidget, QVBoxLayout,
@@ -70,7 +72,12 @@ class MainWindow(QMainWindow):
     def __init__(self, automation_service=None, cooldown_manager=None,
                  music=None, ongoing_service=None, services=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("LoL Music Agent")
+        self.setWindowTitle("星芒")
+        # 应用自定义图标（源码态 = 项目根 assets/icon/app.ico；
+        # 打包态 spec 收集到 _internal/assets/icon/app.ico，__file__ 相对自动命中）
+        _icon_path = str(Path(__file__).resolve().parents[2] / "assets" / "icon" / "app.ico")
+        if os.path.isfile(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
         self.resize(1100, 720)
         self._services = services or {}
 
