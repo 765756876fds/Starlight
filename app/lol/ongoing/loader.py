@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .cache import SnapshotCache
 from .match_model import MatchHistoryResult, MatchRecord, NO_DATA, _VALID_QUEUE_IDS
 from .models import PlayerSnapshot
+from .summoner_privacy import SummonerPrivacyService
 
 
 class RateLimiter:
@@ -154,6 +155,17 @@ class OngoingGameLoader:
             else:
                 pending_puuid.append(p["puuid"])
 
+        # 新增：SGP 批量查询玩家名字（腾讯服 LCU 拿不到名字时的稳定兜底通道）
+        puuids_to_check = [p.get("puuid") for p in players if p.get("puuid")]
+        self._sgp_info_cache = {}
+        if puuids_to_check:
+            try:
+                if not getattr(self, "_privacy_service", None):
+                    self._privacy_service = SummonerPrivacyService(self._get)
+                self._sgp_info_cache = self._privacy_service.batch_summoner_info(puuids_to_check)
+            except Exception as _e:
+                self._sgp_info_cache = {}
+                self._errors.append("sgp batch failed: %s" % _e)
         futures = {
             self._executor.submit(self._load_one, p): p for p in players
             if p["puuid"] in pending_puuid
@@ -285,6 +297,12 @@ class OngoingGameLoader:
               or summoner.get("internalName") or summoner.get("riotIdGameName")
               or summoner.get("name") or "")
         tl = summoner.get("tagLine") or ""
+        # 新增：SGP 名字兜底（解决腾讯服 LCU 没名字导致 "?" 的问题）
+        if not gn and getattr(self, "_sgp_info_cache", None):
+            sgp_info = self._sgp_info_cache.get(puuid)
+            if sgp_info:
+                gn = sgp_info.get("name") or ""
+                tl = sgp_info.get("tagLine") or tl
         
         snap = PlayerSnapshot(
             puuid=puuid,

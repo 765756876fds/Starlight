@@ -139,3 +139,48 @@ class SummonerPrivacyService:
             else:
                 out[pu] = ERROR
         return out
+    def batch_summoner_info(self, puuids: list) -> dict:
+        """批量查询召唤师信息（包含国服名字）。返回 {puuid: {name, tagLine, privacy, level}}。"""
+        uniq = []
+        seen = set()
+        for pu in puuids:
+            pu = (pu or "").strip()
+            if pu and pu not in seen:
+                seen.add(pu)
+                uniq.append(pu)
+        if not uniq:
+            return {}
+        token = self._league_session_token()
+        _, base, sub = SgpServerResolver(self._lcu_get).resolve()
+        out = {pu: {} for pu in uniq}
+        if not (token and base and sub):
+            return out
+        url = f"{base}/summoner-ledge/v1/regions/{sub}/summoners/puuids"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "x-akari-sgp-server-id": sub,
+            "x-akari-token-type": "league-session",
+            "x-akari-force-stream-collect": "true",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        try:
+            data = self._https_post(url, uniq, headers)
+        except Exception:
+            return out
+        if not isinstance(data, list):
+            return out
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            pu = item.get("puuid")
+            if not pu:
+                continue
+            out[pu] = {
+                "name": item.get("name") or item.get("gameName"),
+                "tagLine": item.get("tagLine") or "",
+                "privacy": item.get("privacy"),
+                "level": item.get("level"),
+            }
+        return out
+
