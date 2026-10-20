@@ -1,0 +1,13 @@
+# 字节级补丁依赖：Python / JS / 配置 一律 LF，禁止 autocrlf 转 CRLF 回潮
+*.py text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.spec text eol=lf
+*.iss text eol=lf
+*.txt text eol=lf
+# Windows 批处理必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
