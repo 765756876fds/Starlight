@@ -24,8 +24,11 @@ from .listener import ComboListener
 from .models import ChampionCombos, Combo
 from .win_focus import is_lol_foreground
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-USAGE_PATH = os.path.join(PROJECT_ROOT, "data", "combo_usage.json")
+try:
+    from app.core.path_resolve import PROJECT_ROOT  # 打包态: exe 目录（使用频率 json 可写）
+except ImportError:
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+USAGE_PATH = os.path.join(str(PROJECT_ROOT), "data", "combo_usage.json")
 
 # 连招执行结束后仍忽略按键的窗口（秒）：拦住"程序自己发的键"的延迟回调，
 # 防止发出的键恰好也是 trigger 时自我触发死循环。200ms 是防御回调延迟与手感的平衡点。

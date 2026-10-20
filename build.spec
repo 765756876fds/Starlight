@@ -52,6 +52,11 @@ datas = [
     ('app/music/online/js_bridge', 'app/music/online/js_bridge'),
     ('app/third_party/fingerprint', 'app/third_party/fingerprint'),
     ('data/lol_data', 'data/lol_data'),
+    # 外部可写配置模板：只收 settings.example.yaml（空白模板，无任何真实凭据）。
+    # 真实 config/settings.yaml 含用户 API Key，绝不进包；打包态首次启动由
+    # config.py（P2）在 exe 同级 config/ 自动生成默认 settings.yaml。
+    # tools/.qwen_key 由 build.ps1 后处理创建空模板（避免误收开发目录真实 Key）。
+    ('config/settings.example.yaml', 'config'),
 ] + pyside_datas
 
 binaries = [

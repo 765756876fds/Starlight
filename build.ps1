@@ -78,24 +78,45 @@ if (-not (Test-Path (Join-Path $dist 'data\lol_data'))) {
 if (-not (Test-Path (Join-Path $dist 'data\music_sources'))) {
     Move-Item (Join-Path $internal 'data\music_sources') (Join-Path $dist 'data\music_sources') -Force
 }
+# 外部可写配置：settings.example.yaml 空白模板 → exe 同级 config/
+# （真实 settings.yaml 含用户 Key，绝不进包；首次启动由 config.py 自动生成默认配置）
+if (-not (Test-Path (Join-Path $dist 'config'))) {
+    New-Item -ItemType Directory -Force (Join-Path $dist 'config') | Out-Null
+}
+if ((Test-Path (Join-Path $internal 'config\settings.example.yaml')) -and -not (Test-Path (Join-Path $dist 'config\settings.example.yaml'))) {
+    Move-Item (Join-Path $internal 'config\settings.example.yaml') (Join-Path $dist 'config\settings.example.yaml') -Force
+}
+# tools/.qwen_key 空模板（用户在此填 Qwen Key；绝不复制开发目录真实 Key）
+if (-not (Test-Path (Join-Path $dist 'tools'))) {
+    New-Item -ItemType Directory -Force (Join-Path $dist 'tools') | Out-Null
+}
+$qwenTpl = Join-Path $dist 'tools\.qwen_key'
+if (-not (Test-Path $qwenTpl)) {
+    New-Item -ItemType File -Force $qwenTpl | Out-Null   # 空文件：strip 后为空 → 未配置
+}
 
 Write-Host '[4/4] Verify + integrity assertions ...'
 # ===== 打包完整性断言（防呆）：缺失任何关键资源 → 抛异常中断，绝不生成安装包 =====
+# 断言检查的是 exe 同级外层根目录（外部可读写），非 _internal
 $missing = @()
 $qss = Join-Path $internal 'app\ui\theme\dark.qss'
 $iconsDir = Join-Path $internal 'app\ui\theme\icons'
 $msDir = Join-Path $dist 'data\music_sources'
 $lolDir = Join-Path $dist 'data\lol_data'
+$cfgDir = Join-Path $dist 'config'
+$cfgTpl = Join-Path $dist 'config\settings.example.yaml'
 if (-not (Test-Path $qss)) { $missing += "UI 主题 QSS: $qss" }
 if (-not (Get-ChildItem $iconsDir -Filter *.svg -ErrorAction SilentlyContinue)) { $missing += "UI 图标 SVG: $iconsDir" }
 if (-not (Get-ChildItem $msDir -Recurse -Filter *.js -ErrorAction SilentlyContinue)) { $missing += "JS 音源插件: $msDir" }
 if (-not (Get-ChildItem $lolDir -Filter *.json -ErrorAction SilentlyContinue)) { $missing += "游戏静态数据: $lolDir" }
+if (-not (Test-Path $cfgTpl)) { $missing += "配置模板 settings.example.yaml: $cfgTpl" }
+if (-not (Test-Path $qwenTpl)) { $missing += "Qwen Key 空模板: $qwenTpl" }
 if ($missing.Count -gt 0) {
     Write-Host '[BUILD FAILED] 打包完整性断言未通过：'
     foreach ($m in $missing) { Write-Host "  MISSING: $m" }
     throw '打包资源缺失，中断构建——不生成安装包（请检查 build.spec 的 datas 收集规则）'
 }
-Write-Host '    integrity: theme(QSS+SVG) / js-plugins / lol_data 全部就位'
+Write-Host '    integrity: theme(QSS+SVG) / js-plugins / lol_data / config模板 / qwen_key模板 全部就位'
 
 $exe = Join-Path $dist 'LoL_Music_Agent.exe'
 if (-not (Test-Path $exe)) { throw "exe missing: $exe" }

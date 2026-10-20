@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 from app.core.config import resolve_mpv_path
+from app.core.path_resolve import PROJECT_ROOT
 from ..core.event_bus import Event, EventType, get_event_bus
 
 
@@ -311,10 +312,7 @@ class TTSController:
         cfg_key = config.get("qwen_api_key", "")
         if cfg_key:
             return cfg_key
-        key_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "tools", ".qwen_key",
-        )
+        key_file = os.path.join(str(PROJECT_ROOT), "tools", ".qwen_key")
         if os.path.exists(key_file):
             try:
                 with open(key_file, encoding="utf-8") as f:

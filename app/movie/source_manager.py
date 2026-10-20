@@ -12,6 +12,8 @@ import json
 import os
 import threading
 from pathlib import Path
+
+from app.core.path_resolve import PROJECT_ROOT
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -36,7 +38,7 @@ _TEST_KW = "流浪地球2"
 
 
 def _default_settings_path() -> str:
-    return str(Path(__file__).parent.parent.parent / "config" / "settings.yaml")
+    return str(PROJECT_ROOT / "config" / "settings.yaml")
 
 
 def _check_hls(url: str, timeout: float) -> bool:

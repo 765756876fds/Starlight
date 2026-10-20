@@ -16,7 +16,15 @@ import time
 from typing import Any, Dict
 
 # 纭繚椤圭洰鏍圭洰褰曞湪璺緞涓?
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# frozen build: PROJECT_ROOT = exe dir (all external read/write lands beside exe,
+# never _internal - settings.yaml / tools/.qwen_key / data/music_sources etc.)
+if getattr(sys, "frozen", False):
+    try:
+        from app.core.path_resolve import PROJECT_ROOT
+    except Exception:
+        PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+else:
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 # 原始 stderr：绕过 TeeStream 劫持，供 LogRedirect 初始化失败时留原始痕迹

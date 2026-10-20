@@ -12,8 +12,11 @@ import yaml
 
 from .models import ChampionCombos, parse_champion
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-COMBO_YAML_PATH = os.path.join(PROJECT_ROOT, "config", "combos.yaml")
+try:
+    from app.core.path_resolve import PROJECT_ROOT  # 打包态: exe 目录（combos.yaml 可写）
+except ImportError:
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+COMBO_YAML_PATH = os.path.join(str(PROJECT_ROOT), "config", "combos.yaml")
 
 # UI 保存写文件 与 配置读取/重载 的互斥锁（防并发读写）
 _IO_LOCK = threading.Lock()
