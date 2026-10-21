@@ -8,6 +8,7 @@ import re
 import tempfile
 import urllib.request
 import requests
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtCore import QObject, QRect, QSize, QThread, Qt, QTimer, Signal
@@ -24,6 +25,10 @@ from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import _GlassMsgBox, glass_info
 from ...movie import douban_rank
 from ...movie.rank_providers import BaseRankProvider, TgmengProvider, default_provider
+
+from app.core.logger import get_logger
+
+logger = get_logger()
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
 _POSTER_DIR = Path("data/movie/posters")
@@ -270,7 +275,7 @@ class _PosterBatchWorker(QObject):
                     self.done.emit(str(vod_id), str(path))
                     continue
             except Exception as e:
-                print(f"[Movie] 海报下载失败 {vod_id}: {e}")
+                logger.error(f"[Movie] 海报下载失败 {vod_id}: {e}")
             self.done.emit(str(vod_id), "")
         self.finished.emit()
 
@@ -310,7 +315,7 @@ class _DbPosterBatchWorker(QObject):
                         if thumb.save(str(path)):
                             return str(path)
             except Exception as e:
-                print(f"[Movie] 豆瓣海报下载失败 {key} {cand}: {e}")
+                logger.error(f"[Movie] 豆瓣海报下载失败 {key} {cand}: {e}")
         # 全部域无效 → 会话内不再重试（占位兜底）
         _db_poster_failed.add(url)
         return ""
@@ -706,6 +711,8 @@ class MoviePanel(QWidget):
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+        # 海报磁盘缓存上限清理（启动时一次；超 500 张删最旧）
+        self._cleanup_poster_cache()
 
         # 单击开详情（300ms 延迟防双击误触：双击先触发一次单击，让位给播放）
         self._click_timer = QTimer(self)
@@ -744,7 +751,7 @@ class MoviePanel(QWidget):
                 self._video_win.stopped.connect(self._on_video_stopped)
                 self._movie.set_embed_wid(self._video_win.container.native_id())
         except Exception as e:
-            print(f"[Movie] 内嵌播放窗口初始化失败（回退独立窗口）: {e}", flush=True)
+            logger.error(f"[Movie] 内嵌播放窗口初始化失败（回退独立窗口）: {e}")
             self._video_win = None
             self._embed_playing = False
 
@@ -1042,7 +1049,7 @@ class MoviePanel(QWidget):
             self._rank_db_worker.finished.connect(self._on_db_poster_batch_finished)
             self._rank_db_thread.start()
         except Exception as e:
-            print(f"[Movie] 榜单海报下载线程启动失败: {e}")
+            logger.error(f"[Movie] 榜单海报下载线程启动失败: {e}")
 
     def _on_db_poster_batch_finished(self):
         if self._pending_db_jobs:
@@ -1090,7 +1097,7 @@ class MoviePanel(QWidget):
             self._video_win.attach_current()
             self._embed_playing = True
         except Exception as e:
-            print(f"[Movie] 语音窗口接管异常: {e}", flush=True)
+            logger.error(f"[Movie] 语音窗口接管异常: {e}")
 
     def _current_source_name(self):
         """当前源名（管理器读不到/非真实源时返回 None，不打扰 UI）。"""
@@ -1214,7 +1221,7 @@ class MoviePanel(QWidget):
             self._poster_worker.finished.connect(self._on_poster_batch_finished)
             self._poster_thread.start()
         except Exception as e:
-            print(f"[Movie] 海报下载线程启动失败: {e}")
+            logger.error(f"[Movie] 海报下载线程启动失败: {e}")
 
     def _on_poster_batch_finished(self):
         if self._pending_poster_jobs:
@@ -1352,6 +1359,33 @@ class MoviePanel(QWidget):
         if n > 0:
             self.lbl_status.setText(f"已找到 {n} 个字幕，点「字」加载")
 
+    def _safe_movie_call(self, fn, *args, **kwargs) -> None:
+        """后台线程通用包裹：controller 调用放子线程，避免 mpv IPC 超时卡住 UI；
+        异常捕获记录，绝不炸线程。"""
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"[Movie] 后台控制调用失败: {e!r}")
+
+    def _cleanup_poster_cache(self, max_files: int = 500):
+        """海报磁盘缓存上限：超过 max_files 张按 mtime 删最旧，防磁盘膨胀。"""
+        try:
+            if not _POSTER_DIR.exists():
+                return
+            files = [p for p in _POSTER_DIR.iterdir() if p.suffix.lower() == ".jpg"]
+            if len(files) <= max_files:
+                return
+            files.sort(key=lambda p: p.stat().st_mtime)
+            drop = files[:-max_files]
+            for p in drop:
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            logger.info(f"[Movie] 海报缓存清理: 删除 {len(drop)} 张（当前 {len(files)} 张，上限 {max_files}）")
+        except Exception as e:
+            logger.error(f"[Movie] 海报缓存清理失败: {e!r}")
+
     def _sync_toggle_icon(self):
         """按真实播放状态刷新 播放/暂停 图标（纯 UI 呈现）。"""
         try:
@@ -1362,12 +1396,11 @@ class MoviePanel(QWidget):
             "pause" if playing else "play", 20, Colors.TEXT_PRIMARY))
 
     def _on_toggle(self):
-        try:
-            # 播放中 → 暂停；暂停/停止 → 恢复（toggle 语义），随后立即同步图标
-            self._movie.toggle_pause()
-            self._sync_toggle_icon()
-        except Exception as e:
-            self.lbl_status.setText(f"控制失败: {e}")
+        # 播放中 → 暂停；暂停/停止 → 恢复（toggle 语义）；IPC 下发走后台线程防假死
+        threading.Thread(target=self._safe_movie_call, args=(self._movie.toggle_pause,),
+                         daemon=True, name="movie-toggle").start()
+        # 图标立即翻转（纯 UI 呈现），500ms _tick 轮询兜底校正
+        self._sync_toggle_icon()
 
     # ---- 增强控制 ----
 
@@ -1413,17 +1446,14 @@ class MoviePanel(QWidget):
             self.lbl_status.setText(f"倍速失败: {e}")
 
     def _on_volume(self, value):
-        try:
-            self._movie.set_volume(value)
-        except Exception as e:
-            self.lbl_status.setText(f"音量失败: {e}")
+        threading.Thread(target=self._safe_movie_call,
+                         args=(self._movie.set_volume, value),
+                         daemon=True, name="movie-volume").start()
 
     def _on_mute(self):
-        try:
-            self._movie.toggle_mute()
-            self.btn_mute.setIcon(lucide_icon("volume-x", 16, Colors.TEXT_PRIMARY))
-        except Exception as e:
-            self.lbl_status.setText(f"静音失败: {e}")
+        threading.Thread(target=self._safe_movie_call, args=(self._movie.toggle_mute,),
+                         daemon=True, name="movie-mute").start()
+        self.btn_mute.setIcon(lucide_icon("volume-x", 16, Colors.TEXT_PRIMARY))
 
     def _on_shortcut(self):
         table = (
@@ -1445,25 +1475,25 @@ class MoviePanel(QWidget):
         glass_info(self, "快捷键说明", table)
 
     def _on_stop(self):
-        try:
-            self._movie.stop()
-            self.lbl_now.setText("未播放")
-            self.slider_pos.setEnabled(False)
-            self.slider_pos.setValue(0)
-            self.lbl_time.setText("0:00 / 0:00")
-        except Exception as e:
-            self.lbl_status.setText(f"停止失败: {e}")
+        threading.Thread(target=self._safe_movie_call, args=(self._movie.stop,),
+                         daemon=True, name="movie-stop").start()
+        # UI 重置在主线程（controller 最终状态由 _tick 校正）
+        self.lbl_now.setText("未播放")
+        self.slider_pos.setEnabled(False)
+        self.slider_pos.setValue(0)
+        self.lbl_time.setText("0:00 / 0:00")
 
     def _on_seek(self):
-        try:
-            if not self._movie.is_playing():
-                return
-            dur = self._movie.get_duration()
-            if dur > 0:
-                ratio = self.slider_pos.value() / 1000.0
-                self._movie.seek(ratio * dur, mode="absolute")
-        except Exception as e:
-            self.lbl_status.setText(f"跳转失败: {e}")
+        # 只读判定留在主线程（is_playing/get_duration 快速查询），seek 下发走后台线程
+        if not self._movie.is_playing():
+            return
+        dur = self._movie.get_duration()
+        if dur > 0:
+            ratio = self.slider_pos.value() / 1000.0
+            threading.Thread(target=self._safe_movie_call,
+                             args=(self._movie.seek, ratio * dur),
+                             kwargs={"mode": "absolute"},
+                             daemon=True, name="movie-seek").start()
 
     # ---- 字幕 ----
 

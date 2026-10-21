@@ -25,6 +25,10 @@ from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
 from .source_manager import MovieSourceManager, _SingleSourceManager
 
+from ..core.logger import get_logger
+
+logger = get_logger()
+
 # 默认源：360资源（苹果 CMS 标准接口）
 DEFAULT_SOURCE_URL = "https://360zyzz.com/api.php/provide/vod/from/360m3u8/at/json"
 DEFAULT_IPC_PIPE = r"\\.\pipe\lol_movie_mpv"
@@ -174,7 +178,7 @@ class MovieController:
             bus.register(CommandType.MOVIE_PAUSE, lambda c: self.pause())
             bus.register(CommandType.MOVIE_RESUME, lambda c: self.resume())
         except Exception as e:
-            print(f"[Movie] 注册语音命令失败: {e}")
+            logger.error(f"[Movie] 注册语音命令失败: {e}")
 
     def _cmd_search_play(self, command):
         """语音"播放电影XX"：搜索 → 播 Top1（语音直达，不弹 UI 选集对话框）。
@@ -219,7 +223,7 @@ class MovieController:
                 cb(msg)
                 return
             except Exception as e:
-                print(f"[Movie] 语音反馈回调异常: {e}")
+                logger.error(f"[Movie] 语音反馈回调异常: {e}")
         print(f"[Movie] 语音反馈: {msg}")
 
     def _write_state(self, playing=None, paused=None):
@@ -232,7 +236,7 @@ class MovieController:
             if paused is not None:
                 st.set(StateNamespace.MOVIE, "paused", bool(paused))
         except Exception as e:
-            print(f"[Movie] 写播放状态失败: {e}")
+            logger.error(f"[Movie] 写播放状态失败: {e}")
 
     # ---- 互斥：事件解耦（音乐 → 电影） ----
 
@@ -247,7 +251,7 @@ class MovieController:
             bus.subscribe(EventType.SYSTEM_SHUTDOWN, self._on_shutdown)
             self._subscribed = True
         except Exception as e:
-            print(f"[Movie] 订阅音乐事件失败: {e}")
+            logger.error(f"[Movie] 订阅音乐事件失败: {e}")
 
     def _on_music_playing(self, event):
         """音乐开始播放（换歌或继续）→ 电影暂停（保留进度）。幂等 + 守卫防循环。"""
@@ -371,7 +375,7 @@ class MovieController:
             try:
                 music.pause()
             except Exception as e:
-                print(f"[Movie] 暂停音乐失败: {e}")
+                logger.error(f"[Movie] 暂停音乐失败: {e}")
         # 内嵌 wid：embed 开且窗口已注入 → 传 --wid；否则 None（独立窗口，现状）
         wid = self._embed_wid if (self._embed and self._embed_wid) else None
         if wid is not None:
@@ -514,7 +518,7 @@ class MovieController:
                 ok = bool(self.mpv.start(taskkill=False, wid=wid,
                                          pipe_timeout=3.0, prop_timeout=0.5))
             except Exception as e:
-                print(f"[Movie] mpv 重启异常: {e!r}")
+                logger.error(f"[Movie] mpv 重启异常: {e!r}")
                 ok = False
         finally:
             with self._recover_lock:
@@ -535,7 +539,7 @@ class MovieController:
             if pos and pos > 0:
                 self.mpv.seek(pos, "absolute")
         except Exception as e:
-            print(f"[Movie] 崩溃恢复 loadfile 异常: {e!r}")
+            logger.error(f"[Movie] 崩溃恢复 loadfile 异常: {e!r}")
             return
         self._last_idle = False      # 恢复播放：重置连播基线（防误判 idle 上升沿）
         self._write_state(playing=True, paused=False)
@@ -643,7 +647,7 @@ class MovieController:
                 })
             return out
         except Exception as e:
-            print(f"[Movie] 字幕搜索失败: {e}")
+            logger.error(f"[Movie] 字幕搜索失败: {e}")
             return []
 
     def load_subtitle(self, sub_id, timeout=30.0):
@@ -686,7 +690,7 @@ class MovieController:
             self._force_select_sub()
             return True, out_path
         except Exception as e:
-            print(f"[Movie] 字幕加载失败: {e}")
+            logger.error(f"[Movie] 字幕加载失败: {e}")
             return False, f"字幕加载失败: {e}"
 
     def _extract_subtitle(self, data: bytes, filename_hint: str = ""):
@@ -743,7 +747,7 @@ class MovieController:
                     if self._is_real_subtitle(content):
                         out.append((name, content))
         except Exception as e:
-            print(f"[Movie] ZIP 解压失败: {e}")
+            logger.error(f"[Movie] ZIP 解压失败: {e}")
         return out
 
     def _extract_rar(self, data: bytes):
@@ -780,7 +784,7 @@ class MovieController:
             print("[Movie] RAR 解压超时")
             return []
         except Exception as e:
-            print(f"[Movie] RAR 解压失败: {e}")
+            logger.error(f"[Movie] RAR 解压失败: {e}")
             return []
         finally:
             if tmp_rar:
@@ -803,7 +807,7 @@ class MovieController:
             if sub_ids:
                 self.mpv.set_sid(max(sub_ids))
         except Exception as e:
-            print(f"[Movie] 字幕选中失败: {e}")
+            logger.error(f"[Movie] 字幕选中失败: {e}")
 
     def maybe_mark_sub_searched(self, item):
         """记录某片已搜过字幕（自动搜去重用，每片一次）。"""
