@@ -416,6 +416,8 @@ class MusicPanel(QWidget):
             self.slider_vol.valueChanged.connect(self._on_volume)
             self.slider_vol.sliderReleased.connect(self._on_volume_released)
             self.slider_pos.sliderReleased.connect(self._on_seek)
+            # 拖动过程实时预览目标时间（仅内存级 UI 更新，不碰 mpv IPC）
+            self.slider_pos.sliderMoved.connect(self._on_seek_preview)
             self.btn_search.clicked.connect(self._do_search)
             self.edit_kw.returnPressed.connect(self._do_search)
             self.list_results.itemDoubleClicked.connect(self._on_play)
@@ -463,6 +465,7 @@ class MusicPanel(QWidget):
 
         # 进度轮询后台线程：mpv IPC（playback-time/duration）绝不在主线程同步读取
         self._progress_polling = False
+        self._last_dur = 0.0  # 最近一次进度快照的时长，供拖动预览换算（_on_seek_preview）
         self._progress_signal.connect(self._on_progress)
 
         # P1 候选旁路：订阅 controller 推送的候选事件（Signal 桥到主线程）
@@ -1904,6 +1907,20 @@ class MusicPanel(QWidget):
         self._play_async(self._music.play_online, track,
                          ok_msg=f"正在播放：{track.title}")
 
+    def _on_seek_preview(self, value: int) -> None:
+        """拖动进度条（sliderMoved，主线程）：只更新时间标签预览目标位置，
+        不碰任何 mpv IPC（seek 指令仍由 sliderReleased → 后台线程执行）。"""
+        try:
+            dur = getattr(self, "_last_dur", 0.0)
+            if dur <= 0:
+                return
+            frac = value / 1000.0
+            t = min(max(0.0, frac * dur), dur)
+            self.lbl_time.setText(
+                f"{int(t//60)}:{int(t%60):02d} / {int(dur//60)}:{int(dur%60):02d}")
+        except Exception:
+            pass
+
     def _on_seek(self):
         """进度条拖拽：seek 整体丢后台线程执行——mpv IPC（get_duration/seek）绝不碰主线程。"""
         if self._music is None:
@@ -1946,6 +1963,7 @@ class MusicPanel(QWidget):
     def _on_progress(self, pos: float, dur: float) -> None:
         """主线程槽：只做内存级 UI 更新（setValue/setText），不碰 mpv IPC。"""
         try:
+            self._last_dur = dur  # 供拖动预览换算目标时间（_on_seek_preview）
             if dur > 0:
                 self.slider_pos.setEnabled(True)
                 if not self.slider_pos.isSliderDown():

@@ -228,6 +228,10 @@ class MusicController:
 
         # 注册事件
         self._running = True
+        # seek 防抖：seek 指令发出后 mpv 会短暂进入 idle（缓冲/seek 窗口），
+        # 若不加拦截，_poll_idle 会把"seek 导致的瞬时 idle"误判为播放结束而自动切歌。
+        # 置位/复位均由线程写布尔值（GIL 原子），轮询线程读即可，无需加锁。
+        self._is_seeking = False
         self._subscribe_speech_events()
 
         # 启动后台轮询：每0.8秒实时查mpv idle状态，播完自动切下一首。
@@ -303,6 +307,13 @@ class MusicController:
                     _time.sleep(0.8)
                     continue
                 # 3) 原逻辑：idle 上升沿 → 自动切歌
+                if now_idle and self._is_seeking:
+                    # seek 防抖：拖拽进度条后 mpv 短暂进入 idle（seek 缓冲窗口），
+                    # 属正常现象，绝不能误判为播放结束。不消费上升沿（不更新
+                    # _last_idle）：seek 结束恢复播放 → 无事发生；seek 后确实
+                    # 播完 → 下轮轮询仍命中上升沿正常切歌。
+                    _time.sleep(0.5)
+                    continue
                 if now_idle and not self._last_idle:
                     _time.sleep(0.5)  # 等 mpv 稳定
                     logger.info("[Music] 检测到播放结束，自动切下一首")
@@ -1668,6 +1679,13 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
+        # seek 防抖：发送前置位，mpv seek 会短暂进入 idle（缓冲窗口），
+        # 该窗口内 _poll_idle 不得误判为播放结束触发 _auto_next；
+        # 1.5s 后由 daemon Timer 复位（保底覆盖 seek 缓冲/网络抖动）。
+        self._is_seeking = True
+        timer = threading.Timer(1.5, lambda: setattr(self, "_is_seeking", False))
+        timer.daemon = True
+        timer.start()
         self.mpv.seek(seconds, mode)
         # seek 成功后同步快照目标值（绝对 → 目标；相对 → 当前外推位置 + delta），
         # 避免切歌/seek 后进度跳回旧缓存。
