@@ -5,6 +5,7 @@
 通过 EventBus 发布音乐事件。
 通过 CommandBus 接收音乐命令。
 """
+import contextlib
 import os
 import threading
 import time
@@ -99,13 +100,18 @@ class MusicController:
 
         # 影子模式对拍基建：trace_enabled=True 时包一层 RecordingMpv（只记录，不改行为）。
         # 开关读 config/settings.yaml 的 music.trace_enabled，默认关闭。
+        # self._trace 保存 recorder 引用（未启用时为 None），供 intent/decision 打点。
+        self._trace = None
         if self._load_trace_enabled():
             try:
                 from .trace_recorder import get_trace_recorder
                 from .recording_mpv import RecordingMpv
-                self.mpv = RecordingMpv(self.mpv, get_trace_recorder(enabled=True))
+                self._trace = get_trace_recorder(enabled=True)
+                self.mpv = RecordingMpv(self.mpv, self._trace)
             except Exception:
-                pass
+                self._trace = None
+        # origin 上下文（threading.local）：区分用户主动操作（user）与自动流程（auto）
+        self._tl = threading.local()
 
         # 落雪音乐客户端
         self.lx_client = LxMusicClient()
@@ -359,6 +365,12 @@ class MusicController:
 
     def stop(self):
         """停止音乐模块"""
+        # 决策点：模块级 stop 被触发（记录调用来源；controller 内部无 self.stop() 调用，
+        # 均由外部/UI 触发，caller 恒为 stop 方法本身）
+        self._record_decision({
+            "kind": "module_stop",
+            "caller": "stop()",
+        })
         self._running = False
         self._invalidate_highlight()
         if getattr(self, "online_manager", None) is not None:
@@ -394,6 +406,8 @@ class MusicController:
     @_cancel_switch_on_user_action
     def play(self):
         """播放"""
+        # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
+        self._record_intent("play", self._current_song, 0)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
@@ -449,6 +463,8 @@ class MusicController:
     @_cancel_switch_on_user_action
     def pause(self):
         """暂停"""
+        # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
+        self._record_intent("pause", self._current_song, 0)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
@@ -473,6 +489,8 @@ class MusicController:
     @_cancel_switch_on_user_action
     def resume(self):
         """继续播放"""
+        # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
+        self._record_intent("resume", self._current_song, 0)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
@@ -494,6 +512,8 @@ class MusicController:
     @_cancel_switch_on_user_action
     def toggle(self):
         """切换播放/暂停（直接让 mpv 处理，不依赖缓存状态）"""
+        # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
+        self._record_intent("toggle", self._current_song, 0)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
@@ -521,6 +541,8 @@ class MusicController:
 
         _timeout 非空时：业务锁忙则放弃本轮（自动跳过路径用，防无限等锁）。
         """
+        # 打点：意图入口（t_enter 仅在 trace 启用时计时；实际记录在锁内）
+        _t_enter = time.perf_counter() if (self._trace and self._trace.enabled) else None
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
@@ -550,6 +572,11 @@ class MusicController:
             return
 
         with self._lock:
+            # 意图打点：已获取锁，记录锁等待耗时与切走前的当前曲目
+            if _t_enter is not None:
+                self._record_intent(
+                    "next", self.queue.get_current(),
+                    round((time.perf_counter() - _t_enter) * 1000, 2))
             self._next_locked()
 
     def _next_locked(self):
@@ -580,6 +607,8 @@ class MusicController:
     @_cancel_switch_on_user_action
     def prev(self):
         """上一首"""
+        # 打点：意图入口（实际记录在锁内）
+        _t_enter = time.perf_counter() if (self._trace and self._trace.enabled) else None
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
@@ -593,6 +622,11 @@ class MusicController:
                 self.lx_connected = False
         
         with self._lock:
+            # 意图打点：已获取锁
+            if _t_enter is not None:
+                self._record_intent(
+                    "prev", self.queue.get_current(),
+                    round((time.perf_counter() - _t_enter) * 1000, 2))
             self._invalidate_highlight()
             song = self.queue.prev()
             if song:
@@ -601,11 +635,18 @@ class MusicController:
     @_cancel_switch_on_user_action
     def play_song(self, song: dict[str, Any]):
         """播放指定歌曲"""
+        # 打点：意图入口（实际记录在锁内）
+        _t_enter = time.perf_counter() if (self._trace and self._trace.enabled) else None
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
         # 代际号由 _play_song（唯一咽喉）统一递增，此处不再重复
         with self._lock:
+            # 意图打点：已获取锁
+            if _t_enter is not None:
+                self._record_intent(
+                    "play_song", song,
+                    round((time.perf_counter() - _t_enter) * 1000, 2))
             if self._mpv_restart_pending:
                 logger.info("[Music] mpv 重启中，忽略播放请求")
                 return
@@ -869,6 +910,9 @@ class MusicController:
     @_cancel_switch_on_user_action
     def play_search_result(self, query: str, index: int = 0):
         """搜索并播放第 N 个结果，本地找不到自动走在线fallback"""
+        # 打点：意图入口（搜索路径不持锁，lock_wait_ms 记为 0）
+        self._record_intent("play_search_result", self._current_song, 0,
+                            extra={"query": str(query)[:20], "index": int(index)})
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return None
@@ -1073,12 +1117,19 @@ class MusicController:
 
     def _do_skip_online(self, song: dict[str, Any]):
         """跳队列在线歌：队列 current 仍是该 song 才跳（防覆盖用户切歌操作）。"""
-        try:
-            if self.queue.get_current() is not song:
-                return
-            self.next(_timeout=0.5)
-        except Exception as e:
-            logger.info(f"[Music] 跳过队列在线歌 next() 异常: {e!r}")
+        # origin 上下文：自动跳过标记为 auto（_play_song 内部据此区分意图）
+        with self._origin_ctx("auto"):
+            try:
+                if self.queue.get_current() is not song:
+                    return
+                # 决策点：在线歌跳过真正触发
+                self._record_decision({
+                    "kind": "skip_online",
+                    "reason": "queue_online_skip",
+                })
+                self.next(_timeout=0.5)
+            except Exception as e:
+                logger.info(f"[Music] 跳过队列在线歌 next() 异常: {e!r}")
 
     def _play_song(self, song: dict[str, Any]):
         """实际播放歌曲（唯一咽喉：play_song/next/prev/_auto_next/在线队列全部汇入）"""
@@ -1105,6 +1156,12 @@ class MusicController:
 
         filepath = song.get("path")
         if not filepath or not os.path.exists(filepath):
+            # 决策点：缺失文件分支（记录连续失败计数）
+            self._record_decision({
+                "kind": "missing_file",
+                "filepath_kind": "local",
+                "fail_streak_before": self._missing_file_streak,
+            })
             logger.info(f"[Music] 文件不存在: {filepath}")
             self._missing_file_streak += 1
             if self._missing_file_streak >= 3:
@@ -1216,14 +1273,22 @@ class MusicController:
         threading.Timer(0.2, lambda: self._do_skip_bad(song)).start()
 
     def _do_skip_bad(self, song: dict[str, Any]):
-        self._skip_pending = False
-        if self._current_song is not song:
-            return
-        try:
-            # 抢锁 0.5s：锁忙（UI/重启持锁）则放弃本轮，下轮 confirm/轮询再处理
-            self.next(_timeout=0.5)
-        except Exception as e:
-            logger.info(f"[Music] 跳过坏文件时 next() 异常: {e!r}")
+        # origin 上下文：自动跳过标记为 auto（_play_song 内部据此区分意图）
+        with self._origin_ctx("auto"):
+            self._skip_pending = False
+            if self._current_song is not song:
+                return
+            try:
+                # 决策点：坏文件跳过真正触发
+                self._record_decision({
+                    "kind": "skip_bad",
+                    "missing_file_streak": self._missing_file_streak,
+                    "reason": "file_not_found",
+                })
+                # 抢锁 0.5s：锁忙（UI/重启持锁）则放弃本轮，下轮 confirm/轮询再处理
+                self.next(_timeout=0.5)
+            except Exception as e:
+                logger.info(f"[Music] 跳过坏文件时 next() 异常: {e!r}")
 
     # ===== 音量控制 =====
 
@@ -1393,6 +1458,9 @@ class MusicController:
         - 成功 -> 从 0:00 重播（不保进度）；全部失败 -> 发 ONLINE_ERROR；
         - 用户操作（_cancel_candidate_switch）可随时中断。
         """
+        # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
+        self._record_intent("play_online_resume", self._current_song, 0,
+                            extra={"generation": int(generation), "idx": int(idx)})
         try:
             if generation != self._candidate_generation:
                 return False
@@ -1477,6 +1545,8 @@ class MusicController:
 
     def play_online(self, track, _before_load=None) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
+        # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
+        self._record_intent("play_online", track, 0)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return False
@@ -1804,7 +1874,14 @@ class MusicController:
     def clear_queue(self):
         """清空队列：同时停止当前播放、失效 highlight、重置轮询基线。
         旧行为只清队列数据 → 播完自动重载全库续播（清空无意义 + 状态错乱）。"""
+        # 打点：意图入口（实际记录在锁内）
+        _t_enter = time.perf_counter() if (self._trace and self._trace.enabled) else None
         with self._lock:
+            # 意图打点：已获取锁（记录清空前的当前曲目）
+            if _t_enter is not None:
+                self._record_intent(
+                    "clear_queue", self._current_song,
+                    round((time.perf_counter() - _t_enter) * 1000, 2))
             self._invalidate_highlight()
             self._current_song = None
             self.queue.clear()
@@ -1883,29 +1960,104 @@ class MusicController:
 
     def _auto_next(self):
         """自动播放下一首"""
-        if self._candidate_switching:
-            logger.info("[Music] 换源中，跳过自动切歌")
-            return
-        if not self._running:
-            return
-        # 守卫必须与 _poll_idle 同源（实时 get_property）。
-        # 不能用 self.mpv.is_idle()：它读的是启动时初始化的属性缓存，
-        # mpv 事件回调在 _send_command 中被丢弃，idle-active 缓存从不更新，
-        # 初始读失败时默认 False → 会拦截已被实时确认的切歌（next() 永不执行）。
+        # origin 上下文：自动切歌全程标记为 auto（_play_song 内部据此区分用户/自动意图）
+        with self._origin_ctx("auto"):
+            if self._candidate_switching:
+                logger.info("[Music] 换源中，跳过自动切歌")
+                return
+            if not self._running:
+                return
+            # 守卫必须与 _poll_idle 同源（实时 get_property）。
+            # 不能用 self.mpv.is_idle()：它读的是启动时初始化的属性缓存，
+            # mpv 事件回调在 _send_command 中被丢弃，idle-active 缓存从不更新，
+            # 初始读失败时默认 False → 会拦截已被实时确认的切歌（next() 永不执行）。
+            try:
+                idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
+            except Exception as e:
+                logger.error(f"[Music] auto_next idle check error: {e!r}")
+                return
+            if not idle_now:
+                logger.info("[Music] auto_next: idle-active 实时为 False，跳过切歌")
+                return
+            # 决策点：auto_next 真正触发（已确认 idle）
+            self._record_decision({
+                "kind": "auto_next_fired",
+                # getattr 防御：_last_idle 在 start() 才初始化，打点绝不因此抛异常
+                "last_idle": getattr(self, "_last_idle", None),
+                "now_idle": idle_now,
+                "queue_pos": self.queue.current_index
+                    if hasattr(self.queue, "current_index") else -1,
+            })
+            logger.info("[Music] auto_next: 已确认 idle，执行 next()")
+            try:
+                self.next()
+                logger.info("[Music] auto_next: next() 完成")
+            except Exception as e:
+                logger.info(f"[Music] auto_next: next() 异常: {e!r}")
+
+    # ===== 影子对拍打点基建（意图/决策记录，完全透明：先执行原逻辑，记录异常吞掉） =====
+
+    def _current_origin(self) -> str:
+        """读取当前线程的 origin（缺省 'user'）。"""
         try:
-            idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
-        except Exception as e:
-            logger.error(f"[Music] auto_next idle check error: {e!r}")
-            return
-        if not idle_now:
-            logger.info("[Music] auto_next: idle-active 实时为 False，跳过切歌")
-            return
-        logger.info("[Music] auto_next: 已确认 idle，执行 next()")
+            return getattr(self._tl, "origin", "user")
+        except Exception:
+            return "user"
+
+    @contextlib.contextmanager
+    def _origin_ctx(self, origin: str):
+        """上下文管理器：进入后本线程 origin 切到指定值，退出恢复原值。"""
+        old = getattr(self._tl, "origin", "user")
+        self._tl.origin = origin
         try:
-            self.next()
-            logger.info("[Music] auto_next: next() 完成")
-        except Exception as e:
-            logger.info(f"[Music] auto_next: next() 异常: {e!r}")
+            yield
+        finally:
+            self._tl.origin = old
+
+    def _record_intent(self, method: str, track, lock_wait_ms: float,
+                       extra: dict | None = None) -> None:
+        """意图打点（kind='intent'）。守卫未启用时零开销；记录异常绝不外抛。"""
+        if not (self._trace and self._trace.enabled):
+            return
+        try:
+            data = {
+                "method": method,
+                "origin": self._current_origin(),
+                "track_ref": self._track_ref(track),
+                "old_request_id": self._play_request_id,
+                "lock_wait_ms": round(float(lock_wait_ms), 2),
+            }
+            if extra:
+                data.update(extra)
+            self._trace.record("intent", data)
+        except Exception:
+            pass
+
+    def _record_decision(self, data: dict) -> None:
+        """旧决策点打点（外层 kind='decision'）。守卫未启用时零开销；记录异常绝不外抛。
+
+        注意：内层子类名（调用方习惯写 "kind": "auto_next_fired"）会被改写为
+        "decision" 键，避免覆盖 recorder 的外层分类 kind（intent/decision/mpv）。"""
+        if not (self._trace and self._trace.enabled):
+            return
+        try:
+            d = dict(data)
+            if "kind" in d:
+                d["decision"] = d.pop("kind")
+            self._trace.record("decision", d)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _track_ref(track) -> dict:
+        """曲目脱敏引用：本地歌只记文件名，在线歌只记 title 前 20 字符。"""
+        if not track:
+            return {"kind": "none"}
+        if isinstance(track, dict):
+            if track.get("path") and not str(track["path"]).startswith("http"):
+                return {"kind": "local", "name": os.path.basename(str(track["path"]))}
+            return {"kind": "online", "title": str(track.get("title", ""))[:20]}
+        return {"kind": "unknown"}
 
     @staticmethod
     def _load_trace_enabled() -> bool:
