@@ -87,6 +87,13 @@ class ObjectiveTracker:
         """
         with self._lock:
             if dragon_type == "Elder":
+                # 物理事实兜底：只要远古龙出现，龙魂必然已产生，强制终止普通小龙排程
+                self._elder_reached = True
+                d = self._objs.get("dragon")
+                if d:
+                    d.next_spawn = None
+                    d.state = ObjectiveState.NOT_ACTIVE
+
                 e = self._objs.get("elder")
                 if e and e.rule.respawn:
                     e.killed += 1
