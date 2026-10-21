@@ -7,7 +7,7 @@
 import logging
 import threading
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -142,17 +142,15 @@ class EventBus:
         self._event_history: list[Event] = []
         self._max_history = 1000
         self._running = True
-        # 状态合并竞态治理：正在执行的 state key + 执行期间同 key 的最新待处理事件
-        self._running_state_keys: set[str] = set()
-        self._pending_latest_state: dict[str, Event] = {}
         self._is_shutting_down = False
         # ---- 异步事件物理隔离：双池 ----
-        # 状态池：高频可丢弃事件（time_update/snapshot 等），按 key 合并保最新、上限 64
+        # 状态池：高频可丢弃事件（time_update/snapshot 等）。
+        # 真合并实现：每 key 一个"最新值槽"（dict 覆盖）+ 单 dispatcher 消费——
+        # 旧事件从不排队执行，只执行槽内最新值（修复"deque 记账但旧事件照样执行"的假合并）。
+        self._state_latest_slots: dict[str, Event] = {}
         self._state_executor = ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="eventbus-state"
+            max_workers=1, thread_name_prefix="eventbus-state"
         )
-        # 待处理状态事件队列（按 key 合并语义：同 key 新替旧，满且无同 key 时丢最旧）
-        self._state_queue: deque[Event] = deque()
         # 临界池：不可丢弃事件（击杀/提醒/系统错误等），容量大、拥堵记录但不丢。
         # 关键事件必须保证严格 FIFO 顺序，故限制单 worker；禁止在此池放入长耗时任务。
         self._critical_executor = ThreadPoolExecutor(
@@ -162,7 +160,7 @@ class EventBus:
         self._async_executor = self._critical_executor
         self._pool_lock = threading.Lock()
         self._critical_pending = 0
-        self._STATE_MAX_PENDING = 64   # 状态池硬上限：满且无同 key 可合并时，丢弃最早的事件
+        self._STATE_MAX_PENDING = 64   # 兼容保留（历史字段）；槽位式真合并无队列上限——状态 key 空间有限，槽值天然收敛
         self._CRITICAL_MAX_PENDING = 32  # 临界池告警阈值：超则记录 ERROR，绝不丢弃
 
     def subscribe(self, event_type: str, handler: Callable[[Event], None]):
@@ -246,51 +244,32 @@ class EventBus:
         return str(event.data.get("entity_key") or event.event_type)
 
     def _submit_state(self, event: Event):
-        """状态池：按 key 合并保最新（同 key 新事件替换旧事件，保留最新状态）；
-        无同 key 时追加到队尾；达到硬上限（64）且无同 key 可替换时，丢弃最早的事件；
-        若 key 正在执行，缓存为最新待处理，等当前执行完立即消费（最终收敛到最新）。"""
+        """状态池（真合并）：每 key 一个最新值槽——直接覆盖槽位，不排队、不绑定 submit。
+        单 dispatcher（_drain_state_slots）消费槽位：执行期间同 key 新值写回槽，
+        循环继续消费，最终只执行每个 key 的最新值；旧事件永不执行。"""
         key = self._state_key(event)
         with self._pool_lock:
-            # 该 key 正在执行：不丢弃，缓存为最新待处理（放在"同 key 替换队列"之前，
-            # 避免执行中的 key 被队列里的旧记录覆盖/混淆）
-            if key in self._running_state_keys:
-                self._pending_latest_state[key] = event
-                return
-            for i, pending in enumerate(self._state_queue):
-                if self._state_key(pending) == key:
-                    # 同 key：新事件替换旧事件（不追加、不重复执行）
-                    self._state_queue[i] = event
-                    break
-            else:
-                if len(self._state_queue) >= self._STATE_MAX_PENDING:
-                    # 满且无同 key 可合并：丢弃最早的事件腾出空间
-                    self._state_queue.popleft()
-                self._state_queue.append(event)
+            self._state_latest_slots[key] = event
         try:
-            future = self._state_executor.submit(self._run_state_event, event)
+            self._state_executor.submit(self._drain_state_slots)
         except RuntimeError:
             # 总线正在关闭，不再接受新事件；避免回退同步阻塞调用方
             with self._pool_lock:
-                if event in self._state_queue:
-                    self._state_queue.remove(event)
+                self._state_latest_slots.pop(key, None)
             logger.warning("EventBus 关闭中，事件 %s 被丢弃", event.event_type)
-            return
-        future.add_done_callback(lambda _f: self._dec_state(event))
 
-    def _run_state_event(self, event: Event):
-        """状态池 worker 执行体：登记运行中 key，执行后释放并立即消费缓存的最新状态。"""
-        key = self._state_key(event)
-        with self._pool_lock:
-            self._running_state_keys.add(key)
-        try:
-            self.publish(event)
-        finally:
+    def _drain_state_slots(self):
+        """状态池单 dispatcher：每次取一个 key 的最新值执行；执行期间同 key 新值
+        写回槽位，循环继续直到槽空。任何 key 的旧值都不会排队执行（真合并）。"""
+        while True:
             with self._pool_lock:
-                self._running_state_keys.discard(key)
-                latest = self._pending_latest_state.pop(key, None)
-            # 执行期间同 key 有更新到达：立即重新入队消费（保证最终收敛到最新）
-            if latest is not None:
-                self._submit_state(latest)
+                if not self._state_latest_slots:
+                    return
+                key, event = self._state_latest_slots.popitem()
+            try:
+                self.publish(event)
+            except Exception:
+                logger.error("状态池事件处理异常 %s", event.event_type, exc_info=True)
 
     def _submit_critical(self, event: Event):
         """临界池：容量足够大，拥堵时记录 ERROR 但绝不静默丢弃。"""
@@ -323,12 +302,6 @@ class EventBus:
                     "[EventBus] 关键任务 %s 耗时 %.0fms，请检查是否误放长任务",
                     event.event_type, elapsed_ms,
                 )
-
-    def _dec_state(self, event: Event):
-        """状态池事件执行完成：从待处理队列移除（可能已被同 key 新事件替换，忽略即可）。"""
-        with self._pool_lock:
-            if event in self._state_queue:
-                self._state_queue.remove(event)
 
     def _dec_pending(self, pool: str):
         with self._pool_lock:
@@ -383,9 +356,7 @@ class EventBus:
             self._subscribers.clear()
             self._wildcard_subscribers.clear()
         with self._pool_lock:
-            self._state_queue.clear()
-            self._pending_latest_state.clear()
-            self._running_state_keys.clear()
+            self._state_latest_slots.clear()
         logger.info("[EventBus] shutdown 完成")
 
     def _has_running_tasks(self) -> bool:

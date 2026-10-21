@@ -20,47 +20,47 @@ def _make_bus():
 
 
 def test_state_pool_merges_by_key():
-    """状态池按 key 合并：同 key 新事件替换旧事件（保留最新状态，不重复执行）。"""
+    """状态池真合并：每 key 最新值槽——预置待处理值被新事件覆盖，
+    单 dispatcher 只执行最新值（旧值从不排队执行）。"""
     bus = _make_bus()
     got = []
     bus.subscribe(EventType.GAME_TIME_UPDATE, lambda e: got.append(e.get("t")))
     try:
-        # 队列中已有同 key 待处理事件 → 新事件替换，不追加
-        bus._state_queue.append(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 1}))
+        # 预置槽位待处理值（同 key 旧状态），再发布新值覆盖
+        bus._state_latest_slots[EventType.GAME_TIME_UPDATE] = Event(
+            event_type=EventType.GAME_TIME_UPDATE, data={"t": 1})
         bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 2}))
         deadline = time.time() + 2
         while time.time() < deadline:
             time.sleep(0.02)
-        # 只执行最新值；旧事件被替换不重复执行
-        assert got == [2], "同 key 合并后只执行最新事件"
+        # 只执行最新值；旧值（t=1）被槽覆盖，从不执行
+        assert got == [2], f"同 key 真合并后只执行最新事件，got={got}"
     finally:
         bus.shutdown()
 
 
-def test_state_pool_discards_oldest_when_full():
-    """状态池满（64）且无同 key 可合并时，丢弃最早的事件腾出空间（而非丢新）。"""
+def test_state_pool_slots_keep_latest_per_key():
+    """槽位式真合并：每 key 独立保留最新值；同 key 覆盖，异 key 共存（无丢语义）。"""
     bus = _make_bus()
     got = []
     bus.subscribe(EventType.GAME_TIME_UPDATE, lambda e: got.append(e.get("n")))
     try:
-        # 填满状态队列（64 个不同 entity_key 的待处理状态事件）
-        for i in range(bus._STATE_MAX_PENDING):
-            bus._state_queue.append(Event(
-                event_type=EventType.GAME_TIME_UPDATE,
-                data={"entity_key": f"k{i}", "n": i},
-            ))
-        # 发新 key 状态事件：无同 key 可合并，应丢弃最旧（n=0）并接收新事件
+        bus._state_latest_slots["k0"] = Event(
+            event_type=EventType.GAME_TIME_UPDATE, data={"entity_key": "k0", "n": 0})
+        bus._state_latest_slots["k1"] = Event(
+            event_type=EventType.GAME_TIME_UPDATE, data={"entity_key": "k1", "n": 1})
+        bus._state_latest_slots["k0"] = Event(
+            event_type=EventType.GAME_TIME_UPDATE, data={"entity_key": "k0", "n": 100})
+        assert bus._state_latest_slots["k0"].data["n"] == 100, "同 key 覆盖为最新值"
+        assert len(bus._state_latest_slots) == 2, "异 key 各自保留最新值"
+        # 发布触发消费：两 key 最新值（100、1）都会执行；k0 旧值 0 永不执行
         bus.publish_async(Event(
-            event_type=EventType.GAME_TIME_UPDATE,
-            data={"entity_key": "new", "n": 999},
-        ))
+            event_type=EventType.GAME_TIME_UPDATE, data={"entity_key": "k0", "n": 100}))
         deadline = time.time() + 2
-        while time.time() < deadline:
+        while len(set(got)) < 2 and time.time() < deadline:
             time.sleep(0.02)
-        remaining = [e.get("n") for e in bus._state_queue]
-        assert 0 not in remaining, "最旧事件应被丢弃（popleft）"
-        assert 999 in remaining or 999 in got, "新事件应进入队列并最终执行"
-        assert len(bus._state_queue) <= bus._STATE_MAX_PENDING
+        assert 0 not in got, f"旧值 0 不应执行（真合并），got={got}"
+        assert 100 in got and 1 in got, f"每个 key 最新值应执行，got={got}"
     finally:
         bus.shutdown()
 
@@ -126,23 +126,23 @@ def test_compat_alias_async_executor():
 
 
 def test_state_pool_converges_to_latest_while_running():
-    """运行中 key 的新状态被缓存，执行完后立即消费，最终收敛到最新状态。"""
+    """执行期间同 key 新值写回槽：单 dispatcher 循环消费，最终收敛到最新值。"""
     bus = _make_bus()
     got = []
 
     def handler(e):
         got.append(e.get("t"))
-        time.sleep(0.15)  # 制造执行窗口，暴露运行中竞态
+        time.sleep(0.15)  # 制造执行窗口，暴露执行期间到达的合并竞态
 
     bus.subscribe(EventType.GAME_TIME_UPDATE, handler)
     try:
         bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 1}))
-        # 等 t=1 真正开始执行（running key 已登记，确定竞态窗口）
+        # 等 t=1 真正开始执行（got 有 1 个元素）
         deadline = time.time() + 2
-        while EventType.GAME_TIME_UPDATE not in bus._running_state_keys and time.time() < deadline:
+        while not got and time.time() < deadline:
             time.sleep(0.01)
-        assert EventType.GAME_TIME_UPDATE in bus._running_state_keys
-        # 执行期间同 key 到达 2 次：中间值 2 应被覆盖，最终收敛到 3
+        assert got == [1]
+        # 执行期间同 key 到达 2 次：中间值 2 被槽覆盖，最终只播 3
         bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 2}))
         bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 3}))
         deadline = time.time() + 3

@@ -571,8 +571,7 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
-        # 新播放意图：递增代际号，作废在途的在线解析结果（防旧 URL 覆盖本地歌）
-        self._play_request_id += 1
+        # 代际号由 _play_song（唯一咽喉）统一递增，此处不再重复
         with self._lock:
             if self._mpv_restart_pending:
                 logger.info("[Music] mpv 重启中，忽略播放请求")
@@ -840,8 +839,7 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return None
-        # 新播放意图：递增代际号，作废在途的在线解析结果（统一 request_id 契约）
-        self._play_request_id += 1
+        # 代际号由 _play_song（唯一咽喉）统一递增；本地命中路径经 play_song 覆盖。
         results = self.search.search(query, limit=10)
         if results and 0 <= index < len(results):
             self.play_song(results[index])
@@ -849,6 +847,9 @@ class MusicController:
 
         # 本地搜索失败，尝试在线fallback
         if self.online_manager is not None:
+            # 在线 fallback 不经 _play_song（直连 mpv），必须自行递增代际号，
+            # 作废在途的在线解析 worker（防旧网络请求覆盖本 fallback 播放）。
+            self._play_request_id += 1
             _t_online_start = time.time()
             try:
                 logger.info(f"[Music] 本地未找到'{query}'，尝试在线搜索...")
@@ -891,61 +892,9 @@ class MusicController:
                     if play_result:
                         logger.info("[Music] 获取播放URL成功，开始在线播放...")
                         play_url = play_result.get("url")
-                        # 在线URL需要HTTP头。mpv 的 http-header-fields 是持久属性，
-                        # 某源 Referer 一旦设置会跨源残留。因此每次播放前无条件重设
-                        # （覆盖式 set_property）：插件 headers（白名单）优先，
-                        # 否则仅酷我系源带 Referer，其他源重置为纯 UA。
-                        hdr = _pick_play_headers(play_result.get("headers"))
-                        need_kw_header = ("kw" in chosen.source_name.lower()
-                                          or "酷我" in chosen.source_name
-                                          or "kuwo" in (play_url or "").lower())   # URL 是酷我 CDN → 带酷我 Referer
-                        try:
-                            # 双保险：先清空 http-header-fields，再按分支设置——
-                            # 无论 mpv 对 list 属性是"覆盖"还是"追加"，旧 headers 都不会残留。
-                            self.mpv.set_property("http-header-fields", "")
-                            if hdr:
-                                fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
-                                self.mpv.set_property("http-header-fields", fields)
-                            elif need_kw_header:
-                                self.mpv.set_property(
-                                    "http-header-fields",
-                                    "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
-                            else:
-                                self.mpv.set_property(
-                                    "http-header-fields",
-                                    "User-Agent: Mozilla/5.0")
-                        except Exception:
-                            pass
-                        self.mpv.loadfile(play_url)
-                        self.mpv.set_property("pause", False)
-                        try:
-                            self.mpv._properties["pause"] = False
-                        except Exception:
-                            pass
-                        online_song = {
-                            "id": -1,
-                            "title": chosen.title,
-                            "artist": chosen.artist,
-                            "album": chosen.album,
-                            "duration": getattr(chosen, 'duration_seconds', 0) or 0,
-                            "path": play_url,
-                            "source": "online",
-                            "source_name": chosen.source_name,
-                            "track_id": chosen.track_id,
-                            "extra": getattr(chosen, 'extra', None) or {},
-                        }
-                        self._current_song = online_song
-                        self._update_state(
-                            playing=True,
-                            current_song={
-                                "id": -1,
-                                "title": chosen.title,
-                                "artist": chosen.artist,
-                                "album": chosen.album,
-                                "duration": getattr(chosen, 'duration_seconds', 0) or 0,
-                                "path": play_url,
-                            }
-                        )
+                        # 统一流设置（header 重设 + loadfile + pause + 状态落库，DRY）
+                        online_song = self._apply_stream(
+                            chosen, play_url, play_result.get("headers"))
                         self.event_bus.publish(Event(
                             event_type=EventType.MUSIC_TRACK_CHANGED,
                             data={"song": online_song},
@@ -976,7 +925,7 @@ class MusicController:
             logger.info("[Music] 队列在线歌无 title，跳过")
             self._schedule_skip_online(song)
             return
-        self._play_request_id += 1
+        # 代际号已由 _play_song（唯一咽喉）递增——此处只取当前值传给 worker
         req_id = self._play_request_id
         threading.Thread(
             target=self._resolve_online_worker,
@@ -986,7 +935,9 @@ class MusicController:
     def _resolve_online_worker(self, song: dict[str, Any], query: str, req_id: int):
         """后台线程：重搜 → 逐个候选取 URL → loadfile → 状态/历史。
         解析完成时 req_id 已过期（期间用户又切歌）→ 丢弃结果，不覆盖新歌。
-        网络解析经 OnlineResolver（纯解析，不碰 mpv/队列/Qt 信号）。"""
+        网络解析经 OnlineResolver（纯解析，不碰 mpv/队列/Qt 信号）；
+        loadfile 必须在 controller._lock 内做二次校验后执行，防止与本地
+        播放（play_song 持锁）并发竞态——旧网络请求绝不覆盖最新播放意图。"""
         try:
             if self._resolver is None:
                 logger.error("[Music] 在线解析器未就绪，跳过")
@@ -997,6 +948,7 @@ class MusicController:
                 logger.info("[Music] 队列在线歌重搜无结果/URL 均失败，跳过")
                 self._schedule_skip_online(song)
                 return
+            # 无锁快速检查：已过期直接放弃（省一次 IPC）
             if req_id != self._play_request_id:
                 logger.info("[Music] 在线解析已过期（期间已切歌），丢弃结果")
                 return
@@ -1004,46 +956,14 @@ class MusicController:
             url = result["url"]
             play_result = result["play_result"]
             logger.info(f"[Music] 队列在线歌重搜播放: {chosen.title} - {chosen.artist} ({chosen.source_name})")
-            # http-header-fields 持久属性：每次无条件重设，避免 Referer 跨源残留
-            hdr = _pick_play_headers(play_result.get("headers"))
-            need_kw_header = ("kw" in chosen.source_name.lower()
-                              or "酷我" in chosen.source_name
-                              or "kuwo" in (url or "").lower())
-            try:
-                self.mpv.set_property("http-header-fields", "")
-                if hdr:
-                    fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
-                    self.mpv.set_property("http-header-fields", fields)
-                elif need_kw_header:
-                    self.mpv.set_property(
-                        "http-header-fields",
-                        "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
-                else:
-                    self.mpv.set_property(
-                        "http-header-fields",
-                        "User-Agent: Mozilla/5.0")
-            except Exception:
-                pass
-            self.mpv.loadfile(url)
-            self.mpv.set_property("pause", False)
-            try:
-                self.mpv._properties["pause"] = False
-            except Exception:
-                pass
-            online_song = {
-                "id": -1,
-                "title": chosen.title,
-                "artist": chosen.artist,
-                "album": chosen.album,
-                "duration": getattr(chosen, 'duration_seconds', 0) or 0,
-                "path": url,
-                "source": "online",
-                "source_name": chosen.source_name,
-                "track_id": chosen.track_id,
-                "extra": getattr(chosen, 'extra', None) or {},
-            }
-            self._current_song = online_song
-            self._update_state(playing=True, current_song=online_song)
+            # 锁内权威校验 + 播放：校验失败绝不 loadfile；
+            # 锁内执行保证与 play_song（本地持锁）互斥，杜绝旧请求覆盖新歌
+            with self._lock:
+                if req_id != self._play_request_id:
+                    logger.info("[Music] 在线解析已过期（期间已切歌），锁内丢弃结果")
+                    return
+                online_song = self._apply_stream(
+                    chosen, url, play_result.get("headers"))
             try:
                 self.history_recorder.record_song({
                     "id": -1,
@@ -1059,7 +979,60 @@ class MusicController:
             logger.error(f"[Music] 队列在线歌播放失败: {e}")
             self._schedule_skip_online(song)
 
+    def _apply_stream(self, track, url: str, headers, before_load=None) -> dict | None:
+        """统一播放在线流：http-header-fields 重设 + loadfile + pause 同步 + 状态落库。
 
+        三处在线播放共用（play_search_result 在线 fallback / 队列在线 worker /
+        play_online），消除 header 设置与 online_song 构造的重复（DRY）。
+        before_load: 可选校验回调——返回 False 则放弃播放（满足 play_online
+        的"校验紧贴 loadfile"原子需求，校验与 loadfile 之间无耗时 IPC）。
+        返回构造好的 online_song（_current_song/_update_state 已更新）；放弃返回 None。
+        """
+        hdr = _pick_play_headers(headers)
+        src_name = (getattr(track, "source_name", "") or "").lower()
+        need_kw_header = ("kw" in src_name or "酷我" in src_name
+                          or "kuwo" in (url or "").lower())
+        try:
+            # mpv 的 http-header-fields 是持久属性：每次播放前无条件重设，
+            # 避免某源 Referer 跨源残留（覆盖式 set_property）。
+            # 优先级：插件返回 headers（白名单过滤） > source_name 硬编码（酷我）。
+            self.mpv.set_property("http-header-fields", "")
+            if hdr:
+                fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
+                self.mpv.set_property("http-header-fields", fields)
+            elif need_kw_header:
+                self.mpv.set_property(
+                    "http-header-fields",
+                    "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
+            else:
+                self.mpv.set_property(
+                    "http-header-fields",
+                    "User-Agent: Mozilla/5.0")
+        except Exception:
+            pass
+        if before_load is not None and not before_load():
+            return None
+        self.mpv.loadfile(url)
+        self.mpv.set_property("pause", False)
+        try:
+            self.mpv._properties["pause"] = False
+        except Exception:
+            pass
+        online_song = {
+            "id": -1,
+            "title": getattr(track, "title", "") or "",
+            "artist": getattr(track, "artist", "") or "",
+            "album": getattr(track, "album", "") or "",
+            "duration": getattr(track, 'duration_seconds', 0) or 0,
+            "path": url,
+            "source": "online",
+            "source_name": getattr(track, 'source_name', '') or '',
+            "track_id": getattr(track, 'track_id', '') or '',
+            "extra": getattr(track, 'extra', None) or {},
+        }
+        self._current_song = online_song
+        self._update_state(playing=True, current_song=online_song)
+        return online_song
 
     def _schedule_skip_online(self, song: dict[str, Any]):
         """延迟 next() 跳过队列在线歌（不依赖轮询上升沿——会被 _last_idle 覆盖吞掉）。"""
@@ -1075,9 +1048,12 @@ class MusicController:
             logger.info(f"[Music] 跳过队列在线歌 next() 异常: {e!r}")
 
     def _play_song(self, song: dict[str, Any]):
-        """实际播放歌曲"""
+        """实际播放歌曲（唯一咽喉：play_song/next/prev/_auto_next/在线队列全部汇入）"""
         if not song:
             return
+        # 播放请求代际号（request_id 契约）：一切新播放意图在此递增，作废在途的
+        # 在线解析结果——旧网络请求（_resolve_online_worker）锁内校验不过，绝不 loadfile。
+        self._play_request_id += 1
 
         # 每次“尝试播放”都重置 idle 轮询状态，让轮询重新感知新歌：
         # - 正常：mpv 进入 playing，轮询读到 idle-active=False，与 _last_idle=False 一致；
@@ -1098,8 +1074,17 @@ class MusicController:
             if self._missing_file_streak >= 3:
                 # 限次保护：连续 3 次文件不可用 → 放弃播放，避免无限空转
                 self._missing_file_streak = 0
-                logger.info("[Music] 连续 3 次文件不可用，停止播放")
-                self.stop()
+                logger.info("[Music] 连续 3 次文件不可用，停止当前播放")
+                # 关键：只"停止播放"（mpv 回 idle），绝不能用模块级 stop()——
+                # stop() 会杀 mpv 进程并停掉轮询线程，整个音乐模块停摆。
+                # 只是这首歌播不了，轮询线程与 mpv 实例必须继续存活。
+                self._current_song = None
+                self._last_idle = True
+                try:
+                    self.mpv.stop()
+                except Exception:
+                    pass
+                self._update_state(playing=False, current_song=None)
                 return
             # 单曲循环 + 文件不存在 → 跳出循环，顺序切下一首（防卡死）
             if self.queue.get_play_mode() == PlayMode.REPEAT_ONE:
@@ -1461,40 +1446,12 @@ class MusicController:
         url = result.get("url")
         logger.info(f"[Music] play online: {track.title} -> {url[:80]}")
         try:
-            # mpv 的 http-header-fields 是持久属性：每次播放前无条件重设，
-            # 避免某源 Referer 跨源残留（覆盖式 set_property）。
-            # 优先级：插件返回 headers（白名单过滤） > source_name 硬编码（酷我）。
-            # 设置失败仅跳过 header，不影响播放流程。
-            hdr = _pick_play_headers(result.get("headers"))
-            try:
-                # 双保险：先清空 http-header-fields，再按分支设置——
-                # 无论 mpv 对 list 属性是"覆盖"还是"追加"，旧 headers 都不会残留。
-                self.mpv.set_property("http-header-fields", "")
-                if hdr:
-                    fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
-                    self.mpv.set_property("http-header-fields", fields)
-                elif ("kw" in (track.source_name or "").lower()
-                      or "酷我" in (track.source_name or "")):
-                    self.mpv.set_property(
-                        "http-header-fields",
-                        "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
-                else:
-                    self.mpv.set_property(
-                        "http-header-fields",
-                        "User-Agent: Mozilla/5.0")
-            except Exception:
-                pass
-            # 校验必须紧贴 loadfile：此前不得有释放 GIL 的操作，
-            # 确保"校验→loadfile"原子（用户取消后不会后发 loadfile 劫持播放）。
-            if _before_load is not None and not _before_load():
+            # 统一流设置（DRY）：header 重设 + before_load 紧贴 loadfile（保持
+            # "校验→loadfile"原子）+ loadfile + pause + 状态落库。
+            online_song = self._apply_stream(
+                track, url, result.get("headers"), before_load=_before_load)
+            if online_song is None:
                 return False
-            self.mpv.loadfile(url)
-            # 确保新歌开始播放（不继承之前的暂停状态）
-            self.mpv.set_property("pause", False)
-            try:
-                self.mpv._properties["pause"] = False
-            except Exception:
-                pass
             logger.info("[Music] mpv loadfile ok")
         except Exception as e:
             logger.info(f"[Music] mpv loadfile fail: {e}")
@@ -1505,29 +1462,7 @@ class MusicController:
             source_name=getattr(track, "source_name", "") or "",
             track_id=getattr(track, "track_id", "") or "",
             cover_url=getattr(track, "cover_url", None) or "")
-        self._current_song = {
-            "id": None,
-            "title": track.title,
-            "artist": track.artist,
-            "album": track.album,
-            "duration": track.duration_seconds,
-            "path": url,
-            "source": "online",
-            "source_name": getattr(track, "source_name", "") or "",
-            "track_id": getattr(track, "track_id", "") or "",
-            "extra": getattr(track, "extra", None) or {},
-        }
-        self._update_state(
-            playing=True,
-            current_song={
-                "title": track.title,
-                "artist": track.artist,
-                "album": track.album,
-                "duration": track.duration_seconds,
-                "path": url,
-                "online": True,
-            }
-        )
+        # _current_song/_update_state 已由 _apply_stream 统一更新（id=-1）
         # 记录播放历史（直接调用 record_song，不走 MUSIC_TRACK_CHANGED——
         # 该事件另有 rule_engine/speech_judge 语音订阅者，不能因播放而误触）
         try:

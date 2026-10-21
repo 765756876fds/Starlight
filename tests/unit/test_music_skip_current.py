@@ -89,19 +89,21 @@ class TestPlaySongMissingFile:
         assert ctrl._missing_file_streak == 1
 
     def test_missing_file_streak_stops_after_3(self, tmp_path):
-        """连续 3 次文件不存在 → stop() 停播（限次保护）。"""
+        """连续 3 次文件不存在 → 只停止当前播放（mpv.stop + 清状态），
+        绝不调用模块级 stop()——轮询线程与 mpv 实例必须存活。"""
         ctrl = _make_ctrl(tmp_path)
         ctrl.queue = PlayQueue()
         ctrl.queue.add({"path": "a"})
         ctrl.queue.set_play_mode(PlayMode.REPEAT_ONE)
-        ctrl.stop = MagicMock()
         missing = {"id": 1, "path": str(tmp_path / "gone.flac")}
         for _ in range(2):
             ctrl._play_song(missing)
-        assert ctrl.stop.call_count == 0  # 前 2 次未触顶
-        ctrl._play_song(missing)          # 第 3 次 → 停播
-        ctrl.stop.assert_called_once()
+        assert ctrl._missing_file_streak == 2  # 前 2 次未触顶
+        ctrl._play_song(missing)               # 第 3 次 → 停止当前播放
         assert ctrl._missing_file_streak == 0  # 计数复位
+        assert ctrl._current_song is None, "坏文件后应清空当前歌曲"
+        ctrl.mpv.stop.assert_called_once()          # 只停播放（mpv 回 idle）
+        ctrl.mpv.stop_process.assert_not_called()   # 绝不允许杀 mpv 实例
 
     def test_missing_file_sequential_no_skip(self, tmp_path):
         """非 REPEAT_ONE（顺序模式）→ 不调 skip_current（现有上升沿机制自愈）。"""

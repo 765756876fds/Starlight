@@ -205,6 +205,115 @@ class TestControllerMpvAdapterInjection:
             ctrl.db.close()
 
 
+class TestP0ConcurrencyAndRobustness:
+    """P0 修复回归：request_id 竞态 / 坏文件不杀模块 / _apply_stream 统一流设置。"""
+
+    def _make_ctrl(self, tmp_path, fake):
+        from unittest.mock import patch
+
+        from app.music.controller import MusicController
+        cfg = {
+            "database": str(tmp_path / "p0.db"),
+            "scan_dirs": [],
+            "extensions": [".flac"],
+            "mpv_path": "mpv",
+            "mpv_ipc_pipe": "\\\\.\\pipe\\test_p0",
+            "default_volume": 70,
+        }
+        with patch("app.music.controller.LxMusicClient"):
+            return MusicController(cfg, mpv_adapter=fake)
+
+    def test_inflight_resolve_dropped_after_local_play(self, tmp_path):
+        """旧在线解析返回时已被本地播放作废 → 锁内校验不过，绝不 loadfile。"""
+        import threading
+        from unittest.mock import MagicMock
+
+        fake = FakeMpvAdapter()
+        ctrl = self._make_ctrl(tmp_path, fake)
+        try:
+            local = tmp_path / "local.flac"
+            local.write_bytes(b"x")
+            ctrl._play_request_id = 1
+            ctrl._resolver = MagicMock()
+            ctrl._resolver.resolve.return_value = {
+                "url": "http://fake/url",
+                "track": MagicMock(title="A", artist="B", album="C",
+                                   source_name="kw", track_id="t1",
+                                   extra={}, duration_seconds=180),
+                "play_result": {"headers": None, "url": "http://fake/url"},
+            }
+            # 用户随后本地播放 → 代际号升为 2（_play_song 统一递增）
+            ctrl.play_song({"id": 2, "title": "local", "path": str(local)})
+            before = len(fake.calls)
+            # 旧 worker（req_id=1）此刻才解析完返回 → 必须被丢弃
+            ctrl._resolve_online_worker({}, "q", 1)
+            new_loads = [c for c in fake.calls[before:] if c[0] == "loadfile"]
+            assert new_loads == [], \
+                f"过期解析不得 loadfile: {fake.calls[before:]}"
+            assert ctrl._play_request_id == 2
+        finally:
+            ctrl.stop()
+            ctrl.db.close()
+
+    def test_missing_files_do_not_kill_module(self, tmp_path):
+        """连续 3 个坏文件：只停止当前播放，绝不调用模块级 stop()——
+        轮询线程与 _running 必须存活。"""
+        import threading
+
+        fake = FakeMpvAdapter()
+        ctrl = self._make_ctrl(tmp_path, fake)
+        try:
+            ctrl.start()
+            bad = str(tmp_path / "missing.flac")
+            for i in range(3):
+                ctrl._play_song({"id": i, "title": f"bad{i}", "path": bad})
+            # 轮询线程必须仍存活（模块未被 stop() 杀）
+            alive = any(t.name == "music-idle-poll" and t.is_alive()
+                        for t in threading.enumerate())
+            assert alive, "连续坏文件后轮询线程必须存活"
+            assert ctrl._running is True, "连续坏文件后 _running 必须为 True"
+            # 模块级 stop() 特有的杀进程调用绝不能被触发
+            assert not any(c[0] == "stop_process" for c in fake.calls), \
+                f"绝不允许 stop_process（杀 mpv 实例）: {fake.calls}"
+            # 状态应回"未播放"
+            assert ctrl._current_song is None
+        finally:
+            ctrl.stop()
+            ctrl.db.close()
+
+    def test_apply_stream_unifies_headers_and_state(self, tmp_path):
+        """_apply_stream 统一流设置：header 分支 + loadfile + pause + _current_song；
+        before_load 失败 → 放弃播放（play_online 原子校验语义）。"""
+        from unittest.mock import MagicMock
+
+        fake = FakeMpvAdapter()
+        ctrl = self._make_ctrl(tmp_path, fake)
+        try:
+            track = MagicMock(title="晴天", artist="周杰伦", album="专辑",
+                              source_name="酷我", track_id="t2",
+                              extra={}, duration_seconds=200)
+            online_song = ctrl._apply_stream(track, "http://kw/url.mp3", None)
+            assert online_song is not None
+            assert online_song["source"] == "online"
+            assert online_song["id"] == -1
+            assert fake._properties.get("http-header-fields", "").startswith(
+                "Referer: https://www.kuwo.cn/"), \
+                f"酷我系 URL 应带 Referer: {fake._properties.get('http-header-fields')}"
+            assert any(c[0] == "loadfile" for c in fake.calls)
+            assert fake._properties.get("pause") is False
+            assert ctrl._current_song == online_song
+            # before_load 返回 False → 放弃播放，绝不 loadfile
+            n0 = len(fake.calls)
+            result = ctrl._apply_stream(track, "http://kw/url2.mp3", None,
+                                        before_load=lambda: False)
+            assert result is None
+            assert len([c for c in fake.calls[n0:] if c[0] == "loadfile"]) == 0, \
+                "before_load 失败后不得 loadfile"
+        finally:
+            ctrl.stop()
+            ctrl.db.close()
+
+
 class TestIncrementalScan:
     """增量扫描测试"""
 
