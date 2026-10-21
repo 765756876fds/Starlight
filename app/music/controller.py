@@ -30,6 +30,13 @@ from .online.resolver import (
     _pick_play_headers,
     _quality_score,
 )
+from .playback_state import (
+    PlaybackEvent,
+    PlaybackEventType,
+    PlaybackState,
+    classify_status,
+    reduce,
+)
 from .queue import PlayMode, PlayQueue
 from .scanner import MusicScanner
 from .search import MusicSearch
@@ -112,6 +119,15 @@ class MusicController:
                 self._trace = None
         # origin 上下文（threading.local）：区分用户主动操作（user）与自动流程（auto）
         self._tl = threading.local()
+
+        # 影子状态机（影子模式对拍）：无条件实例化（PlaybackState 极轻）。
+        # _dispatch_shadow 以 _trace 守卫保证 trace 关闭时零开销；
+        # _shadow_loadfile_ts/_shadow_file_kind 供 classify_status 的
+        # elapsed_sec/kind 采样（无 loadfile 时 ts 为 None → elapsed 记 0）。
+        self._shadow_state = PlaybackState()
+        self._shadow_lock = threading.Lock()
+        self._shadow_loadfile_ts = None
+        self._shadow_file_kind = "local"
 
         # 落雪音乐客户端
         self.lx_client = LxMusicClient()
@@ -249,6 +265,23 @@ class MusicController:
                                 # 只有非 None 才更新；IPC 抖动返回 None 时保留旧快照
                                 self._playback_time_cache = (
                                     float(pt), _time.perf_counter(), self._paused_snapshot)
+                        except Exception:
+                            pass
+                    # 影子模式采样（trace 启用时）：把 mpv 遥测喂给影子状态机，
+                    # 只记录 effects，绝不执行真实副作用。复用缓存避免重复 IPC。
+                    if self._trace and self._trace.enabled:
+                        try:
+                            sample = {"idle": now_idle}
+                            if not now_idle:
+                                cached = self._playback_time_cache
+                                if cached and cached[0] is not None:
+                                    sample["playback_time"] = float(cached[0])
+                            shadow_ts = self._shadow_loadfile_ts
+                            elapsed = (_time.perf_counter() - shadow_ts) if shadow_ts else 0.0
+                            kind = self._shadow_file_kind
+                            ev = classify_status(self._shadow_state, sample, elapsed, kind)
+                            if ev is not None:
+                                self._dispatch_shadow(ev)
                         except Exception:
                             pass
                 except Exception as e:
@@ -1089,6 +1122,9 @@ class MusicController:
             pass
         if before_load is not None and not before_load():
             return None
+        # 影子模式：记录在线 loadfile 发起时刻与文件类型（classify 的 elapsed/kind 依据）
+        self._shadow_loadfile_ts = time.perf_counter()
+        self._shadow_file_kind = "online"
         self.mpv.loadfile(url)
         self.mpv.set_property("pause", False)
         try:
@@ -1187,6 +1223,10 @@ class MusicController:
             # 保留以防御未来该行被移动后回归）
             self._last_idle = False
             return
+
+        # 影子模式：记录 loadfile 发起时刻与文件类型（classify 的 elapsed/kind 依据）
+        self._shadow_loadfile_ts = time.perf_counter()
+        self._shadow_file_kind = "online" if str(filepath).startswith("http") else "local"
 
         self.mpv.loadfile(filepath)
         # 播放成功 → 重置连续失败计数
@@ -2020,16 +2060,21 @@ class MusicController:
         if not (self._trace and self._trace.enabled):
             return
         try:
+            track_ref = self._track_ref(track)
             data = {
                 "method": method,
                 "origin": self._current_origin(),
-                "track_ref": self._track_ref(track),
+                "track_ref": track_ref,
                 "old_request_id": self._play_request_id,
                 "lock_wait_ms": round(float(lock_wait_ms), 2),
             }
             if extra:
                 data.update(extra)
             self._trace.record("intent", data)
+            # 影子模式：同一意图并行喂给 reducer（只算 effects，绝不执行真实副作用）
+            ev = self._shadow_event_for_intent(method, track_ref)
+            if ev is not None:
+                self._dispatch_shadow(ev)
         except Exception:
             pass
 
@@ -2045,6 +2090,58 @@ class MusicController:
             if "kind" in d:
                 d["decision"] = d.pop("kind")
             self._trace.record("decision", d)
+        except Exception:
+            pass
+
+    # 意图方法 → 影子状态机事件类型（与 scripts/replay_trace.py 的映射保持一致；
+    # toggle / play_online_resume 语义依赖运行时状态，影子不映射，避免错误建模）
+    _SHADOW_INTENT_MAP = {
+        "play_song": PlaybackEventType.PLAY_REQUESTED,
+        "play_online": PlaybackEventType.PLAY_REQUESTED,
+        "play_search_result": PlaybackEventType.PLAY_REQUESTED,
+        "next": PlaybackEventType.PLAY_REQUESTED,
+        "prev": PlaybackEventType.PLAY_REQUESTED,
+        "pause": PlaybackEventType.PAUSE_REQUESTED,
+        "resume": PlaybackEventType.RESUME_REQUESTED,
+        "play": PlaybackEventType.RESUME_REQUESTED,
+        "clear_queue": PlaybackEventType.STOP_REQUESTED,
+    }
+
+    def _shadow_event_for_intent(self, method: str,
+                                 track_ref: dict | None) -> PlaybackEvent | None:
+        """intent 打点 → 影子状态机事件。epoch 由 reducer 自增，事件侧不携带。"""
+        etype = self._SHADOW_INTENT_MAP.get(method)
+        if etype is None:
+            return None
+        return PlaybackEvent(
+            type=etype,
+            track=track_ref,
+            origin=self._current_origin(),
+        )
+
+    def _dispatch_shadow(self, event: PlaybackEvent) -> None:
+        """影子模式执行器：把意图/采样事件喂给 PlaybackState reducer，
+        只把计算出的 effects 记录到 trace（decision 子类 shadow_effects），
+        绝不执行任何真实副作用（不碰 mpv/队列/状态库）。trace 关闭时零开销。"""
+        if not (self._trace and self._trace.enabled):
+            return
+        try:
+            with self._shadow_lock:
+                old = self._shadow_state
+                new_state, effects = reduce(old, event)
+                self._shadow_state = new_state
+                if effects:
+                    # old_status 取 reduce 前状态（语义即"变更前"）
+                    self._trace.record("decision", {
+                        "decision": "shadow_effects",
+                        "event": event.type.value,
+                        "old_status": (old.status.name
+                                       if old.status is not None else None),
+                        "new_status": (new_state.status.name
+                                       if new_state.status is not None else None),
+                        "epoch": new_state.epoch,
+                        "effects": [e.type.name for e in effects],
+                    })
         except Exception:
             pass
 
