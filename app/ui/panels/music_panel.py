@@ -1930,11 +1930,15 @@ class MusicPanel(QWidget):
                          daemon=True, name="ui-music-seek").start()
 
     def _do_seek(self, frac: float) -> None:
-        """后台线程执行 seek（IPC 出主线程；失败静默，不炸线程）。"""
+        """后台线程执行 seek（IPC 出主线程；失败静默，不炸线程）。
+        统一走 controller 入口：享受 _is_seeking 防抖与快照同步——
+        直连 mpv.seek 会绕过防抖，拖拽期间 mpv 短暂 idle 会被误判为播放结束而切歌。
+        目标为绝对位置：frac * duration，必须显式 mode="absolute"
+        （controller 默认 relative 是"当前位置 + seconds"语义）。"""
         try:
             dur = self._music.mpv.get_duration() if hasattr(self._music, "mpv") else 0
             if dur > 0:
-                self._music.mpv.seek(frac * dur)
+                self._music.seek(frac * dur, mode="absolute")
         except Exception:
             pass
 
