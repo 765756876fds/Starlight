@@ -49,16 +49,19 @@ class PlaybackEffectType(str, Enum):
     STOP_MPV = "stop_mpv"
     SCHEDULE_NEXT_EPISODE = "schedule_next_episode"
     NOTIFY_UI = "notify_ui"
+    ADVANCE_QUEUE = "advance_queue"
 
 
 @dataclass
 class PlaybackEvent:
-    """状态机输入事件。epoch 为代际号：异步结果必须携带发起时的代际号。"""
+    """状态机输入事件。epoch 为代际号：异步结果必须携带发起时的代际号。
+    origin（仅 PLAY_REQUESTED 使用）："user"（用户主动切歌）或 "auto"（自动切歌）。"""
 
     type: PlaybackEventType
     track: Optional[dict[str, Any]] = None
     epoch: int = 0
     error_msg: Optional[str] = None
+    origin: str = "user"
 
 
 @dataclass
@@ -71,12 +74,14 @@ class PlaybackEffect:
 
 @dataclass
 class PlaybackState:
-    """播放状态快照（不可变：reducer 每次返回新实例）。"""
+    """播放状态快照（不可变：reducer 每次返回新实例）。
+    fail_streak：连续加载失败计数（>=3 触发熔断，停止自动重试）。"""
 
     status: PlaybackStatus = PlaybackStatus.IDLE
     current_track: Optional[dict[str, Any]] = None
     epoch: int = 0
     error_msg: Optional[str] = None
+    fail_streak: int = 0
 
 
 def _same_epoch(state: PlaybackState, event: PlaybackEvent) -> bool:
@@ -90,27 +95,33 @@ def reduce(
     """纯 reducer：(state, event) -> (new_state, effects)。
 
     严禁在函数内发起 IO / 网络 / mpv 调用；一切副作用只以 effects 返回。
+    统一用 dataclasses.replace 构造新状态，避免遗漏字段。
     """
+    from dataclasses import replace
+
     effects: list[PlaybackEffect] = []
 
     # ---- 意图事件 ----
     if event.type == PlaybackEventType.PLAY_REQUESTED:
-        # 新播放意图：进入加载态，epoch 递增（作废一切在途的旧异步结果）
-        return PlaybackState(
+        # 新播放意图：进入加载态，epoch 递增（作废一切在途的旧异步结果）。
+        # 熔断语义：用户主动切歌清零失败计数；自动切歌保留（连续失败由 auto 累积）。
+        new_fail_streak = 0 if event.origin == "user" else state.fail_streak
+        return replace(
+            state,
             status=PlaybackStatus.LOADING,
             current_track=event.track,
             epoch=state.epoch + 1,
             error_msg=None,
+            fail_streak=new_fail_streak,
         ), [PlaybackEffect(PlaybackEffectType.LOAD_FILE, {"track": event.track})]
 
     if event.type == PlaybackEventType.PAUSE_REQUESTED:
         # 仅播放中可暂停
         if state.status != PlaybackStatus.PLAYING:
             return state, effects
-        return PlaybackState(
+        return replace(
+            state,
             status=PlaybackStatus.PAUSED,
-            current_track=state.current_track,
-            epoch=state.epoch,
             error_msg=None,
         ), [PlaybackEffect(PlaybackEffectType.PAUSE_MPV)]
 
@@ -118,44 +129,59 @@ def reduce(
         # 仅暂停态可恢复
         if state.status != PlaybackStatus.PAUSED:
             return state, effects
-        return PlaybackState(
+        return replace(
+            state,
             status=PlaybackStatus.PLAYING,
-            current_track=state.current_track,
-            epoch=state.epoch,
             error_msg=None,
         ), [PlaybackEffect(PlaybackEffectType.RESUME_MPV)]
 
     if event.type == PlaybackEventType.STOP_REQUESTED:
-        return PlaybackState(
+        return replace(
+            state,
             status=PlaybackStatus.IDLE,
             current_track=None,
-            epoch=state.epoch,
             error_msg=None,
         ), [PlaybackEffect(PlaybackEffectType.STOP_MPV)]
 
-    # ---- 异步结果事件（epoch 契约） ----
+    # ---- 异步结果事件（epoch 契约 + 状态防污染） ----
     if event.type == PlaybackEventType.LOAD_SUCCESS:
-        if not _same_epoch(state, event):
-            # 过期结果：已被更新的播放请求覆盖，丢弃（防旧覆盖新）
+        # 拦截条件：epoch 匹配 且 当前确在 LOADING。
+        # 双条件防污染：PAUSED/PLAYING 收到迟到的 LOAD_SUCCESS 绝不能变回/维持错误状态。
+        if not _same_epoch(state, event) or state.status != PlaybackStatus.LOADING:
             return state, effects
-        return PlaybackState(
+        return replace(
+            state,
             status=PlaybackStatus.PLAYING,
             current_track=event.track or state.current_track,
-            epoch=state.epoch,
             error_msg=None,
+            fail_streak=0,  # 加载成功清零连续失败计数
         ), effects
 
     if event.type == PlaybackEventType.LOAD_FAILED:
-        if not _same_epoch(state, event):
-            # 过期失败（可能已被新请求覆盖），丢弃
+        # 同 LOAD_SUCCESS：epoch 匹配 且 LOADING 才生效（防迟到失败污染）
+        if not _same_epoch(state, event) or state.status != PlaybackStatus.LOADING:
             return state, effects
-        return PlaybackState(
+        new_streak = state.fail_streak + 1
+        if new_streak >= 3:
+            # 熔断：连续 3 次失败，停止自动重试——转 IDLE + 通知 UI，不产生 ADVANCE_QUEUE
+            return replace(
+                state,
+                status=PlaybackStatus.IDLE,
+                current_track=None,
+                error_msg=event.error_msg,
+                fail_streak=new_streak,
+            ), [PlaybackEffect(
+                PlaybackEffectType.NOTIFY_UI,
+                {"error_msg": f"连续 {new_streak} 次加载失败，已停止播放"},
+            )]
+        # 未达熔断阈值：转 FAILED 并请求队列前进（自动跳过坏歌）
+        return replace(
+            state,
             status=PlaybackStatus.FAILED,
-            current_track=state.current_track,
-            epoch=state.epoch,
             error_msg=event.error_msg,
+            fail_streak=new_streak,
         ), [PlaybackEffect(
-            PlaybackEffectType.NOTIFY_UI, {"error_msg": event.error_msg}
+            PlaybackEffectType.ADVANCE_QUEUE, {"reason": "load_failed"}
         )]
 
     # 播放结束：仅在 PLAYING 且 epoch 匹配时生效（防旧检测误切下一首）
@@ -167,10 +193,10 @@ def reduce(
             return state, effects
         if not _same_epoch(state, event):
             return state, effects
-        return PlaybackState(
+        return replace(
+            state,
             status=PlaybackStatus.IDLE,
             current_track=None,
-            epoch=state.epoch,
             error_msg=None,
         ), [PlaybackEffect(
             PlaybackEffectType.SCHEDULE_NEXT_EPISODE,
@@ -179,3 +205,71 @@ def reduce(
 
     # 未知事件：保持原状态（防御性，不产生副作用）
     return state, effects
+
+
+# 加载确认宽限期：本地文件解码快（0.8s），在线流媒体握手慢（3.0s）
+_LOAD_GRACE_SEC = {"local": 0.8, "online": 3.0}
+_ONLINE_TIMEOUT_SEC = 10.0
+
+
+def classify_status(
+    state: PlaybackState,
+    sample: dict[str, Any],
+    elapsed_sec: float,
+    kind: str,
+) -> Optional[PlaybackEvent]:
+    """纯函数分类器：根据 mpv 采样把"原始遥测"翻译成状态机事件。
+
+    sample 包含：idle (bool)、playback_time (float)、duration (float)。
+    elapsed_sec：距离 loadfile 发起过去了多少秒。
+    kind：文件类型（"local" 或 "online"）。
+
+    规则：
+    - LOADING：宽限期（local 0.8s / online 3.0s）内返回 None 等待；
+      过宽限期后 idle=True → LOAD_FAILED；playback_time/duration > 0 → LOAD_SUCCESS；
+      online 超 10s 仍未起播 → LOAD_FAILED（超时）。
+    - PLAYING：idle=True → IDLE_DETECTED（播放自然结束）。
+    - 其他状态：None。
+
+    返回的事件携带当前 epoch（异步结果必须与 state.epoch 匹配才被 reducer 接受）。
+    本函数纯计算，不做任何 IO。
+    """
+    idle = bool(sample.get("idle", False))
+    playback_time = float(sample.get("playback_time") or 0.0)
+    duration = float(sample.get("duration") or 0.0)
+
+    if state.status == PlaybackStatus.LOADING:
+        grace = _LOAD_GRACE_SEC.get(kind, 3.0)
+        if elapsed_sec < grace:
+            # 仍在宽限期内：不急于判定，等待 mpv 起播
+            return None
+        if idle:
+            return PlaybackEvent(
+                PlaybackEventType.LOAD_FAILED,
+                epoch=state.epoch,
+                error_msg=f"加载失败（{kind}，宽限期后仍 idle）",
+            )
+        if playback_time > 0 or duration > 0:
+            # 已取得播放时间或时长：确认起播
+            return PlaybackEvent(
+                PlaybackEventType.LOAD_SUCCESS,
+                epoch=state.epoch,
+                track=state.current_track,
+            )
+        if kind == "online" and elapsed_sec > _ONLINE_TIMEOUT_SEC:
+            return PlaybackEvent(
+                PlaybackEventType.LOAD_FAILED,
+                epoch=state.epoch,
+                error_msg="在线加载超时",
+            )
+        return None
+
+    if state.status == PlaybackStatus.PLAYING:
+        if idle:
+            return PlaybackEvent(
+                PlaybackEventType.IDLE_DETECTED,
+                epoch=state.epoch,
+            )
+        return None
+
+    return None

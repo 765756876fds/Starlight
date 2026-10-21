@@ -95,15 +95,138 @@ def test_epoch_race_old_load_success_dropped():
 
 
 def test_epoch_race_old_load_failed_dropped():
-    """epoch 竞态：过期 LOAD_FAILED 丢弃；当前代际失败才转 FAILED + NOTIFY_UI。"""
+    """epoch 竞态：过期 LOAD_FAILED 丢弃；当前代际失败（未熔断）转 FAILED + ADVANCE_QUEUE。"""
     s = PlaybackState(status=PlaybackStatus.LOADING, current_track=TRACK_A, epoch=3)
     s2, fx = reduce(s, _ev(PlaybackEventType.LOAD_FAILED, epoch=2, error="old"))
     assert s2 is s and fx == [], "过期 LOAD_FAILED 不得改变状态"
     s3, fx = reduce(s, _ev(PlaybackEventType.LOAD_FAILED, epoch=3, error="boom"))
     assert s3.status == PlaybackStatus.FAILED
     assert s3.error_msg == "boom"
-    assert _types(fx) == [PlaybackEffectType.NOTIFY_UI]
-    assert fx[0].payload["error_msg"] == "boom"
+    assert s3.fail_streak == 1
+    assert _types(fx) == [PlaybackEffectType.ADVANCE_QUEUE]
+    assert fx[0].payload["reason"] == "load_failed"
+
+
+def test_load_success_ignored_when_not_loading():
+    """状态防污染：非 LOADING（如 PAUSED）收到同 epoch 的迟到 LOAD_SUCCESS → 忽略。"""
+    s = PlaybackState(status=PlaybackStatus.PAUSED, current_track=TRACK_A, epoch=2)
+    for st in (PlaybackStatus.PAUSED, PlaybackStatus.PLAYING,
+               PlaybackStatus.IDLE, PlaybackStatus.FAILED):
+        s2 = PlaybackState(status=st, current_track=TRACK_A, epoch=2)
+        s3, fx = reduce(s2, _ev(PlaybackEventType.LOAD_SUCCESS, epoch=2, track=TRACK_A))
+        assert s3 is s2 and fx == [], f"{st} 收到迟到 LOAD_SUCCESS 必须忽略"
+    # LOAD_FAILED 同样只在 LOADING 生效
+    s4 = PlaybackState(status=PlaybackStatus.PLAYING, current_track=TRACK_A, epoch=2)
+    s5, fx = reduce(s4, _ev(PlaybackEventType.LOAD_FAILED, epoch=2, error="late"))
+    assert s5 is s4 and fx == [], "PLAYING 收到迟到 LOAD_FAILED 必须忽略"
+
+
+def test_circuit_breaker_after_3_failures():
+    """熔断机制：连续 3 次 auto 切歌加载失败 → IDLE + fail_streak==3，不产生 ADVANCE_QUEUE。"""
+    s = PlaybackState()
+    for i in range(2):
+        # auto 切歌：fail_streak 保留
+        s, fx = reduce(s, PlaybackEvent(
+            PlaybackEventType.PLAY_REQUESTED, track=TRACK_A, origin="auto"))
+        assert s.status == PlaybackStatus.LOADING
+        s, fx = reduce(s, _ev(PlaybackEventType.LOAD_FAILED,
+                              epoch=s.epoch, error="boom"))
+        assert s.status == PlaybackStatus.FAILED
+        assert s.fail_streak == i + 1, f"第 {i+1} 次失败后 streak 应为 {i+1}"
+        assert _types(fx) == [PlaybackEffectType.ADVANCE_QUEUE]
+    # 第 3 次失败 → 熔断
+    s, fx = reduce(s, PlaybackEvent(
+        PlaybackEventType.PLAY_REQUESTED, track=TRACK_A, origin="auto"))
+    s, fx = reduce(s, _ev(PlaybackEventType.LOAD_FAILED,
+                          epoch=s.epoch, error="boom"))
+    assert s.status == PlaybackStatus.IDLE, "熔断后应回 IDLE（停止自动重试）"
+    assert s.fail_streak == 3
+    assert _types(fx) == [PlaybackEffectType.NOTIFY_UI], \
+        "熔断时只通知 UI，不得产生 ADVANCE_QUEUE"
+    assert "连续 3 次" in fx[0].payload["error_msg"]
+
+
+def test_user_play_resets_circuit_breaker():
+    """用户切歌重置熔断：连续 2 次失败后，origin='user' 的 PLAY_REQUESTED 清零 fail_streak。"""
+    s = PlaybackState()
+    for _ in range(2):
+        s, _ = reduce(s, PlaybackEvent(
+            PlaybackEventType.PLAY_REQUESTED, track=TRACK_A, origin="auto"))
+        s, _ = reduce(s, _ev(PlaybackEventType.LOAD_FAILED,
+                             epoch=s.epoch, error="boom"))
+    assert s.fail_streak == 2
+    # 用户主动切歌：清零
+    s, fx = reduce(s, PlaybackEvent(
+        PlaybackEventType.PLAY_REQUESTED, track=TRACK_B, origin="user"))
+    assert s.status == PlaybackStatus.LOADING
+    assert s.fail_streak == 0, "用户切歌必须清零失败计数"
+    assert s.current_track == TRACK_B
+    # auto 切歌则保留
+    s2, _ = reduce(s, _ev(PlaybackEventType.LOAD_FAILED, epoch=s.epoch))
+    s3, _ = reduce(s2, PlaybackEvent(
+        PlaybackEventType.PLAY_REQUESTED, track=TRACK_A, origin="auto"))
+    assert s3.fail_streak == 1, "auto 切歌保留现有 fail_streak"
+
+
+def test_classify_grace_period():
+    """classify 宽限期：LOADING + elapsed=0.5s + idle=True → None（等待起播）。"""
+    from app.music.playback_state import classify_status
+    s = PlaybackState(status=PlaybackStatus.LOADING, current_track=TRACK_A, epoch=1)
+    ev = classify_status(s, {"idle": True, "playback_time": 0.0, "duration": 0.0},
+                         elapsed_sec=0.5, kind="local")
+    assert ev is None, "宽限期内不判定"
+
+
+def test_classify_success():
+    """classify 成功判定：LOADING + elapsed=1.0s + duration=180 → LOAD_SUCCESS（带当前 epoch）。"""
+    from app.music.playback_state import classify_status
+    s = PlaybackState(status=PlaybackStatus.LOADING, current_track=TRACK_A, epoch=3)
+    ev = classify_status(s, {"idle": False, "playback_time": 0.0, "duration": 180.0},
+                         elapsed_sec=1.0, kind="local")
+    assert ev is not None
+    assert ev.type == PlaybackEventType.LOAD_SUCCESS
+    assert ev.epoch == 3, "classify 结果必须携带当前 epoch"
+    assert ev.track == TRACK_A
+
+
+def test_classify_failed_and_timeout():
+    """classify 失败判定：宽限期后 idle → LOAD_FAILED；online 超 10s 未起播 → LOAD_FAILED。"""
+    from app.music.playback_state import classify_status
+    s = PlaybackState(status=PlaybackStatus.LOADING, current_track=TRACK_A, epoch=1)
+    ev = classify_status(s, {"idle": True, "playback_time": 0.0, "duration": 0.0},
+                         elapsed_sec=1.2, kind="local")
+    assert ev is not None and ev.type == PlaybackEventType.LOAD_FAILED
+    assert ev.epoch == 1
+    # 宽限期（online 3.0s）内 idle 不判失败
+    ev2 = classify_status(s, {"idle": True, "playback_time": 0.0, "duration": 0.0},
+                          elapsed_sec=2.0, kind="online")
+    assert ev2 is None
+    # online 超 10s 且无播放时间 → 超时失败
+    ev3 = classify_status(s, {"idle": False, "playback_time": 0.0, "duration": 0.0},
+                          elapsed_sec=11.0, kind="online")
+    assert ev3 is not None and ev3.type == PlaybackEventType.LOAD_FAILED
+    assert ev3.error_msg == "在线加载超时"
+    # 超时判定仅限 online：local 无此语义
+    ev4 = classify_status(s, {"idle": False, "playback_time": 0.0, "duration": 0.0},
+                          elapsed_sec=11.0, kind="local")
+    assert ev4 is None
+
+
+def test_classify_playing_idle_detected():
+    """classify 播放中 idle → IDLE_DETECTED；其他状态一律 None。"""
+    from app.music.playback_state import classify_status
+    s = PlaybackState(status=PlaybackStatus.PLAYING, current_track=TRACK_A, epoch=1)
+    ev = classify_status(s, {"idle": True, "playback_time": 10.0, "duration": 180.0},
+                         elapsed_sec=30.0, kind="local")
+    assert ev is not None and ev.type == PlaybackEventType.IDLE_DETECTED
+    assert ev.epoch == 1
+    ev2 = classify_status(s, {"idle": False, "playback_time": 10.0, "duration": 180.0},
+                          elapsed_sec=30.0, kind="local")
+    assert ev2 is None
+    # 非 LOADING/PLAYING 状态：一律 None
+    s_idle = PlaybackState(status=PlaybackStatus.IDLE, epoch=1)
+    assert classify_status(s_idle, {"idle": True, "playback_time": 0.0, "duration": 0.0},
+                           elapsed_sec=1.0, kind="local") is None
 
 
 def test_idle_detected_ignored_when_not_playing():
