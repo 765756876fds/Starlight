@@ -195,3 +195,7 @@ config/music_sources.json
 /third_party/ffmpeg/
 config/settings.yaml
 .claude/
+
+.coverage.*
+skills-lock.json
+docs/perf_report_2026.md
