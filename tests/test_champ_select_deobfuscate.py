@@ -7,6 +7,10 @@ CS-DEOBFUSCATE-01: ChampSelect 阶段 HIDDEN 反解集成测试
 ② feature flag 关闭（deobfuscate_enabled=False）→ 不构建 session
 ③ 反解失败（obfuscatedPuuid 非法）→ 无损降级：session 仍构建但只有自己有 puuid
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import MagicMock
 
 from app.lol.ongoing.service import OngoingGameService

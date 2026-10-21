@@ -1,4 +1,8 @@
 """PHASE B-FIX 端到端测试。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 
 import pytest

@@ -13,6 +13,11 @@ from app.lol.automation.models import AutomationConfig
 from app.lol.automation.service import LoLAutomationService
 
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 class _FakeLCU:
     connected = True
 

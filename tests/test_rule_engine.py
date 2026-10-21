@@ -1,6 +1,10 @@
 """
 RuleEngine 单元测试
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 import pytest
 

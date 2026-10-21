@@ -1,4 +1,8 @@
 """阶段1：CurrentGameSession 数据链测试（Gameflow → Session → CurrentGamePlayer → history）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 
 import pytest

@@ -6,6 +6,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTest import QTest
 

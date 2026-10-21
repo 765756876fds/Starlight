@@ -3,6 +3,10 @@
 覆盖：容器 StrongFocus + 点画面收焦点 / 空格播放暂停 / ←→ seek ±5 /
 ↑↓ 音量 ±5 / F 全屏切换 / M 静音 / Esc 全屏退全屏 / overlay 点击后焦点归还。
 """
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

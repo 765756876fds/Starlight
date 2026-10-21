@@ -3,6 +3,10 @@
 52c3d23 候选 A 语义：缺失场次（win/kills/deaths/assists 为 None）必须原样保留，
 不能归一为 False/0——否则回退分支无法区分"真负"与"未知"。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.lol.ongoing.loader import OngoingGameLoader
 from app.lol.ongoing.match_model import MatchRecord
 

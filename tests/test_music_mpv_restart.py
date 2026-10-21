@@ -1,4 +1,8 @@
 """mpv 崩溃/管道断自愈测试（修2：自动重启 + 3次/5分钟上限 + 歌曲恢复）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 from unittest.mock import MagicMock, patch
 

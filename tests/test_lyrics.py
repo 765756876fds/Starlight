@@ -3,6 +3,8 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from app.music.lyrics import parse_lrc, find_local_lrc, load_lyrics_from_file
 from app.music.online.models import OnlineTrack

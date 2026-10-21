@@ -13,6 +13,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QListWidgetItem

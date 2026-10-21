@@ -11,6 +11,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from PySide6.QtWidgets import QApplication, QTabWidget
 
 from app.ui.panels.movie_panel import MoviePanel

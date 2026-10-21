@@ -1,6 +1,10 @@
 """PHASE D OngoingGameLoader 测试（mock LCU）。"""
 import pytest
 
+pytestmark = pytest.mark.unit
+
+import pytest
+
 from app.lol.ongoing.loader import OngoingGameLoader, RateLimiter
 from app.lol.ongoing.cache import SnapshotCache
 

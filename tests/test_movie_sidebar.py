@@ -4,6 +4,10 @@
 右缘鼠标触发浮现 / 3s 静止隐藏 / hover 不隐藏 / 点集数切集（复用 play 链）/
 定位跟随窗口 resize。
 """
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

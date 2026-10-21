@@ -3,6 +3,10 @@
 - ALIASES 目标值与 2999 playerlist.championName（称号）一致。
 - 未知称呼返回清洗后的原始名；空值返回 None。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import json
 from pathlib import Path
 

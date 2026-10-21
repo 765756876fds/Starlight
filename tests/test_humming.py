@@ -1,4 +1,8 @@
 """哼唱识曲测试：增量建库 / 识别成功失败 / 录音 wav / 弹窗状态机 / 语音入口。"""
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 import sys
 import types

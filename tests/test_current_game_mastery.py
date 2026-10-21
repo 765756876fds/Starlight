@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from app.ui.panels.current_game_panel import CurrentGamePanel
 from app.lol.ongoing.intelligence_service import PlayerIntelligenceCacheEntry

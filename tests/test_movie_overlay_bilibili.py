@@ -12,6 +12,10 @@
   （播放 · 下一集 · 时间 · 音量 · 倍速 · 字幕 · 全屏，对齐 B站）。
 - 回归：overlay 浮现/隐藏、侧栏右缘触发/超时隐藏、mpv 穿透容错、键盘空格不变。
 """
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

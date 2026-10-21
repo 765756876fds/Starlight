@@ -20,6 +20,11 @@ from app.lol.ongoing.session import CurrentGameSession
 from app.lol.ongoing.gsm_provider import merge_gsm_players
 
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 class _FakeAcct:
     """SGP AccountMatchHistoryService 替身：SUMMARY 直接返回 AVAILABLE 空记录。"""
 

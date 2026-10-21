@@ -7,6 +7,10 @@ ASR-RECONNECT-01: ASR 服务挂掉/恢复自动重连测试（修2）
 ③ 重连失败（服务一直不可用）→ 返回 ""，不阻塞（retry_seconds=0 单次探测）
 ④ 无引擎配置 → 返回 ""
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import requests
 
 from app.voice.asr import ASRManager

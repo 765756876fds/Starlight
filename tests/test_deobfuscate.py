@@ -4,6 +4,10 @@ DEOBFUSCATE-01: obfuscatedPuuid 还原（腾讯服 ChampSelect HIDDEN 混淆）
 fixture：identity_diag_20261001_105951_cs.json 里 4 个真实腾讯服 obfuscatedPuuid
 （cs 阶段 myTeam HIDDEN 成员），同文件自己（UNHIDDEN）真 puuid 作为结构参照。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import re
 
 from app.lol.ongoing.deobfuscate import deobfuscate_puuid

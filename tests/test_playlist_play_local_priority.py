@@ -1,4 +1,8 @@
 """歌单播放：在线歌已下载 → 优先播本地副本；未下载 → 原在线重搜（不变）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 import time

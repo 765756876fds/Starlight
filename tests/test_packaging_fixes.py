@@ -8,6 +8,10 @@
 - highlight_detector 惰性 import：模块加载不引入 librosa；调用时正常执行
 - tts / js_source / lx_plugin_runner / requirements / .gitignore 无个人路径与死依赖
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 from pathlib import Path

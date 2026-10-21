@@ -5,6 +5,10 @@
 - ionian 拼写修正："Ionian Boots of Lucidity" → +10
 - 空 items → 不加
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.lol.cooldown.ssh_provider import summoner_spell_haste
 
 

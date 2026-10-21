@@ -1,4 +1,8 @@
 """在线选源：音质提取 / 归一化 / 首选选择 单测。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.music.controller import (
     _kw_bonus, _normalize, _pick_best, _pick_candidates, _quality_score,
 )

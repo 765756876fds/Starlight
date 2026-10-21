@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 

@@ -4,6 +4,10 @@
 unknown_count 只数 win=None / streak 遇 None 保持 break /
 games 含数据不全场次 / 10 场窗口同步语义。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.lol.ongoing.intelligence import PlayerIntelligenceService
 from app.lol.ongoing.match_model import MatchRecord
 

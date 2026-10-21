@@ -6,6 +6,10 @@
 - ID3 有值 → 用标签（不被文件名覆盖）
 - 存量脚本：mock 库 → 修复后 music + play_history 两表都正确
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import importlib.util
 import os
 import sqlite3

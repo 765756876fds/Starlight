@@ -5,6 +5,10 @@
 - service：选人 5 puuid → 进游戏 gameflow 10 puuid（同 game_id）→ 强制重建 + 补拉
 - 重建保留已加载 history（old_by_puuid 匹配）；回归新 session 正常创建
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 
 import pytest

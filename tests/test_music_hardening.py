@@ -6,6 +6,10 @@
 3. jump_to_highlight 边界 clamp（不超歌曲时长）与 mpv 异常安全
 4. 自动下一首 idle 轮询（mpv 事件回调不可达，独立轮询触发 auto_next）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import threading
 import time

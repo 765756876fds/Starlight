@@ -1,4 +1,8 @@
 """lcu.py 线程安全测试（mock session）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import threading
 import time
 from unittest.mock import MagicMock

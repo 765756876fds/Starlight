@@ -9,6 +9,10 @@ Highlight 测试：数据层 + Controller jump_to_highlight
 5. jump_to_highlight 无 highlight → fallback duration * 0.6
 6. CASCADE：删除 song 后 highlight 一起删除
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import pytest
 from unittest.mock import MagicMock, patch

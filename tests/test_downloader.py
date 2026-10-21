@@ -1,5 +1,9 @@
 """下载功能：并发≤3、super→high 降级、入 music 表、已下载判定、失败不卡队列、
 已存在不覆盖、.part 原子改名、无 Content-Length 进度。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 import time

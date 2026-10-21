@@ -3,6 +3,10 @@ Intent 模块测试：规则匹配（纯规则版，无 LLM fallback）
 """
 import pytest
 
+pytestmark = pytest.mark.unit
+
+import pytest
+
 from app.voice.intent import RuleBasedIntent, Intent, IntentRouter
 
 

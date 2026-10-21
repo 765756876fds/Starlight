@@ -9,6 +9,8 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from app.ui.panels.music_panel import MusicPanel
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import threading
 
 import pytest
+pytestmark = pytest.mark.unit
 
 from app.lol.automation.action_executor import ChampSelectActionExecutor
 from app.lol.automation.champ_select_controller import ChampSelectController

@@ -7,6 +7,10 @@
 - 状态：movie_controller play/pause/resume/stop 写 state_store(MOVIE)（语音路由数据源）
 - 音乐回归：无电影时暂停/继续 → MUSIC_* 命令零变化
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import unittest
 from unittest.mock import MagicMock, patch
 

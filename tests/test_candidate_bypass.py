@@ -1,4 +1,8 @@
 """P1 候选旁路 + 换源续播测试。"""
+import pytest
+
+pytestmark = pytest.mark.ui
+
 
 import os
 

@@ -1,6 +1,10 @@
 """
 SpeechJudge → SpeechQueue 接线测试
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 import time

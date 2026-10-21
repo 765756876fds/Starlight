@@ -6,6 +6,10 @@ GAME-EVENT-02 回归测试
 2. Riot 原生 EventID 正确进入 Domain Event 并用于 dedup
 """
 import pytest
+
+pytestmark = pytest.mark.unit
+
+import pytest
 from unittest.mock import MagicMock
 
 from app.core.event_bus import Event, EventType

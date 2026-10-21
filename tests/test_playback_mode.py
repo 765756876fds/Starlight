@@ -12,6 +12,10 @@ Phase 1-C: Playback Mode + Highlight Mode 测试
 8. generation 失效保护
 9. 一次性"高潮"命令仍正常工作
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 import pytest
 from unittest.mock import MagicMock, patch

@@ -7,6 +7,10 @@
 - TTS 403：两次 403 后成功（0s/1s/3s 退避），输出文件有效
 - TTS 一直 403：3 次后放弃返回 None，且残留文件被清理
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import time
 

@@ -6,6 +6,8 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from app.core.event_bus import Event, EventType, get_event_bus
 from app.music.mpv import MpvController

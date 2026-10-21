@@ -1,6 +1,10 @@
 """
 VoiceRuntime command dispatch wiring 测试
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import MagicMock
 
 from app.voice.runtime import VoiceRuntime

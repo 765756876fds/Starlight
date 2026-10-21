@@ -1,4 +1,8 @@
 """PHASE B 测试：data catalog + cooldown manager（用 FakeScheduler）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import threading
 import time
 

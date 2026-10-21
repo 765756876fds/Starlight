@@ -1,4 +1,8 @@
 """坏文件播放卡死修复测试：重启拆锁不阻塞 UI + _send_command 有界 + 防重入。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import threading
 import time
 from unittest.mock import MagicMock, patch

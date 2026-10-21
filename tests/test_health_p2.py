@@ -1,4 +1,8 @@
 """体检修复 P2：event_bus shutdown 禁发 + publish_async 有界池 + execute_async 异常记录 + 裸 except 收敛行为不变。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 import threading

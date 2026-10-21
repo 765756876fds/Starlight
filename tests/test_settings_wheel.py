@@ -6,6 +6,8 @@ import os
 import sys
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QSlider
 

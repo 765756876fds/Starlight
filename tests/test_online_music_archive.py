@@ -1,4 +1,8 @@
 """ArchiveSource + custom loader 测试（mock HTTP，不真联网）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import textwrap
 

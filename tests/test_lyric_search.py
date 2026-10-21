@@ -1,4 +1,8 @@
 """歌词搜歌测试：LyricIndex 构建/模糊匹配/标点清理 + 面板模式切换/懒构建/失效。"""
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 import sys
 from unittest.mock import MagicMock

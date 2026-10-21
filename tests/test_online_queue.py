@@ -1,4 +1,8 @@
 """队列在线歌播放：按 title+artist 真重搜（不用旧 track_id）；失败主动跳过；本地不变。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 import time

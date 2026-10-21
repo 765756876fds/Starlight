@@ -6,6 +6,10 @@
 - 找不到 / 非 .js / 目录外（含前缀误判：lx vs lx_evil）拒绝
 - os.remove 异常 / reload 失败路径
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import threading
 
 from app.music.online.sources.js_source import JSMusicSource

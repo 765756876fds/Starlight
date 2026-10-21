@@ -12,6 +12,10 @@
 - clear() 重置后重新首帧静默
 - 异常防御（非 dict / price 缺失 / 非数字）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.lol.equipment_notifier import EquipmentUpdateNotifier
 from app.lol.snapshot import PlayerInfo
 

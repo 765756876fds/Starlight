@@ -4,6 +4,11 @@ from app.player.current_game_analysis import richest, self_kda, economy
 from app.lol.snapshot import GameSnapshot, PlayerInfo
 
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 def _snapshot():
     snap = GameSnapshot()
     snap.current_player = PlayerInfo(champion_name="Karthus", team="ORDER",

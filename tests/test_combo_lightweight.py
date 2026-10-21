@@ -21,6 +21,11 @@ from app.combo.models import ChampionCombos
 
 # ---------- win_focus：无诊断 print ----------
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 def test_win_focus_no_diag_print(capsys):
     """正常路径不再打 hwnd/pid/proc_name/match 四行诊断（异常路径提示保留）。"""
     try:

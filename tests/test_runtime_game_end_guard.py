@@ -5,6 +5,10 @@ runtime 游戏结束误判守卫测试：
 - is_available=False 时 phase 守卫拦住加载/对局中误判（2999 暂不可用不算结束）
 - is_available=False 时 phase 已离开游戏则放行真结束检测
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import MagicMock, patch
 
 

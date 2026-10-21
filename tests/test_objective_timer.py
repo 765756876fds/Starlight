@@ -1,5 +1,9 @@
 """Phase 1-D: Objective Reminder 测试"""
 import pytest
+
+pytestmark = pytest.mark.unit
+
+import pytest
 from unittest.mock import MagicMock
 
 from app.core.event_bus import EventBus, Event, EventType, get_event_bus

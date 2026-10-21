@@ -7,6 +7,10 @@
 - loader：NO_DATA 空名计入 missing_names_count；空名快照（任意状态）不作为缓存复用
 - 选人 deobfuscate 分队诊断事件（ongoing.cs_team_resolve）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 
 from app.lol.ongoing.cache import SnapshotCache

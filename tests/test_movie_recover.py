@@ -8,6 +8,10 @@
 - VideoPlayerWindow._tick 状态机（检测→提示→轮询恢复→成功/放弃收尾）
 - 回归：正常播放/正常停播不触发恢复
 """
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 import threading
 import time

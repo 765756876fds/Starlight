@@ -6,6 +6,10 @@
 - wall 线程（_wall_loop → _check_wall_alarms）只检查 wall 基准，不碰 game alarm
 - 游戏开始/结束只清理 game 基准提醒，wall 日常提醒跨对局保留
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 from unittest.mock import MagicMock
 

@@ -10,6 +10,10 @@ VOICE-DECOUPLE-01: 采集/识别解耦（方案 A）单测
 - 长任务白名单 execute_async（MUSIC_SEARCH_PLAY / MUSIC_RESCAN / PLAYER_QUERY）
 - 短命令保持 execute（保序、兼容 test_voice_dispatch）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import queue
 import time
 from unittest.mock import MagicMock

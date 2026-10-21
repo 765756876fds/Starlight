@@ -1,4 +1,8 @@
 """Phase 1A-R2: three-source diagnostic state machine tests."""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.lol.ongoing.diagnostic import ChampSelectDiagnostic

@@ -6,6 +6,10 @@
 - history retry 直接 force 重载、不重发 session_created（P0b）
 - 腾讯服 gameId 复用：离开对局清空后重新宣布（P0b 关键补充）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 
 from app.lol.ongoing.service import OngoingGameService

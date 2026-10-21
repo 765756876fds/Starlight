@@ -2,6 +2,10 @@
 
 损坏 db → _recover_corrupt：主 db + -wal + -shm 全部重命名保留 + 新建空库。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 
 from app.music.database import MusicDatabase

@@ -1,4 +1,8 @@
 """js_bridge watchdog 自愈测试（修3：node 退出/连续超时 → 自动 reload + 3次/5分钟上限）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import json
 import threading
 from unittest.mock import MagicMock, patch

@@ -6,6 +6,10 @@ Event → EventBus → RuleEngine → SpeechCandidate → SpeechJudge → Speech
 
 不真实播放 TTS，使用 FakeTTS。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 import pytest
 

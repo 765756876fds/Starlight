@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.unit
+
 # -*- coding: utf-8 -*-
 """EventBus 异步双池隔离测试：状态池可丢 / 临界池不丢 / 路由正确。"""
 import threading

@@ -2,6 +2,10 @@
 包2a 测试：Assrt 字幕链（搜索解析 / ZIP GBK 修复 / 假字幕过滤 / RAR tar 解压 / 直接 /
 sub-add + sid 强制选中 / 失败降级）。全部 mock 网络与外部程序，不污染真实 data/。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import io
 import os
 import subprocess

@@ -1,4 +1,8 @@
 """Akari 式玩家模糊搜索（拼音首字母 + difflib）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.lol.ongoing.fuzzy import py_initials, fuzzy_score, fuzzy_candidates
 
 

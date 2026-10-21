@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """TgmengProvider 单测：降级契约 + 字段 schema（不依赖真实网络/密钥）。"""
 import pytest
+pytestmark = pytest.mark.unit
 import app.movie.rank_providers as rp
 from app.movie.rank_providers import TgmengProvider
 

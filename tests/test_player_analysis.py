@@ -1,4 +1,8 @@
 """Player Analysis unit tests"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import tempfile
 import pytest

@@ -11,6 +11,8 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication

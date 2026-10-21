@@ -1,6 +1,10 @@
 """
 Phase 2.4 集成测试：2999 → StateDiff → EventBus → SpeechJudge → SpeechQueue
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 import time

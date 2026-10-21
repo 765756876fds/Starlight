@@ -11,6 +11,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from app.ui.widgets.video_player_window import VideoPlayerWindow
 

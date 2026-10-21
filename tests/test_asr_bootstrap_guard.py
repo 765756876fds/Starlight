@@ -1,5 +1,9 @@
 """asr_bootstrap 空模型防护 + asr.py 400 提示 定向测试。"""
 import pytest
+
+pytestmark = pytest.mark.unit
+
+import pytest
 from app.voice import asr_bootstrap as ab
 
 

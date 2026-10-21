@@ -1,6 +1,10 @@
 """
 包2a 测试：剧集选集判据 + 自动连播（idle 上升沿检测）——mock mpv，不依赖真实播放器。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 

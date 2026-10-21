@@ -1,4 +1,8 @@
 """清空队列停播测试（修5：清空队列 → 停止播放 + 清 _current_song + 失效 highlight）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import MagicMock, patch
 
 from app.music.controller import MusicController

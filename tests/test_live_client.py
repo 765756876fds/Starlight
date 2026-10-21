@@ -4,6 +4,10 @@ Live Client Data API (2999) 测试
 注意：需要进入 LoL 训练模式才能真实验证。
 如果未在游戏中，测试自动 skip。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import pytest
 

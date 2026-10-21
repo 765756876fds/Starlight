@@ -1,4 +1,8 @@
 """ASR 自举（轻量版）测试：模型路径解析 / hf-mirror 下载 / llama-server 拉起 / 退出清理。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import subprocess
 

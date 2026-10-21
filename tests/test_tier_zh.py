@@ -4,6 +4,10 @@
 """
 import pytest
 
+pytestmark = pytest.mark.unit
+
+import pytest
+
 from app.ui.panels.current_game_panel import _TIER_ZH as CGP_TIER
 from app.ui.panels.ongoing_panel import _TIER_MAP as OG_TIER
 

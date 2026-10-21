@@ -1,4 +1,8 @@
 """扫描可播验证测试：坏文件不入库 / 正常入库 / mpv 降级 / 超时不死等。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 from subprocess import TimeoutExpired
 from unittest.mock import patch

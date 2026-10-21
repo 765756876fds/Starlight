@@ -13,6 +13,10 @@ INTENT-NEGATION-01: "停止播放"意图修复测试（修3 + 打断路由）
 ⑨ 播放 → MUSIC_RESUME（锚定整串，不进 search）
 ⑩ 播放下一首 → MUSIC_NEXT（MUSIC_RULES 规则表先于 SEARCH 命中，正确行为）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.core.command_bus import CommandType
 from app.voice.intent import IntentRouter
 

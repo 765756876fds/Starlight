@@ -1,4 +1,8 @@
 """P2 路径自适应收尾：events.log_dir / capture_dir 默认值基于 PROJECT_ROOT。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import inspect
 
 from app.core.path_resolve import PROJECT_ROOT

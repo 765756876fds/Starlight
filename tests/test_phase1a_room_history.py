@@ -1,4 +1,8 @@
 """Phase 1A: 统一历史战绩数据链 + 10 人房间分析。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 import time

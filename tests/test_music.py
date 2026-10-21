@@ -1,6 +1,10 @@
 """
 Music 模块测试：SQLite 数据库 + FTS5
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import pytest
 

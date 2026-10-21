@@ -4,6 +4,10 @@ LCU 连接发现测试
 注意：需要 LoL 客户端运行才能真实验证。
 如果客户端未运行，测试自动 skip。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import pytest
 

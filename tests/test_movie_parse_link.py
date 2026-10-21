@@ -4,6 +4,8 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 

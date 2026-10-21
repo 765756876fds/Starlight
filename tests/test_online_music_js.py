@@ -1,4 +1,8 @@
 """JSMusicSource 单测（不真起 node）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import json
 import threading
 import time

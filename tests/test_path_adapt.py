@@ -1,6 +1,10 @@
 """P0 路径自适应测试（2026-10-16）：llama-server 查找链 + TTS mpv 解析。
 覆盖：配置优先 / PATH / glob 兜底 / 全空降级 / mpv 默认一致 /
 legacy 迁移保护（仅默认值）/ 显式配置不自动替换。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 from unittest import mock

@@ -1,4 +1,8 @@
 """P1：set_play_mode 双定义收敛（方案 A 删死代码）验收。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 

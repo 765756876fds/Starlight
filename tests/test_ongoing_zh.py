@@ -7,6 +7,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import importlib
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 
 def _mod():

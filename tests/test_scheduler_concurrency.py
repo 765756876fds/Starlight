@@ -4,6 +4,7 @@ import threading
 import time
 
 import pytest
+pytestmark = pytest.mark.unit
 
 from app.core.scheduler import Scheduler
 

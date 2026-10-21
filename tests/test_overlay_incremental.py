@@ -9,6 +9,10 @@
 6. 从有到空 → 卡片清空
 7. hide 期间卡片保留、show 后复用
 """
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 import pytest
 

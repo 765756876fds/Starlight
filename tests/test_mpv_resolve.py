@@ -2,6 +2,10 @@
 settings 显式配置(isfile) → 打包内置 bundled_tool("mpv") → PATH 兜底值。
 覆盖 movie/music/tts 三入口共用 resolve_mpv_path 的行为。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 

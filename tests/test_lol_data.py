@@ -1,4 +1,8 @@
 """PHASE C 数据层小修测试。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from app.lol.data import AbilityCatalog, ChampionCatalog
 from app.lol.cooldown.manager import CooldownManager
 from tests.test_lol_cooldown_e2e import FakeScheduler

@@ -1,4 +1,8 @@
 """修2：语音 + UI 并发"下一首"跳两首 → next() 300ms 防抖窗口。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 from unittest.mock import MagicMock, patch
 

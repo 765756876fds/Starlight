@@ -9,6 +9,10 @@ d) 真结束（phase 离开 + 曾递增 + 停滞）→ 发布一次且不循环
 e) 6607e1a 兜底（2999 挂着 + phase 离开 + count 累积）→ 发布一次
 f) state_diff 路径（A 方案）→ 发布一次 + _game_active=False
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 import unittest

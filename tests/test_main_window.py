@@ -4,6 +4,8 @@ import sys
 from ctypes import wintypes
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 import app.ui.main_window as mw
 from app.ui.main_window import MainWindow, _nchit_edge

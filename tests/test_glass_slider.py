@@ -12,6 +12,8 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 

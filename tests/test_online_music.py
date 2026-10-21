@@ -1,6 +1,10 @@
 """Online music 测试。"""
 import pytest
 
+pytestmark = pytest.mark.unit
+
+import pytest
+
 from app.music.online.models import OnlineTrack
 from app.music.online.source import MusicSource
 from app.music.online.manager import OnlineSourceManager

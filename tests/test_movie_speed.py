@@ -6,6 +6,10 @@
 - _on_speed：弹菜单（9 个 action、当前档勾选高亮、触发回调 → _apply_speed）
 - 倍速失败 → 状态栏降级不崩
 """
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest

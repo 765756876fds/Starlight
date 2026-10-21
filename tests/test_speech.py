@@ -1,6 +1,10 @@
 """
 TTS 测试：Edge TTS 基础生成
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import pytest
 

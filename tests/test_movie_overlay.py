@@ -4,6 +4,10 @@
 倍速 9 档菜单（当前档高亮）/ 音量静音 / 全屏触发 / 焦点管理 WS_EX_NOACTIVATE /
 overlay 定位跟随窗口 resize。
 """
+import pytest
+
+pytestmark = pytest.mark.ui
+
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

@@ -17,6 +17,10 @@ VOICE-ECHO-01: 采集闸门 + 打断旁路（Side-channel）测试
 ⑩ _detect_interrupt：有锁引擎 → 旁路跳过（不抢主 ASR 锁）
 ⑪ 旁路只截取音频前 1.5s 识别（缩短耗时）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import MagicMock
 
 from app.voice.runtime import VoiceRuntime

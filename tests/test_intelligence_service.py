@@ -1,4 +1,8 @@
 """intelligence_service 失败节流 + 缓存行为测试（A+C 修复）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import MagicMock, patch
 
 from app.lol.ongoing.intelligence_service import OngoingIntelligenceService

@@ -3,6 +3,10 @@
 - queue.skip_current：REPEAT_ONE 下顺序取下一首（逃生路径）
 - controller._play_song 文件不存在分支：REPEAT_ONE → 立即跳；连续 3 次 → 停播
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 from unittest.mock import MagicMock, patch
 

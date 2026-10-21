@@ -6,6 +6,10 @@
 """
 import pytest
 
+pytestmark = pytest.mark.unit
+
+import pytest
+
 from app.lol.cooldown.ssh_provider import (
     _INSPIRATION_TREE_IDS,
     summoner_spell_haste,

@@ -7,6 +7,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from unittest.mock import patch
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 
 @pytest.fixture(scope="module")

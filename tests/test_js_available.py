@@ -1,4 +1,8 @@
 """修3：js 状态误报 ok → JSMusicSource.available 判定（node 缺失/未就绪 → False）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import threading
 
 from app.music.online.sources.js_source import JSMusicSource

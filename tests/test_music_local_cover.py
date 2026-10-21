@@ -8,6 +8,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 # 合法 PNG 运行时生成（QImage 编码，避免手写 base64 CRC 出错）
 _PNG_CACHE = {}

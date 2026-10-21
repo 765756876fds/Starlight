@@ -10,6 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.ui.overlay.overlay_model import (
+
     OverlayModel,
     fmt_remaining,
     _norm_position,
@@ -18,11 +19,14 @@ from app.ui.overlay.overlay_model import (
 from app.lol.cooldown.ssh_provider import summoner_spell_haste
 from app.lol.cooldown.calculator import CooldownCalculator
 
-
 # ---------- fakes ----------
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 FLASH = {"id": 4, "displayName": "SummonerFlash"}
 TELEPORT = {"id": 12, "displayName": "SummonerTeleport"}
-
 
 def _player(cid, name, position, spells=(FLASH, TELEPORT)):
     return SimpleNamespace(
@@ -32,10 +36,8 @@ def _player(cid, name, position, spells=(FLASH, TELEPORT)):
         summoner_spells=list(spells),
     )
 
-
 def _snapshot(players, game_time=120.0):
     return SimpleNamespace(game_time=game_time, enemy_team=list(players))
-
 
 class FakeCM:
     """模拟 CooldownManager.get_active_reminders（生产路径：语音 cooldown.start →
@@ -50,7 +52,6 @@ class FakeCM:
     def clear(self):
         self.reminders.clear()
 
-
 def _rem(champion_name, skill, remaining):
     """对齐 manager.get_active_reminders 字段子集（Overlay 只读 champion_name/skill/remaining）。"""
     return {
@@ -60,7 +61,6 @@ def _rem(champion_name, skill, remaining):
         "side": "enemy", "status": "ACTIVE",
     }
 
-
 def _model(players=None, game_time=120.0, phase="InProgress", cm_reminders=None):
     snap = _snapshot(players or [], game_time)
     cm = FakeCM(cm_reminders)   # 共享同一实例：测试改 cm 状态，get_rows 读到同一份
@@ -69,7 +69,6 @@ def _model(players=None, game_time=120.0, phase="InProgress", cm_reminders=None)
         phase_provider=lambda: phase,
         cooldown_manager_provider=lambda: cm,
     )
-
 
 # ---------- position normalization ----------
 def test_position_normalize_mid_bot_sup():
@@ -81,10 +80,8 @@ def test_position_normalize_mid_bot_sup():
     assert _norm_position("top") == "TOP"
     assert _norm_position("") == ""
 
-
 def test_position_order_keys():
     assert _POSITION_ORDER == {"TOP": 0, "JUNGLE": 1, "MIDDLE": 2, "BOTTOM": 3, "UTILITY": 4}
-
 
 def test_position_sorting_five_rows():
     # 故意乱序给出 5 个位置
@@ -102,7 +99,6 @@ def test_position_sorting_five_rows():
     positions = [r.position for r in rows]
     assert positions == ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 
-
 def test_enemy_five_rows_only_from_enemy_team():
     players = [_player(1, "A", "top"), _player(2, "B", "jungle")]
     m = _model(players)
@@ -113,7 +109,6 @@ def test_enemy_five_rows_only_from_enemy_team():
     m2 = _model(players_bad)
     assert len(m2.get_rows()) == 2
 
-
 def test_spell1_spell2_populated():
     m = _model([_player(1, "盖伦", "top", (FLASH, TELEPORT))])
     row = m.get_rows()[0]
@@ -122,7 +117,6 @@ def test_spell1_spell2_populated():
     assert row.spell1.base_cooldown == 300.0
     assert row.spell2.active is False and row.spell1.active is False
 
-
 # ---------- timer 显示（生产路径：CooldownManager → Overlay 只读渲染）----------
 def test_timer_start_and_remaining():
     m = _model([_player(1, "盖伦", "top")], game_time=100.0,
@@ -130,7 +124,6 @@ def test_timer_start_and_remaining():
     row = m.get_rows()[0]
     assert row.spell1.active is True
     assert abs(row.spell1.remaining - 300.0) < 1e-6
-
 
 def test_timer_advances_with_game_time():
     m = _model([_player(1, "盖伦", "top")], game_time=100.0,
@@ -142,7 +135,6 @@ def test_timer_advances_with_game_time():
     row = m.get_rows()[0]
     assert abs(row.spell1.remaining - 250.0) < 1e-6
 
-
 def test_two_slots_independent():
     m = _model([_player(1, "盖伦", "top")], game_time=100.0,
                cm_reminders=[_rem("盖伦", "闪现", 300.0), _rem("盖伦", "传送", 190.0)])
@@ -150,28 +142,23 @@ def test_two_slots_independent():
     assert abs(row.spell1.remaining - 300.0) < 1e-6
     assert abs(row.spell2.remaining - 190.0) < 1e-6
 
-
 # ---------- display rules ----------
 def test_fmt_ready():
     assert fmt_remaining(-1.0) == "OK"
     assert fmt_remaining(0.0) == "0.0"
 
-
 def test_fmt_below_10_one_decimal():
     assert fmt_remaining(9.9) == "9.9"
     assert fmt_remaining(5.0) == "5.0"
-
 
 def test_fmt_above_999():
     assert fmt_remaining(1000.0) == "999"
     assert fmt_remaining(1500.0) == "999"
 
-
 def test_fmt_integer_seconds():
     assert fmt_remaining(45.0) == "45"
     assert fmt_remaining(9.99) == "10.0"  # <10 一位小数
     assert fmt_remaining(10.0) == "10"
-
 
 # ---------- lifecycle ----------
 def test_inprogress_shows_else_hides():
@@ -183,12 +170,10 @@ def test_inprogress_shows_else_hides():
     m3 = _model(players, phase="None")
     assert m3.get_rows() == []
 
-
 def test_disabled_hides():
     m = _model([_player(1, "盖伦", "top")])
     m.set_enabled(False)
     assert m.get_rows() == []
-
 
 def test_game_end_clear():
     m = _model([_player(1, "盖伦", "top")], game_time=100.0,
@@ -201,7 +186,6 @@ def test_game_end_clear():
     row = m.get_rows()[0]
     assert row.spell1.active is False
 
-
 def test_new_game_no_inherit():
     m = _model([_player(1, "盖伦", "top")], game_time=100.0,
                cm_reminders=[_rem("盖伦", "闪现", 300.0)])
@@ -209,7 +193,6 @@ def test_new_game_no_inherit():
     cm.clear()  # 模拟 game end / 离开 InProgress → CM 清空，新局不继承
     rows = m.get_rows()
     assert all(not r.spell1.active and not r.spell2.active for r in rows)
-
 
 # ---------- dynamic SSH (复用 ssh_provider + calculator) ----------
 def test_dynamic_ssh_formula():
@@ -223,13 +206,11 @@ def test_dynamic_ssh_formula():
     # 300 * 100 / 128 = 234.375
     assert abs(eff - 234.375) < 0.01
 
-
 def test_overlay_uses_ssh_adjusted_cooldown():
     m = _model([_player(1, "盖伦", "top")], game_time=100.0,
                cm_reminders=[_rem("盖伦", "闪现", 230.77)])
     row = m.get_rows()[0]
     assert abs(row.spell1.remaining - 230.77) < 1e-6
-
 
 # ---------- game_time pause ----------
 def test_game_time_pause_freezes_remaining():
@@ -240,7 +221,6 @@ def test_game_time_pause_freezes_remaining():
     r2 = m.get_rows()[0].spell1.remaining
     assert abs(r1 - r2) < 1e-6
     assert r1 == 300.0
-
 
 # ---------- 100ms 刷新不改变 CM 状态 ----------
 def test_refresh_does_not_create_timers():

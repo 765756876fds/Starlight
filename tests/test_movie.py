@@ -7,6 +7,8 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+pytestmark = pytest.mark.ui
+
 from unittest.mock import MagicMock, patch
 
 from app.core.event_bus import Event, EventType, get_event_bus

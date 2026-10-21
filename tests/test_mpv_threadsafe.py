@@ -1,6 +1,10 @@
 """
 MpvController 线程安全测试
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import threading
 from unittest.mock import MagicMock, patch
 

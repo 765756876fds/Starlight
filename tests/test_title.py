@@ -6,6 +6,10 @@
 """
 import pytest
 
+pytestmark = pytest.mark.unit
+
+import pytest
+
 from app.lol.title import compute_title, COLORS
 
 

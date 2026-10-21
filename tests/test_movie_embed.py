@@ -12,6 +12,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from app.music.mpv import MpvController
 from app.movie.movie_controller import MovieController

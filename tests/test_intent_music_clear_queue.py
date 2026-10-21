@@ -6,6 +6,10 @@
 - "清空计时" → system.unknown（COOLDOWN 只认"取消"前缀；新词表不含"计时"）
 - "停止播放" → system.unknown（否定词短路不受影响）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 

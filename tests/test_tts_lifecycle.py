@@ -1,6 +1,10 @@
 """
 TTS 生命周期事件测试：speech.started / speech.finished
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock

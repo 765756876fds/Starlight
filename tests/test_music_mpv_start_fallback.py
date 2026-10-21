@@ -1,4 +1,8 @@
 """mpv 启动失败降级测试（修1：mpv 未装/路径错不崩主程序 + PATH 解析）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import shutil
 from unittest.mock import MagicMock, patch

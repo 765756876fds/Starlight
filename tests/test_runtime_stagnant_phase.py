@@ -2,6 +2,10 @@
 GAME-REAL-06: game_time 停滞检测 phase 守卫测试
 （训练营 queue 890 误判回归：8ed7721 双门槛 + 实时 phase 修正）
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 

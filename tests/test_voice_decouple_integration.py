@@ -4,6 +4,10 @@ VOICE-DECOUPLE-INT-01: 采集/识别解耦集成测试
 核心场景 6 验证：ASR 慢响应（5s）期间，采集线程仍持续 stream.read
 → 识别期间说的话不再丢失。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import struct
 import sys
 import time

@@ -1,4 +1,8 @@
 """歌单：数据层（建/删/重命名/去重/级联/排序/持久化）+ controller（插队/重播/删文件）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 

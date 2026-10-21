@@ -3,6 +3,10 @@
 修1（实机问题1）：播放状态判断改为实时 get_property（不读 mpv._properties 启动缓存）。
 回归：test_duck_when_idle_cache_stale 覆盖"is_idle() 缓存死链"陷阱。
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import MagicMock, patch
 
 from app.core.event_bus import EventType

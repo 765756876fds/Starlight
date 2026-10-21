@@ -7,6 +7,10 @@
 """
 import pytest
 
+pytestmark = pytest.mark.unit
+
+import pytest
+
 from app.core.path_resolve import PROJECT_ROOT
 from app.lol.objectives.rules import DEFAULT_PATH, load_ruleset
 from app.lol.data.champion_catalog import DEFAULT_DATA as CHAMP_DATA, ChampionCatalog

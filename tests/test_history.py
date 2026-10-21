@@ -1,4 +1,8 @@
 """播放历史：数据层 + 记录器 + 重播兜底。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 

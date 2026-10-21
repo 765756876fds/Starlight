@@ -11,6 +11,11 @@ import os
 import sys
 import types
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 历史环境缺以下第三方包（仅导入期使用），显式 stub，不安装依赖。

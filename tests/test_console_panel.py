@@ -1,5 +1,7 @@
 """ConsolePanel 定向测试：日志降噪分级 + 节流队列 + 行数上限。"""
 import pytest
+pytestmark = pytest.mark.ui
+
 
 from app.ui.panels.console_panel import ConsolePanel, classify_log, MAX_LINES
 

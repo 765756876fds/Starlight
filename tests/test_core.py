@@ -1,6 +1,10 @@
 """
 Core 模块测试：EventType, EventBus, StateDiff, GameAlarm
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 import pytest
 

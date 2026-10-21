@@ -1,4 +1,8 @@
 """阶段2：GSM 补充身份源测试（Gameflow 主源 → GSM supplement → puuid merge → CurrentGameSession）。"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import time
 
 import pytest

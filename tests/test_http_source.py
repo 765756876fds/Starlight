@@ -1,6 +1,8 @@
 """UI 自定义音源（HTTP JSON）与同步注册逻辑测试。"""
 import os
 import pytest
+pytestmark = pytest.mark.ui
+
 from unittest.mock import MagicMock, patch
 
 import requests
