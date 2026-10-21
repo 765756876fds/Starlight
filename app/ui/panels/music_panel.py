@@ -754,6 +754,16 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] 后台调用失败: {e!r}")
 
+    def _enter_switching_ui(self) -> None:
+        """切歌意图发出瞬间：UI 立即归零并显示"加载中"（不等后台轮询确认）。
+        真正的渲染恢复由 controller._is_switching_track 翻转驱动（_on_progress），
+        本方法只负责"立刻"反馈，避免旧歌进度残留在切换窗口内。"""
+        try:
+            self.slider_pos.setValue(0)
+            self.lbl_time.setText("加载中...")
+        except Exception:
+            pass
+
     def _play_async(self, target, *args, ok_msg: str = "", fail_msg: str = "该曲目无法播放",
                     status_label=None) -> None:
         """播放类操作后台线程化：UI 只发信号，不等待网络/mpv 结果（双击播放不卡窗）。
@@ -761,6 +771,7 @@ class MusicPanel(QWidget):
         status_label：失败提示的目标状态栏（默认顶部 lbl_status）。"""
         if self._music is None:
             return
+        self._enter_switching_ui()  # 播放新歌入口统一切换态（归零 + 加载中）
         lbl = status_label or self.lbl_status
         if ok_msg:
             lbl.setText(ok_msg)
@@ -783,6 +794,7 @@ class MusicPanel(QWidget):
     def _on_prev(self):
         if self._music is None:
             return
+        self._enter_switching_ui()
         threading.Thread(target=self._safe_call, args=(self._music.prev,),
                          daemon=True, name="ui-music-prev").start()
 
@@ -871,6 +883,7 @@ class MusicPanel(QWidget):
     def _on_next(self):
         if self._music is None:
             return
+        self._enter_switching_ui()
         threading.Thread(target=self._safe_call, args=(self._music.next,),
                          daemon=True, name="ui-music-next").start()
 
@@ -1968,6 +1981,13 @@ class MusicPanel(QWidget):
         """主线程槽：只做内存级 UI 更新（setValue/setText），不碰 mpv IPC。"""
         try:
             self._last_dur = dur  # 供拖动预览换算目标时间（_on_seek_preview）
+            # 切换态（controller._is_switching_track）：在线解析窗口内 mpv 仍报
+            # 旧歌实时位置，禁止渲染——保持归零 + "加载中"，新歌 loadfile 起播
+            # （controller 置 False）后恢复渲染。
+            if getattr(self._music, "_is_switching_track", False):
+                self.slider_pos.setValue(0)
+                self.lbl_time.setText("加载中...")
+                return
             if dur > 0:
                 self.slider_pos.setEnabled(True)
                 if not self.slider_pos.isSliderDown():

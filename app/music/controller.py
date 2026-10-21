@@ -232,6 +232,14 @@ class MusicController:
         # 若不加拦截，_poll_idle 会把"seek 导致的瞬时 idle"误判为播放结束而自动切歌。
         # 置位/复位均由线程写布尔值（GIL 原子），轮询线程读即可，无需加锁。
         self._is_seeking = False
+        # 代次隔离（epoch 契约）：_play_request_id 即最新播放意图代次；
+        # _last_loadfile_epoch 记录最后一次真正 loadfile 的代次。
+        # 两者不相等 = "切歌已发起但新歌尚未 loadfile"（在线解析窗口）
+        # → _poll_idle 必须跳过 playback-time 缓存写入，旧歌实时位置不得污染新歌进度。
+        self._last_loadfile_epoch = 0
+        # UI 切换态：置 True 期间 UI 禁止渲染旧进度（显示"加载中"），
+        # 新歌 loadfile 起播（本地/在线统一入口）后置 False 恢复渲染。
+        self._is_switching_track = False
         self._subscribe_speech_events()
 
         # 启动后台轮询：每0.8秒实时查mpv idle状态，播完自动切下一首。
@@ -265,7 +273,12 @@ class MusicController:
                     else:
                         try:
                             pt = self.mpv.get_property("playback-time", timeout=0.5)
-                            if pt is not None:
+                            # 代次隔离：仅当前代次已真正 loadfile 起播，才允许实时位置
+                            # 写入缓存。在线解析窗口内（新代次已发起但未 loadfile，mpv
+                            # 仍在播旧歌）跳过写入——缓存保持 _play_song 重置的 0.0，
+                            # 旧歌 playback-time 无法污染新歌进度显示。
+                            if pt is not None and \
+                                    self._play_request_id == self._last_loadfile_epoch:
                                 # 只有非 None 才更新；IPC 抖动返回 None 时保留旧快照
                                 self._playback_time_cache = (
                                     float(pt), _time.perf_counter(), self._paused_snapshot)
@@ -1137,6 +1150,11 @@ class MusicController:
         self._shadow_loadfile_ts = time.perf_counter()
         self._shadow_file_kind = "online"
         self.mpv.loadfile(url)
+        # 在线歌已真正 loadfile：代次生效（_poll_idle 恢复写缓存）+ 结束切换态。
+        # 调用方（_resolve_online_worker/play_online）已在锁内/入口校验过 req_id
+        # 等于当前代次，此处 loadfile 的一定是最新播放意图。
+        self._last_loadfile_epoch = self._play_request_id
+        self._is_switching_track = False
         self.mpv.set_property("pause", False)
         try:
             self.mpv._properties["pause"] = False
@@ -1185,6 +1203,9 @@ class MusicController:
         # 播放请求代际号（request_id 契约）：一切新播放意图在此递增，作废在途的
         # 在线解析结果——旧网络请求（_resolve_online_worker）锁内校验不过，绝不 loadfile。
         self._play_request_id += 1
+        current_epoch = self._play_request_id  # 本代次号（代次隔离：窗口内旧数据全部失效）
+        # UI 切换态：新歌 loadfile 前禁止渲染旧进度（在线解析窗口内 mpv 仍报旧歌位置）
+        self._is_switching_track = True
         # 切歌重置播放时间快照与暂停标志：防止旧位置外推污染新歌的进度显示
         self._playback_time_cache = (0.0, time.perf_counter(), False)
         self._paused_snapshot = False
@@ -1233,6 +1254,9 @@ class MusicController:
             # 防御性明确：本分支 return 前重置轮询状态（L673 已置过，
             # 保留以防御未来该行被移动后回归）
             self._last_idle = False
+            # 切歌失败（文件缺失）：结束切换态，UI 恢复渲染（缓存已为 0.0，
+            # 且代次不匹配使 _poll_idle 不会写入旧值）
+            self._is_switching_track = False
             return
 
         # 影子模式：记录 loadfile 发起时刻与文件类型（classify 的 elapsed/kind 依据）
@@ -1240,6 +1264,9 @@ class MusicController:
         self._shadow_file_kind = "online" if str(filepath).startswith("http") else "local"
 
         self.mpv.loadfile(filepath)
+        # 本地歌已真正 loadfile 起播：代次生效（_poll_idle 恢复写缓存）+ 结束切换态
+        self._last_loadfile_epoch = self._play_request_id
+        self._is_switching_track = False
         # 播放成功 → 重置连续失败计数
         self._missing_file_streak = 0
         # 确保新歌曲开始播放（不继承之前的暂停状态）
@@ -1598,6 +1625,10 @@ class MusicController:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_online", track, 0)
+        # 代次隔离：play_online 是不经 _play_song 的公开入口，同样递增代次
+        # 并置切换态——URL 解析（get_play_url）窗口内 mpv 仍报旧歌位置，必须失效。
+        self._play_request_id += 1
+        self._is_switching_track = True
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return False
