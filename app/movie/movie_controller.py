@@ -385,6 +385,12 @@ class MovieController:
                 print("[Movie] mpv 启动失败")
                 return False
         self.mpv.loadfile(url)
+        # 确保新视频开始播放（不继承之前的暂停状态）
+        self.mpv.set_property("pause", False)
+        try:
+            self.mpv._properties["pause"] = False
+        except Exception:
+            pass
         self._current = item
         self._current_index = idx
         self._last_idle = False  # 新播放开始，等播完再触发连播
