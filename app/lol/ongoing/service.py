@@ -108,6 +108,8 @@ class OngoingGameService:
             rps=rps,
             recent_matches_count=recent_n, fetch_count=50, account_history_service=account_history_service,
         )
+        if getattr(self, "_loader", None):
+            self._loader.on_name_resolved = self._on_player_name_resolved
         self._snapshots: List[PlayerSnapshot] = []
         # 当前对局 session（game_id 为生命周期锚点；players 由 gameflow teamOne/teamTwo 构建）
         self._session: Optional[CurrentGameSession] = None
@@ -323,6 +325,9 @@ class OngoingGameService:
                             if op is not None:
                                 match_n += 1
                                 np_.history = op.history
+                                # 继承旧 display_name：防止进游戏重建瞬间名字被刷成 "?"
+                                if not np_.display_name and op.display_name:
+                                    np_.display_name = op.display_name
                                 if not np_.realtime_available:
                                     np_.live_kills = op.live_kills
                                     np_.live_deaths = op.live_deaths
@@ -711,6 +716,17 @@ class OngoingGameService:
             with self._lock:
                 self._loading_in_progress = False
                 self._force_reload = False
+
+    def _on_player_name_resolved(self, puuid, display_name):
+        # 名字秒出回调：loader 子线程查到名字后立即更新 session（先出名字，战绩后台加载）
+        if not (puuid and display_name):
+            return
+        with self._lock:
+            if self._session is not None:
+                for p in self._session.players:
+                    if p.puuid == puuid and not p.display_name:
+                        p.display_name = display_name
+                        break
 
     # ----- UI -----
     def get_session(self) -> Optional[CurrentGameSession]:

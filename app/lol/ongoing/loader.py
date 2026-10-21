@@ -50,6 +50,7 @@ class OngoingGameLoader:
         self._acct = account_history_service
         self._errors: List[str] = []
         self._loading = False
+        self.on_name_resolved = None  # 名字先出回调：查到名字立即通知（service 绑定）
 
     def clear(self) -> None:
         self._cache.clear()
@@ -303,6 +304,14 @@ class OngoingGameLoader:
             if sgp_info:
                 gn = sgp_info.get("name") or ""
                 tl = sgp_info.get("tagLine") or tl
+        # 名字先出：查到名字立即回调（service 回填 session，UI 秒显示），不等 SGP 战绩
+        if gn:
+            _disp = f"{gn}#{tl}" if tl else gn
+            if getattr(self, "on_name_resolved", None):
+                try:
+                    self.on_name_resolved(puuid, _disp)
+                except Exception:
+                    pass
         
         snap = PlayerSnapshot(
             puuid=puuid,
