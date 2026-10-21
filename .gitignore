@@ -199,3 +199,6 @@ config/settings.yaml
 .coverage.*
 skills-lock.json
 docs/perf_report_2026.md
+
+.ruff_cache/
+htmlcov/

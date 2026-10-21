@@ -1,0 +1,346 @@
+"""
+SpeechJudge → SpeechQueue 接线测试
+"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
+import os
+import sys
+import time
+import unittest
+from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from app.speech.speech_judge import SpeechJudge, SpeechLevel
+from app.speech.speech_queue import SpeechQueue, SpeechItem, PRIORITY_S, PRIORITY_A, PRIORITY_B
+from app.core.event_bus import Event, EventType
+
+
+class FakeQueue:
+    """模拟 SpeechQueue"""
+    def __init__(self):
+        self.items = []
+
+    def enqueue(self, item: SpeechItem) -> bool:
+        self.items.append(item)
+        return True
+
+
+class TestSpeechJudgeToQueue(unittest.TestCase):
+    def setUp(self):
+        self.queue = FakeQueue()
+        self.judge = SpeechJudge({"intensity": "normal", "min_level": "B"}, queue=self.queue)
+
+    def _make_event(self, event_type: str, data: dict = None) -> Event:
+        return Event(
+            event_type=event_type,
+            data=data or {},
+            source="test"
+        )
+
+    def test_1_s_event_to_queue(self):
+        """S 级事件 → Queue"""
+        event = self._make_event("game.nexus_destroyed", {})
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        item = self.queue.items[0]
+        self.assertEqual(item.priority, PRIORITY_S)
+
+    def test_2_a_event_to_queue(self):
+        """A 级事件 → Queue"""
+        event = self._make_event(EventType.GAME_ENDED, {"result": "Win"})
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        item = self.queue.items[0]
+        self.assertEqual(item.priority, PRIORITY_A)
+
+    def test_3_b_event_to_queue(self):
+        """B 级事件 → Queue"""
+        event = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": {"title": "测试提醒"},
+            "remaining": 5,
+        })
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        item = self.queue.items[0]
+        self.assertEqual(item.priority, PRIORITY_B)
+
+    def test_4_drop_event_not_to_queue(self):
+        """DROP 事件不进入 Queue"""
+        event = self._make_event(EventType.GAME_TIME_UPDATE, {})
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 0)
+
+    def test_5_text_generated(self):
+        """文本正确生成"""
+        event = self._make_event("game.nexus_destroyed", {})
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        self.assertIn("水晶", self.queue.items[0].text)
+
+    def test_6_category_correct(self):
+        """category 正确"""
+        # 目标事件
+        event = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": {"title": "40秒后小龙刷新"},
+            "remaining": 5,
+        })
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        self.assertEqual(self.queue.items[0].category, "alarm")
+
+    def test_7_event_id_generated(self):
+        """event_id 生成"""
+        event = self._make_event("game.nexus_destroyed", {})
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        self.assertTrue(len(self.queue.items[0].event_id) > 0)
+
+    def test_8_different_events_different_ids(self):
+        """不同事件有不同 event_id"""
+        # 跳过频率限制
+        self.judge.min_interval = 0
+
+        event1 = self._make_event("game.nexus_destroyed", {"event_id": 1})
+        event1.data["game_time"] = 100
+        event1.timestamp = 1000000001.0
+        self.judge._judge_and_speak(event1)
+
+        event2 = self._make_event("game.team_wiped", {"event_id": 2})
+        event2.data["game_time"] = 200
+        event2.timestamp = 1000000002.0
+        self.judge._judge_and_speak(event2)
+
+        self.assertEqual(len(self.queue.items), 2)
+        self.assertNotEqual(self.queue.items[0].event_id, self.queue.items[1].event_id)
+
+    def test_9_ttl_set(self):
+        """TTL 正确设置"""
+        # 用 GAME_ENDED（A 级）
+        event = self._make_event(EventType.GAME_ENDED, {"result": "Win"})
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        item = self.queue.items[0]
+        # A 级 TTL 6 秒
+        self.assertGreater(item.expire_at - time.time(), 5)
+        self.assertLess(item.expire_at - time.time(), 7)
+
+    def test_10_frequency_limit(self):
+        """频率限制生效（B 级事件，S 级不受限制）"""
+        event = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": {"title": "测试"},
+            "remaining": 5,
+        })
+        self.judge._judge_and_speak(event)
+
+        # 立即再来一个同类型 B 级事件
+        self.judge._judge_and_speak(event)
+
+        # 只有第一个进入了 Queue
+        self.assertEqual(len(self.queue.items), 1)
+
+    def test_11_alarm_event(self):
+        """Alarm 事件进入 Queue"""
+        alarm_data = {
+            "type": "flash",
+            "title": "闪现",
+            "expire_at": time.time() + 30,
+        }
+        event = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": alarm_data,
+            "remaining": 5,
+        })
+        self.judge._judge_and_speak(event)
+
+        self.assertEqual(len(self.queue.items), 1)
+        self.assertEqual(self.queue.items[0].category, "alarm")
+
+    def test_12_without_queue_publishes_event(self):
+        """没有 Queue 时发布 SPEECH_SAY 事件"""
+        bus = MagicMock()
+        judge = SpeechJudge({"intensity": "normal", "min_level": "B"}, queue=None)
+        judge.event_bus = bus
+
+        event = self._make_event("game.nexus_destroyed", {})
+        judge._judge_and_speak(event)
+
+        # 应该发布了 SPEECH_SAY 事件
+        bus.publish.assert_called_once()
+
+    def test_13_same_event_same_id(self):
+        """Test A：相同事件重复处理得到相同 event_id"""
+        self.judge.min_interval = 0  # 跳过频率限制
+
+        event1 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "敌方",
+            "victim_name": "你",
+            "is_current_player_death": True,
+            "game_time": 100.0,
+        })
+        event2 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "敌方",
+            "victim_name": "你",
+            "is_current_player_death": True,
+            "game_time": 100.0,
+        })
+
+        id1 = self.judge._get_event_id(event1)
+        id2 = self.judge._get_event_id(event2)
+
+        self.assertEqual(id1, id2)
+
+    def test_14_different_killers_different_ids(self):
+        """Test B：相同 game_time，不同 killer/victim，不同 event_id"""
+        self.judge.min_interval = 0
+
+        event1 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "亚索",
+            "victim_name": "你",
+            "game_time": 100.0,
+        })
+        event2 = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "你",
+            "victim_name": "亚索",
+            "game_time": 100.0,
+        })
+
+        id1 = self.judge._get_event_id(event1)
+        id2 = self.judge._get_event_id(event2)
+
+        self.assertNotEqual(id1, id2)
+
+    def test_15_category_not_dedup(self):
+        """Test C：相同 category 不同事件，都允许"""
+        self.judge.min_interval = 0
+
+        event1 = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": {"title": "A"}, "remaining": 5,
+        })
+        event1.data["game_time"] = 100
+        self.judge._judge_and_speak(event1)
+
+        event2 = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": {"title": "B"}, "remaining": 5,
+        })
+        event2.data["game_time"] = 200
+        self.judge._judge_and_speak(event2)
+
+        # 两个都进入了 Queue
+        self.assertEqual(len(self.queue.items), 2)
+        # category 都是 alarm
+        self.assertEqual(self.queue.items[0].category, "alarm")
+        self.assertEqual(self.queue.items[1].category, "alarm")
+
+    def test_16_fallback_no_timestamp(self):
+        """Test D：fallback 不含系统时间"""
+        event = self._make_event(EventType.CHAMPION_KILL, {
+            "killer_name": "A",
+            "victim_name": "B",
+            "game_time": 100.0,
+        })
+
+        event_id = self.judge._get_event_id(event)
+
+        # 不应该包含当前系统时间
+        self.assertNotIn(str(int(time.time())), event_id)
+        self.assertFalse(event_id.startswith("calc:"))
+
+    def test_17_native_event_id(self):
+        """Test E：原生 EventID 优先"""
+        event = self._make_event(EventType.DRAGON_KILLED, {
+            "event_id": 12345,
+            "killer_name": "A",
+        })
+
+        event_id = self.judge._get_event_id(event)
+
+        # 应该使用原生 ID
+        self.assertTrue(event_id.startswith("liveclient:"))
+        self.assertIn("12345", event_id)
+
+
+class TestPhase1DFixes(unittest.TestCase):
+    """Phase 1-D: GAME_ENDED, multikill kill_streak, S-level frequency"""
+
+    def setUp(self):
+        self.queue = FakeQueue()
+        self.judge = SpeechJudge({"intensity": "sparse", "min_level": "B"}, queue=self.queue)
+
+    def _make_event(self, event_type: str, data: dict = None) -> Event:
+        return Event(event_type=event_type, data=data or {}, source="test")
+
+    # P1-1: GAME_ENDED
+    def test_game_end_win(self):
+        event = self._make_event(EventType.GAME_ENDED, {"result": "Win"})
+        self.judge._judge_and_speak(event)
+        self.assertEqual(len(self.queue.items), 1)
+        self.assertEqual(self.queue.items[0].text, "游戏胜利！")
+
+    def test_game_end_lose(self):
+        event = self._make_event(EventType.GAME_ENDED, {"result": "Lose"})
+        self.judge._judge_and_speak(event)
+        self.assertEqual(len(self.queue.items), 1)
+        self.assertEqual(self.queue.items[0].text, "游戏失败。")
+
+    def test_game_end_no_result(self):
+        event = self._make_event(EventType.GAME_ENDED, {})
+        self.judge._judge_and_speak(event)
+        self.assertEqual(len(self.queue.items), 1)
+        self.assertEqual(self.queue.items[0].text, "游戏结束。")
+
+    # P2-1: multikill kill_streak
+    def test_multikill_double(self):
+        event = self._make_event(EventType.MULTI_KILL, {"kill_streak": 2, "killer_name": "X"})
+        text = self.judge._generate_speech_text(event, SpeechLevel.A)
+        self.assertEqual(text, "双杀！")
+
+    def test_multikill_triple(self):
+        event = self._make_event(EventType.MULTI_KILL, {"kill_streak": 3, "killer_name": "X"})
+        text = self.judge._generate_speech_text(event, SpeechLevel.A)
+        self.assertEqual(text, "三杀！")
+
+    def test_multikill_quadra(self):
+        event = self._make_event(EventType.MULTI_KILL, {"kill_streak": 4, "killer_name": "X"})
+        text = self.judge._generate_speech_text(event, SpeechLevel.A)
+        self.assertEqual(text, "四杀！")
+
+    def test_multikill_penta(self):
+        event = self._make_event(EventType.MULTI_KILL, {"kill_streak": 5, "killer_name": "X"})
+        text = self.judge._generate_speech_text(event, SpeechLevel.A)
+        self.assertEqual(text, "五杀！")
+
+    # P1-2: S level skips frequency limit
+    def test_s_skips_frequency(self):
+        """两个不同 S 事件 5 秒内都应播报"""
+        e1 = self._make_event("game.nexus_destroyed", {"event_id": 1})
+        e2 = self._make_event("game.team_wiped", {"event_id": 2})
+        self.judge._judge_and_speak(e1)
+        self.judge._judge_and_speak(e2)
+        self.assertEqual(len(self.queue.items), 2)
+
+    def test_b_level_still_frequency_limited(self):
+        """B 级仍受 min_interval 限制"""
+        judge = SpeechJudge({"intensity": "normal", "min_level": "B"}, queue=self.queue)
+        e1 = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": {"title": "A"}, "remaining": 5,
+        })
+        e2 = self._make_event(EventType.ALARM_TRIGGERED, {
+            "alarm": {"title": "B"}, "remaining": 5,
+        })
+        judge._judge_and_speak(e1)
+        judge._judge_and_speak(e2)
+        self.assertEqual(len(self.queue.items), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
