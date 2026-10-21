@@ -1,4 +1,4 @@
-﻿"""
+"""
 音乐控制器 - 高层封装，整合 mpv + 队列 + 数据库 + 搜索
 
 对外提供统一的音乐操作接口。
@@ -199,6 +199,8 @@ class MusicController:
         # B 方案：换源取消令牌 + 抑制跳歌标记
         self._candidate_switch_token: int = 0
         self._candidate_switching: bool = False
+        # 在线切歌解析 generation：快速连切时丢弃过期 resolve（防旧 URL 覆盖新歌）
+        self._online_resolve_gen = 0
 
         # mpv 可用性（mpv 未安装/路径错/启动失败 → 模块降级运行，不崩主程序）
         self._mpv_available = True
@@ -1028,16 +1030,29 @@ class MusicController:
         return None
 
     def _play_online_queue_item(self, song: Dict[str, Any]):
-        """队列在线歌播放：按 title+artist 重搜（不用存的 track_id——旧 track 会失效，
-        日志 raw=None 证实），候选逐个取 URL → loadfile。失败 → 延迟 next() 主动跳过：
-        轮询上升沿会被 _last_idle=now_idle 覆盖吞掉（_play_song 的 reset 在 auto_next 同步
-        返回后被 L295 覆盖），必须主动跳，不能等轮询。不发 MUSIC_TRACK_CHANGED
-        （rule_engine/speech_judge 语音订阅者），直接 record_song 记历史。"""
+        """队列在线歌播放：网络解析（重搜+取URL）放后台线程，不阻塞调用线程。
+        解析完成后在同一 worker 线程执行 loadfile（mpv IPC 有锁、db 有锁、
+        状态只写 state_store——轮询/Timer 线程早已多线程调用，安全）。
+        快速连切时用 generation token 丢弃过期 resolve，防止旧 URL 覆盖新歌。
+        失败 → 延迟 next() 主动跳过：轮询上升沿会被 _last_idle=now_idle 覆盖吞掉
+        （_play_song 的 reset 在 auto_next 同步返回后被 L295 覆盖），必须主动跳，
+        不能等轮询。不发 MUSIC_TRACK_CHANGED（rule_engine/speech_judge 语音订阅者），
+        直接 record_song 记历史。"""
         query = f"{song.get('title', '')} {song.get('artist', '')}".strip()
         if not query:
             print("[Music] 队列在线歌无 title，跳过")
             self._schedule_skip_online(song)
             return
+        self._online_resolve_gen += 1
+        gen = self._online_resolve_gen
+        threading.Thread(
+            target=self._resolve_online_worker,
+            args=(song, query, gen), daemon=True,
+            name="music-online-resolve").start()
+
+    def _resolve_online_worker(self, song: Dict[str, Any], query: str, gen: int):
+        """后台线程：重搜 → 逐个候选取 URL → loadfile → 状态/历史。
+        解析完成时 gen 已过期（期间用户又切歌）→ 丢弃结果，不覆盖新歌。"""
         try:
             online_dict = self.online_manager.search_all(query, limit_per_source=5)
             all_tracks = [t for tracks in online_dict.values() for t in tracks]
@@ -1055,6 +1070,9 @@ class MusicController:
             if chosen is None:
                 print("[Music] 队列在线歌重搜 URL 均失败，跳过")
                 self._schedule_skip_online(song)
+                return
+            if gen != self._online_resolve_gen:
+                print("[Music] 在线解析已过期（期间已切歌），丢弃结果")
                 return
             url = play_result["url"]
             print(f"[Music] 队列在线歌重搜播放: {chosen.title} - {chosen.artist} ({chosen.source_name})")
@@ -1112,6 +1130,8 @@ class MusicController:
         except Exception as e:
             print(f"[Music] 队列在线歌播放失败: {e}")
             self._schedule_skip_online(song)
+
+
 
     def _schedule_skip_online(self, song: Dict[str, Any]):
         """延迟 next() 跳过队列在线歌（不依赖轮询上升沿——会被 _last_idle 覆盖吞掉）。"""

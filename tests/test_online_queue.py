@@ -8,6 +8,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from unittest.mock import MagicMock, patch
 
 
+def _wait_until(condition, timeout=2.0):
+    """轮询等待：适配切歌异步化（loadfile 在后台 worker 线程执行）。"""
+    start = time.time()
+    while time.time() - start < timeout:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def _make_ctrl(tmp_path):
     from app.music.controller import MusicController
     cfg = {
@@ -51,6 +61,7 @@ def test_queue_online_song_researches_and_plays(tmp_path):
     # URL 取自搜索结果里的新 track（不是存的 track_id）
     t = c.online_manager.get_play_url.call_args.args[0]
     assert t.track_id == "new-1" and t.title == "夜曲"
+    assert _wait_until(lambda: c.mpv.loadfile.call_count == 1, timeout=2.0), "后台切歌超时未执行 loadfile"
     c.mpv.loadfile.assert_called_once_with("http://x/new.mp3")
     rows = c.db.get_history()
     assert len(rows) == 1 and rows[0]["source_type"] == "online"
@@ -135,6 +146,7 @@ def test_queue_online_then_local_auto_next(tmp_path):
     ])
     c.queue.play_at(0)
     c._play_song(c.queue.get_current())
+    assert _wait_until(lambda: c.mpv.loadfile.call_count == 1, timeout=2.0), "后台切歌超时未执行 loadfile"
     assert c.mpv.loadfile.call_count == 1
     nxt = c.queue.next()
     assert nxt["title"] == "本地"

@@ -1,4 +1,5 @@
 """音乐面板（本地 + 在线）。"""
+import threading
 import zlib
 from typing import List
 
@@ -709,9 +710,19 @@ class MusicPanel(QWidget):
                 print(f"[Music] highlight toggle: {e}")
 
     # ---- 播放控制 ----
+    def _safe_call(self, fn, *args) -> None:
+        """后台线程通用包裹：controller 调用放子线程，避免 mpv IPC 超时卡住 UI；
+        异常捕获记录，绝不炸线程。"""
+        try:
+            fn(*args)
+        except Exception as e:
+            print(f"[MusicPanel] 后台调用失败: {e!r}")
+
     def _on_prev(self):
-        try: self._music.prev()
-        except Exception: pass
+        if self._music is None:
+            return
+        threading.Thread(target=self._safe_call, args=(self._music.prev,),
+                         daemon=True, name="ui-music-prev").start()
 
     def _sync_toggle_icon(self):
         """按真实播放状态立即同步 播放/暂停 图标（锁定期间跳过，防止点击后闪回）。"""
@@ -734,6 +745,8 @@ class MusicPanel(QWidget):
                 self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
 
     def _on_toggle(self):
+        if self._music is None:
+            return
         # 点击瞬间锁定图标并立即翻转，mpv 异步启动期间旧状态不会再把它闪回
         cur = getattr(self, "_toggle_icon", None)
         if cur is None:                    # 首次点击：先对齐真实状态再翻转
@@ -743,10 +756,8 @@ class MusicPanel(QWidget):
         want = "pause" if cur == "play" else "play"
         self._toggle_icon = want
         self.btn_toggle.setIcon(lucide_icon(want, 18, "#ffffff"))
-        try:
-            self._music.toggle()
-        except Exception:
-            pass
+        threading.Thread(target=self._safe_call, args=(self._music.toggle,),
+                         daemon=True, name="ui-music-toggle").start()
         # 轮询真实播放状态直到确认翻转（mpv 异步），最长 ~3s；切换失败则按真实状态校正
         self._poll_ticks = 15
         QTimer.singleShot(200, self._poll_toggle_confirm)
@@ -793,12 +804,17 @@ class MusicPanel(QWidget):
             print(f"[MusicPanel] 清空队列失败: {e}")
 
     def _on_next(self):
-        try: self._music.next()
-        except Exception: pass
+        if self._music is None:
+            return
+        threading.Thread(target=self._safe_call, args=(self._music.next,),
+                         daemon=True, name="ui-music-next").start()
 
     def _on_volume(self, v):
-        try: self._music.set_volume(int(v))
-        except Exception: pass
+        if self._music is None:
+            return
+        threading.Thread(target=self._safe_call,
+                         args=(self._music.set_volume, int(v)),
+                         daemon=True, name="ui-music-volume").start()
 
     def _on_volume_released(self):
         """音量滑块松开 → 防抖 1s 写回 settings.yaml music.default_volume
