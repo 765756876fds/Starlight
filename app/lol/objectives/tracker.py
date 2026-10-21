@@ -97,7 +97,7 @@ class ObjectiveTracker:
             d = self._objs.get("dragon")
             if d:
                 d.killed += 1
-                if d.rule.respawn:
+                if d.rule.respawn and not self._elder_reached:
                     d.next_spawn = game_time + float(d.rule.respawn)
                     d.state = ObjectiveState.WAITING_RESPAWN
 
@@ -109,6 +109,12 @@ class ObjectiveTracker:
                 if not self._elder_reached and cnt >= 4:
                     self._elder_reached = True
                     self._soul_team = killer_team
+                    # 龙魂达成：普通小龙不再刷新，清理其排程（避免幽灵提醒）
+                    d = self._objs.get("dragon")
+                    if d:
+                        d.next_spawn = None
+                        d.state = ObjectiveState.NOT_ACTIVE
+                    # 开始排程远古龙
                     e = self._objs.get("elder")
                     if e and e.rule.respawn:
                         e.next_spawn = game_time + float(e.rule.respawn)

@@ -300,31 +300,33 @@ class StateDiff:
 
             if event_name == "DragonKill":
                 killer_name = evt.get("KillerName", "")
+                real_time = float(evt.get("EventTime", new.game_time))
                 events.append(GameEvent(
                     event_type=GameEventType.DRAGON_KILLED,
-                    game_time=new.game_time,
+                    game_time=real_time,
                     data={
                         "riot_event_id": evt.get("EventID"),
                         "dragon_type": evt.get("DragonType", ""),
                         "killer_name": killer_name,
                         "killer_team": self._find_team(new, killer_name),
                         "stolen": evt.get("Stolen", False),
-                        "game_time": new.game_time,
+                        "game_time": real_time,
                     },
                     timestamp=time.time(),
                 ))
 
             elif event_name == "BaronKill":
                 killer_name = evt.get("KillerName", "")
+                real_time = float(evt.get("EventTime", new.game_time))
                 events.append(GameEvent(
                     event_type=GameEventType.BARON_KILLED,
-                    game_time=new.game_time,
+                    game_time=real_time,
                     data={
                         "riot_event_id": evt.get("EventID"),
                         "killer_name": killer_name,
                         "killer_team": self._find_team(new, killer_name),
                         "stolen": evt.get("Stolen", False),
-                        "game_time": new.game_time,
+                        "game_time": real_time,
                     },
                     timestamp=time.time(),
                 ))
