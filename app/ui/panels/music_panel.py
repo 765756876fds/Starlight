@@ -1,5 +1,6 @@
 """音乐面板（本地 + 在线）。"""
 import threading
+import time
 import zlib
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
@@ -129,6 +130,7 @@ class MusicPanel(QWidget):
     # 下载进度：后台线程 emit → 主线程渲染（跨线程安全）；pct None=无总量，-1=完成，-2=失败
     _dl_signal = Signal(str, object)  # key, pct
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
+    _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
 
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
@@ -457,6 +459,10 @@ class MusicPanel(QWidget):
         self._timer.timeout.connect(self._refresh)
         self._timer.start(1000)
 
+        # 进度轮询后台线程：mpv IPC（playback-time/duration）绝不在主线程同步读取
+        self._progress_polling = False
+        self._progress_signal.connect(self._on_progress)
+
         # P1 候选旁路：订阅 controller 推送的候选事件（Signal 桥到主线程）
         self._search_event.connect(self._on_search_show)
         try:
@@ -469,11 +475,14 @@ class MusicPanel(QWidget):
         super().showEvent(event)
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.start()
+        self._progress_polling = True
+        self._start_progress_poll()
 
     def hideEvent(self, event):
         super().hideEvent(event)
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.stop()
+        self._progress_polling = False
 
     # ---- 卡片网格（只改 UI 绘制，不动数据流） ----
     def _setup_card_view(self, w: QListWidget) -> MusicCardDelegate:
@@ -1876,19 +1885,46 @@ class MusicPanel(QWidget):
         except Exception:
             pass
 
+    def _start_progress_poll(self):
+        """后台线程每 400ms 读 mpv 进度（playback-time/duration 的 IPC 不碰主线程），
+        经 _progress_signal 回主线程更新滑块/时间。面板隐藏时停轮询（线程退出后可重启）。"""
+        th = getattr(self, "_progress_thread", None)
+        if th is not None and th.is_alive():
+            return
+
+        def poll():
+            while self._progress_polling:
+                try:
+                    if self._music is not None and hasattr(self._music, "mpv"):
+                        pos = self._music.mpv.get_live_playback_time()
+                        dur = self._music.mpv.get_duration()
+                        self._progress_signal.emit(pos, dur)
+                except Exception:
+                    pass
+                time.sleep(0.4)
+
+        self._progress_thread = threading.Thread(target=poll, daemon=True,
+                                                 name="ui-music-progress-poll")
+        self._progress_thread.start()
+
+    def _on_progress(self, pos: float, dur: float) -> None:
+        """主线程槽：只做内存级 UI 更新（setValue/setText），不碰 mpv IPC。"""
+        try:
+            if dur > 0:
+                self.slider_pos.setEnabled(True)
+                if not self.slider_pos.isSliderDown():
+                    self.slider_pos.setValue(int(pos / dur * 1000))
+                self.lbl_time.setText(
+                    f"{int(pos//60)}:{int(pos%60):02d} / {int(dur//60)}:{int(dur%60):02d}")
+        except Exception:
+            pass
+
     def _refresh(self):
         if self._music is None:
             return
         try:
-            if hasattr(self._music, "mpv"):
-                pos = self._music.mpv.get_live_playback_time()
-                dur = self._music.mpv.get_duration()
-                if dur > 0:
-                    self.slider_pos.setEnabled(True)
-                    if not self.slider_pos.isSliderDown():
-                        self.slider_pos.setValue(int(pos / dur * 1000))
-                    self.lbl_time.setText(
-                        f"{int(pos//60)}:{int(pos%60):02d} / {int(dur//60)}:{int(dur%60):02d}")
+            # 进度滑块/时间由后台轮询线程（_progress_signal → _on_progress）驱动，
+            # 主线程绝不同步 IPC 读 mpv——playback-time/duration 响应慢曾造成拖拽窗口卡顿。
             song = self._music.get_current_song()
             if song:
                 title = song.get("title") or song.get("name") or ""

@@ -287,9 +287,9 @@ class MpvController:
     def get_current_time(self) -> float:
         return float(self._properties.get("playback-time", 0))
 
-    def get_live_playback_time(self) -> float:
+    def get_live_playback_time(self, timeout: float = 1.0) -> float:
         try:
-            val = self.get_property("playback-time", timeout=1.0)
+            val = self.get_property("playback-time", timeout=timeout)
             if val is not None:
                 self._properties["playback-time"] = val
                 return float(val)
@@ -297,9 +297,9 @@ class MpvController:
             pass
         return self.get_current_time()
 
-    def get_duration(self) -> float:
+    def get_duration(self, timeout: float = 1.0) -> float:
         try:
-            val = self.get_property("duration", timeout=1.0)
+            val = self.get_property("duration", timeout=timeout)
             if val is not None:
                 self._properties["duration"] = val
                 return float(val)
