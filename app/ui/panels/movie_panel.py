@@ -801,8 +801,10 @@ class MoviePanel(QWidget):
 
     def _on_app_quit(self):
         try:
-            # 退出清理（QThread 崩溃修复）：先 cancel（循环快速停）→ quit → 有界 wait。
-            # 最坏情况当前网络请求阻塞：requests 超时 TIMEOUT=8s 收尾，wait 上限 9s 覆盖。
+            # 退出清理（QThread 崩溃修复）：先 cancel（循环快速停）→ 对仍运行的
+            # 线程统一 quit() + requestInterruption()（请求中断）→ 统一 wait(2000) 有界等待。
+            # 绝不串行 9000：最坏情况网络请求阻塞由 requests 8s 超时收尾，退出不等它；
+            # 逐个 9s 串行等待会让退出流程卡死数秒甚至触发二次崩溃。
             for w in (self._worker, self._rank_worker, self._poster_worker,
                       self._rank_db_worker, self._sub_worker):
                 cancel = getattr(w, "cancel", None)
@@ -811,11 +813,17 @@ class MoviePanel(QWidget):
                         cancel()
                     except Exception:
                         pass
-            for t in (self._thread, self._rank_thread, self._poster_thread,
-                      self._rank_db_thread, self._parse_thread, self._sub_thread):
-                if t is not None and t.isRunning():
-                    t.quit()
-                    t.wait(9000)
+            threads = [t for t in (self._thread, self._rank_thread, self._poster_thread,
+                                   self._rank_db_thread, self._parse_thread, self._sub_thread)
+                       if t is not None and t.isRunning()]
+            for t in threads:
+                t.quit()
+                try:
+                    t.requestInterruption()
+                except Exception:
+                    pass
+            for t in threads:
+                t.wait(2000)
             self._movie.close()
         except Exception:
             pass

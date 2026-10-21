@@ -477,6 +477,17 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] 订阅候选事件失败: {e}")
 
+    def closeEvent(self, event):
+        """关闭时注销事件总线订阅（防内存泄漏/幽灵回调）：
+        与 __init__ 中 subscribe 的一一配对注销。"""
+        try:
+            bus = get_event_bus()
+            bus.unsubscribe(ONLINE_SEARCH_DONE, self._on_search_event)
+            bus.unsubscribe(ONLINE_ERROR, self._on_error_event)
+        except Exception as e:
+            print(f"[MusicPanel] 注销事件订阅失败: {e}")
+        super().closeEvent(event)
+
     def showEvent(self, event):
         super().showEvent(event)
         if hasattr(self, "_timer") and self._timer is not None:
