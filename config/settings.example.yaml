@@ -9,6 +9,7 @@ app:
   data_dir: ./data
   log_dir: ./logs
 music:
+  trace_enabled: true
   scan_dirs: []
   extensions:
   - .mp3

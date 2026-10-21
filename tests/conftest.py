@@ -68,3 +68,16 @@ def _qt_process_cleanup():
             app.processEvents()
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _disable_trace_in_tests(monkeypatch):
+    """测试隔离：强制关闭影子对拍 trace（不读本地 config/settings.yaml）。
+
+    本地配置可能已开启 music.trace_enabled（实机采集默认开），测试必须独立于该
+    配置：否则 RecordingMpv 包装会破坏 `ctrl.mpv is fake` 注入断言，且测试进程
+    会向 logs/trace 写真实 trace 文件。生产行为不受影响（默认仍读 settings.yaml）。"""
+    from app.music.controller import MusicController
+
+    monkeypatch.setattr(MusicController, "_load_trace_enabled", lambda self: False)
+    yield
