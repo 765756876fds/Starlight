@@ -189,7 +189,7 @@ class MusicPanel(QWidget):
         top_bar.addWidget(self.btn_view_toggle)
         root.addLayout(top_bar)
         tabs = self.tabs = QTabWidget()
-        root.addWidget(tabs)
+        root.addWidget(tabs, 1)  # Tab 区占满上方剩余空间，下方留给全局播放控制栏
         tabs.currentChanged.connect(self._on_tab_changed)
 
         # ---- 本地 Tab ----
@@ -228,12 +228,11 @@ class MusicPanel(QWidget):
         self.list_local = QListWidget()
         self._dl_local = self._setup_card_view(self.list_local)
         ll.addWidget(self.list_local, 1)
-
         # 当前曲目（小标题级）
         self.lbl_track = QLabel("未播放")
         self.lbl_track.setAlignment(Qt.AlignCenter)
         self.lbl_track.setProperty("class", "title")
-        ll.addWidget(self.lbl_track)
+        root.addWidget(self.lbl_track)  # 全局播放控制栏：常驻面板底部，不随 Tab 切换
 
         # 进度条（律动波形：播放中频谱跳动，暂停低电平）
         from ..widgets.waveform_slider import WaveformSlider
@@ -250,8 +249,8 @@ class MusicPanel(QWidget):
             self.lbl_time.setFont(f)
         except Exception:
             pass  # 旧 Qt 无 QFont.Tag：忽略
-        ll.addWidget(self.slider_pos)
-        ll.addWidget(self.lbl_time)
+        root.addWidget(self.slider_pos)
+        root.addWidget(self.lbl_time)
 
         # 播放控制：金字塔布局——高频操作（播放/暂停）放大居中，次要操作紧凑成行
         row_main = QHBoxLayout()
@@ -272,7 +271,7 @@ class MusicPanel(QWidget):
         row_main.addWidget(self.btn_toggle)
         row_main.addWidget(self.btn_next)
         row_main.addStretch()
-        ll.addLayout(row_main)
+        root.addLayout(row_main)
 
         # 次要操作（紧凑）+ 音量
         row_sub = QHBoxLayout()
@@ -305,7 +304,7 @@ class MusicPanel(QWidget):
         self.slider_vol.setRange(0, 100)
         self.btn_volume.set_slider(self.slider_vol)
         row_sub.addWidget(self.btn_volume)
-        ll.addLayout(row_sub)
+        root.addLayout(row_sub)
 
         # 键盘优先：Ctrl+F / Ctrl+K 聚焦搜索框（窗口级快捷键）
         self._sc_find = QShortcut(
