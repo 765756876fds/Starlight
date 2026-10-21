@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.combo.models import Combo, ComboStep, ChampionCombos
-from app.combo.validation import SEQUENCE_KEYS, validate_combo
+from app.combo.validation import SEQUENCE_KEYS, is_valid_sequence_key, validate_combo
 from app.ui.widgets.glass_dialog import GlassDialog
 from app.ui.widgets.glass_msg import glass_info, glass_question, glass_warning
 from app.ui.widgets.icon_utils import lucide_icon
@@ -32,7 +32,7 @@ _KEY_GROUPS = [
     ("技能", "qwer"),
     ("召唤", "df"),
     ("物品", "1234567"),
-    ("其他", "asb"),
+    ("其他", "abcs"),
 ]
 
 
@@ -59,6 +59,20 @@ class KeyPickerDialog(GlassDialog):
                 row.addWidget(btn)
             row.addStretch()
             layout.addLayout(row)
+        # 手动输入：按钮列表只覆盖常用键，其余字母/数字可在此输入（1~5 位）
+        tip = QLabel("或手动输入按键（1~5 位字母/数字）：")
+        layout.addWidget(tip)
+        mrow = QHBoxLayout()
+        self.edt_manual = QLineEdit()
+        self.edt_manual.setPlaceholderText("如 s / g / w")
+        self.edt_manual.setMaxLength(5)
+        self.edt_manual.returnPressed.connect(self._pick_manual)
+        btn_manual = QPushButton("确定")
+        btn_manual.setProperty("class", "primary")
+        btn_manual.clicked.connect(self._pick_manual)
+        mrow.addWidget(self.edt_manual, 1)
+        mrow.addWidget(btn_manual)
+        layout.addLayout(mrow)
         btn_cancel = QPushButton("取消")
         btn_cancel.clicked.connect(self.reject)
         layout.addWidget(btn_cancel)
@@ -66,6 +80,14 @@ class KeyPickerDialog(GlassDialog):
     def _pick(self, key: str) -> None:
         self._selected = key
         self.accept()
+
+    def _pick_manual(self) -> None:
+        k = self.edt_manual.text().strip().lower()
+        if is_valid_sequence_key(k):
+            self._selected = k
+            self.accept()
+        else:
+            glass_warning(self, "按键不合法", "需 1~5 位字母或数字（如 s / g / w）")
 
     def selected_key(self) -> Optional[str]:
         return self._selected

@@ -222,10 +222,15 @@ def test_validate_empty_sequence_rejected(tmp_path):
 
 
 def test_validate_bad_sequence_key_rejected(tmp_path):
+    """非字母数字的序列键（符号）→ 按键不合法；字母/数字 1~5 位已放开。"""
     champ = ComboConfig.load(str(tmp_path / "combos.yaml")).find_by_id(64)
-    ok, errors = validate_combo(champ, "s", [SimpleNamespace(key="x", delay_after_ms=10)])
+    ok, errors = validate_combo(champ, "s", [SimpleNamespace(key="-", delay_after_ms=10)])
     assert ok is False
     assert any("按键不合法" in e for e in errors)
+    # 放开后：x / s / 任意字母数字单键合法（回归防误伤）
+    for good in ("x", "s", "g", "5"):
+        ok, errors = validate_combo(champ, "s", [SimpleNamespace(key=good, delay_after_ms=10)])
+        assert ok is True, (good, errors)
 
 
 def test_validate_edit_same_trigger_not_duplicate(tmp_path):
