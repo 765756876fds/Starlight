@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-
 SEARCH_URL = "/lol-lobby/v2/lobby/matchmaking/search"
 SEARCH_STATE_URL = "/lol-lobby/v2/lobby/matchmaking/search-state"
 LOBBY_URL = "/lol-lobby/v2/lobby"

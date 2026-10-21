@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 from . import cache as cache_mod
 from .cache import DEFAULT_CACHE_DIR

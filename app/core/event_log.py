@@ -11,16 +11,19 @@ JSONL Event Log - 事件持久化层
 - EventLog 是观察层，不是核心链路
 - 即使写入失败，也不能导致 Agent 崩溃
 """
-import os
 import json
-import uuid
+import os
 import threading
+import uuid
 from datetime import datetime, timedelta
+from typing import Any
 
+from app.core.logger import get_logger
 from app.core.path_resolve import PROJECT_ROOT
-from typing import Any, Dict, Optional
 
-from .event_bus import Event, EventBus, get_event_bus
+from .event_bus import Event, get_event_bus
+
+logger = get_logger()
 
 
 # 需要脱敏的敏感字段
@@ -31,7 +34,7 @@ SENSITIVE_KEYS = {
 }
 
 
-def _sanitize_dict(d: Dict[str, Any], depth: int = 0) -> Dict[str, Any]:
+def _sanitize_dict(d: dict[str, Any], depth: int = 0) -> dict[str, Any]:
     """递归脱敏字典中的敏感字段"""
     if depth > 5:  # 防止无限递归
         return d
@@ -63,7 +66,7 @@ class EventLog:
     def __init__(self, log_dir: str = str(PROJECT_ROOT / "data" / "events")):
         self.log_dir = log_dir
         self._lock = threading.Lock()
-        self._current_date: Optional[str] = None
+        self._current_date: str | None = None
         self._current_file = None
         self._running = False
 
@@ -110,8 +113,8 @@ class EventLog:
                         os.remove(path)
                         deleted += 1
                         freed += sz
-                    except OSError:
-                        pass
+                    except OSError as e:
+                        logger.warning(f"清理旧日志失败: {e}")
                 else:
                     remaining.append(path)
 
@@ -229,7 +232,7 @@ class EventLog:
         """获取日志目录"""
         return self.log_dir
 
-    def count_events(self, date_str: Optional[str] = None) -> int:
+    def count_events(self, date_str: str | None = None) -> int:
         """统计某天的事件数（只读，用于测试）"""
         if date_str is None:
             date_str = datetime.now().strftime("%Y-%m-%d")

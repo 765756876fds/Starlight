@@ -1,6 +1,6 @@
 """Player data models - identity unification + current game snapshot"""
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 
 @dataclass
@@ -39,11 +39,11 @@ class GamePlayer:
 @dataclass
 class CurrentGamePlayers:
     """当前对局 10 人快照"""
-    self_player: Optional[GamePlayer] = None
-    allies: List[GamePlayer] = field(default_factory=list)
-    enemies: List[GamePlayer] = field(default_factory=list)
+    self_player: GamePlayer | None = None
+    allies: list[GamePlayer] = field(default_factory=list)
+    enemies: list[GamePlayer] = field(default_factory=list)
 
-    def all(self) -> List[GamePlayer]:
+    def all(self) -> list[GamePlayer]:
         result = []
         if self.self_player:
             result.append(self.self_player)
@@ -51,7 +51,7 @@ class CurrentGamePlayers:
         result.extend(self.enemies)
         return result
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         return {
             "self": self.self_player.summoner_name if self.self_player else None,
             "ally_count": len(self.allies),

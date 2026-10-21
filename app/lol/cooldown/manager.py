@@ -1,19 +1,24 @@
 """CooldownManager：管理多个手动 reminder，用 Scheduler 做一次性计时。"""
 from __future__ import annotations
 
+import copy
 import threading
 import uuid
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from types import MappingProxyType
 
 from ...core.scheduler import get_scheduler
 from ..data.ability_catalog import AbilityCatalog
 from ..data.champion_catalog import ChampionCatalog
 from ..data.summoner_spell_catalog import SummonerSpellCatalog
 from .calculator import CooldownCalculator
-from .events import COOLDOWN_CANCELLED, COOLDOWN_REMIND, COOLDOWN_STARTED, COOLDOWN_READY
-from .models import CooldownReminder, CooldownCastSnapshot, ReminderStatus
-from types import MappingProxyType
-import copy
+from .events import (
+    COOLDOWN_CANCELLED,
+    COOLDOWN_READY,
+    COOLDOWN_REMIND,
+    COOLDOWN_STARTED,
+)
+from .models import CooldownCastSnapshot, CooldownReminder, ReminderStatus
 from .policy import ReminderPolicy
 
 _SLOT_ZH = {"Q": "Q", "W": "W", "E": "E", "R": "大招"}
@@ -36,14 +41,14 @@ def _normalize_slot(skill: str) -> str:
 class CooldownManager:
     def __init__(
         self,
-        champions: Optional[ChampionCatalog] = None,
-        abilities: Optional[AbilityCatalog] = None,
-        spells: Optional[SummonerSpellCatalog] = None,
-        on_event: Optional[Callable[[str, dict], None]] = None,
-        speech_enqueue: Optional[Callable[[str, str], None]] = None,
+        champions: ChampionCatalog | None = None,
+        abilities: AbilityCatalog | None = None,
+        spells: SummonerSpellCatalog | None = None,
+        on_event: Callable[[str, dict], None] | None = None,
+        speech_enqueue: Callable[[str, str], None] | None = None,
         remind_before: float = 5.0,
         scheduler=None,
-        policy: Optional[ReminderPolicy] = None,
+        policy: ReminderPolicy | None = None,
         haste_provider=None,
     ):
         self._champions = champions or ChampionCatalog()
@@ -58,8 +63,8 @@ class CooldownManager:
         # callable(champion_name, side) -> float ability_haste；可选，缺省 0
         self._haste_provider = haste_provider
 
-        self._reminders: Dict[str, CooldownReminder] = {}
-        self._task_ids: Dict[str, List[str]] = {}
+        self._reminders: dict[str, CooldownReminder] = {}
+        self._task_ids: dict[str, list[str]] = {}
         self._lock = threading.Lock()
         # 唯一时间基准：2999 游戏内 gameTime。
         # _clock_synced=True 表示已收到有效 game.time_update；
@@ -70,16 +75,16 @@ class CooldownManager:
     # ----- public API -----
     def start_reminder(
         self,
-        champion_name: Optional[str],
+        champion_name: str | None,
         skill: str,
         side: str = "enemy",
-        ability_rank: Optional[int] = None,
+        ability_rank: int | None = None,
         ability_haste: float = 0.0,
         ultimate_haste: float = 0.0,
         summoner_spell_haste: float = 0.0,
-        champion_level: Optional[int] = None,
-        runes: Optional[Tuple] = None,
-    ) -> Optional[CooldownReminder]:
+        champion_level: int | None = None,
+        runes: tuple | None = None,
+    ) -> CooldownReminder | None:
         if not skill:
             return None
 
@@ -333,7 +338,7 @@ class CooldownManager:
         print(f"[Cooldown] adjusted {reminder_id} by {adjustment_seconds}s (event={event_id})")
         return True
 
-    def list_active(self) -> List[CooldownReminder]:
+    def list_active(self) -> list[CooldownReminder]:
         with self._lock:
             return [r for r in self._reminders.values()
                     if r.status == ReminderStatus.ACTIVE.value]
@@ -341,7 +346,7 @@ class CooldownManager:
     def current_game_time(self) -> float:
         return self._game_time
 
-    def get(self, reminder_id: str) -> Optional[CooldownReminder]:
+    def get(self, reminder_id: str) -> CooldownReminder | None:
         with self._lock:
             return self._reminders.get(reminder_id)
 
@@ -367,12 +372,12 @@ class CooldownManager:
         self._clock_synced = False
 
     # ----- CommandBus handlers -----
-    def handle_start(self, command) -> Optional[CooldownReminder]:
+    def handle_start(self, command) -> CooldownReminder | None:
         p = getattr(command, "params", command) or {}
         ah = 0.0
         ssh = 0.0
         level = 0
-        runes: Tuple = ()
+        runes: tuple = ()
         if self._haste_provider is not None:
             try:
                 result = self._haste_provider(p.get("champion"), p.get("side", "enemy"))
@@ -399,7 +404,7 @@ class CooldownManager:
         )
 
     # ----- 静态 CD 查询（cooldown.query）-----
-    def query_cooldown(self, champion_name: Optional[str],
+    def query_cooldown(self, champion_name: str | None,
                        skill: str) -> dict:
         """查询静态基础 CD，返回结构化结果（不创建计时器）。"""
         slot = _normalize_slot(skill)
@@ -470,7 +475,7 @@ class CooldownManager:
     def handle_cancel_all(self, command=None) -> int:
         return self.cancel_all()
 
-    def handle_list(self, command=None) -> List[dict]:
+    def handle_list(self, command=None) -> list[dict]:
         return [self._payload(r) for r in self.list_active()]
 
     # ----- internals -----

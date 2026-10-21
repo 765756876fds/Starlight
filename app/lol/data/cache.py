@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.core.path_resolve import PROJECT_ROOT
 
 DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "lol_data"
 
 
-def load_json(cache_dir: Path, name: str) -> Optional[Dict[str, Any]]:
+def load_json(cache_dir: Path, name: str) -> dict[str, Any] | None:
     p = Path(cache_dir) / name
     if not p.exists():
         return None
@@ -21,7 +21,7 @@ def load_json(cache_dir: Path, name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def save_json(cache_dir: Path, name: str, data: Dict[str, Any]) -> bool:
+def save_json(cache_dir: Path, name: str, data: dict[str, Any]) -> bool:
     """原子写：.tmp + replace。"""
     d = Path(cache_dir)
     d.mkdir(parents=True, exist_ok=True)

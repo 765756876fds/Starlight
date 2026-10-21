@@ -20,7 +20,12 @@ Windows 系统设置（SPI_GETCLIENTAREAANIMATION）+ app 级覆盖开关。
 import sys
 
 from PySide6.QtCore import (
-    QAbstractAnimation, QEasingCurve, QObject, QPointF, QVariantAnimation, Signal,
+    QAbstractAnimation,
+    QEasingCurve,
+    QObject,
+    QPointF,
+    QVariantAnimation,
+    Signal,
 )
 
 # ---------------------------------------------------------------- 曲线

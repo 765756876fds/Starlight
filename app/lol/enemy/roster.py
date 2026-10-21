@@ -7,9 +7,8 @@ haste_source 记录来源；后续如引入 item→haste 映射再扩展，不�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
-from ..snapshot import GameSnapshot, PlayerInfo
+from ..snapshot import GameSnapshot
 
 
 @dataclass(frozen=True)
@@ -30,8 +29,8 @@ class EnemyProfile:
 class EnemyRoster:
     """从 GameSnapshot 构建敌方资料表。纯函数、可单测。"""
 
-    def build(self, snapshot: GameSnapshot) -> List[EnemyProfile]:
-        out: List[EnemyProfile] = []
+    def build(self, snapshot: GameSnapshot) -> list[EnemyProfile]:
+        out: list[EnemyProfile] = []
         for p in (snapshot.enemy_team or []):
             if not p.champion_name:
                 continue
@@ -59,7 +58,7 @@ class EnemyRoster:
             ))
         return out
 
-    def find(self, snapshot: GameSnapshot, champion: str) -> Optional[EnemyProfile]:
+    def find(self, snapshot: GameSnapshot, champion: str) -> EnemyProfile | None:
         if not champion:
             return None
         from ..data.champion_catalog import ChampionCatalog

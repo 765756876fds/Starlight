@@ -1,7 +1,6 @@
 """PlayerAnalysisService - 从 2999 + LCU 构建当前对局玩家快照"""
-from typing import Optional, Dict, Any, List, Tuple
 
-from .models import PlayerIdentity, GamePlayer, CurrentGamePlayers
+from .models import CurrentGamePlayers, GamePlayer, PlayerIdentity
 from .repository import PlayerRepository
 
 
@@ -9,20 +8,20 @@ class PlayerAnalysisService:
     def __init__(self, repository: PlayerRepository, lcu=None):
         self.repo = repository
         self.lcu = lcu
-        self._current: Optional[CurrentGamePlayers] = None
-        self._last_signature: Optional[Tuple] = None
+        self._current: CurrentGamePlayers | None = None
+        self._last_signature: tuple | None = None
 
     def set_lcu(self, lcu):
         self.lcu = lcu
 
-    def _signature(self, snapshot) -> Tuple:
+    def _signature(self, snapshot) -> tuple:
         """玩家阵容签名：用于检测是否变化"""
         return tuple(
             (p.summoner_name, p.team, p.champion_id)
             for p in sorted(snapshot.players, key=lambda x: x.summoner_name)
         )
 
-    def analyze_game(self, snapshot) -> Optional[CurrentGamePlayers]:
+    def analyze_game(self, snapshot) -> CurrentGamePlayers | None:
         """从 GameSnapshot 构建 CurrentGamePlayers
 
         阵营判断：以 self.team 为基准，同队=ally，异队=enemy。
@@ -85,5 +84,5 @@ class PlayerAnalysisService:
         return result
 
     @property
-    def current(self) -> Optional[CurrentGamePlayers]:
+    def current(self) -> CurrentGamePlayers | None:
         return self._current

@@ -21,10 +21,11 @@ import threading
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.core.config import resolve_mpv_path
 from app.core.path_resolve import PROJECT_ROOT
+
 from ..core.event_bus import Event, EventType, get_event_bus
 
 
@@ -59,7 +60,7 @@ class TTSController:
     - 不阻塞 EventBus
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.engine = config.get("engine", "edge")
         self.voice = config.get("edge_voice", "zh-CN-XiaoxiaoNeural")
@@ -91,15 +92,15 @@ class TTSController:
         self._lock = threading.Lock()
 
         # 播放进程
-        self._play_process: Optional[subprocess.Popen] = None
-        self._current_file: Optional[str] = None
+        self._play_process: subprocess.Popen | None = None
+        self._current_file: str | None = None
 
         # asyncio 事件循环（用于 Edge TTS）
-        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._loop_thread: Optional[threading.Thread] = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
 
         # 播放完成监听线程
-        self._watcher_thread: Optional[threading.Thread] = None
+        self._watcher_thread: threading.Thread | None = None
 
         # 停止标志
         self._stop_flag = threading.Event()
@@ -304,7 +305,7 @@ class TTSController:
         """Qwen API Key 是否已配置（环境变量 / settings 值 / tools/.qwen_key）。"""
         return bool(self._resolve_qwen_key(self.config))
 
-    def _resolve_qwen_key(self, config: Dict[str, Any]) -> str:
+    def _resolve_qwen_key(self, config: dict[str, Any]) -> str:
         """Qwen API Key：环境变量 QWEN_API_KEY > settings 值 > tools/.qwen_key（已 gitignore）"""
         env_key = os.environ.get("QWEN_API_KEY", "")
         if env_key:
@@ -321,7 +322,7 @@ class TTSController:
                 pass
         return ""
 
-    def _generate_audio(self, text: str) -> Optional[str]:
+    def _generate_audio(self, text: str) -> str | None:
         """生成音频文件（同步，在后台线程执行）"""
         if self.engine == "qwen":
             output_file = self._generate_qwen_audio(text)
@@ -387,7 +388,7 @@ class TTSController:
             print(f"[TTS] Edge TTS 生成失败: {e}")
             return None
 
-    def _generate_qwen_audio(self, text: str) -> Optional[str]:
+    def _generate_qwen_audio(self, text: str) -> str | None:
         """阿里云百炼 Qwen TTS 合成（同步，在后台线程执行）"""
         if not self.qwen_api_key:
             print("[TTS] Qwen API Key 未配置（settings.yaml / tools/.qwen_key / QWEN_API_KEY）")
@@ -613,7 +614,7 @@ class TTSController:
         except Exception as e:
             print(f"[TTS] 清理临时文件失败: {e}")
 
-    def _publish_event(self, event_type: str, data: Dict[str, Any]):
+    def _publish_event(self, event_type: str, data: dict[str, Any]):
         """发布事件"""
         try:
             self.event_bus.publish(Event(

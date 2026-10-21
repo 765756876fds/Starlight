@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import threading
 
-
 READY_CHECK_URL = "/lol-matchmaking/v1/ready-check"
 ACCEPT_URL = "/lol-matchmaking/v1/ready-check/accept"
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 
 @dataclass
@@ -28,7 +27,7 @@ class ComboStep:
 class Combo:
     trigger: str
     note: str = ""
-    sequence: List[ComboStep] = field(default_factory=list)
+    sequence: list[ComboStep] = field(default_factory=list)
     cooldown_ms: int = 1000  # 同一连招触发冷却（毫秒），防连按误触
 
     @property
@@ -49,10 +48,10 @@ class Combo:
 class ChampionCombos:
     name: str
     champion_id: int
-    aliases: List[str] = field(default_factory=list)
-    combos: List[Combo] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
+    combos: list[Combo] = field(default_factory=list)
 
-    def find_by_trigger(self, key: str) -> Optional[Combo]:
+    def find_by_trigger(self, key: str) -> Combo | None:
         """按触发键查连招（大小写不敏感）。"""
         k = (key or "").strip().lower()
         if not k:
@@ -73,7 +72,7 @@ class ChampionCombos:
 # ---------- YAML dict → dataclass 解析（宽松防御，坏条目跳过不崩） ----------
 
 
-def parse_step(d: dict) -> Optional[ComboStep]:
+def parse_step(d: dict) -> ComboStep | None:
     key = (d or {}).get("key")
     if not key:
         return None
@@ -84,12 +83,12 @@ def parse_step(d: dict) -> Optional[ComboStep]:
     return ComboStep(key=str(key).strip().lower(), delay_after_ms=delay)
 
 
-def parse_combo(d: dict) -> Optional[Combo]:
+def parse_combo(d: dict) -> Combo | None:
     trigger = (d or {}).get("trigger")
     if not trigger:
         return None
     seq_raw = d.get("sequence") or []
-    steps: List[ComboStep] = []
+    steps: list[ComboStep] = []
     for s in seq_raw:
         st = parse_step(s) if isinstance(s, dict) else None
         if st is not None:
@@ -108,7 +107,7 @@ def parse_combo(d: dict) -> Optional[Combo]:
     )
 
 
-def parse_champion(name: str, d: dict) -> Optional[ChampionCombos]:
+def parse_champion(name: str, d: dict) -> ChampionCombos | None:
     """champion 条目 → ChampionCombos；结构损坏时返回 None（跳过不崩）。
 
     YAML 顶层 key 形如 "英雄名_championId"（to_yaml_dict 防同名覆盖）；
@@ -122,7 +121,7 @@ def parse_champion(name: str, d: dict) -> Optional[ChampionCombos]:
         cid = 0
     if cid <= 0:
         return None
-    combos: List[Combo] = []
+    combos: list[Combo] = []
     for c in (d.get("combos") or []):
         cb = parse_combo(c) if isinstance(c, dict) else None
         if cb is not None:

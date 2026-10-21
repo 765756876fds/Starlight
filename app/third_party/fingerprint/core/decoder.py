@@ -32,7 +32,11 @@ from functools import lru_cache
 import numpy as np
 
 from .. import formats
-from ..utils.exceptions import AudioDecodeError, FFmpegNotFoundError, UnsupportedFormatError
+from ..utils.exceptions import (
+    AudioDecodeError,
+    FFmpegNotFoundError,
+    UnsupportedFormatError,
+)
 
 logger = logging.getLogger(__name__)
 

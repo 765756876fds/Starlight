@@ -10,12 +10,11 @@ import os
 import tempfile
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton
 
+from ..theme.colors import Colors
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.icon_utils import lucide_icon
-from ..theme.colors import Colors
-from ..theme.tokens import Tokens
 
 
 class _IdentifyWorker(QObject):

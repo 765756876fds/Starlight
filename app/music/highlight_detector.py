@@ -6,12 +6,11 @@ numba/llvmlite，降低打包难度与启动开销。
 """
 import contextlib
 import io
-import os
+import logging
 import warnings
+
 import numpy as np
 from scipy.signal import find_peaks
-from typing import Optional, Tuple
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +32,7 @@ def _silent_load(audio_path: str):
     这里在 load 期间把进程 fd 2 临时指向 devnull，加载完立即恢复；
     同时抑制 librosa 的 UserWarning/FutureWarning。窗口仅限本次解码调用。"""
     import os as _os
+
     import librosa  # 惰性：仅高光检测实际调用时加载（P1）
     with warnings.catch_warnings(), contextlib.redirect_stderr(io.StringIO()):
         warnings.simplefilter("ignore")
@@ -49,7 +49,7 @@ def _silent_load(audio_path: str):
             _os.close(saved)
 
 
-def detect_highlight(audio_path: str) -> Optional[Tuple[float, float, float]]:
+def detect_highlight(audio_path: str) -> tuple[float, float, float] | None:
     """
     检测歌曲高光位置
     返回 (start_seconds, end_seconds, score)，失败返回None

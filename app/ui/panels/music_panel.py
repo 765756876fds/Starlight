@@ -1,27 +1,37 @@
 """音乐面板（本地 + 在线）。"""
 import threading
 import zlib
-from typing import List
 
-from PySide6.QtCore import QThread, Qt, QTimer, QObject, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-    QStyledItemDelegate, QTabWidget, QVBoxLayout, QWidget,
+    QComboBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QStyledItemDelegate,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
+from ...core.command_bus import CommandType, get_command_bus
+from ...core.event_bus import get_event_bus
+from ...music.humming import HummingService
+from ...music.lyric_search import LyricIndex
+from ...music.online.events import ONLINE_ERROR, ONLINE_SEARCH_DONE
+from ...music.online.models import OnlineTrack
 from ..dialogs.identify_dialog import IdentifyDialog
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
 from ..widgets.icon_utils import lucide_icon
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
-from ...core.command_bus import CommandType, get_command_bus
-from ...core.event_bus import get_event_bus
-from ...music.humming import HummingService
-from ...music.lyric_search import LyricIndex
-from ...music.online.events import ONLINE_SEARCH_DONE, ONLINE_ERROR
-from ...music.online.models import OnlineTrack
 
 
 class _LyricBuildWorker(QObject):
@@ -552,7 +562,7 @@ class MusicPanel(QWidget):
         """扫描本地音乐：读 music_dirs.json 启用目录 → 应用到 scanner → QThread rescan。"""
         if self._music is None:
             return
-        from ..settings_store import load_music_dirs, ALL_EXTENSIONS
+        from ..settings_store import ALL_EXTENSIONS, load_music_dirs
         dirs = [d for d in load_music_dirs() if d.get("enabled")]
         if not dirs:
             self.lbl_scan_status.setText("无启用的音乐目录，请到设置中添加")
@@ -664,7 +674,7 @@ class MusicPanel(QWidget):
         self.lbl_scan_status.setText(f"歌词索引失败: {err}")
         self._pending_lyric_query = None
 
-    def _show_lyric_results(self, songs: List[dict], kw: str):
+    def _show_lyric_results(self, songs: list[dict], kw: str):
         """结果列表复用本地列表（title - artist + UserRole=song，双击走 _on_local_play）。"""
         if not songs:
             self.list_local.clear()
@@ -1468,9 +1478,10 @@ class MusicPanel(QWidget):
             print(f"[MusicPanel] get_playlists error: {e}")
             pls = []
         for p in pls:
+            pid = p.get("id")
             act = sub.addAction(p.get("name", "?"))
             act.triggered.connect(
-                lambda _=False, pid=p.get("id"): self._add_to_playlist(pid, song))
+                lambda _=False, pid=pid: self._add_to_playlist(pid, song))
         if pls:
             sub.addSeparator()
         act_new = sub.addAction("新建歌单…")

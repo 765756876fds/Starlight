@@ -5,8 +5,8 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional, List
 
 # 状态常量
 AVAILABLE = "AVAILABLE"
@@ -35,7 +35,7 @@ class ChampionMasteryProvider:
     def __init__(self, lcu_get: Callable):
         self._lcu_get = lcu_get
 
-    def get_masteries(self, puuid: str) -> tuple[str, List[ChampionMasteryRecord]]:
+    def get_masteries(self, puuid: str) -> tuple[str, list[ChampionMasteryRecord]]:
         """
         查询玩家所有英雄熟练度。
         
@@ -86,7 +86,7 @@ class ChampionMasteryProvider:
 
         return AVAILABLE, records
 
-    def get_top3(self, puuid: str) -> tuple[str, List[ChampionMasteryRecord]]:
+    def get_top3(self, puuid: str) -> tuple[str, list[ChampionMasteryRecord]]:
         """
         获取 Top 3 熟练英雄。
         

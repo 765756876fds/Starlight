@@ -16,16 +16,17 @@ import json
 import os
 import threading
 import time
-from typing import Dict, Optional
 
 from .config import ComboConfig
 from .executor import ComboExecutor, KeySender
 from .listener import ComboListener
-from .models import ChampionCombos, Combo
+from .models import ChampionCombos
 from .win_focus import is_lol_foreground
 
 try:
-    from app.core.path_resolve import PROJECT_ROOT  # 打包态: exe 目录（使用频率 json 可写）
+    from app.core.path_resolve import (
+        PROJECT_ROOT,  # 打包态: exe 目录（使用频率 json 可写）
+    )
 except ImportError:
     PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 USAGE_PATH = os.path.join(str(PROJECT_ROOT), "data", "combo_usage.json")
@@ -38,9 +39,9 @@ EXEC_GRACE_S = 0.2
 class UsageStore:
     """常用英雄使用频率（本地 json，按 champion_id 计数）。"""
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: str | None = None):
         self.path = path or USAGE_PATH
-        self._data: Dict[str, int] = {}
+        self._data: dict[str, int] = {}
         self._lock = threading.Lock()
         try:
             if os.path.exists(self.path):
@@ -65,10 +66,10 @@ class UsageStore:
 
 
 class ComboManager:
-    def __init__(self, config_path: Optional[str] = None,
-                 key_sender: Optional[KeySender] = None,
+    def __init__(self, config_path: str | None = None,
+                 key_sender: KeySender | None = None,
                  ongoing_service=None,
-                 usage_path: Optional[str] = None):
+                 usage_path: str | None = None):
         self.config: ComboConfig = ComboConfig.load(config_path)
         self._executor = ComboExecutor(key_sender)
         self._listener = ComboListener(self._handle_key)
@@ -77,16 +78,16 @@ class ComboManager:
         self._enabled = False
         # 仅 LoL 前台时触发（默认开；一期不持久化，每次启动默认开）
         self._window_gate_enabled = True
-        self._current_champion_id: Optional[int] = None
-        self._current_champion_name: Optional[str] = None
+        self._current_champion_id: int | None = None
+        self._current_champion_name: str | None = None
         self._ignore_until: float = 0.0
         self._last_exec_time: dict = {}  # trigger -> 上次执行时间戳（冷却保护）
         self._log_lock = threading.Lock()  # 保护切换日志不重复刷屏
         # 前台检测缓存（200ms，monotonic）：钩子回调里避免每次按键都调 win32/psutil
-        self._fg_cache: Optional[bool] = None
+        self._fg_cache: bool | None = None
         self._fg_cache_ts: float = 0.0
         # 当前英雄解析缓存（5s，monotonic）：对局内 championId 固定，避免每次按键都查 ongoing
-        self._champ_cache: Optional[ChampionCombos] = None
+        self._champ_cache: ChampionCombos | None = None
         self._champ_cache_ts: float = 0.0
 
     # ---------- 生命周期 ----------
@@ -152,7 +153,7 @@ class ComboManager:
         return ok
 
     def add_champion(self, name: str, champion_id: int,
-                     aliases: Optional[list] = None):
+                     aliases: list | None = None):
         """添加新英雄（连招为空）并保存。已存在返回 None，不重复添加。"""
         cid = int(champion_id)
         if not name or self.config.find_by_id(cid) is not None:
@@ -186,12 +187,12 @@ class ComboManager:
                 self.config.aliases.pop(key, None)
         return self.save_config()
 
-    def current_champion_name(self) -> Optional[str]:
+    def current_champion_name(self) -> str | None:
         """当前对局中我方玩家使用的英雄名（自动识别）。"""
         self._resolve_self_champion()
         return self._current_champion_name
 
-    def current_champion_id(self) -> Optional[int]:
+    def current_champion_id(self) -> int | None:
         self._resolve_self_champion()
         return self._current_champion_id
 
@@ -254,7 +255,7 @@ class ComboManager:
 
         threading.Thread(target=_run, daemon=True, name="combo-exec").start()
 
-    def _resolve_self_champion(self) -> Optional[ChampionCombos]:
+    def _resolve_self_champion(self) -> ChampionCombos | None:
         """从 Ongoing 服务取"我方玩家自己"的 champion_id → ChampionCombos。
 
         只读访问 ongoing_service._session（CurrentGameSession.my_team 中
@@ -294,7 +295,7 @@ class ComboManager:
         self._champ_cache_ts = time.monotonic()
         return cc
 
-    def _read_self_champion_id(self) -> Optional[int]:
+    def _read_self_champion_id(self) -> int | None:
         svc = self._ongoing_service
         if svc is None:
             return None

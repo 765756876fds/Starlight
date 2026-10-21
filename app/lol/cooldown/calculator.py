@@ -13,7 +13,7 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Union
 
 Number = Union[int, float, None]
 
@@ -29,7 +29,7 @@ def _haste_multiplier(haste: Number) -> float:
     return 100.0 / (100.0 + h)
 
 
-def _apply(base: Number, haste: Number) -> Optional[float]:
+def _apply(base: Number, haste: Number) -> float | None:
     if base is None:
         return None
     try:
@@ -41,7 +41,7 @@ def _apply(base: Number, haste: Number) -> Optional[float]:
     return round(b * _haste_multiplier(haste), 2)
 
 
-def effective_ability_cooldown(base: Number, ability_haste: Number = 0.0) -> Optional[float]:
+def effective_ability_cooldown(base: Number, ability_haste: Number = 0.0) -> float | None:
     """普通技能 Q/W/E 的实际冷却。"""
     return _apply(base, ability_haste)
 
@@ -54,13 +54,13 @@ def _num(v: Number) -> float:
 
 
 def effective_ultimate_cooldown(base: Number, ability_haste: Number = 0.0,
-                                ultimate_haste: Number = 0.0) -> Optional[float]:
+                                ultimate_haste: Number = 0.0) -> float | None:
     """R 的实际冷却：Ability Haste 与 Ultimate Haste 叠加。"""
     total = _num(ability_haste) + _num(ultimate_haste)
     return _apply(base, total)
 
 
-def effective_summoner_cooldown(base: Number, summoner_spell_haste: Number = 0.0) -> Optional[float]:
+def effective_summoner_cooldown(base: Number, summoner_spell_haste: Number = 0.0) -> float | None:
     """召唤师技能的实际冷却。"""
     return _apply(base, summoner_spell_haste)
 
@@ -71,7 +71,7 @@ class CooldownCalculator:
     @staticmethod
     def for_ability(base: Number, slot: str = "",
                     ability_haste: Number = 0.0,
-                    ultimate_haste: Number = 0.0) -> Optional[float]:
+                    ultimate_haste: Number = 0.0) -> float | None:
         slot = (slot or "").strip().upper()
         if slot == "R":
             return effective_ultimate_cooldown(base, ability_haste=ability_haste,
@@ -79,7 +79,7 @@ class CooldownCalculator:
         return effective_ability_cooldown(base, ability_haste)
 
     @staticmethod
-    def for_summoner(base: Number, summoner_spell_haste: Number = 0.0) -> Optional[float]:
+    def for_summoner(base: Number, summoner_spell_haste: Number = 0.0) -> float | None:
         return effective_summoner_cooldown(base, summoner_spell_haste)
 
 

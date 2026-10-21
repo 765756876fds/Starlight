@@ -10,7 +10,6 @@
 """
 import os
 import re
-from typing import List, Optional, Tuple
 
 # [mm:ss.xx] / [mm:ss.xxx] / [m:ss.x]
 _TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
@@ -19,7 +18,7 @@ _TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _META_TAGS = ("ti", "ar", "al", "by", "offset", "length", "re", "ve", "au")
 
 
-def _ts_to_seconds(mm: str, ss: str, frac: Optional[str]) -> float:
+def _ts_to_seconds(mm: str, ss: str, frac: str | None) -> float:
     seconds = int(mm) * 60 + int(ss)
     if frac:
         # xx（厘秒）/ xxx（毫秒）统一按小数位换算
@@ -27,14 +26,14 @@ def _ts_to_seconds(mm: str, ss: str, frac: Optional[str]) -> float:
     return seconds
 
 
-def parse_lrc(text: str) -> List[Tuple[float, str]]:
+def parse_lrc(text: str) -> list[tuple[float, str]]:
     """解析 LRC 文本 → [(time_sec, line_text), ...]，按时间升序。
 
     - 无时间轴的行（元标签/空行）忽略
     - 一行多个时间戳 → 每个时间戳一条（同文本）
     - offset 标签（[offset:+500] 毫秒）应用到所有时间戳
     """
-    lines: List[Tuple[float, str]] = []
+    lines: list[tuple[float, str]] = []
     offset_ms = 0
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
@@ -58,7 +57,7 @@ def parse_lrc(text: str) -> List[Tuple[float, str]]:
     return lines
 
 
-def find_local_lrc(audio_path: Optional[str]) -> Optional[str]:
+def find_local_lrc(audio_path: str | None) -> str | None:
     """查同名 .lrc：xxx.mp3 → 同目录 xxx.lrc。不存在/路径非法返回 None。"""
     if not audio_path:
         return None
@@ -69,7 +68,7 @@ def find_local_lrc(audio_path: Optional[str]) -> Optional[str]:
     return None
 
 
-def load_lyrics_from_file(lrc_path: str) -> List[Tuple[float, str]]:
+def load_lyrics_from_file(lrc_path: str) -> list[tuple[float, str]]:
     """读 .lrc 文件（UTF-8 优先，GBK 回退）并解析。读失败返回 []。"""
     try:
         text = _read_text_tolerant(lrc_path)

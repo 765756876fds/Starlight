@@ -11,10 +11,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
 
-from .match_model import MatchRecord, _VALID_QUEUE_IDS
 from .champion_mastery import ChampionMasteryRecord
+from .match_model import _VALID_QUEUE_IDS, MatchRecord
 
 
 def _is_valid_match(m: MatchRecord) -> bool:
@@ -76,10 +75,10 @@ class PlayerIntelligenceResult:
     average_kda: float = 0.0     # 逐场 KDA 的平均值
 
     # 近期英雄统计（来自历史比赛聚合）
-    champion_stats: List[ChampionStat] = field(default_factory=list)
+    champion_stats: list[ChampionStat] = field(default_factory=list)
 
     # 常用位置（来自历史比赛 teamPosition 统计）
-    habitual_positions: List[str] = field(default_factory=list)  # ["UTILITY", "MIDDLE"] 等
+    habitual_positions: list[str] = field(default_factory=list)  # ["UTILITY", "MIDDLE"] 等
 
     # 近期形态（称号判定用）
     streak: int = 0               # 20 场窗口：最新→最旧连续胜负：>0 连胜, <0 连败
@@ -93,13 +92,13 @@ class PlayerIntelligenceResult:
 
     # Champion Mastery Top 3（来自 LCU Champion Mastery API）
     mastery_status: str = ""     # AVAILABLE / EMPTY / UNAVAILABLE / NO_PUUID
-    mastery_top3: List[ChampionMasteryRecord] = field(default_factory=list)
+    mastery_top3: list[ChampionMasteryRecord] = field(default_factory=list)
 
     # 当前英雄判断
     current_champion_id: int = 0
     current_champion_games: int = 0
     current_champion_in_recent_history: bool = False
-    current_champion_is_mastery_top3: Optional[bool] = None  # True/False/None(未知)
+    current_champion_is_mastery_top3: bool | None = None  # True/False/None(未知)
 
     # 状态
     valid: bool = False
@@ -120,13 +119,13 @@ class PlayerIntelligenceService:
     def analyze(
         self,
         puuid: str,
-        matches: List[MatchRecord],
+        matches: list[MatchRecord],
         game_name: str = "",
         tag_line: str = "",
         privacy: str = "",
         current_champion_id: int = 0,
         mastery_status: str = "",
-        mastery_top3: Optional[List[ChampionMasteryRecord]] = None,
+        mastery_top3: list[ChampionMasteryRecord] | None = None,
     ) -> PlayerIntelligenceResult:
         """
         分析玩家历史比赛数据。
@@ -220,7 +219,7 @@ class PlayerIntelligenceService:
 
         # 总统计
         kda_list = []
-        champion_map: Dict[int, ChampionStat] = {}
+        champion_map: dict[int, ChampionStat] = {}
 
         for m in valid_matches:
             # 数据完整性：KDA 缺失场次不参与平均（不计入 unknown_count）
@@ -283,7 +282,7 @@ class PlayerIntelligenceService:
 
         # 常用位置统计
         valid_positions = {"TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"}
-        position_counter: Dict[str, int] = {}
+        position_counter: dict[str, int] = {}
         for m in valid_matches:
             pos = (m.team_position or "").upper()
             if pos in valid_positions:

@@ -1,16 +1,26 @@
 """
 音源管理对话框（GlassDialog 无边框）
 """
-from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLineEdit, QLabel, QFileDialog, QCheckBox
-)
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+)
 
-from ..widgets.glass_msg import glass_info, glass_critical, glass_warning, glass_question
+from app.music.source_manager import MusicSourceManager
 
-from app.music.source_manager import MusicSourceManager, MusicSource
 from ..widgets.glass_dialog import GlassDialog
+from ..widgets.glass_msg import (
+    glass_critical,
+    glass_info,
+    glass_question,
+    glass_warning,
+)
 
 
 class SourceManageDialog(GlassDialog):
@@ -118,7 +128,7 @@ class SourceManageDialog(GlassDialog):
             self._notify_changed()
             self._refresh_list()
         except Exception as e:
-            glass_critical(self, "导入失败", f"错误: {str(e)}")
+            glass_critical(self, "导入失败", f"错误: {e!s}")
 
     def _import_from_url(self):
         """从URL导入"""
@@ -132,7 +142,7 @@ class SourceManageDialog(GlassDialog):
             self._notify_changed()
             self._refresh_list()
         except Exception as e:
-            glass_critical(self, "导入失败", f"错误: {str(e)}")
+            glass_critical(self, "导入失败", f"错误: {e!s}")
 
     def _delete_selected(self):
         """删除选中的音源"""

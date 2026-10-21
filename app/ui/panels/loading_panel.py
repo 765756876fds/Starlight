@@ -1,12 +1,15 @@
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.core.log_bus import get_log_bus
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
-
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit,
-)
-from app.core.log_bus import get_log_bus
-
 
 MODULES = [
     ("eventlog", "EventLog"),

@@ -19,11 +19,11 @@ class CooldownContext:
     available: bool = False  # 是否真的解析到了修正信息
 
     @classmethod
-    def empty(cls) -> "CooldownContext":
+    def empty(cls) -> CooldownContext:
         return cls(0.0, 0.0, 0.0, False)
 
     @classmethod
-    def from_snapshot(cls, snapshot, champion_name: str | None = None) -> "CooldownContext":
+    def from_snapshot(cls, snapshot, champion_name: str | None = None) -> CooldownContext:
         """尽力解析。当前 2999 不暴露 haste，返回 empty（基础 CD）。
 
         保留此入口以便未来接入真实字段，调用方无需改动。

@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from ..config import Settings
 from ..utils.exceptions import ConfigurationError
-from .base import META_PARAMS, META_SIGNATURE, SORTABLE_FIELDS, StorageBackend, TrackRecord, normalize_tags, validate_track_changes
+from .base import (
+    META_PARAMS,
+    META_SIGNATURE,
+    SORTABLE_FIELDS,
+    StorageBackend,
+    TrackRecord,
+    normalize_tags,
+    validate_track_changes,
+)
 from .memory_store import MemoryStore
 from .sqlite_store import SQLiteStore
 

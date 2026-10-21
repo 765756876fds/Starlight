@@ -8,22 +8,22 @@
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
 )
 
-from .glass_dialog import GlassDialog
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
+from .glass_dialog import GlassDialog
 
 
 class _GlassMsgBox(GlassDialog):
     """通用消息框：文本 + 底部按钮行（右对齐；primary 高亮主操作）。"""
 
-    def __init__(self, parent: Optional[object], title: str, text: str,
+    def __init__(self, parent: object | None, title: str, text: str,
                  buttons: list[tuple[str, bool]], danger_yes: bool = False):
         super().__init__(title, parent)
         lbl = QLabel(text)
@@ -37,7 +37,7 @@ class _GlassMsgBox(GlassDialog):
         row = QHBoxLayout()
         row.setSpacing(Tokens.SPACING_SM)
         row.addStretch()
-        self._result: Optional[str] = None
+        self._result: str | None = None
         for text_btn, primary in buttons:
             b = QPushButton(text_btn)
             b.setMinimumWidth(88)

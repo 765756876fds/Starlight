@@ -10,7 +10,7 @@
 import copy
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class StateStore:
@@ -22,9 +22,9 @@ class StateStore:
     """
 
     def __init__(self):
-        self._data: Dict[str, Dict[str, Any]] = {}
+        self._data: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
-        self._listeners: Dict[str, list] = {}
+        self._listeners: dict[str, list] = {}
 
     def set(self, namespace: str, key: str, value: Any):
         """设置状态值"""
@@ -55,7 +55,7 @@ class StateStore:
                 return value
         return default
 
-    def get_namespace(self, namespace: str) -> Dict[str, Any]:
+    def get_namespace(self, namespace: str) -> dict[str, Any]:
         """获取整个命名空间的状态（过滤内部 {key}__updated_at，与 snapshot() 一致）"""
         with self._lock:
             ns_data = self._data.get(namespace, {})
@@ -114,7 +114,7 @@ class StateStore:
             except Exception as e:
                 print(f"[StateStore] 监听器异常: {e}")
 
-    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+    def snapshot(self) -> dict[str, dict[str, Any]]:
         """获取全部状态快照"""
         with self._lock:
             result = {}
@@ -125,7 +125,7 @@ class StateStore:
 
 
 # 全局状态存储单例
-_state_store: Optional[StateStore] = None
+_state_store: StateStore | None = None
 
 
 def get_state_store() -> StateStore:

@@ -1,14 +1,14 @@
 """候选优先级 + fallback 推进。"""
 from __future__ import annotations
 
-from typing import Iterable, Optional, Set
+from collections.abc import Iterable
 
 
 def pick_available(
     priority: Iterable[int],
-    rejected: Set[int],
-    server_available: Optional[Set[int]],
-) -> Optional[int]:
+    rejected: set[int],
+    server_available: set[int] | None,
+) -> int | None:
     """按优先级返回第一个未被 rejected 且在 server_available 中的英雄 id。
 
     server_available 为 None 时（拉取失败）不过滤服务器集合，但仍跳过 rejected。

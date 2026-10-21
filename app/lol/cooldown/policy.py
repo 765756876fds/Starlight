@@ -29,7 +29,7 @@ class ReminderPolicy:
         return self.small_remind_before
 
     @classmethod
-    def from_config(cls, cfg: dict | None) -> "ReminderPolicy":
+    def from_config(cls, cfg: dict | None) -> ReminderPolicy:
         cfg = cfg or {}
         try:
             return cls(

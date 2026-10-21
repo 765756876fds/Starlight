@@ -6,14 +6,15 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Dict, List, Optional
 
 import yaml
 
 from .models import ChampionCombos, parse_champion
 
 try:
-    from app.core.path_resolve import PROJECT_ROOT  # 打包态: exe 目录（combos.yaml 可写）
+    from app.core.path_resolve import (
+        PROJECT_ROOT,  # 打包态: exe 目录（combos.yaml 可写）
+    )
 except ImportError:
     PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 COMBO_YAML_PATH = os.path.join(str(PROJECT_ROOT), "config", "combos.yaml")
@@ -72,15 +73,15 @@ champions:
 class ComboConfig:
     """已加载的连招配置（启动时读一次，一期只读，不写回）。"""
 
-    def __init__(self, champions: List[ChampionCombos], defaults: Dict[str, int],
+    def __init__(self, champions: list[ChampionCombos], defaults: dict[str, int],
                  path: str):
         self.champions = champions
         self.defaults = dict(defaults or {})
         self.path = path
-        self.by_id: Dict[int, ChampionCombos] = {
+        self.by_id: dict[int, ChampionCombos] = {
             c.champion_id: c for c in champions if c.champion_id
         }
-        self.aliases: Dict[str, ChampionCombos] = {}
+        self.aliases: dict[str, ChampionCombos] = {}
         for c in champions:
             names = [c.name] + list(c.aliases)
             for a in names:
@@ -89,27 +90,25 @@ class ComboConfig:
                     self.aliases.setdefault(key, c)
 
     @staticmethod
-    def load(path: Optional[str] = None) -> "ComboConfig":
+    def load(path: str | None = None) -> ComboConfig:
         """加载 combos.yaml；文件不存在时自动创建默认内容，绝不崩。"""
         path = path or COMBO_YAML_PATH
         if not os.path.exists(path):
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                with _IO_LOCK:
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write(DEFAULT_YAML)
+                with _IO_LOCK, open(path, "w", encoding="utf-8") as f:
+                    f.write(DEFAULT_YAML)
                 print(f"[Combo] combos.yaml 不存在，已创建默认配置: {path}")
             except Exception as e:
                 print(f"[Combo] 创建默认配置失败（使用内置默认）: {e}")
         data: dict = {}
         if os.path.exists(path):
             try:
-                with _IO_LOCK:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = yaml.safe_load(f) or {}
+                with _IO_LOCK, open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
             except Exception as e:
                 print(f"[Combo] combos.yaml 解析失败（使用内置默认）: {e}")
-        champions: List[ChampionCombos] = []
+        champions: list[ChampionCombos] = []
         raw = data.get("champions") or {}
         if isinstance(raw, dict):
             for name, d in raw.items():
@@ -124,12 +123,12 @@ class ComboConfig:
             print("[Combo] 配置加载成功（当前无英雄连招数据）")
         return cfg
 
-    def find_by_id(self, champion_id: Optional[int]) -> Optional[ChampionCombos]:
+    def find_by_id(self, champion_id: int | None) -> ChampionCombos | None:
         if not champion_id:
             return None
         return self.by_id.get(int(champion_id))
 
-    def find_by_alias(self, name: str) -> Optional[ChampionCombos]:
+    def find_by_alias(self, name: str) -> ChampionCombos | None:
         return self.aliases.get((name or "").strip().lower())
 
     # ---------- 序列化 / 保存（二期：UI 编辑写回） ----------
@@ -143,7 +142,7 @@ class ComboConfig:
                           for c in self.champions},
         }
 
-    def save(self, path: Optional[str] = None) -> bool:
+    def save(self, path: str | None = None) -> bool:
         """序列化写回 combos.yaml（加锁，与 load 互斥）。
 
         重写会丢失原文件注释（yaml 不保留注释），顶部保留一句说明。
@@ -151,11 +150,10 @@ class ComboConfig:
         path = path or self.path
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with _IO_LOCK:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("# 此文件由 UI 保存时会重写，注释会丢失\n")
-                    yaml.safe_dump(self.to_yaml_dict(), f,
-                                  allow_unicode=True, sort_keys=False)
+            with _IO_LOCK, open(path, "w", encoding="utf-8") as f:
+                f.write("# 此文件由 UI 保存时会重写，注释会丢失\n")
+                yaml.safe_dump(self.to_yaml_dict(), f,
+                              allow_unicode=True, sort_keys=False)
             return True
         except Exception as e:
             print(f"[Combo] 保存配置失败: {e}")

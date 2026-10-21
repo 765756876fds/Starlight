@@ -9,7 +9,7 @@
 """
 import random
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 
 class PlayMode:
@@ -24,16 +24,16 @@ class PlayQueue:
     """播放队列"""
 
     def __init__(self):
-        self._queue: List[Dict[str, Any]] = []
+        self._queue: list[dict[str, Any]] = []
         self._current_index: int = -1
         self._play_mode: str = PlayMode.SEQUENTIAL
-        self._history: List[int] = []  # 播放历史（索引）
+        self._history: list[int] = []  # 播放历史（索引）
         self._history_pos: int = -1
         self._lock = threading.Lock()
-        self._shuffle_order: List[int] = []
+        self._shuffle_order: list[int] = []
         self._shuffle_pos: int = -1
 
-    def add(self, song: Dict[str, Any], position: Optional[int] = None):
+    def add(self, song: dict[str, Any], position: int | None = None):
         """添加歌曲到队列"""
         with self._lock:
             if position is not None and 0 <= position <= len(self._queue):
@@ -42,7 +42,7 @@ class PlayQueue:
                 self._queue.append(song)
             self._rebuild_shuffle()
 
-    def add_all(self, songs: List[Dict[str, Any]]):
+    def add_all(self, songs: list[dict[str, Any]]):
         """批量添加歌曲"""
         with self._lock:
             self._queue.extend(songs)
@@ -69,14 +69,14 @@ class PlayQueue:
             self._shuffle_order.clear()
             self._shuffle_pos = -1
 
-    def get_current(self) -> Optional[Dict[str, Any]]:
+    def get_current(self) -> dict[str, Any] | None:
         """获取当前播放的歌曲"""
         with self._lock:
             if 0 <= self._current_index < len(self._queue):
                 return self._queue[self._current_index]
             return None
 
-    def get_next(self) -> Optional[Dict[str, Any]]:
+    def get_next(self) -> dict[str, Any] | None:
         """获取下一首歌曲（不改变当前位置）"""
         with self._lock:
             next_index = self._get_next_index()
@@ -84,7 +84,7 @@ class PlayQueue:
                 return self._queue[next_index]
             return None
 
-    def next(self) -> Optional[Dict[str, Any]]:
+    def next(self) -> dict[str, Any] | None:
         """播放下一首，返回歌曲"""
         with self._lock:
             next_index = self._get_next_index()
@@ -94,7 +94,7 @@ class PlayQueue:
                 return self._queue[next_index]
             return None
 
-    def skip_current(self) -> Optional[Dict[str, Any]]:
+    def skip_current(self) -> dict[str, Any] | None:
         """跳过当前歌曲：顺序取下一首（REPEAT_ONE 下也不循环回当前）。
 
         仅用于"单曲循环中当前文件不可用"的逃生路径；返回 None 表示队列到尾。
@@ -112,7 +112,7 @@ class PlayQueue:
             self._add_history(nxt)
             return self._queue[nxt]
 
-    def prev(self) -> Optional[Dict[str, Any]]:
+    def prev(self) -> dict[str, Any] | None:
         """播放上一首，返回歌曲"""
         with self._lock:
             # 优先从历史记录回退
@@ -136,7 +136,7 @@ class PlayQueue:
 
             return None
 
-    def play_at(self, index: int) -> Optional[Dict[str, Any]]:
+    def play_at(self, index: int) -> dict[str, Any] | None:
         """播放指定位置的歌曲"""
         with self._lock:
             if 0 <= index < len(self._queue):
@@ -145,13 +145,13 @@ class PlayQueue:
                 return self._queue[index]
             return None
 
-    def _get_next_index(self) -> Optional[int]:
+    def _get_next_index(self) -> int | None:
         """计算下一首的索引"""
         if not self._queue:
             return None
 
         if self._play_mode == PlayMode.REPEAT_ONE:
-            return self._current_index if self._current_index >= 0 else 0
+            return max(self._current_index, 0)
 
         if self._play_mode == PlayMode.SHUFFLE:
             return self._get_shuffle_next()
@@ -168,7 +168,7 @@ class PlayQueue:
 
         return next_index
 
-    def _get_shuffle_next(self) -> Optional[int]:
+    def _get_shuffle_next(self) -> int | None:
         """随机播放的下一首"""
         if not self._shuffle_order:
             return None
@@ -212,7 +212,7 @@ class PlayQueue:
         """获取播放模式"""
         return self._play_mode
 
-    def get_queue(self) -> List[Dict[str, Any]]:
+    def get_queue(self) -> list[dict[str, Any]]:
         """获取整个队列"""
         with self._lock:
             return list(self._queue)

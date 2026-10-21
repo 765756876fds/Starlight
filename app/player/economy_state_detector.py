@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 ECONOMY_EVEN = 2000
 
@@ -29,13 +28,13 @@ def classify(diff: int) -> EconomyState:
 class EconomyStateDetector:
     def __init__(self, threshold: int = ECONOMY_EVEN):
         self.threshold = threshold
-        self._state: Optional[EconomyState] = None  # None = 尚未初始化
+        self._state: EconomyState | None = None  # None = 尚未初始化
 
     def reset(self) -> None:
         """GAME_STARTED / GAME_ENDED 后调用：下一局第一帧静默初始化。"""
         self._state = None
 
-    def update(self, diff: int) -> Optional[str]:
+    def update(self, diff: int) -> str | None:
         """输入当前经济差（our-enemy）。跨边界返回一句短提醒，否则 None。
 
         第一帧（_state is None）只初始化、不播报。

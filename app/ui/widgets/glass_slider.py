@@ -10,7 +10,14 @@ VolumePopover / VolumeButton：底部音量悬浮面板——平时仅一个喇�
 """
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..theme.tokens import Tokens
 from .icon_utils import lucide_icon
@@ -26,7 +33,7 @@ class GlassSlider(QSlider):
             orientation = Qt.Horizontal
         super().__init__(orientation, parent)
 
-    def paintEvent(self, event):  # noqa: N802 (Qt 命名)
+    def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = self.rect()
@@ -62,7 +69,7 @@ class GlassSlider(QSlider):
 class NoWheelGlassSlider(GlassSlider):
     """设置页用：滚轮悬停不改值（忽略 wheel，冒泡给 QScrollArea 滚动）。"""
 
-    def wheelEvent(self, event):  # noqa: N802
+    def wheelEvent(self, event):
         event.ignore()
 
 
@@ -131,7 +138,7 @@ class VolumePopover(QWidget):
         print(f"[Volume] after_show pos=({self.pos().x()},{self.pos().y()}) "
               f"pop_center_x={self.pos().x() + self.width() // 2} 期望={btn_center.x()}")
 
-    def paintEvent(self, event):  # noqa: N802
+    def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
@@ -189,15 +196,15 @@ class VolumeButton(QPushButton):
         # 定位逻辑全部在 VolumePopover.show_near：self=面板、参照物显式传入（绝对居中）
         self._popover.show_near(self)
 
-    def enterEvent(self, event):  # noqa: N802
+    def enterEvent(self, event):
         self._show_popover()
         super().enterEvent(event)
 
-    def leaveEvent(self, event):  # noqa: N802
+    def leaveEvent(self, event):
         self._hide_timer.start(150)
         super().leaveEvent(event)
 
-    def eventFilter(self, obj, ev):  # noqa: N802
+    def eventFilter(self, obj, ev):
         if obj is self._popover and ev.type() in (
                 ev.Type.Leave, ev.Type.Hide):
             self._hide_timer.start(150)

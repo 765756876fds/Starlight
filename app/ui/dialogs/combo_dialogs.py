@@ -9,27 +9,33 @@ TriggerCaptureDialog / KeyPickerDialog；校验失败不保存、对话框保持
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-from app.ui.theme.colors import Colors
-from app.ui.theme.tokens import Tokens
-
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
-from app.combo.models import Combo, ComboStep, ChampionCombos
+from app.combo.models import ChampionCombos, Combo, ComboStep
 from app.combo.validation import validate_combo
+from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
 from app.ui.widgets.glass_dialog import GlassDialog
 from app.ui.widgets.glass_msg import glass_info, glass_warning
 from app.ui.widgets.icon_utils import lucide_icon
 from app.ui.widgets.single_key_edit import SingleKeyEdit
 
 
-def _make_step_row(dialog: "ComboEditDialog", index: int,
+def _make_step_row(dialog: ComboEditDialog, index: int,
                    step: ComboStep) -> QWidget:
     """序列行控件：序号 + 键按钮 + 延迟 SpinBox + 删除按钮。
 
@@ -82,12 +88,12 @@ def _make_step_row(dialog: "ComboEditDialog", index: int,
 class ComboEditDialog(GlassDialog):
     """添加/编辑连招。combo=None → 添加模式；否则编辑现有 combo（直接改其字段）。"""
 
-    def __init__(self, champ: ChampionCombos, combo: Optional[Combo] = None,
+    def __init__(self, champ: ChampionCombos, combo: Combo | None = None,
                  parent=None):
         super().__init__("编辑连招" if combo is not None else "添加连招", parent)
         self._champ = champ
         self._combo = combo
-        self._steps: List[ComboStep] = (
+        self._steps: list[ComboStep] = (
             list(combo.sequence) if combo is not None else [])
 
         layout = self.body_layout
@@ -199,12 +205,12 @@ class ComboEditDialog(GlassDialog):
 class AddChampionDialog(GlassDialog):
     """添加英雄：全英雄搜索（中文名 / 英文名 / title），已配置英雄置灰不可选。"""
 
-    def __init__(self, champions: List[Tuple[int, str, str, str]],
-                 existing_ids: List[int], parent=None):
+    def __init__(self, champions: list[tuple[int, str, str, str]],
+                 existing_ids: list[int], parent=None):
         super().__init__("添加英雄", parent)
         self._champions = champions  # (cid, name, alias, title)
         self._existing = set(int(x) for x in existing_ids)
-        self.selected: Optional[Tuple[int, str]] = None  # (cid, name)
+        self.selected: tuple[int, str] | None = None  # (cid, name)
 
         layout = self.body_layout
         self.edt_search = QLineEdit()

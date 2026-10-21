@@ -10,10 +10,8 @@
 标点清理双侧对称：索引行与输入都做 _norm，中文输入带标点（如
 "天青色，等烟雨"）也能命中"天青色等烟雨"。
 """
-import os
 import re
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Tuple
 
 from app.music.lyrics import find_local_lrc, load_lyrics_from_file
 
@@ -27,7 +25,7 @@ DEFAULT_THRESHOLD = 0.62
 _SEARCH_LIMIT = 50
 
 
-def _norm(text: Optional[str]) -> str:
+def _norm(text: str | None) -> str:
     """去标点 + 去空白（用于输入与歌词行双侧匹配）。"""
     return _NORM_RE.sub("", text or "")
 
@@ -52,11 +50,11 @@ class LyricIndex:
 
     def __init__(self, db=None):
         self._db = db
-        self._entries: List[Tuple[Dict, str]] = []  # [(song, norm_line), ...]
+        self._entries: list[tuple[dict, str]] = []  # [(song, norm_line), ...]
         self._built = False
 
     # ---- 构建 ----
-    def build(self, songs: Optional[List[Dict]] = None) -> int:
+    def build(self, songs: list[dict] | None = None) -> int:
         """全量重建索引，返回收录歌词行数。
 
         songs 缺省时用 db.get_all_songs()；无 .lrc / 读取/解析失败 → 跳过该歌。
@@ -65,7 +63,7 @@ class LyricIndex:
             if self._db is None:
                 raise ValueError("LyricIndex 无 db，需显式传入 songs")
             songs = self._db.get_all_songs()
-        entries: List[Tuple[Dict, str]] = []
+        entries: list[tuple[dict, str]] = []
         for s in songs or []:
             path = s.get("path")
             if not path:
@@ -95,7 +93,7 @@ class LyricIndex:
     def is_built(self) -> bool:
         return self._built
 
-    def ensure_built(self, songs: Optional[List[Dict]] = None) -> int:
+    def ensure_built(self, songs: list[dict] | None = None) -> int:
         """懒构建：未构建时全量建索引，返回行数。"""
         if not self._built:
             return self.build(songs)
@@ -103,7 +101,7 @@ class LyricIndex:
 
     # ---- 搜索 ----
     def search(self, query: str, threshold: float = DEFAULT_THRESHOLD,
-               limit: int = _SEARCH_LIMIT) -> List[Dict]:
+               limit: int = _SEARCH_LIMIT) -> list[dict]:
         """按歌词片段模糊搜索 → 去重歌曲列表（按匹配度降序）。
 
         - 空查询 → []
@@ -113,7 +111,7 @@ class LyricIndex:
         q = _norm(query)
         if not q:
             return []
-        best: Dict = {}  # key(path|id) -> (song, score)
+        best: dict = {}  # key(path|id) -> (song, score)
         for song, line in self._entries:
             if q in line:
                 score = 1.0

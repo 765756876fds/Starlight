@@ -2,18 +2,32 @@
 import time
 
 from ..core.command_bus import Command
-from ..speech.speech_queue import SpeechItem, PRIORITY_B
+from ..lol.data.champion_catalog import ChampionCatalog
+from ..speech.speech_queue import PRIORITY_B, SpeechItem
+from .current_game_analysis import (
+    champion_kda as _champion_kda,
+)
+from .current_game_analysis import (
+    champion_level as _champion_level,
+)
+from .current_game_analysis import (
+    economy as _economy,
+)
+from .current_game_analysis import (
+    enemy_roster as _enemy_roster,
+)
+from .current_game_analysis import (
+    most_deaths as _most_deaths,
+)
 from .current_game_analysis import (
     richest as _richest,
+)
+from .current_game_analysis import (
     self_kda as _self_kda,
-    economy as _economy,
-    enemy_roster as _enemy_roster,
-    most_deaths as _most_deaths,
-    champion_level as _champion_level,
-    champion_kda as _champion_kda,
+)
+from .current_game_analysis import (
     self_level as _self_level,
 )
-from ..lol.data.champion_catalog import ChampionCatalog
 
 
 def _resolve_self_puuid(state_store) -> str:

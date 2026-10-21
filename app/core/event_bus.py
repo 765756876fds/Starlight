@@ -7,11 +7,12 @@
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class EventPriority(Enum):
 class Event:
     """通用事件"""
     event_type: str  # 事件类型，如 "game.dragon_killed", "music.next"
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     priority: EventPriority = EventPriority.NORMAL
     source: str = ""  # 事件来源模块
@@ -135,10 +136,10 @@ class EventBus:
     """
 
     def __init__(self):
-        self._subscribers: Dict[str, List[Callable]] = defaultdict(list)
-        self._wildcard_subscribers: List[Callable] = []
+        self._subscribers: dict[str, list[Callable]] = defaultdict(list)
+        self._wildcard_subscribers: list[Callable] = []
         self._lock = threading.Lock()
-        self._event_history: List[Event] = []
+        self._event_history: list[Event] = []
         self._max_history = 1000
         self._running = True
         # ---- 异步事件物理隔离：双池 ----
@@ -277,7 +278,7 @@ class EventBus:
             else:
                 self._critical_pending -= 1
 
-    def get_history(self, event_type: Optional[str] = None, limit: int = 100) -> List[Event]:
+    def get_history(self, event_type: str | None = None, limit: int = 100) -> list[Event]:
         """获取事件历史"""
         with self._lock:
             history = list(self._event_history)
@@ -307,7 +308,7 @@ class EventBus:
 
 
 # 全局事件总线单例
-_event_bus: Optional[EventBus] = None
+_event_bus: EventBus | None = None
 
 
 def get_event_bus() -> EventBus:

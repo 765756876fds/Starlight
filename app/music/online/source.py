@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 from .models import OnlineTrack
 
@@ -12,15 +11,15 @@ class MusicSource(ABC):
     display_name: str = "Base"
 
     @abstractmethod
-    def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+    def search(self, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         ...
 
     @abstractmethod
-    def get_play_url(self, track: OnlineTrack) -> Optional[str]:
+    def get_play_url(self, track: OnlineTrack) -> str | None:
         ...
 
     @abstractmethod
-    def get_lyric(self, track: OnlineTrack) -> Optional[str]:
+    def get_lyric(self, track: OnlineTrack) -> str | None:
         ...
 
     def close(self) -> None:

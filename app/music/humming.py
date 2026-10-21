@@ -10,7 +10,6 @@ import os
 import sys
 import time
 import wave
-from typing import Dict, List, Optional
 
 # ---- third_party 加载（不依赖 main.py 改 sys.path，红线：不碰 main.py）----
 _THIRD_PARTY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "third_party")
@@ -73,8 +72,8 @@ def _pyaudio_record(out_path: str, seconds: int = RECORD_SECONDS,
 class HummingService:
     """AudioFP 指纹库 + 识别服务（线程安全：SQLiteStore 每线程独立连接）。"""
 
-    def __init__(self, scan_dirs: List[str], sqlite_path: str,
-                 extensions: Optional[List[str]] = None,
+    def __init__(self, scan_dirs: list[str], sqlite_path: str,
+                 extensions: list[str] | None = None,
                  record_seconds: int = RECORD_SECONDS):
         if not _AUDIOFP_AVAILABLE:
             raise HummingError("audiofp 未就绪：缺少 app/third_party/fingerprint，请同步仓库后重试")
@@ -85,7 +84,7 @@ class HummingService:
         db_dir = os.path.dirname(os.path.abspath(sqlite_path)) or "."
         os.makedirs(db_dir, exist_ok=True)
         self.settings = Settings(sqlite_path=os.path.abspath(sqlite_path), data_dir=db_dir)
-        self._runtime: Optional[Runtime] = None
+        self._runtime: Runtime | None = None
 
     # ------------------------------------------------------------------ runtime
     @property
@@ -104,9 +103,9 @@ class HummingService:
             self._runtime = None
 
     # ------------------------------------------------------------------ 建库
-    def _scan_audio(self) -> List[str]:
+    def _scan_audio(self) -> list[str]:
         """递归扫描 scan_dirs 下支持的音频文件。"""
-        found: List[str] = []
+        found: list[str] = []
         for root in self.scan_dirs:
             if not root or not os.path.isdir(root):
                 continue
@@ -116,7 +115,7 @@ class HummingService:
                         found.append(os.path.abspath(os.path.join(dirpath, name)))
         return sorted(found)
 
-    def index_pending(self) -> Dict[str, int]:
+    def index_pending(self) -> dict[str, int]:
         """增量建库：已入库（按绝对路径 content 指纹判重）的文件跳过，只建新增。
 
         返回 {indexed, skipped, failed}。skipped = 已入库 + 本次重复跳过。
@@ -142,7 +141,7 @@ class HummingService:
             return False
 
     # ------------------------------------------------------------------ 识别
-    def identify_file(self, wav_path: str) -> Optional[Dict[str, object]]:
+    def identify_file(self, wav_path: str) -> dict[str, object] | None:
         """识别一段音频文件，返回首名匹配（无命中返回 None）。
 
         返回：{title, artist, filepath, filename, confidence, aligned, peak_ratio, quality, offset_sec}
@@ -166,7 +165,7 @@ class HummingService:
             "offset_sec": float(m.best.offset_sec),
         }
 
-    def record_and_identify(self, wav_path: str) -> Optional[Dict[str, object]]:
+    def record_and_identify(self, wav_path: str) -> dict[str, object] | None:
         """录 `record_seconds` 秒麦克风 → 临时 wav → 识别。供后台线程调用。"""
         t0 = time.perf_counter()
         _pyaudio_record(wav_path, seconds=self.record_seconds)

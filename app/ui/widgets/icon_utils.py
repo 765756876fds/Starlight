@@ -9,7 +9,7 @@ disabled 态由 QIcon 自动灰色化。SVG path 数据来自 Lucide（ISC 许�
 https://lucide.dev）。
 """
 from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QIcon, QPixmap, QPainter
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 
 try:  # PySide6 完整安装含 QtSvg；缺失时降级为文字图标，不影响布局
     from PySide6.QtSvg import QSvgRenderer
@@ -117,7 +117,7 @@ def lucide_icon(name: str, size: int = 20, color: str = "#e0e0e8",
 
 
 def _fallback_icon(name: str, size: int, color: str) -> QIcon:  # pragma: no cover
-    from PySide6.QtGui import QFont, QColor
+    from PySide6.QtGui import QColor, QFont
     pm = QPixmap(size, size)
     pm.fill(Qt.transparent)
     p = QPainter(pm)

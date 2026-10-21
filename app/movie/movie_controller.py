@@ -14,19 +14,17 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib.parse
 import zipfile
 
 import requests
 
 from ..core.config import get_config, resolve_mpv_path
 from ..core.event_bus import EventType, get_event_bus
-from ..core.state_store import StateNamespace, get_state_store
+from ..core.logger import get_logger
 from ..core.path_resolve import PROJECT_ROOT
+from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
 from .source_manager import MovieSourceManager, _SingleSourceManager
-
-from ..core.logger import get_logger
 
 logger = get_logger()
 

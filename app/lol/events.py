@@ -8,7 +8,7 @@ LoL 游戏事件定义
 本文件仅保留 GameEvent 数据类和辅助函数。
 """
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..core.event_bus import EventType
 
@@ -18,10 +18,10 @@ class GameEvent:
     """游戏事件基类"""
     event_type: str
     game_time: float = 0.0
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
     timestamp: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "game_time": self.game_time,
@@ -43,7 +43,7 @@ class ChampionKillEvent(GameEvent):
     killer_team: str = ""
     victim_name: str = ""
     victim_team: str = ""
-    assistants: List[str] = field(default_factory=list)
+    assistants: list[str] = field(default_factory=list)
     is_first_blood: bool = False
 
 
@@ -74,7 +74,7 @@ class TowerEvent(GameEvent):
     tier: int = 0   # 1 / 2 / 3
 
 
-def event_from_dict(data: Dict[str, Any]) -> GameEvent:
+def event_from_dict(data: dict[str, Any]) -> GameEvent:
     """从字典创建事件"""
     event_type = data.get("event_type", GameEventType.UNKNOWN_EVENT)
     return GameEvent(

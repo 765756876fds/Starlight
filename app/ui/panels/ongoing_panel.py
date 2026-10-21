@@ -1,9 +1,22 @@
 """对局信息面板：展示 ChampSelect 10 玩家快照。"""
+import datetime
+import json
+import os
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QLineEdit, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QPushButton,
+    QScrollArea,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
-import datetime, os, json
 
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
@@ -89,6 +102,7 @@ _HIGH_VALUE = {"CHAMPION_KILL","CHAMPION_SPECIAL_KILL","BUILDING_KILL","ELITE_MO
                "WARD_KILL","GAME_END"}
 from app.lol.ongoing.match_detail import MatchTimelineService, _fmt_ms
 
+
 def _runes_zh(p):
     parts = []
     if p.primary_style: parts.append(_RUNE_TREE.get(p.primary_style, str(p.primary_style)))
@@ -128,8 +142,8 @@ class _LineChart(QWidget):
         self._pts = pts or []
         self.update()
     def paintEvent(self, ev):
-        from PySide6.QtGui import QPainter, QColor, QPen
         from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QPainter, QPen
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(24,24,28))
         if not self._pts:
@@ -162,6 +176,7 @@ class _LineChart(QWidget):
 
 def _show_detail(m, svc=None) -> None:
     from PySide6.QtWidgets import QTabWidget
+
     from app.ui.widgets.glass_dialog import GlassDialog
     dlg = GlassDialog("对局详情")
     dlg.resize(520, 720)
@@ -271,7 +286,7 @@ def _show_detail(m, svc=None) -> None:
             tl_lay.addStretch(1)
 
     # ---- Tab 3: 数据曲线 ----
-    from PySide6.QtWidgets import QComboBox, QPushButton
+    from PySide6.QtWidgets import QComboBox
     dat = QWidget()
     dat_lay = QVBoxLayout(dat)
     head = QHBoxLayout()
@@ -608,8 +623,7 @@ class OngoingPanel(QWidget):
         self._ac_model.setStringList(fuzzy_candidates(q, names, top=8))
 
     def _do_search(self):
-        from app.lol.ongoing.player_search import PlayerSearchService
-        from app.lol.ongoing.player_search import parse_riot_id
+        from app.lol.ongoing.player_search import PlayerSearchService, parse_riot_id
         if not self._acct:
             self._search_status.setText("服务未就绪"); return
         txt = self.in_search.text()

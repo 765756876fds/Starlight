@@ -15,7 +15,8 @@ import os
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Deque, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from app.core.path_resolve import PROJECT_ROOT
 
@@ -27,19 +28,19 @@ class ChampSelectDiagnostic:
         capture_dir: str = str(PROJECT_ROOT / "runtime"),
         interval: float = 0.5,
         ring_seconds: float = 120.0,
-        on_event: Optional[Callable[[str, dict], None]] = None,
+        on_event: Callable[[str, dict], None] | None = None,
     ):
         self._req = lcu_request_raw  # (method, endpoint, data) -> (status, body)
         self._dir = capture_dir
         self._interval = interval
-        self._ring: Deque[Dict[str, Any]] = deque(maxlen=int(ring_seconds / interval))
+        self._ring: deque[dict[str, Any]] = deque(maxlen=int(ring_seconds / interval))
         self._on_event = on_event or (lambda c, d: None)
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._last_session_exists = False
         self._capture_seq = 0
-        self._timeline: Deque[Dict[str, Any]] = deque(maxlen=600)
-        self._first_session_200: Optional[float] = None
+        self._timeline: deque[dict[str, Any]] = deque(maxlen=600)
+        self._first_session_200: float | None = None
         os.makedirs(self._dir, exist_ok=True)
 
     def start(self):
@@ -55,7 +56,7 @@ class ChampSelectDiagnostic:
             self._thread.join(timeout=1.5)
             self._thread = None
 
-    def ring(self) -> List[Dict[str, Any]]:
+    def ring(self) -> list[dict[str, Any]]:
         return list(self._ring)
 
     def _run(self):
@@ -83,7 +84,7 @@ class ChampSelectDiagnostic:
 
         # 3. champ-select session
         ss, sb = self._req("GET", "/lol-champ-select/v1/session", None)
-        players: List[Dict] = []
+        players: list[dict] = []
         if ss == 200 and isinstance(sb, dict):
             for team in ("myTeam", "theirTeam"):
                 for cell in sb.get(team) or []:

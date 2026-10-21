@@ -12,16 +12,16 @@ import threading
 import time
 
 logger = logging.getLogger(__name__)
-from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
 class Command:
     """通用命令"""
     command_type: str  # 如 "music.next", "alarm.create_flash"
-    params: Dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     source: str = ""  # 命令来源（voice, ui, system）
     require_confirmation: bool = False  # 是否需要确认
@@ -100,10 +100,10 @@ class CommandBus:
     """
 
     def __init__(self):
-        self._handlers: Dict[str, Callable[[Command], Any]] = {}
-        self._middlewares: List[Callable[[Command], Optional[bool]]] = []
+        self._handlers: dict[str, Callable[[Command], Any]] = {}
+        self._middlewares: list[Callable[[Command], bool | None]] = []
         self._lock = threading.Lock()
-        self._command_history: List[Command] = []
+        self._command_history: list[Command] = []
 
     def register(self, command_type: str, handler: Callable[[Command], Any]):
         """注册命令处理器"""
@@ -115,7 +115,7 @@ class CommandBus:
         with self._lock:
             self._handlers.pop(command_type, None)
 
-    def add_middleware(self, middleware: Callable[[Command], Optional[bool]]):
+    def add_middleware(self, middleware: Callable[[Command], bool | None]):
         """
         添加中间件
         中间件返回 False 则中止命令执行
@@ -199,14 +199,14 @@ class CommandBus:
         with self._lock:
             return command_type in self._handlers
 
-    def get_history(self, limit: int = 100) -> List[Command]:
+    def get_history(self, limit: int = 100) -> list[Command]:
         """获取命令历史"""
         with self._lock:
             return list(self._command_history[-limit:])
 
 
 # 全局命令总线单例
-_command_bus: Optional[CommandBus] = None
+_command_bus: CommandBus | None = None
 
 
 def get_command_bus() -> CommandBus:

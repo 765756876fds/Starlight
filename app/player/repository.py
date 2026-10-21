@@ -2,9 +2,9 @@
 import os
 import sqlite3
 import threading
-from typing import Optional, List
 
 from app.core.path_resolve import PROJECT_ROOT
+
 from .models import PlayerIdentity
 
 
@@ -54,7 +54,7 @@ class PlayerRepository:
             conn.commit()
             conn.close()
 
-    def get(self, puuid: str) -> Optional[PlayerIdentity]:
+    def get(self, puuid: str) -> PlayerIdentity | None:
         if not puuid:
             return None
         with self._lock:
@@ -69,7 +69,7 @@ class PlayerRepository:
                                   summoner_id=row[3] or 0, platform=row[4] or "")
         return None
 
-    def list_all(self) -> List[PlayerIdentity]:
+    def list_all(self) -> list[PlayerIdentity]:
         with self._lock:
             conn = sqlite3.connect(self.db_path)
             rows = conn.execute(

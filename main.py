@@ -68,7 +68,7 @@ try:
     )
 except Exception as e:
     # 此时 stdout 已被 TeeStream 接管，此 print 会落进 print-{date}.log 自证
-    print(f"[LogInit] basicConfig 失败: {e}")
+    logger.error(f"[LogInit] basicConfig 失败: {e}")
 
 from app.core.config import get_config
 from app.core.event_bus import get_event_bus, Event, EventType
@@ -77,6 +77,8 @@ from app.core.state_store import get_state_store, StateNamespace
 from app.core.scheduler import get_scheduler
 from app.core.logger import get_logger
 from app.core.event_log import EventLog
+
+logger = get_logger()
 
 from app.music.controller import MusicController
 from app.lol.runtime import LoLRuntime
@@ -144,7 +146,7 @@ class Application:
                 ensure_and_launch(self.config_data.get("asr", {}))
                 return
         except Exception as _e:
-            print(f"[ASR] asr_bootstrap 异常，回退内置拉起逻辑: {_e}")
+            logger.info(f"[ASR] asr_bootstrap 异常，回退内置拉起逻辑: {_e}")
         # 以下为旧逻辑（bootstrap_enabled=False 或 asr_bootstrap 异常时执行）
         import socket
         import subprocess
@@ -168,26 +170,26 @@ class Application:
                 return False
 
         if _port_in_use():
-            print(f"[ASR] 端口 {port} 已在运行，直接连接")
+            logger.info(f"[ASR] 端口 {port} 已在运行，直接连接")
             return
 
         # 需要启动 ASR
         model_path = asr_config.get("qwen3_asr_model", "")
         mmproj_path = asr_config.get("qwen3_asr_mmproj", "")
         if not model_path:
-            print("[ASR] WARNING: 模型路径为空且内置模型未发现，跳过拉起（避免 router 模式）")
+            logger.warning("[ASR] WARNING: 模型路径为空且内置模型未发现，跳过拉起（避免 router 模式）")
             return
 
         # llama-server 路径：配置 → 自动搜索（PATH / LM Studio 扩展目录）→ 降级
         llama_server = find_llama_server(asr_config)
         if not llama_server:
-            print("[ASR] WARNING: llama-server 未找到（设置 asr.llama_server，或安装 LM Studio 扩展）")
-            print("[ASR] 请手动启动 ASR，或检查 llama-server 路径")
+            logger.warning("[ASR] WARNING: llama-server 未找到（设置 asr.llama_server，或安装 LM Studio 扩展）")
+            logger.info("[ASR] 请手动启动 ASR，或检查 llama-server 路径")
             return
 
-        print(f"[ASR] 端口 {port} 未运行，正在自动拉起 llama-server...")
-        print(f"[ASR] model: {model_path}")
-        print(f"[ASR] mmproj: {mmproj_path}")
+        logger.info(f"[ASR] 端口 {port} 未运行，正在自动拉起 llama-server...")
+        logger.info(f"[ASR] model: {model_path}")
+        logger.info(f"[ASR] mmproj: {mmproj_path}")
 
         args = [
             llama_server,
@@ -206,9 +208,9 @@ class Application:
                 stdout=open("asr_server_out.txt", "w"),
                 stderr=open("asr_server_err.txt", "w"),
             )
-            print("[ASR] llama-server 已启动，等待就绪...")
+            logger.info("[ASR] llama-server 已启动，等待就绪...")
         except Exception as e:
-            print(f"[ASR] 启动 llama-server 失败: {e}")
+            logger.error(f"[ASR] 启动 llama-server 失败: {e}")
             self.logger.error(f"[ASR] 启动 llama-server 失败: {e}")
             return
 
@@ -220,33 +222,33 @@ class Application:
             try:
                 resp = _rq.get(f"http://{host}:{port}/v1/models", timeout=1)
                 if resp.status_code == 200:
-                    print(f"[ASR] 就绪（等待 {i+1} 秒）")
+                    logger.info(f"[ASR] 就绪（等待 {i+1} 秒）")
                     return
             except Exception:
                 pass
             if i % 10 == 0:
-                print(f"[ASR] 等待中... ({i}s)")
+                logger.info(f"[ASR] 等待中... ({i}s)")
 
-        print("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
+        logger.info("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
 
     def initialize(self):
         if Application._initialized:
-            print("[Startup] already initialized, skip")
+            logger.info("[Startup] already initialized, skip")
             return
         Application._initialized = True
         """鍒濆鍖栨墍鏈夊瓙绯荤粺"""
-        print("=" * 60)
-        print("  LoL 脳 鏈湴闊充箰 脳 璇煶 Agent")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("  LoL 脳 鏈湴闊充箰 脳 璇煶 Agent")
+        logger.info("=" * 60)
 
         # 0. Event Log锛堟渶鍏堝惎鍔紝璁板綍鎵€鏈変簨浠讹級
-        print("\n[0/5] 鍒濆鍖?Event Log...")
+        logger.info("\n[0/5] 鍒濆鍖?Event Log...")
         self.event_log = EventLog(
             log_dir=self.config.get("events.log_dir", os.path.join(PROJECT_ROOT, "data", "events"))
         )
 
         # 1. 闊充箰妯″潡
-        print("\n[1/5] 鍒濆鍖栭煶涔愭ā鍧?..")
+        logger.info("\n[1/5] 鍒濆鍖栭煶涔愭ā鍧?..")
         self.music = MusicController(self.config.get_section("music"))
         # 娉ㄥ唽 online music source
         try:
@@ -260,15 +262,15 @@ class Application:
             _om_cfg = (self.config_data.get("online_music") or {})
             if _om_cfg.get("demo_source", False):
                 self.online_music_manager.register(DemoSource())
-                print("[Music] demo 音源已启用（online_music.demo_source=true）")
+                logger.info("[Music] demo 音源已启用（online_music.demo_source=true）")
             if _om_cfg.get("archive_source", False):
                 self.online_music_manager.register(ArchiveSource())
-                print("[Music] archive 音源已启用（online_music.archive_source=true）")
+                logger.info("[Music] archive 音源已启用（online_music.archive_source=true）")
             custom_dir = os.path.join(PROJECT_ROOT, "data", "music_sources")
             try:
                 self.online_music_manager.load_custom_sources(custom_dir)
             except Exception as e:
-                print(f"[Music] 鑷畾涔夋簮鍔犺浇澶辫触: {e}")
+                logger.info(f"[Music] 鑷畾涔夋簮鍔犺浇澶辫触: {e}")
             try:
                 from app.music.online.sources.js_source import JSMusicSource
                 _mf = os.path.join(PROJECT_ROOT, "data", "music_sources", "musicfree")
@@ -277,30 +279,30 @@ class Application:
                 self.online_music_manager.register(self._js_source)
                 self._set_module_status("js", "ok" if self._js_source.available else "fail")
             except Exception as e:
-                print(f"[Music] JS bridge 鍒濆鍖栧け璐? {e}")
+                logger.info(f"[Music] JS bridge 鍒濆鍖栧け璐? {e}")
                 self._set_module_status("js", "fail")
             self.music.set_online_manager(self.online_music_manager)
             # 同步「音源管理」UI 导入的自定义音源（config/music_sources.json）
             try:
                 self.music.sync_custom_sources()
             except Exception as e:
-                print(f"[Music] 自定义音源同步失败: {e}")
-            print(f"[Music] online source 宸叉敞鍐? {self.online_music_manager.list_sources()}")
+                logger.error(f"[Music] 自定义音源同步失败: {e}")
+            logger.info(f"[Music] online source 宸叉敞鍐? {self.online_music_manager.list_sources()}")
         except Exception as e:
-            print(f"[Music] online source 鍒濆鍖栧け璐? {e}")
+            logger.info(f"[Music] online source 鍒濆鍖栧け璐? {e}")
 
         # 2. LoL 妯″潡
-        print("[2/5] 鍒濆鍖?LoL 妯″潡...")
+        logger.info("[2/5] 鍒濆鍖?LoL 妯″潡...")
         self.lol = LoLRuntime(self.config_data)
 
         # 3. 璇煶杈撳嚭
-        print("[3/5] 鍒濆鍖栬闊宠緭鍑?(TTS)...")
+        logger.info("[3/5] 鍒濆鍖栬闊宠緭鍑?(TTS)...")
         tts_config = self.config.get_section("tts")
         tts_config["mpv_path"] = self.config.get("music.mpv_path")
         self.tts = TTSController(tts_config)
 
         # 4. Speech Queue + Judge
-        print("[4/5] 鍒濆鍖栬闊虫挱鎶ラ槦鍒?(SpeechQueue + SpeechJudge)...")
+        logger.info("[4/5] 鍒濆鍖栬闊虫挱鎶ラ槦鍒?(SpeechQueue + SpeechJudge)...")
         self.speech_queue = SpeechQueue(self.tts)
         self.speech_judge = SpeechJudge(
             self.config.get_section("speech_judge"),
@@ -316,11 +318,11 @@ class Application:
             from app.ui.settings_store import load_ui_prefs
             self._equip_enabled = bool(load_ui_prefs().get("equip_notify", True))
         except Exception as _e:
-            print(f"[Equipment] notifier 初始化失败: {_e}")
+            logger.error(f"[Equipment] notifier 初始化失败: {_e}")
             self.equip_notifier = None
 
         # 5. 璇煶杈撳叆
-        print("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
+        logger.info("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
         self._set_module_status("asr", "loading")
         self._ensure_asr_running()
         self.voice = VoiceRuntime(self.config_data, tts_provider=lambda: self.tts)
@@ -341,7 +343,7 @@ class Application:
 
         # 娉ㄥ唽 OngoingGameService锛圕hampSelect 鍔犺浇 10 鐜╁锛?
 
-        print("\n鍒濆鍖栧畬鎴愶紒")
+        logger.info("\n鍒濆鍖栧畬鎴愶紒")
 
     def start(self):
         """doc"""
@@ -349,7 +351,7 @@ class Application:
             return
 
         self._running = True
-        print("\n姝ｅ湪鍚姩绯荤粺...")
+        logger.info("\n姝ｅ湪鍚姩绯荤粺...")
 
         # 鍚姩 Event Log锛堟渶鍏堝惎鍔級
         self.event_log.start()
@@ -362,7 +364,7 @@ class Application:
         try:
             _music_ok = self.music.start()
         except Exception as e:
-            print(f"[Music] module start failed: {e!r}")
+            logger.info(f"[Music] module start failed: {e!r}")
             _music_ok = False
         self._set_module_status("music", "ok" if _music_ok else "fail")
 
@@ -382,7 +384,7 @@ class Application:
         # 启动 OngoingGameService（ChampSelect 加载 10 玩家）
         if hasattr(self, 'ongoing_service') and self.ongoing_service:
             self.ongoing_service.start()
-            print("[Ongoing] 加载服务已启动")
+            logger.info("[Ongoing] 加载服务已启动")
 
         # 注册一键连招 ComboManager（依赖 ongoing_service 识别当前英雄）
         self._register_combo()
@@ -408,15 +410,15 @@ class Application:
         ))
 
         self.state_store.set(StateNamespace.SYSTEM, "running", True)
-        print("\nSystem started! Press Ctrl+C to stop.")
-        print("-" * 60)
+        logger.info("\nSystem started! Press Ctrl+C to stop.")
+        logger.info("-" * 60)
 
     def stop(self):
         """doc"""
         if not self._running:
             return
 
-        print("\n姝ｅ湪鍋滄绯荤粺...")
+        logger.info("\n姝ｅ湪鍋滄绯荤粺...")
         self._running = False
 
         # 鍙戝竷鍋滄浜嬩欢
@@ -452,7 +454,7 @@ class Application:
         if self.event_log:
             self.event_log.stop()
 
-        print("...")
+        logger.info("...")
 
         # 收尾：flush+close 重定向落盘句柄（print-{date}.log / error-{date}.log）
         try:
@@ -464,12 +466,12 @@ class Application:
     def _scan_music_library(self):
         """doc"""
         try:
-            print("...")
+            logger.info("...")
             result = self.music.rescan()
-            print(f"[Music] 鎵弿瀹屾垚: 鍏?{result.get('scanned', 0)} 涓枃浠? "
+            logger.info(f"[Music] 鎵弿瀹屾垚: 鍏?{result.get('scanned', 0)} 涓枃浠? "
                   f"鏂板 {result.get('added', 0)}, 鏇存柊 {result.get('updated', 0)}")
         except Exception as e:
-            print(f"[Music] 鎵弿澶辫触: {e}")
+            logger.info(f"[Music] 鎵弿澶辫触: {e}")
 
     def _register_alarm_events(self):
         """注册 GameAlarm 事件处理"""
@@ -485,10 +487,10 @@ class Application:
                 self.logger.error("[Alarm] SPEECH_SAY 事件发布失败", exc_info=True)
 
         def on_create_flash(event):
-            print(f"[P0CD DEBUG] on_create_flash called: event_type={event.event_type}, data={event.data}")
+            logger.info(f"[P0CD DEBUG] on_create_flash called: event_type={event.event_type}, data={event.data}")
             champion = event.get("champion", "")
             if not (champion and self.lol):
-                print(f"[P0CD DEBUG] early return: champion={champion}, lol={self.lol}")
+                logger.info(f"[P0CD DEBUG] early return: champion={champion}, lol={self.lol}")
                 _say("没确认到目标")
                 return
             # T0：报告瞬间读当前 2999 快照，算 base + SSH，冻结 effective CD。
@@ -515,7 +517,7 @@ class Application:
                 eff = CooldownCalculator.for_summoner(base, summoner_spell_haste=ssh) or base
             except Exception:
                 eff = base
-            print(f"[P0CD] raw={raw_champ} normalized={canonical} enemy_found={enemy is not None} "
+            logger.info(f"[P0CD] raw={raw_champ} normalized={canonical} enemy_found={enemy is not None} "
                   f"base={base} ssh={ssh} src={ssh_src} eff={eff} "
                   f"gt={snap.game_time if snap else None}")
             disp = canonical or champion
@@ -612,9 +614,9 @@ class Application:
                 snapshot_provider=_snapshot_provider,
             )
             self.command_bus.register(CommandType.PLAYER_QUERY, handler)
-            print("...")
+            logger.info("...")
         except Exception as e:
-            print(f"[PlayerQuery] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[PlayerQuery] 娉ㄥ唽澶辫触: {e}")
 
     def _register_automation(self):
         """doc"""
@@ -640,9 +642,9 @@ class Application:
                 self._set_module_status("automation", "ok")
             else:
                 self._set_module_status("automation", "disabled")
-            print(f"[Automation] 宸叉敞鍐?enabled={cfg.enabled}")
+            logger.info(f"[Automation] 宸叉敞鍐?enabled={cfg.enabled}")
         except Exception as e:
-            print(f"[Automation] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[Automation] 娉ㄥ唽澶辫触: {e}")
 
     def _register_combo(self):
         """注册一键连招 ComboManager（一期：配置加载+键盘监听+执行引擎+只读UI）。
@@ -662,9 +664,9 @@ class Application:
             except Exception:
                 pass
             self.combo_manager.start()
-            print("[Combo] ComboManager 已启动（默认关闭，需在自动化面板开启）")
+            logger.info("[Combo] ComboManager 已启动（默认关闭，需在自动化面板开启）")
         except Exception as e:
-            print(f"[Combo] 注册失败: {e}")
+            logger.error(f"[Combo] 注册失败: {e}")
             self.logger.error(f"[Combo] 注册失败: {e}")
 
     def _register_cooldown(self):
@@ -691,7 +693,7 @@ class Application:
 
             def _on_event(code: str, data: dict):
                 # 绠€鍗曟棩蹇楋紱TTS 鐢?_speech_enqueue 璐熻矗
-                print(f"[Cooldown] {code}: {data.get('text') or data}")
+                logger.info(f"[Cooldown] {code}: {data.get('text') or data}")
 
             def _haste_provider(champion, side="enemy"):
                 # 返回 (ability_haste, summoner_spell_haste, champion_level, runes)
@@ -754,10 +756,10 @@ class Application:
                             reminder_id, adjustment, event_id
                         )
                 except Exception as e:
-                    print(f"[Cooldown] adjustment event error: {e}")
+                    logger.error(f"[Cooldown] adjustment event error: {e}")
             
             self.event_bus.subscribe("cooldown.adjustment", _on_cooldown_adjustment)
-            print("[Cooldown] adjustment event handler registered")
+            logger.info("[Cooldown] adjustment event handler registered")
             
             # Phase 3-K.7.4.4: AxiomArcEvaluator 生产接入
             try:
@@ -771,10 +773,10 @@ class Application:
                     champion_catalog=getattr(self.cooldown_manager, '_champions', None),
                 )
                 self.axiom_evaluator.start()
-                print("[AxiomArc] evaluator registered")
+                logger.info("[AxiomArc] evaluator registered")
             except Exception as _e:
-                print(f"[AxiomArc] evaluator 注册失败: {_e}")
-            print("...")
+                logger.error(f"[AxiomArc] evaluator 注册失败: {_e}")
+            logger.info("...")
             # A5 经济状态边沿提醒（仅跨边界时一句短话，低噪音）
             try:
                 from app.player.economy_advisor import make_economy_advisor
@@ -783,9 +785,9 @@ class Application:
                 adv = make_economy_advisor(_snap_provider, self.speech_queue, enabled=True)
                 self.event_bus.subscribe("game.time_update", adv["on_time_update"])
                 self.event_bus.subscribe("game.ended", adv["on_game_reset"])
-                print("[A5] economy advisor registered")
+                logger.info("[A5] economy advisor registered")
             except Exception as _e:
-                print(f"[A5] economy advisor 注册失败: {_e}")
+                logger.error(f"[A5] economy advisor 注册失败: {_e}")
 
             # A6 敌方成装语音提醒（equipment_notifier，game.time_update 每帧 ~1Hz）
             try:
@@ -803,21 +805,21 @@ class Application:
                             if snap and getattr(snap, "players", None):
                                 self.equip_notifier.update(snap.players)
                         except Exception as _e:
-                            print(f"[Equipment] 更新异常: {_e}")
+                            logger.info(f"[Equipment] 更新异常: {_e}")
 
                     def _on_equip_game_end(event):
                         try:
                             self.equip_notifier.clear()
                         except Exception as _e:
-                            print(f"[Equipment] 清理异常: {_e}")
+                            logger.info(f"[Equipment] 清理异常: {_e}")
 
                     self.event_bus.subscribe("game.time_update", _on_equip_tick)
                     self.event_bus.subscribe("game.ended", _on_equip_game_end)
-                    print("[Equipment] notifier registered")
+                    logger.info("[Equipment] notifier registered")
             except Exception as _e:
-                print(f"[Equipment] notifier 注册失败: {_e}")
+                logger.error(f"[Equipment] notifier 注册失败: {_e}")
         except Exception as e:
-            print(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")
 
     def _register_ongoing(self):
         try:
@@ -846,9 +848,9 @@ class Application:
                     if _ongoing_last.get(code) == cur:
                         return  # 与上次相同，跳过（高频日志去重）
                     _ongoing_last[code] = cur
-                print(f"[Ongoing] {code}: {data}")
+                logger.info(f"[Ongoing] {code}: {data}")
 
-            print("[Ongoing] 高频日志去重已启用（session_source/gsm_supplement/live_merged 相同内容不重复打印）")
+            logger.info("[Ongoing] 高频日志去重已启用（session_source/gsm_supplement/live_merged 相同内容不重复打印）")
             self.ongoing_service = OngoingGameService(
                 lcu=self.lol.lcu if self.lol else None,
                 on_event=_ongoing_on_event,
@@ -859,7 +861,7 @@ class Application:
                 deobfuscate_enabled=self.config.get("ongoing.deobfuscate_enabled", True),
             )
         except Exception as e:
-            print(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
             self.logger.error(f"[Ongoing] 注册失败: {e}")
 
     def run(self):
@@ -868,7 +870,7 @@ class Application:
         self.start()
 
         def signal_handler(sig, frame):
-            print("\n鏀跺埌鍋滄淇″彿...")
+            logger.info("\n鏀跺埌鍋滄淇″彿...")
             self._shutdown_event.set()
             # UI 妯″紡涓嬶細璁?Qt 浜嬩欢寰幆閫€鍑猴紙headless 妯″紡 QApplication.instance() 涓?None锛?
             try:
@@ -899,7 +901,7 @@ class Application:
             from app.ui.main_window import MainWindow
             from app.ui.tray import TrayIcon
         except Exception as e:
-            print(f"[UI] PySide6 鏈畨瑁咃紝浣跨敤 headless: {e}")
+            logger.info(f"[UI] PySide6 鏈畨瑁咃紝浣跨敤 headless: {e}")
             try:
                 while not self._shutdown_event.is_set():
                     time.sleep(0.5)
@@ -913,9 +915,9 @@ class Application:
             from app.ui.theme.applier import apply_dark_theme
             apply_dark_theme(app)
         except Exception as _e:
-            print(f'[UI] theme load failed: {_e}')
+            logger.info(f'[UI] theme load failed: {_e}')
 
-        print("[Run] creating MainWindow")
+        logger.info("[Run] creating MainWindow")
         window = MainWindow(
             automation_service=None,
             cooldown_manager=None,
@@ -925,17 +927,17 @@ class Application:
         window.show()
         window.raise_()
         window.activateWindow()
-        print(f"[Run] MainWindow shown at {window.geometry()}")
+        logger.info(f"[Run] MainWindow shown at {window.geometry()}")
 
         state = {"done": False, "error": None, "switched": False}
 
         def backend():
             try:
-                print("[Run] background: initialize")
+                logger.info("[Run] background: initialize")
                 self.initialize()
-                print("[Run] background: start")
+                logger.info("[Run] background: start")
                 self.start()
-                print("[Run] background: done")
+                logger.info("[Run] background: done")
                 state["done"] = True
             except Exception as e:
                 import traceback
@@ -949,16 +951,17 @@ class Application:
 
         def check():
             if state["error"]:
-                print(f"[Run] backend error: {state['error']}")
+                logger.error(f"[Run] backend error: {state['error']}")
                 return
             if state["done"] and not state["switched"]:
                 state["switched"] = True
-                print("[Run] switching to tabs")
+                logger.info("[Run] switching to tabs")
                 try:
                     self._switch_to_tabs(window)
-                    print("[Run] switched")
+                    logger.info("[Run] switched")
                     # H.4.4: 启动 Overlay（在主线程中）
                     self._start_overlay()
+                    timer.stop()
                 except Exception:
                     import traceback
                     traceback.print_exc()
@@ -968,7 +971,7 @@ class Application:
         timer.start(500)
         self._startup_timer = timer
 
-        print("[Run] entering app.exec()")
+        logger.info("[Run] entering app.exec()")
         try:
             app.exec()
         finally:
@@ -1008,14 +1011,14 @@ class Application:
             
             # H.4.4: 连接 Overlay 点击信号 → EventBus → alarm.create_flash
             def on_spell_clicked(champion_name: str, spell_name: str):
-                print(f"[Overlay] spell clicked: champion={champion_name}, spell={spell_name}")
+                logger.info(f"[Overlay] spell clicked: champion={champion_name}, spell={spell_name}")
                 # 规范化 spell 名称：把 2999 的变体名称转换成 canonical name
                 # 例如："治疗术" → "治疗"，"解封的传送" → "传送"，"引燃" → "点燃"
                 from app.ui.overlay.overlay_model import _normalize_spell_name
                 from app.lol.data.summoner_spell_catalog import SummonerSpellCatalog
                 _spell_catalog = SummonerSpellCatalog()
                 canonical_spell = _normalize_spell_name(spell_name, _spell_catalog)
-                print(f"[Overlay] normalized spell: {spell_name} → {canonical_spell}")
+                logger.info(f"[Overlay] normalized spell: {spell_name} → {canonical_spell}")
                 # H.4.4: 通过 CommandBus → CooldownManager（统一语音和 Overlay 入口）
                 from app.core.command_bus import Command, CommandType
                 self.command_bus.execute(Command(
@@ -1036,13 +1039,13 @@ class Application:
                 ))
             
             self._overlay_window.spell_clicked.connect(on_spell_clicked)
-            print("[Run] overlay started")
+            logger.info("[Run] overlay started")
         except Exception:
             import traceback; traceback.print_exc()
     def _switch_to_tabs(self, window):
-        print("[Run] _switch_to_tabs start")
+        logger.info("[Run] _switch_to_tabs start")
         from app.ui.widgets.main_tabs import MainTabs
-        print("[Run] building MainTabs")
+        logger.info("[Run] building MainTabs")
         tabs = MainTabs(
             automation_service=getattr(self, "automation", None),
             cooldown_manager=getattr(self, "cooldown_manager", None),
@@ -1056,7 +1059,7 @@ class Application:
             overlay_toggle=window._on_overlay_toggle,
             overlay_enabled=True,
                     )
-        print("[Run] MainTabs built, switching")
+        logger.info("[Run] MainTabs built, switching")
         # 统一运行时状态：MainWindow 底部唯一 StatusBar 读取这套真实服务
         try:
             window._services = {
@@ -1066,15 +1069,15 @@ class Application:
                 "voice": getattr(self, "voice", None),
             }
         except Exception as e:
-            print(f"[UI] services wiring failed: {e}")
+            logger.info(f"[UI] services wiring failed: {e}")
         window.switch_to_tabs(tabs)
-        print("[Run] switched, showing tray")
+        logger.info("[Run] switched, showing tray")
         from app.ui.tray import TrayIcon
         tray = TrayIcon(window, on_quit=self.stop)
         tray.show()
         self._tray = tray
         self._main_window = window
-        print("[Run] tray shown")
+        logger.info("[Run] tray shown")
 
 
     def get_status(self) -> Dict[str, Any]:

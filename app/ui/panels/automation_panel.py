@@ -1,16 +1,21 @@
 """自动化面板：4 个开关 + 状态显示。"""
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QHBoxLayout, QPushButton, QGroupBox, QLabel, QSizePolicy, QVBoxLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
 
-from ..widgets.toggle_button import ToggleButton
-from ..widgets.icon_utils import lucide_icon
 from ..dialogs.auto_queue_config_dialog import AutoQueueConfigDialog
 from ..dialogs.ban_pick_config_dialog import BanPickConfigDialog
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
+from ..widgets.icon_utils import lucide_icon
+from ..widgets.toggle_button import ToggleButton
 
 
 class AutomationPanel(QWidget):
@@ -154,7 +159,7 @@ class AutomationPanel(QWidget):
             return
         val = dlg.value()
         try:
-            setattr(cfg, "accept_delay", val)
+            cfg.accept_delay = val
             # 同时保存到yaml配置（沿用现有模式）
             import yaml
             path = "config/settings.yaml"

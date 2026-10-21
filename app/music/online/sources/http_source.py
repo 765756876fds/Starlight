@@ -7,8 +7,6 @@ SourceError（由 OnlineSourceManager 记录到 _errors，不影响其他音源�
 """
 from __future__ import annotations
 
-from typing import List, Optional
-
 import requests
 
 from ..models import OnlineTrack
@@ -110,7 +108,7 @@ class HttpJsonSource(MusicSource):
         return ""
 
     @staticmethod
-    def _extract_track(item: dict, source_name: str) -> Optional[OnlineTrack]:
+    def _extract_track(item: dict, source_name: str) -> OnlineTrack | None:
         """宽松提取一首歌：兼容 name/title/songName、artist/singer、
         id/songId/songmid 等常见字段。album 可能为字符串或字典。"""
         if not isinstance(item, dict):
@@ -149,7 +147,7 @@ class HttpJsonSource(MusicSource):
 
     # ---- MusicSource 接口 ----
 
-    def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+    def search(self, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         if not keyword or not self._api_url:
             return []
         data, err = self._get_json(self._search_path, {
@@ -171,7 +169,7 @@ class HttpJsonSource(MusicSource):
             items = data
         if not isinstance(items, list):
             raise SourceError("structure", self.name)
-        out: List[OnlineTrack] = []
+        out: list[OnlineTrack] = []
         for item in items:
             t = self._extract_track(item, self.name)
             if t:
@@ -183,7 +181,7 @@ class HttpJsonSource(MusicSource):
             raise SourceError("structure", self.name)
         return out
 
-    def get_play_url(self, track: OnlineTrack) -> Optional[str]:
+    def get_play_url(self, track: OnlineTrack) -> str | None:
         if not self._api_url:
             return None
         data, err = self._get_json(self._song_url_path, {"id": track.track_id})
@@ -199,5 +197,5 @@ class HttpJsonSource(MusicSource):
             return None
         return url
 
-    def get_lyric(self, track: OnlineTrack) -> Optional[str]:
+    def get_lyric(self, track: OnlineTrack) -> str | None:
         return None

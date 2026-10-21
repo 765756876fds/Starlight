@@ -1,9 +1,12 @@
-# -*- coding: utf-8 -*-
 """电影源管理对话框：多源列表 + 增删 + 测源（三合一）+ 设为当前。仿音源管理。"""
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
 )
 
 from ...movie.source_manager import MovieSourceManager

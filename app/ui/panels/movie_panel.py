@@ -1,33 +1,53 @@
 """电影面板：搜索 + 结果列表 + 播放控制（暂停/继续/进度条/全屏/倍速/音量/静音）
 + 剧集选集 + 自动连播 + Assrt 字幕。"""
-from pathlib import Path
 import functools
 import html as _html_mod
 import os
 import re
 import tempfile
-import urllib.request
-import requests
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from PySide6.QtCore import QObject, QRect, QSize, QThread, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPixmap
+import requests
+from PySide6.QtCore import QObject, QRect, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListView, QListWidgetItem, QMenu, QPushButton, QScrollArea,
-    QSlider, QStackedWidget, QStyledItemDelegate, QStyle, QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QVBoxLayout,
+    QWidget,
 )
 
+from app.core.logger import get_logger
+from app.core.path_resolve import PROJECT_ROOT
+
+from ...movie import douban_rank
+from ...movie.rank_providers import TgmengProvider, default_provider
 from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..dialogs.parse_link_dialog import ParseLinkDialog
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import _GlassMsgBox, glass_info
-from ...movie import douban_rank
-from ...movie.rank_providers import BaseRankProvider, TgmengProvider, default_provider
-
-from app.core.logger import get_logger
-from app.core.path_resolve import PROJECT_ROOT
 
 logger = get_logger()
 
@@ -164,10 +184,10 @@ def _get_poster(vod_id):
             return pix
     return None
 
+from ...movie.movie_controller import MovieController
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
 from ..widgets.icon_utils import lucide_icon
-from ...movie.movie_controller import MovieController
 
 
 class _PosterWallDelegate(QStyledItemDelegate):
@@ -457,7 +477,9 @@ class _ParseLinkWorker(QObject):
 
     def run(self):
         try:
-            from videodl import videodl  # 延迟 import；库 bug：默认参数 None 会崩，必须传 []
+            from videodl import (
+                videodl,  # 延迟 import；库 bug：默认参数 None 会崩，必须传 []
+            )
             client = videodl.VideoClient(allowed_video_sources=[])
             infos = client.parsefromurl(self._url)
             if infos and getattr(infos[0], "download_url", None):
@@ -1161,7 +1183,7 @@ class MoviePanel(QWidget):
         if api.strip():
             # 第三方接口备用方案：接口地址 + 视频链接，直接播放
             full = api.strip() + url
-            self.lbl_status.setText(f"使用第三方接口播放…")
+            self.lbl_status.setText("使用第三方接口播放…")
             self._play_parsed_url(full, title="第三方接口")
             return
         if self._parse_thread is not None and self._parse_thread.isRunning():

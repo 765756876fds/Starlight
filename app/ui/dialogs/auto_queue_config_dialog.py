@@ -1,6 +1,10 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QVBoxLayout, QGridLayout, QComboBox, QHBoxLayout, QLabel, QPushButton,
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
 )
 
 from ...ui.theme.tokens import Tokens

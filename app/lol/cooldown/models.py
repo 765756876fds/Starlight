@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, List, Optional, Tuple
 
 
 class ReminderStatus(str, Enum):
@@ -27,19 +26,19 @@ class CooldownCastSnapshot:
     spell: str
     cast_game_time: float
     champion_level: int
-    items: Tuple[int, ...] = field(default_factory=tuple)
-    runes: Tuple[MappingProxyType, ...] = field(default_factory=tuple)  # 每个 rune 是只读 mapping
+    items: tuple[int, ...] = field(default_factory=tuple)
+    runes: tuple[MappingProxyType, ...] = field(default_factory=tuple)  # 每个 rune 是只读 mapping
     ability_haste: float = 0.0
     summoner_spell_haste: float = 0.0
     ultimate_haste: float = 0.0
-    special_effects: Tuple[str, ...] = field(default_factory=tuple)  # 预留：未来扩展
+    special_effects: tuple[str, ...] = field(default_factory=tuple)  # 预留：未来扩展
 
 
 @dataclass
 class CooldownReminder:
     id: str
-    champion_id: Optional[int]
-    champion_name: Optional[str]
+    champion_id: int | None
+    champion_name: str | None
     skill: str                 # 'W' / 'R' / 'Flash' / 'Teleport'
     skill_type: str            # 'ability' | 'summoner_spell'
     base_cooldown: float       # 秒
@@ -51,7 +50,7 @@ class CooldownReminder:
     status: str = ReminderStatus.ACTIVE.value
     game_clock: bool = False     # True=used_at/ready_at 锚定游戏内时钟（跟随游戏暂停）
     skill_level_source: str = ""  # assumed_level_1 | inferred_from_champion_level
-    cast_snapshot: Optional[CooldownCastSnapshot] = None  # 记录时的状态快照
+    cast_snapshot: CooldownCastSnapshot | None = None  # 记录时的状态快照
     dynamic_adjustment: float = 0.0  # 动态修正总秒数（>0 表示提前）
     applied_event_ids: set = field(default_factory=set)  # 已处理的事件 ID（幂等）
 

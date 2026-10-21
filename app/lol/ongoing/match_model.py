@@ -7,8 +7,6 @@ UI/Service 只消费本模型，不感知来源差异。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
-
 
 # 可用性状态（严格区分“真实 0 胜”与“拿不到”）
 AVAILABLE = "AVAILABLE"
@@ -34,12 +32,12 @@ class MatchRecord:
     queue_type: str = ""             # SGP/LCU 解析出的队列名（可空）
     champion_id: int = 0
     champion_name: str = ""
-    win: Optional[bool] = None       # None=未知，True/False=确定
-    kills: Optional[int] = None
-    deaths: Optional[int] = None
-    assists: Optional[int] = None
-    cs: Optional[int] = None         # totalMinionsKilled + neutralMinionsKilled
-    gold: Optional[int] = None
+    win: bool | None = None       # None=未知，True/False=确定
+    kills: int | None = None
+    deaths: int | None = None
+    assists: int | None = None
+    cs: int | None = None         # totalMinionsKilled + neutralMinionsKilled
+    gold: int | None = None
     team_position: str = ""
     team_id: int = 0
     source: str = "unknown"          # sgp / lcu
@@ -48,7 +46,7 @@ class MatchRecord:
 @dataclass
 class MatchHistoryResult:
     state: str = ERROR               # AVAILABLE / NO_DATA / ...
-    records: List[MatchRecord] = field(default_factory=list)
+    records: list[MatchRecord] = field(default_factory=list)
     total: int = 0                   # 服务端声称的总数（SGP 可远大于 LCU 20）
     message: str = ""
 

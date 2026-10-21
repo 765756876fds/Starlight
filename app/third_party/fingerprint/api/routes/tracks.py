@@ -17,7 +17,15 @@ from ...utils.exceptions import NotFoundError, ValidationError
 from ...utils.files import ensure_dir, safe_filename
 from ..auth import STREAM_TOKEN_TTL, make_stream_token
 from ..responses import format_job, format_page, format_track
-from ..validators import check_json_body_size, clean_directory_path, parse_bool, parse_choice, parse_int, parse_pagination, require_upload
+from ..validators import (
+    check_json_body_size,
+    clean_directory_path,
+    parse_bool,
+    parse_choice,
+    parse_int,
+    parse_pagination,
+    require_upload,
+)
 from . import api_bp, runtime
 
 

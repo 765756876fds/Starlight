@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """电影源管理：多源配置（settings.yaml movie.sources 持久化）+ 三合一测源。
 
 设计（包2c后续，用户批准）：
@@ -11,18 +10,17 @@
 import json
 import os
 import threading
-from pathlib import Path
-
-from app.core.path_resolve import PROJECT_ROOT
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 import yaml
 
+from app.core.path_resolve import PROJECT_ROOT
+
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 # 实测可用源（2026-10-16 探针：17 源里 9 个通过三合一）——量子置顶
-DEFAULT_SOURCES: List[Dict[str, Any]] = [
+DEFAULT_SOURCES: list[dict[str, Any]] = [
     {"name": "量子资源", "url": "http://cj.lziapi.com/api.php/provide/vod/from/lzm3u8/", "enabled": True},
     {"name": "非凡资源", "url": "http://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8/", "enabled": True},
     {"name": "暴风资源", "url": "https://bfzyapi.com/api.php/provide/vod/from/bfzym3u8/", "enabled": True},
@@ -64,10 +62,10 @@ class MovieSourceManager:
 
     _lock = threading.Lock()
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: str | None = None):
         self._config_path = config_path or _default_settings_path()
-        self._sources: List[Dict[str, Any]] = []
-        self._active: Optional[str] = None
+        self._sources: list[dict[str, Any]] = []
+        self._active: str | None = None
         self._load()
 
     # ---- 加载/保存 ----
@@ -120,7 +118,7 @@ class MovieSourceManager:
                 print(f"[MovieSource] 保存配置失败: {e}")
 
     @staticmethod
-    def _norm(s) -> Dict[str, Any]:
+    def _norm(s) -> dict[str, Any]:
         return {
             "name": str(s.get("name") or "").strip() or "未命名源",
             "url": str(s.get("url") or "").strip(),
@@ -129,19 +127,19 @@ class MovieSourceManager:
 
     # ---- 查询 ----
 
-    def get_all_sources(self) -> List[Dict[str, Any]]:
+    def get_all_sources(self) -> list[dict[str, Any]]:
         return [dict(s) for s in self._sources]
 
-    def get_enabled_sources(self) -> List[Dict[str, Any]]:
+    def get_enabled_sources(self) -> list[dict[str, Any]]:
         return [dict(s) for s in self._sources if s.get("enabled", True)]
 
-    def get_active_name(self) -> Optional[str]:
+    def get_active_name(self) -> str | None:
         if self._active:
             return self._active
         srcs = self._sources
         return srcs[0]["name"] if srcs else None
 
-    def get_active_source(self) -> Optional[Dict[str, Any]]:
+    def get_active_source(self) -> dict[str, Any] | None:
         name = self.get_active_name()
         for s in self._sources:
             if s["name"] == name:
@@ -185,7 +183,7 @@ class MovieSourceManager:
     # ---- 测源（三合一） ----
 
     @staticmethod
-    def test_source(src: Dict[str, Any], timeout: float = 8.0):
+    def test_source(src: dict[str, Any], timeout: float = 8.0):
         """三合一：L1 连通 / L2 搜索有结果 / L3 首条 m3u8 可播。返回 (ok, detail)。"""
         url = (src or {}).get("url", "")
         if not url:
@@ -219,7 +217,7 @@ class MovieSourceManager:
         except Exception as e:
             return False, type(e).__name__
 
-    def test_all(self, sources: Optional[List[Dict[str, Any]]] = None,
+    def test_all(self, sources: list[dict[str, Any]] | None = None,
                  timeout: float = 8.0):
         """批量测试。返回 [(name, ok, detail), ...]。"""
         srcs = sources if sources is not None else self._sources
@@ -242,5 +240,5 @@ class _SingleSourceManager:
     def get_enabled_sources(self):
         return [dict(self._src)]
 
-    def get_active_name(self) -> Optional[str]:
+    def get_active_name(self) -> str | None:
         return "单源"

@@ -4,15 +4,14 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
-from typing import Any, Callable, List, Optional
+from collections.abc import Callable
 
-from .loader import OngoingGameLoader
+from .deobfuscate import deobfuscate_puuid
 from .diagnostic import ChampSelectDiagnostic
+from .gsm_provider import merge_gsm_players
+from .loader import OngoingGameLoader
 from .models import PlayerSnapshot
 from .session import CurrentGamePlayer, CurrentGameSession
-from .gsm_provider import merge_gsm_players
-from .deobfuscate import deobfuscate_puuid
-
 
 # liveclientdata 玩家对象没有 championId 字段（只有 championName / rawChampionName），
 # 需要用名称反查 cid 才能与 gameflow 身份 cell 的 championId 对齐匹配。
@@ -82,7 +81,7 @@ class OngoingGameService:
     def __init__(
         self,
         lcu=None,
-        on_event: Optional[Callable[[str, dict], None]] = None,
+        on_event: Callable[[str, dict], None] | None = None,
         cache_ttl: float = 300.0,
         max_workers: int = 4,
         rps: float = 20.0,
@@ -110,11 +109,11 @@ class OngoingGameService:
         )
         if getattr(self, "_loader", None):
             self._loader.on_name_resolved = self._on_player_name_resolved
-        self._snapshots: List[PlayerSnapshot] = []
+        self._snapshots: list[PlayerSnapshot] = []
         # 当前对局 session（game_id 为生命周期锚点；players 由 gameflow teamOne/teamTwo 构建）
-        self._session: Optional[CurrentGameSession] = None
-        self._current_session_key: Optional[str] = None
-        self._last_loaded_key: Optional[str] = None
+        self._session: CurrentGameSession | None = None
+        self._current_session_key: str | None = None
+        self._last_loaded_key: str | None = None
         self._loading_in_progress = False
         self._poll_interval = poll_interval
         # 历史战绩缺失自动重试状态（按 game_id 持久；离开对局清空，防腾讯服 gameId 复用串局）
@@ -127,12 +126,12 @@ class OngoingGameService:
         self._force_reload = False
         # ChampSelect 完整 session 缓存：人机/匹配选人阶段 10 人含 puuid，
         # InProgress 阶段 liveclientdata 无 puuid，必须复用该缓存才能查到队友历史战绩
-        self._champ_select_session: Optional[dict] = None
+        self._champ_select_session: dict | None = None
 
         self._diag = ChampSelectDiagnostic(lcu.request_raw, on_event=self._on_event) if lcu is not None else None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     # ----- lifecycle -----
     def get_direct_getter(self):
@@ -407,7 +406,7 @@ class OngoingGameService:
             return
         threading.Thread(target=self._load_in_thread, args=(session,), daemon=True).start()
 
-    def _build_gameflow_session(self, me_puuid: Optional[str]):
+    def _build_gameflow_session(self, me_puuid: str | None):
         """身份主源：gameflow session.gameData.teamOne/teamTwo → myTeam/theirTeam。
 
         gameflow 的 teamOne/teamTwo 不携带 team 字段，用当前召唤师 puuid 判定我方；
@@ -444,7 +443,7 @@ class OngoingGameService:
                        {"source": "gameflow", "players": len(my_team) + len(their_team)})
         return {"myTeam": my_team, "theirTeam": their_team, "gameId": game_id}
 
-    def _deobfuscate_champ_select(self, cs: dict, me_puuid: Optional[str]) -> Optional[dict]:
+    def _deobfuscate_champ_select(self, cs: dict, me_puuid: str | None) -> dict | None:
         """ChampSelect 阶段：cs session → 可加载 session（HIDDEN 成员反解 puuid）。
 
         只对 nameVisibilityType=="HIDDEN" 且 obfuscatedPuuid 非空的 cell 做还原；
@@ -510,7 +509,7 @@ class OngoingGameService:
                 "gameId": cs.get("gameId") or 0}
 
     def _supplement_gsm(self, session: dict, phase: str,
-                        me_puuid: Optional[str]) -> dict:
+                        me_puuid: str | None) -> dict:
         """GSM 补充身份源：仅 GameStart/InProgress/Reconnect 启用；ChampSelect 不请求。
 
         Gameflow 永远是主源：GSM 只在同局校验通过后追加 Gameflow 完全没有的 puuid；
@@ -629,7 +628,7 @@ class OngoingGameService:
         raise NotImplementedError("2999 不再作为玩家集合来源（阶段1 已移除）")
 
     @staticmethod
-    def _to_player(cell: dict, team: str, me_puuid: Optional[str]) -> CurrentGamePlayer:
+    def _to_player(cell: dict, team: str, me_puuid: str | None) -> CurrentGamePlayer:
         """gameflow/champ-select cell → CurrentGamePlayer（identity + realtime 两区）。
 
         identity 唯一来源：gameflow teamOne/teamTwo（或同局 champ-select 缓存回退）；
@@ -656,7 +655,7 @@ class OngoingGameService:
         )
 
     def _to_current_session(self, session: dict, phase: str,
-                            me_puuid: Optional[str]) -> CurrentGameSession:
+                            me_puuid: str | None) -> CurrentGameSession:
         now = time.time()
         return CurrentGameSession(
             game_id=session.get("gameId") or 0,
@@ -729,12 +728,12 @@ class OngoingGameService:
                         break
 
     # ----- UI -----
-    def get_session(self) -> Optional[CurrentGameSession]:
+    def get_session(self) -> CurrentGameSession | None:
         """当前对局 session（UI 玩家集合唯一来源；2999 不参与玩家存在性）。"""
         with self._lock:
             return self._session
 
-    def get_snapshots(self) -> List[PlayerSnapshot]:
+    def get_snapshots(self) -> list[PlayerSnapshot]:
         with self._lock:
             return list(self._snapshots)
 

@@ -8,8 +8,6 @@
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 from .models import ChampionCombos
 
 # 触发键合法集（小写）：字母 a-z + 主键盘数字 0-9
@@ -27,13 +25,13 @@ def is_valid_sequence_key(key: str) -> bool:
 
 
 def validate_combo(champ: ChampionCombos, trigger: str,
-                   sequence: List, exclude: Optional[object] = None
-                   ) -> Tuple[bool, List[str]]:
+                   sequence: list, exclude: object | None = None
+                   ) -> tuple[bool, list[str]]:
     """校验一条连招。返回 (是否通过, 错误列表)。
 
     exclude：编辑模式下传入被编辑的 Combo 对象，避免"trigger 未变"被误判为重复。
     """
-    errors: List[str] = []
+    errors: list[str] = []
     t = (trigger or "").strip().lower()
     if not t:
         errors.append("触发键不能为空")

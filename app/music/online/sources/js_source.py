@@ -8,7 +8,6 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
 
 from ..models import OnlineTrack
 from ..source import MusicSource
@@ -59,19 +58,19 @@ class JSMusicSource(MusicSource):
     _auto_reload_gave_up = False
     _closed = False
 
-    def __init__(self, mf_dir: str, lx_dir: str, bridge_dir: Optional[str] = None,
-                 user_variables: Optional[dict] = None):
+    def __init__(self, mf_dir: str, lx_dir: str, bridge_dir: str | None = None,
+                 user_variables: dict | None = None):
         self._mf_dir = str(Path(mf_dir).resolve())
         self._lx_dir = str(Path(lx_dir).resolve())
         self._user_variables = user_variables or {}
         self._bridge_dir = Path(bridge_dir) if bridge_dir else (
             Path(__file__).parent.parent / "js_bridge"
         )
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._pending: dict = {}
-        self._sources: List[str] = []
-        self._plugins: List[dict] = []   # [{name, type, status, error?}]
+        self._sources: list[str] = []
+        self._plugins: list[dict] = []   # [{name, type, status, error?}]
         self._ready = threading.Event()
         self._start_bridge()
         # 阻塞等待 bridge 就绪
@@ -219,10 +218,10 @@ class JSMusicSource(MusicSource):
         except Exception:
             return False
 
-    def list_sources(self) -> List[str]:
+    def list_sources(self) -> list[str]:
         return list(self._sources)
 
-    def list_plugins(self) -> List[dict]:
+    def list_plugins(self) -> list[dict]:
         """结构化插件列表：[{name, type(musicfree/lx), status(ok/fail), error?}]。
         供设置页「内置插件」UI 展示。"""
         return [dict(p) for p in self._plugins]
@@ -241,7 +240,7 @@ class JSMusicSource(MusicSource):
         except Exception:
             return True   # _plugins 元素异常时放行（bridge 仍能按名路由）
 
-    def search_plugin(self, source: str, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+    def search_plugin(self, source: str, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         """只搜指定插件（测试按钮用，不经 manager 遍历回退）。"""
         if not keyword or not source:
             return []
@@ -275,7 +274,7 @@ class JSMusicSource(MusicSource):
         return out
 
     def get_top_list_detail(self, source: str, list_id: str,
-                            page: int = 1) -> Optional[dict]:
+                            page: int = 1) -> dict | None:
         """单榜单歌曲：bridge 返回与搜索同构的 tracks → 复用 _parse_tracks。
 
         返回 {is_end: bool, tracks: [OnlineTrack]}；无榜单能力/失败 → None。
@@ -294,7 +293,7 @@ class JSMusicSource(MusicSource):
 
     # ---------- 插件检查更新 / 更新 ----------
 
-    def check_updates(self, timeout: float = 25.0) -> List[dict]:
+    def check_updates(self, timeout: float = 25.0) -> list[dict]:
         """拉全部 MusicFree 插件的更新源，返回判断结果列表。
 
         每项：{name, file, local_version, remote_version, has_update, error?}
@@ -406,8 +405,8 @@ class JSMusicSource(MusicSource):
         ok = self.reload()
         return {"ok": ok, "error": None if ok else "reload-fail"}
 
-    def _parse_tracks(self, result: list) -> List[OnlineTrack]:
-        out: List[OnlineTrack] = []
+    def _parse_tracks(self, result: list) -> list[OnlineTrack]:
+        out: list[OnlineTrack] = []
         for r in result:
             try:
                 extra = dict(r.get("extra") or {}) if isinstance(r.get("extra"), dict) else {}
@@ -511,7 +510,7 @@ class JSMusicSource(MusicSource):
         finally:
             self._auto_reloading = False
 
-    def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+    def search(self, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         if not keyword:
             return []
         result = self._call("search", {"source": "*", "keyword": keyword, "limit": limit})
@@ -519,7 +518,7 @@ class JSMusicSource(MusicSource):
             return []
         return self._parse_tracks(result)
 
-    def get_play_url(self, track: OnlineTrack, quality: str = "high") -> Optional[dict]:
+    def get_play_url(self, track: OnlineTrack, quality: str = "high") -> dict | None:
         print(f"[getUrl] -> {track.source_name} track_id={track.track_id}", flush=True)
         extra = track.extra if isinstance(getattr(track, "extra", None), dict) else {}
         r = self._call("getUrl", {
@@ -537,7 +536,7 @@ class JSMusicSource(MusicSource):
             "headers": r.get("headers") or None,
         }
 
-    def get_lyric(self, track: OnlineTrack) -> Optional[str]:
+    def get_lyric(self, track: OnlineTrack) -> str | None:
         r = self._call("getLyric", {
             "source": track.source_name,
             "track_id": track.track_id,

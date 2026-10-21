@@ -7,9 +7,8 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
 
 from .rules import ObjectiveRule, ObjectiveRuleset
 
@@ -28,7 +27,7 @@ class ObjectiveState(str, Enum):
 class _Objective:
     rule: ObjectiveRule
     state: ObjectiveState = ObjectiveState.NOT_ACTIVE
-    next_spawn: Optional[float] = None   # 下次刷新的绝对游戏时间（秒）
+    next_spawn: float | None = None   # 下次刷新的绝对游戏时间（秒）
     killed: int = 0
 
 
@@ -38,10 +37,10 @@ class ObjectiveTracker:
     def __init__(self, ruleset: ObjectiveRuleset):
         self.ruleset = ruleset
         self._lock = threading.Lock()
-        self._objs: Dict[str, _Objective] = {}
+        self._objs: dict[str, _Objective] = {}
         # Dragon Soul 按队伍计：某队累计 4 条 Elemental Drake 才触发
-        self._dragon_kills_by_team: Dict[str, int] = {}
-        self._soul_team: Optional[str] = None
+        self._dragon_kills_by_team: dict[str, int] = {}
+        self._soul_team: str | None = None
         self._elder_reached = False
         self.reset()
 
@@ -148,7 +147,7 @@ class ObjectiveTracker:
                 h.state = ObjectiveState.KILLED
 
     # ----- 查询 -----
-    def next_spawn_times(self) -> Dict[str, float]:
+    def next_spawn_times(self) -> dict[str, float]:
         """{objective_type: 下次刷新绝对游戏时间}，不含 None。"""
         with self._lock:
             return {t: o.next_spawn for t, o in self._objs.items()
@@ -159,7 +158,7 @@ class ObjectiveTracker:
             o = self._objs.get(objective_type)
             return o.state if o else ObjectiveState.NOT_ACTIVE
 
-    def snapshot(self) -> List[dict]:
+    def snapshot(self) -> list[dict]:
         with self._lock:
             return [
                 {"type": o.rule.type, "name": o.rule.name_zh,

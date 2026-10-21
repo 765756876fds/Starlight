@@ -8,8 +8,6 @@ ObjectiveTimer - 中立资源刷新提醒（实时接线层）。
 """
 from __future__ import annotations
 
-from typing import Dict, List
-
 from ..core.event_bus import Event, EventType, get_event_bus
 from .game_alarm import GameAlarmEngine
 from .objectives import ObjectiveTracker, load_ruleset
@@ -143,7 +141,7 @@ class ObjectiveTimer:
                 {"objective": obj_type}
             )
 
-    def get_next_timers(self) -> List[Dict]:
+    def get_next_timers(self) -> list[dict]:
         """当前活跃资源的下次刷新倒计时（游戏内秒）。供 UI/查询使用。"""
         now = getattr(self.game_alarm, "_current_game_time", 0.0) or 0.0
         out = []

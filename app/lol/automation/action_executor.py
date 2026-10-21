@@ -8,8 +8,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Optional
-
+from collections.abc import Callable
 
 # 阶段 1 → 阶段 2 之间的停顿（秒）。可被 stop_event 打断。
 HOVER_TO_LOCK_DELAY = 0.15
@@ -20,15 +19,15 @@ class ChampSelectActionExecutor:
 
     def __init__(
         self,
-        request_with_status: Callable[[str, str, Optional[dict]], tuple],
+        request_with_status: Callable[[str, str, dict | None], tuple],
         stop_event: threading.Event,
-        on_event: Optional[Callable[[str, dict], None]] = None,
+        on_event: Callable[[str, dict], None] | None = None,
     ):
         self._request = request_with_status
         self._stop = stop_event
         self._on_event = on_event or (lambda code, payload: None)
 
-    def _post(self, method: str, endpoint: str, body: Optional[dict] = None) -> int:
+    def _post(self, method: str, endpoint: str, body: dict | None = None) -> int:
         status, _ = self._request(method, endpoint, body)
         return int(status or 0)
 

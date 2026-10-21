@@ -10,7 +10,7 @@ import os
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 class MusicDatabase:
@@ -19,7 +19,7 @@ class MusicDatabase:
     def __init__(self, db_path: str = "./data/music.db"):
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         # 连接级互斥：scanner 后台 highlight 线程与 playback/UI 线程共享同一连接
         # （check_same_thread=False + WAL 只保证读写不互斥，写写并发仍需应用层锁）
         # RLock：close() 先调 checkpoint()（内部拿锁），再 with self._lock——
@@ -196,7 +196,7 @@ class MusicDatabase:
 
         self._conn.commit()
 
-    def insert_song(self, song_data: Dict[str, Any]) -> int:
+    def insert_song(self, song_data: dict[str, Any]) -> int:
         """插入一首歌曲，返回 ID"""
         with self._lock:
             cursor = self._conn.cursor()
@@ -237,7 +237,7 @@ class MusicDatabase:
             self._conn.commit()
             return cursor.lastrowid
 
-    def update_song(self, song_id: int, song_data: Dict[str, Any]):
+    def update_song(self, song_id: int, song_data: dict[str, Any]):
         """更新歌曲信息"""
         with self._lock:
             fields = []
@@ -257,19 +257,19 @@ class MusicDatabase:
                 )
                 self._conn.commit()
 
-    def get_song_by_path(self, path: str) -> Optional[Dict[str, Any]]:
+    def get_song_by_path(self, path: str) -> dict[str, Any] | None:
         """按路径获取歌曲"""
         cursor = self._conn.execute("SELECT * FROM music WHERE path = ?", (path,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def get_song_by_id(self, song_id: int) -> Optional[Dict[str, Any]]:
+    def get_song_by_id(self, song_id: int) -> dict[str, Any] | None:
         """按 ID 获取歌曲"""
         cursor = self._conn.execute("SELECT * FROM music WHERE id = ?", (song_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """
         FTS5 全文搜索 + BM25 排序
 
@@ -339,7 +339,7 @@ class MusicDatabase:
 
         return " OR ".join(parts) if parts else query
 
-    def get_all_songs(self, limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_all_songs(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
         """获取所有歌曲"""
         cursor = self._conn.execute(
             "SELECT * FROM music ORDER BY artist, album, track_number LIMIT ? OFFSET ?",
@@ -347,7 +347,7 @@ class MusicDatabase:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_artists(self) -> List[Dict[str, Any]]:
+    def get_artists(self) -> list[dict[str, Any]]:
         """获取所有歌手"""
         cursor = self._conn.execute("""
             SELECT artist, COUNT(*) as song_count,
@@ -359,7 +359,7 @@ class MusicDatabase:
         """)
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_albums(self) -> List[Dict[str, Any]]:
+    def get_albums(self) -> list[dict[str, Any]]:
         """获取所有专辑"""
         cursor = self._conn.execute("""
             SELECT album, artist, COUNT(*) as song_count,
@@ -371,7 +371,7 @@ class MusicDatabase:
         """)
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_random_songs(self, count: int = 10) -> List[Dict[str, Any]]:
+    def get_random_songs(self, count: int = 10) -> list[dict[str, Any]]:
         """随机获取歌曲"""
         cursor = self._conn.execute(
             "SELECT * FROM music ORDER BY RANDOM() LIMIT ?", (count,)
@@ -393,7 +393,7 @@ class MusicDatabase:
             self._conn.execute("DELETE FROM music WHERE id = ?", (song_id,))
             self._conn.commit()
 
-    def delete_missing_songs(self) -> Dict[str, int]:
+    def delete_missing_songs(self) -> dict[str, int]:
         """删除文件已不存在的歌曲记录（连同其 highlight），返回删除数量。
         扫描器只增不删，文件被移动/删除后旧记录会一直残留并导致播放跳过。"""
         with self._lock:
@@ -415,7 +415,7 @@ class MusicDatabase:
         cursor = self._conn.execute("SELECT COUNT(*) as cnt FROM music")
         return cursor.fetchone()["cnt"]
 
-    def get_highlight(self, song_id: int) -> Optional[Dict[str, Any]]:
+    def get_highlight(self, song_id: int) -> dict[str, Any] | None:
         """获取歌曲高潮位置"""
         with self._lock:
             cursor = self._conn.execute(
@@ -426,7 +426,7 @@ class MusicDatabase:
             return dict(row) if row else None
 
     def save_highlight(self, song_id: int, start_time: float,
-                        end_time: Optional[float] = None,
+                        end_time: float | None = None,
                         confidence: float = 1.0, source: str = "manual"):
         """保存歌曲高潮位置"""
         with self._lock:
@@ -459,7 +459,7 @@ class MusicDatabase:
 
     def add_history(self, title: str, artist: str, source_type: str,
                     source_name: str = "", track_id: str = "",
-                    music_id: int = 0, played_at: Optional[float] = None) -> int:
+                    music_id: int = 0, played_at: float | None = None) -> int:
         """写入一条播放历史（只存元数据，不缓存歌曲文件）；超过 200 条删最旧。"""
         with self._lock:
             now = played_at if played_at is not None else time.time()
@@ -476,7 +476,7 @@ class MusicDatabase:
             self._conn.commit()
             return int(row_id)
 
-    def get_history(self, limit: int = 200) -> List[Dict[str, Any]]:
+    def get_history(self, limit: int = 200) -> list[dict[str, Any]]:
         """播放历史（最近在前）。"""
         with self._lock:
             cursor = self._conn.execute(
@@ -492,7 +492,7 @@ class MusicDatabase:
 
     # ---- 歌单 ----
 
-    def create_playlist(self, name: str) -> Optional[int]:
+    def create_playlist(self, name: str) -> int | None:
         """新建歌单；名字已存在（UNIQUE 冲突）返回 None。"""
         with self._lock:
             try:
@@ -524,7 +524,7 @@ class MusicDatabase:
             except sqlite3.IntegrityError:
                 return False
 
-    def get_playlists(self) -> List[Dict[str, Any]]:
+    def get_playlists(self) -> list[dict[str, Any]]:
         """全部歌单（按创建时间），附 song_count。"""
         with self._lock:
             cursor = self._conn.execute(
@@ -533,7 +533,7 @@ class MusicDatabase:
                 " FROM playlists p ORDER BY p.created_at")
             return [dict(r) for r in cursor.fetchall()]
 
-    def add_to_playlist(self, playlist_id: int, song: Dict[str, Any]) -> bool:
+    def add_to_playlist(self, playlist_id: int, song: dict[str, Any]) -> bool:
         """加歌到歌单；同歌单内同歌去重（本地按 music_id、在线按 source_name+track_id），
         重复返回 False。"""
         with self._lock:
@@ -575,7 +575,7 @@ class MusicDatabase:
             self._conn.commit()
             return cur.rowcount > 0
 
-    def get_playlist_songs(self, playlist_id: int) -> List[Dict[str, Any]]:
+    def get_playlist_songs(self, playlist_id: int) -> list[dict[str, Any]]:
         """歌单内歌曲（按加入时间）。"""
         with self._lock:
             cursor = self._conn.execute(

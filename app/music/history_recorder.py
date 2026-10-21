@@ -5,7 +5,7 @@
 防单曲循环刷屏。
 """
 import time
-from typing import Any, Dict
+from typing import Any
 
 from ..core.event_bus import EventType
 
@@ -58,7 +58,7 @@ class HistoryRecorder:
         except Exception as e:
             print(f"[History] 记录播放历史失败: {e}")
 
-    def record_song(self, song: Dict[str, Any]) -> None:
+    def record_song(self, song: dict[str, Any]) -> None:
         """公开记录入口：事件订阅与 play_online 直接调用共用。
 
         去重键：5 分钟内同 title+artist+source_type 视为同一首歌，不重复记

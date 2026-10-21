@@ -4,26 +4,29 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional
+
+from app.core.logger import get_logger
 
 from .cache import OnlineCache
 from .models import OnlineTrack
 from .source import MusicSource
 
+logger = get_logger()
+
 
 class OnlineSourceManager:
     def __init__(self, cache_ttl: float = 300.0, max_workers: int = 4,
                  request_timeout: float = 5.0):
-        self._sources: Dict[str, MusicSource] = {}
+        self._sources: dict[str, MusicSource] = {}
         self._cache = OnlineCache(ttl_seconds=cache_ttl)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._timeout = request_timeout
-        self._errors: Dict[str, str] = {}
+        self._errors: dict[str, str] = {}
         # 各源最近一次搜索耗时（秒）——同音质选源时用"最快"排序。
-        self._latency: Dict[str, float] = {}
+        self._latency: dict[str, float] = {}
         # 音源版本号：register 递增、unregister 单调递增（删除标记）。
         # 同名源被替换/注销后，在途旧搜索任务的结果必须被丢弃且不得写回缓存。
-        self._source_versions: Dict[str, int] = {}
+        self._source_versions: dict[str, int] = {}
         # 生命周期锁：register/unregister 的版本递增+缓存删除，与 search_all 的
         # 版本校验+缓存写入必须互斥，保证"版本检查→cache.set"之间无法被
         # unregister/同名 register 插入（消除旧结果回写污染窗口）。
@@ -74,16 +77,16 @@ class OnlineSourceManager:
         if s:
             s.close()
 
-    def list_sources(self) -> List[str]:
+    def list_sources(self) -> list[str]:
         return list(self._sources.keys())
 
-    def get_source(self, name: str) -> Optional[MusicSource]:
+    def get_source(self, name: str) -> MusicSource | None:
         """按注册名取源（UI 等外部组件用，避免摸私有 dict）。"""
         return self._sources.get(name)
 
     def search_all(self, keyword: str, limit_per_source: int = 10
-                   ) -> Dict[str, List[OnlineTrack]]:
-        out: Dict[str, List[OnlineTrack]] = {}
+                   ) -> dict[str, list[OnlineTrack]]:
+        out: dict[str, list[OnlineTrack]] = {}
         futs = {}
         for name, src in self._sources.items():
             cached = self._cache.get(name, keyword, limit_per_source)
@@ -118,14 +121,14 @@ class OnlineSourceManager:
         return out
 
     def _safe_search(self, src: MusicSource, kw: str, limit: int,
-                     version: int) -> List[OnlineTrack]:
+                     version: int) -> list[OnlineTrack]:
         t0 = time.monotonic()
         try:
             return src.search(kw, limit)
         finally:
             self._latency[src.name] = time.monotonic() - t0
 
-    def get_latency(self, name: str) -> Optional[float]:
+    def get_latency(self, name: str) -> float | None:
         """某源最近一次搜索耗时（秒）；无记录返回 None（调用方用默认值兜底）。"""
         return self._latency.get(name)
 
@@ -139,7 +142,7 @@ class OnlineSourceManager:
         except TypeError:
             return src.get_play_url(track)
 
-    def get_play_url(self, track: OnlineTrack, quality: Optional[str] = None) -> Optional[dict]:
+    def get_play_url(self, track: OnlineTrack, quality: str | None = None) -> dict | None:
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         src = self._sources.get(track.source_name)
         if src is not None:
@@ -159,7 +162,8 @@ class OnlineSourceManager:
                 r = self._normalize_play_result(self._call_get_url(s, track, quality))
                 if r:
                     return r
-            except Exception:
+            except Exception as e:
+                logger.warning(f"获取在线源失败: {e}")
                 continue
         # 仍 miss（未知 track / accepts 源也失败）：回退旧行为全遍历
         for s in self._sources.values():
@@ -180,7 +184,7 @@ class OnlineSourceManager:
             return r
         return {"url": r, "headers": None}
 
-    def get_lyric(self, track: OnlineTrack) -> Optional[str]:
+    def get_lyric(self, track: OnlineTrack) -> str | None:
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         src = self._sources.get(track.source_name)
         if src is not None:
@@ -203,13 +207,13 @@ class OnlineSourceManager:
                 continue  # 单源失败继续下一个
         return None
 
-    def get_top_lists(self) -> Dict[str, list]:
+    def get_top_lists(self) -> dict[str, list]:
         """聚合各源榜单分组（源自报能力，无该方法/失败自动跳过）。
 
         返回 {源名或插件名: [分组]}——js_bridge 内部按插件名分组返回；
         自定义源若实现 get_top_lists 同样聚合。失败记录 _errors 不抛。
         """
-        out: Dict[str, list] = {}
+        out: dict[str, list] = {}
         for name, src in self._sources.items():
             fn = getattr(src, "get_top_lists", None)
             if not callable(fn):
@@ -223,7 +227,7 @@ class OnlineSourceManager:
         return out
 
     def get_top_list_detail(self, source: str, list_id: str,
-                            page: int = 1) -> Optional[dict]:
+                            page: int = 1) -> dict | None:
         """单榜单详情：路由到实现 get_top_list_detail 的源（js_bridge 按插件名）。
 
         返回 {is_end: bool, tracks: [OnlineTrack]}；无能力/失败 → None。

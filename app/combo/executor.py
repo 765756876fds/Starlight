@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .models import Combo
 
@@ -17,12 +17,12 @@ KeySender = Callable[[str], None]
 
 def default_key_sender(key: str) -> None:
     """默认按键发送：keyboard 库模拟按下并释放（Windows 需管理员权限）。"""
-    import keyboard  # noqa: PLC0415  (延迟导入：仅真实执行时依赖)
+    import keyboard
     keyboard.press_and_release(key)
 
 
 class ComboExecutor:
-    def __init__(self, key_sender: Optional[KeySender] = None):
+    def __init__(self, key_sender: KeySender | None = None):
         self._key_sender: KeySender = key_sender or default_key_sender
         self._lock = threading.Lock()
         self._executing = False

@@ -14,10 +14,16 @@
 - 降级：无歌词 → "暂无歌词"占位；同步/加载异常不影响播放；配置读取失败 → 默认值
 """
 import bisect
-from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QGuiApplication,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import QWidget
 
 from ...core.event_bus import EventType
@@ -40,7 +46,7 @@ class LyricsWindow(QWidget):
         self.setAttribute(Qt.WA_NativeWindow)
 
         # 歌词数据：[(time_sec, text)]；当前行索引；标题
-        self._lines: List[Tuple[float, str]] = []
+        self._lines: list[tuple[float, str]] = []
         self._title = ""
         self._current_idx = 0
         self._started = False
@@ -246,7 +252,7 @@ class LyricsWindow(QWidget):
         except Exception:
             self.set_lyrics([], title or "")
 
-    def set_lyrics(self, lines: List[Tuple[float, str]], title: str = "") -> None:
+    def set_lyrics(self, lines: list[tuple[float, str]], title: str = "") -> None:
         self._lines = list(lines)
         self._title = title or ""
         self._current_idx = 0
@@ -264,7 +270,7 @@ class LyricsWindow(QWidget):
 
     # ---- 同步 ----
     @staticmethod
-    def match_index(lines: List[Tuple[float, str]], pos: float) -> int:
+    def match_index(lines: list[tuple[float, str]], pos: float) -> int:
         """最后一个 t<=pos 的行索引；pos 早于首行 → 0；空 → -1。"""
         if not lines:
             return -1

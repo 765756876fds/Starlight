@@ -11,7 +11,9 @@ import threading
 
 _LOCK = threading.RLock()  # 可重入：save_ui_prefs 内部调 load_ui_prefs（同锁），Lock 会死锁
 try:
-    from app.core.path_resolve import PROJECT_ROOT as _ROOT  # 打包态: exe 目录（配置可写）
+    from app.core.path_resolve import (
+        PROJECT_ROOT as _ROOT,  # 打包态: exe 目录（配置可写）
+    )
 except ImportError:
     _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MUSIC_DIRS_PATH = os.path.join(_ROOT, "config", "music_dirs.json")

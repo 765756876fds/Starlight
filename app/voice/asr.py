@@ -10,7 +10,7 @@ ASREngine 是统一接口，以后可以直接换模型。
 import abc
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class ASREngine(abc.ABC):
@@ -28,22 +28,18 @@ class ASREngine(abc.ABC):
         Returns:
             识别出的文字
         """
-        pass
 
     @abc.abstractmethod
     def is_available(self) -> bool:
         """引擎是否可用"""
-        pass
 
     @abc.abstractmethod
     def load(self):
         """加载模型"""
-        pass
 
     @abc.abstractmethod
     def unload(self):
         """卸载模型，释放资源"""
-        pass
 
 
 class Qwen3ASR(ASREngine):
@@ -181,7 +177,7 @@ class Qwen3ServerASR(ASREngine):
             time.sleep(2)
 
     def transcribe(self, audio_data: bytes, sample_rate: int = 16000,
-                   timeout: Optional[float] = None) -> str:
+                   timeout: float | None = None) -> str:
         """转录音频。
 
         timeout：本次请求超时（秒）。None = 用实例默认 self.timeout（30s）。
@@ -191,9 +187,10 @@ class Qwen3ServerASR(ASREngine):
             return ""
 
         try:
-            import requests
             import io
             import wave
+
+            import requests
 
             # 构造 WAV 文件
             buf = io.BytesIO()
@@ -248,10 +245,10 @@ class ASRManager:
     优先使用主引擎，失败时自动切换到备用引擎。
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.engines: List[ASREngine] = []
-        self._active_engine: Optional[ASREngine] = None
+        self.engines: list[ASREngine] = []
+        self._active_engine: ASREngine | None = None
         self._lock = threading.Lock()
 
     def initialize(self):

@@ -3,8 +3,8 @@
 支持运行 globalThis.lx 接口的.js音源插件
 """
 import json
-import re
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import requests
 from py_mini_racer import MiniRacer
 
@@ -65,7 +65,6 @@ class LxPluginRunner:
             if event == 'inited':
                 self._inited = data
                 self._sources = data.get('sources', {})
-            return None
 
         def py_request(url, options_json, callback):
             options = json.loads(options_json)
@@ -84,7 +83,6 @@ class LxPluginRunner:
                 callback(None, json.dumps(resp_data))
             except Exception as e:
                 callback(str(e), None)
-            return None
 
         # 在JS里暴露Python桥接
         self.ctx.eval("""
@@ -111,9 +109,9 @@ class LxPluginRunner:
             code = f.read()
         print(f"[插件] 加载: {path}, 大小: {len(code)} 字符")
         self.ctx.eval(code)
-        print(f"[插件] 加载完成")
+        print("[插件] 加载完成")
 
-    def search(self, keyword: str, source: str = None) -> List[Dict[str, Any]]:
+    def search(self, keyword: str, source: str = None) -> list[dict[str, Any]]:
         """搜索歌曲"""
         # 触发request事件，action=search
         # 先简化：直接调用插件的搜索逻辑

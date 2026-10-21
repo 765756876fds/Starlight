@@ -12,32 +12,55 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Callable, Optional
+from collections.abc import Callable
+
+from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFontComboBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 from app.ui.widgets.glass_slider import GlassSlider
 
-
-from PySide6.QtCore import Qt, QThread, QObject, Signal
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFontComboBox,
-    QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QSizePolicy,
-    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
-)
-
+from ...lol.data.lol_data_updater import update_all as _update_lol_data
 from ..settings_store import (
-    ALL_EXTENSIONS, load_music_dirs, save_music_dirs,
-    load_ui_prefs, save_ui_prefs, save_settings_yaml, reset_ui_prefs, reset_music_dirs,
-    load_lyrics_prefs, save_lyrics_prefs,
+    ALL_EXTENSIONS,
+    load_lyrics_prefs,
+    load_music_dirs,
+    load_ui_prefs,
+    reset_music_dirs,
+    reset_ui_prefs,
+    save_lyrics_prefs,
+    save_music_dirs,
+    save_settings_yaml,
+    save_ui_prefs,
+)
+from ..settings_store import (
     SETTINGS_PATH as _SETTINGS_PATH,
 )
-from ..widgets.toggle_button import ToggleButton
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import glass_question, glass_warning
 from ..widgets.icon_utils import lucide_icon
-from ...lol.data.lol_data_updater import update_all as _update_lol_data
+from ..widgets.toggle_button import ToggleButton
 
 
 class NoWheelSlider(GlassSlider):
@@ -72,7 +95,7 @@ def _notify_lyrics_prefs_changed(update: dict | None = None) -> None:
         return
     if update is not None and "pos_x" not in update and "pos_y" not in update:
         prefs = {k: v for k, v in prefs.items() if k not in ("pos_x", "pos_y")}
-    for fn in list(_LYRICS_LISTENERS):
+    for fn in _LYRICS_LISTENERS:
         try:
             fn(prefs)
         except Exception:
@@ -240,9 +263,9 @@ class SettingsPanel(QWidget):
     _updates_done = Signal(str, object)  # (状态文本, 检查结果列表)
 
     def __init__(self, music=None, tts=None, combo_manager=None,
-                 equip_toggle: Optional[Callable[[bool], None]] = None,
-                 on_refresh_changed: Optional[Callable[[int], None]] = None,
-                 overlay_toggle: Optional[Callable[[bool], None]] = None,
+                 equip_toggle: Callable[[bool], None] | None = None,
+                 on_refresh_changed: Callable[[int], None] | None = None,
+                 overlay_toggle: Callable[[bool], None] | None = None,
                  overlay_enabled: bool = True,
                  parent=None):
         super().__init__(parent)
@@ -534,7 +557,7 @@ class SettingsPanel(QWidget):
         self.cmb_lyrics_mode.addItem("3 行上下文", "triple")
         self.cmb_lyrics_mode.addItem("单行", "single")
         idx = self.cmb_lyrics_mode.findData(str(prefs.get("mode") or "triple"))
-        self.cmb_lyrics_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cmb_lyrics_mode.setCurrentIndex(max(idx, 0))
         self.cmb_lyrics_mode.currentIndexChanged.connect(self._on_lyrics_changed)
         row_mode.addWidget(self._label("显示模式"))
         row_mode.addWidget(self.cmb_lyrics_mode)
@@ -1014,7 +1037,7 @@ class SettingsPanel(QWidget):
         self._dirs.pop(idx)
         self._save_dirs()
 
-    def _scan_dirs(self) -> Optional[list]:
+    def _scan_dirs(self) -> list | None:
         """返回启用的目录配置；无启用目录时提示并返回 None。"""
         enabled = [d for d in self._dirs if d.get("enabled")]
         if not enabled:
@@ -1169,7 +1192,7 @@ class SettingsPanel(QWidget):
         idx = self.cmb_engine.findData(engine)
         # blockSignals：加载期间不触发 _on_engine_change（防止误写配置）
         self.cmb_engine.blockSignals(True)
-        self.cmb_engine.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cmb_engine.setCurrentIndex(max(idx, 0))
         self.cmb_engine.blockSignals(False)
         if engine == "qwen":
             voice = tts_cfg.get("qwen_voice", _QWEN_DEFAULT_VOICE)
@@ -1292,8 +1315,9 @@ class SettingsPanel(QWidget):
         if not key:
             QMessageBox.warning(self, "API Key", "请输入 Key（sk-...）")
             return
-        from app.core.path_resolve import PROJECT_ROOT
         import os as _os
+
+        from app.core.path_resolve import PROJECT_ROOT
         # 统一外部读写路径：frozen 下 = exe 同级 tools/.qwen_key（绝不再写 _internal）
         key_path = _os.path.join(str(PROJECT_ROOT), "tools", ".qwen_key")
         try:

@@ -17,14 +17,13 @@
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 from ...core.event_bus import Event, EventType
 from ..data.champion_catalog import ChampionCatalog
 from ..data.item_stats import sum_lethality
 from .calculator import calculate_axiom_arc_refund
 from .manager import CooldownManager
-from .models import ReminderStatus
 
 # Axiom Arc SR itemID
 AXIOM_ARC_ITEM_ID = 6696
@@ -49,8 +48,8 @@ class AxiomArcEvaluator:
         self,
         cooldown_manager: CooldownManager,
         event_bus,
-        get_snapshot: Callable[[], Optional[object]],
-        champion_catalog: Optional[ChampionCatalog] = None,
+        get_snapshot: Callable[[], object | None],
+        champion_catalog: ChampionCatalog | None = None,
     ):
         self._cm = cooldown_manager
         self._bus = event_bus

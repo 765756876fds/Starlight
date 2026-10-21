@@ -1,5 +1,5 @@
 """Glass 自定义顶栏（无边框主窗口用）：标题 + 最小化 + 关闭 + 拖动。"""
-from PySide6.QtCore import Qt, QPoint
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ..theme.colors import Colors

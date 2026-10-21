@@ -18,9 +18,8 @@ Rule Engine - 确定性游戏事件规则引擎
 - 轻量同步，毫秒级完成
 """
 import time
-import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..core.event_bus import Event, EventType
 
@@ -41,7 +40,7 @@ class SpeechCandidate:
     created_at: float = field(default_factory=time.time)
     expire_at: float = 0.0
     interruptible: bool = True
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class RuleEngine:
@@ -148,7 +147,7 @@ class RuleEngine:
         # 已处理的 event_id 去重
         self._seen_event_ids: set = set()
 
-    def evaluate(self, event: Event) -> Optional[SpeechCandidate]:
+    def evaluate(self, event: Event) -> SpeechCandidate | None:
         """
         评估事件，返回 SpeechCandidate 或 None
 

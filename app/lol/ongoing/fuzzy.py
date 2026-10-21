@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Akari 式玩家模糊搜索：拼音首字母 + difflib 名称模糊。
 
 - py_initials(text)：GB2312 区位 → 拼音首字母（字母/数字原样小写）。
@@ -9,7 +8,7 @@
 from __future__ import annotations
 
 import difflib
-from typing import Iterable, List
+from collections.abc import Iterable
 
 # GB2312 区位码 → 拼音首字母（A-Y；Z 无独立区间，归入 Y 尾部）
 _GB2312_INITIAL_RANGES = [
@@ -74,7 +73,7 @@ def fuzzy_score(query: str, name: str) -> float:
 
 
 def fuzzy_candidates(query: str, names: Iterable[str],
-                     top: int = 8, threshold: float = 20.0) -> List[str]:
+                     top: int = 8, threshold: float = 20.0) -> list[str]:
     """对候选池按匹配分排序，返回 top N（低于阈值剔除）。"""
     scored = [(fuzzy_score(query, name), name) for name in names]
     scored.sort(key=lambda x: (-x[0], len(x[1])))

@@ -10,7 +10,7 @@ LeagueAkari: getSgpServerId(auth.region, auth.rsoPlatformId) -> sgp server。
 """
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple
+from collections.abc import Callable
 
 RESOLVED = "RESOLVED"
 UNSUPPORTED = "UNSUPPORTED"
@@ -32,10 +32,10 @@ _TENCENT_SGP_BASES: dict = {
 
 
 class SgpServerResolver:
-    def __init__(self, lcu_get: Callable[[str], Optional[dict]]):
+    def __init__(self, lcu_get: Callable[[str], dict | None]):
         self._lcu = lcu_get
 
-    def resolve(self) -> Tuple[str, Optional[str], Optional[str]]:
+    def resolve(self) -> tuple[str, str | None, str | None]:
         """返回 (state, base_url, sub_id)。"""
         try:
             auth = self._lcu("/lol-rso-auth/v1/authorization")

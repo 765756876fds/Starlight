@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -13,5 +12,5 @@ class OnlineTrack:
     artist: str = ""
     album: str = ""
     duration_seconds: int = 0
-    cover_url: Optional[str] = None
+    cover_url: str | None = None
     extra: dict = field(default_factory=dict)

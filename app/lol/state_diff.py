@@ -5,10 +5,10 @@
 不直接 TTS，而是产生 Event 交给 EventBus。
 """
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from .snapshot import GameSnapshot, PlayerInfo
 from .events import GameEvent, GameEventType
+from .snapshot import GameSnapshot
 
 
 class StateDiff:
@@ -17,12 +17,12 @@ class StateDiff:
     """
 
     def __init__(self):
-        self._last_snapshot: Optional[GameSnapshot] = None
+        self._last_snapshot: GameSnapshot | None = None
         self._last_kill_time: float = 0.0
         self._last_kill_team: str = ""
         self._known_events: set = set()  # 去重
 
-    def diff(self, new_snapshot: GameSnapshot) -> List[GameEvent]:
+    def diff(self, new_snapshot: GameSnapshot) -> list[GameEvent]:
         """
         比较新旧快照，产生事件列表
 
@@ -99,7 +99,7 @@ class StateDiff:
         self._last_snapshot = new_snapshot
         return events
 
-    def _detect_level_ups(self, old: GameSnapshot, new: GameSnapshot) -> List[GameEvent]:
+    def _detect_level_ups(self, old: GameSnapshot, new: GameSnapshot) -> list[GameEvent]:
         """检测玩家升级"""
         events = []
         old_players = {p.summoner_name: p for p in old.players}
@@ -122,7 +122,7 @@ class StateDiff:
                 ))
         return events
 
-    def _detect_kills(self, old: GameSnapshot, new: GameSnapshot) -> List[GameEvent]:
+    def _detect_kills(self, old: GameSnapshot, new: GameSnapshot) -> list[GameEvent]:
         """
         检测击杀事件
 
@@ -215,7 +215,7 @@ class StateDiff:
 
         return events
 
-    def _detect_item_changes(self, old: GameSnapshot, new: GameSnapshot) -> List[GameEvent]:
+    def _detect_item_changes(self, old: GameSnapshot, new: GameSnapshot) -> list[GameEvent]:
         """检测物品变化"""
         events = []
         old_players = {p.summoner_name: p for p in old.players}
@@ -248,7 +248,7 @@ class StateDiff:
         return events
 
     def _detect_summoner_spell_usage(self, old: GameSnapshot,
-                                       new: GameSnapshot) -> List[GameEvent]:
+                                       new: GameSnapshot) -> list[GameEvent]:
         """检测召唤师技能使用（通过冷却时间变化）"""
         events = []
         old_players = {p.summoner_name: p for p in old.players}
@@ -285,7 +285,7 @@ class StateDiff:
 
         return events
 
-    def _detect_objectives(self, old: GameSnapshot, new: GameSnapshot) -> List[GameEvent]:
+    def _detect_objectives(self, old: GameSnapshot, new: GameSnapshot) -> list[GameEvent]:
         """检测中立资源事件（从 eventdata）"""
         events = []
 
@@ -408,7 +408,7 @@ class StateDiff:
                 return p.team
         return "UNKNOWN"
 
-    def _event_key(self, event: Dict[str, Any]) -> str:
+    def _event_key(self, event: dict[str, Any]) -> str:
         """生成事件唯一键（用于去重）
 
         优先使用 Riot 原生 EventID 作为唯一身份。
@@ -428,7 +428,7 @@ class StateDiff:
                 key_parts.append(str(event[field]))
         return "fallback:" + "|".join(key_parts)
 
-    def _deduplicate(self, events: List[GameEvent]) -> List[GameEvent]:
+    def _deduplicate(self, events: list[GameEvent]) -> list[GameEvent]:
         """事件去重"""
         result = []
         seen = set()

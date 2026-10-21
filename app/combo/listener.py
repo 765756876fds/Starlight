@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 # 无意义的修饰键/系统键，不参与 trigger 匹配
 _SKIP_KEYS = {
@@ -36,7 +36,7 @@ class ComboListener:
         self._started = False
         self._last_cb_ts = 0.0
         self._stop_watch = threading.Event()
-        self._watch_thread: Optional[threading.Thread] = None
+        self._watch_thread: threading.Thread | None = None
         self._reconnects = 0
         self._MAX_RECONNECTS = 3   # 连续重连上限（连续失败），防循环
         # 零回调超 60s 判定 hook 可能掉线。60s 覆盖死亡/复活/看小地图等常见空闲；
@@ -48,7 +48,7 @@ class ComboListener:
         if self._hooked:
             return
         try:
-            import keyboard  # noqa: PLC0415
+            import keyboard
             self._remove_hook = keyboard.hook(self._callback)
             self._hooked = True
             print("[Combo] 全局键盘监听已启动（需要管理员权限才能模拟按键）")
@@ -66,7 +66,7 @@ class ComboListener:
         if not self._hooked:
             return
         try:
-            import keyboard  # noqa: PLC0415
+            import keyboard
             if self._remove_hook is not None:
                 # 只取消自己的 hook，不清全局。keyboard.unhook 接受 hook() 的
                 # 返回值（__init__.py:518-523，实现 _hooks[remove]()，remove_ 闭包
@@ -114,7 +114,7 @@ class ComboListener:
             self._reconnects += 1
             print(f"[Combo] 键盘监听疑似掉线（{int(idle)}s 无回调），自动重连 #{self._reconnects}")
             try:
-                import keyboard  # noqa: PLC0415
+                import keyboard
                 if self._remove_hook is not None:
                     try:
                         keyboard.unhook(self._remove_hook)

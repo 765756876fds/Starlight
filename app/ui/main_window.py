@@ -13,16 +13,21 @@ except Exception:
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget,
-    QWidget, QVBoxLayout,
+    QApplication,
+    QCheckBox,
+    QHBoxLayout,
+    QMainWindow,
+    QStackedWidget,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .panels.automation_panel import AutomationPanel
-from .panels.cooldown_panel import CooldownPanel
+from .panels.loading_panel import LoadingPanel
 from .panels.music_panel import MusicPanel
 from .panels.ongoing_panel import OngoingPanel
 from .panels.status_bar import StatusBar
-from .panels.loading_panel import LoadingPanel
 from .theme.tokens import Tokens
 from .widgets.title_bar import GlassTitleBar
 

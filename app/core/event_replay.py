@@ -13,10 +13,9 @@ JSONL Event Replay - 事件回放
 """
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .event_bus import Event, EventBus
-
 
 # Replay 标记 key（放在 Event.data 中，EventLog 检查并跳过）
 REPLAY_MARKER = "_replay"
@@ -91,7 +90,7 @@ class EventReplay:
         print(f"[EventReplay] 完成: replay {self._replay_count} 个事件，跳过 {self._skip_count} 行")
         return self._replay_count
 
-    def _entry_to_event(self, entry: Dict[str, Any]) -> Optional[Event]:
+    def _entry_to_event(self, entry: dict[str, Any]) -> Event | None:
         """
         将 JSONL entry 恢复为 Event 对象
 
@@ -101,7 +100,7 @@ class EventReplay:
         # 检查必要字段
         event_type = entry.get("event_type")
         if not event_type:
-            print(f"[EventReplay] 缺少 event_type 字段，跳过")
+            print("[EventReplay] 缺少 event_type 字段，跳过")
             return None
 
         timestamp = entry.get("timestamp", time.time())

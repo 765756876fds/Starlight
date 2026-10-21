@@ -1,17 +1,24 @@
 """当前对局面板：双排卡片布局，左己方右敌方。"""
 import threading
-from datetime import datetime
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QScrollArea, QWidget
 
-from app.lol.ongoing.champion_mastery import ChampionMasteryProvider, AVAILABLE
-from app.lol.ongoing.intelligence_service import OngoingIntelligenceService
-from app.lol.ongoing.sgp_server import SgpServerResolver
-from app.lol.ongoing.sgp_provider import SgpMatchHistoryProvider
-from app.lol.ongoing.intelligence import PlayerIntelligenceService
-from app.lol.title import compute_title
-from app.lol.data.champion_catalog import ChampionCatalog
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
 from app.core.event_bus import Event, get_event_bus
+from app.lol.data.champion_catalog import ChampionCatalog
+from app.lol.ongoing.champion_mastery import ChampionMasteryProvider
+from app.lol.ongoing.intelligence import PlayerIntelligenceService
+from app.lol.ongoing.intelligence_service import OngoingIntelligenceService
+from app.lol.ongoing.sgp_provider import SgpMatchHistoryProvider
+from app.lol.ongoing.sgp_server import SgpServerResolver
+from app.lol.title import compute_title
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 
@@ -163,7 +170,7 @@ class CurrentGamePanel(QWidget):
                     intelligence_service=PlayerIntelligenceService(),
                 )
                 self._intelligence.set_sgp_factory(self._try_create_sgp_provider)
-                print(f"[UI] 玩家情报服务已初始化（SGP 动态懒加载）")
+                print("[UI] 玩家情报服务已初始化（SGP 动态懒加载）")
             except Exception as e:
                 print(f"[UI] 玩家情报服务初始化失败: {e}")
                 self._publish_intel_event("intel.init_failed", {

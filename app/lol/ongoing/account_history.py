@@ -10,11 +10,13 @@
 from __future__ import annotations
 
 import json
-from typing import Callable, List, Optional
 
 from .match_model import (
-    MatchRecord, MatchHistoryResult,
-    AVAILABLE, NO_DATA, ERROR,
+    AVAILABLE,
+    ERROR,
+    NO_DATA,
+    MatchHistoryResult,
+    MatchRecord,
 )
 from .sgp_provider import SgpMatchHistoryProvider
 
@@ -34,17 +36,14 @@ _QUEUE_LABELS = {
     900: "无限火力",
     1010: "无限火力",
     450: "大乱斗",
-    900: "无限火力",
     1900: "无限火力",
     420: "单双排位",
-    430: "匹配",
     440: "灵活排位",
     470: "双人排位",
     700: "克隆",
     720: "围场",
     800: "人机",
     820: "人机",
-    900: "无限火力",
     1020: "ONE for ALL",
     1300: "纳什男爵",
 }
@@ -95,7 +94,7 @@ class AccountMatchHistoryService:
                 return t
         return None
 
-    def _current_puuid(self) -> Optional[str]:
+    def _current_puuid(self) -> str | None:
         s = self._direct_get("/lol-summoner/v1/current-summoner")
         if isinstance(s, dict):
             return s.get("puuid")
@@ -107,7 +106,7 @@ class AccountMatchHistoryService:
             return MatchHistoryResult(state=ERROR, message="no_self_puuid")
         return self.recent(puuid)
 
-    def recent(self, puuid: str, count: Optional[int] = None) -> MatchHistoryResult:
+    def recent(self, puuid: str, count: int | None = None) -> MatchHistoryResult:
         """按 puuid 查任意玩家最近战绩（SGP primary，LCU fallback）。
 
         房间 10 人批量查询统一入口。以 puuid 为主键，不依赖昵称。
@@ -147,7 +146,7 @@ class AccountMatchHistoryService:
             f"/lol-match-history/v1/products/lol/{puuid}/games?begIndex=0&endIndex={self._n}")
         if not isinstance(data, dict):
             return MatchHistoryResult(state=ERROR, message="lcu_unavailable")
-        out: List[MatchRecord] = []
+        out: list[MatchRecord] = []
         for g in (data.get("games", {}).get("games") or []):
             raw = g.get("json")
             try:

@@ -21,7 +21,11 @@ from typing import Any
 
 import numpy as np
 
-from ..utils.exceptions import FingerprintCompatibilityError, NotFoundError, ValidationError
+from ..utils.exceptions import (
+    FingerprintCompatibilityError,
+    NotFoundError,
+    ValidationError,
+)
 
 SORTABLE_FIELDS = ("indexed_at", "title", "artist", "duration", "filename", "num_hashes")
 META_SIGNATURE = "fingerprint_signature"
@@ -145,7 +149,7 @@ class StorageBackend(ABC):
             details={"stored_signature": stored, "current_signature": signature, "stored_params": self.get_meta(META_PARAMS)},
         )
 
-    def close(self) -> None:  # noqa: B027 (optional hook, backends without connections need not override)
+    def close(self) -> None:
         """Release connections. Safe to call more than once."""
 
     def flush(self) -> int:

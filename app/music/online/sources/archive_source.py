@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import urllib.parse
 import urllib.request
-from typing import List, Optional
 
 from ..models import OnlineTrack
 from ..source import MusicSource
@@ -19,7 +18,7 @@ class ArchiveSource(MusicSource):
     DOWNLOAD_URL = "https://archive.org/download/{identifier}/{file}"
     TIMEOUT = 8.0
 
-    def _http_get_json(self, url: str) -> Optional[dict]:
+    def _http_get_json(self, url: str) -> dict | None:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "lol-music-agent/1.0"})
             with urllib.request.urlopen(req, timeout=self.TIMEOUT) as resp:
@@ -27,7 +26,7 @@ class ArchiveSource(MusicSource):
         except Exception:
             return None
 
-    def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+    def search(self, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         if not keyword:
             return []
         q = urllib.parse.quote(f"title:({keyword}) AND mediatype:audio")
@@ -39,7 +38,7 @@ class ArchiveSource(MusicSource):
         data = self._http_get_json(url)
         if not isinstance(data, dict):
             return []
-        out: List[OnlineTrack] = []
+        out: list[OnlineTrack] = []
         for doc in (data.get("response") or {}).get("docs") or []:
             ident = doc.get("identifier")
             if not ident:
@@ -61,7 +60,7 @@ class ArchiveSource(MusicSource):
             ))
         return out
 
-    def get_play_url(self, track: OnlineTrack) -> Optional[str]:
+    def get_play_url(self, track: OnlineTrack) -> str | None:
         ident = track.extra.get("identifier") or track.track_id
         meta = self._http_get_json(self.META_URL.format(identifier=ident))
         if not isinstance(meta, dict):
@@ -73,5 +72,5 @@ class ArchiveSource(MusicSource):
                 return self.DOWNLOAD_URL.format(identifier=ident, file=urllib.parse.quote(name))
         return None
 
-    def get_lyric(self, track: OnlineTrack) -> Optional[str]:
+    def get_lyric(self, track: OnlineTrack) -> str | None:
         return None

@@ -3,11 +3,8 @@
 """
 from __future__ import annotations
 
-from typing import List, Optional
-
 from ..models import OnlineTrack
 from ..source import MusicSource
-
 
 _DEMO_CATALOG = [
     OnlineTrack(source_name="demo", track_id="demo-1",
@@ -23,15 +20,15 @@ class DemoSource(MusicSource):
     name = "demo"
     display_name = "Demo 音乐源（内置示例）"
 
-    def search(self, keyword: str, limit: int = 20) -> List[OnlineTrack]:
+    def search(self, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         kw = (keyword or "").lower().strip()
         if not kw:
             return list(_DEMO_CATALOG[:limit])
         return [t for t in _DEMO_CATALOG
                 if kw in t.title.lower() or kw in t.artist.lower()][:limit]
 
-    def get_play_url(self, track: OnlineTrack) -> Optional[str]:
+    def get_play_url(self, track: OnlineTrack) -> str | None:
         return track.extra.get("url") or None
 
-    def get_lyric(self, track: OnlineTrack) -> Optional[str]:
+    def get_lyric(self, track: OnlineTrack) -> str | None:
         return None

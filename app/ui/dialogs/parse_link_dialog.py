@@ -2,8 +2,7 @@
 
 第一阶段只做 UI 收集 + 面板后台解析 + 弹窗展示结果（不接播放器）。
 """
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton
 
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens

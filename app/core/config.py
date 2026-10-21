@@ -5,7 +5,7 @@ P2（2026-10-18）：配置缺失不再崩溃——使用内置默认配置并�
 """
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -21,7 +21,7 @@ _RELATIVE_KEYS = (
 )
 
 
-def _default_config() -> Dict[str, Any]:
+def _default_config() -> dict[str, Any]:
     """内置默认配置（全新机器无配置文件时的兜底，路径全部基于 PROJECT_ROOT 绝对化）。"""
     data_dir = str(PROJECT_ROOT / "data")
     logs_dir = str(PROJECT_ROOT / "logs")
@@ -110,7 +110,7 @@ def _default_config() -> Dict[str, Any]:
     }
 
 
-def _absolutize(data: Dict[str, Any]) -> Dict[str, Any]:
+def _absolutize(data: dict[str, Any]) -> dict[str, Any]:
     """把已知相对路径键（点号分隔）绝对化。缺失的键不动。"""
     out = data
     for key in _RELATIVE_KEYS:
@@ -129,7 +129,7 @@ def _absolutize(data: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def resolve_mpv_path(configured: Optional[str]) -> str:
+def resolve_mpv_path(configured: str | None) -> str:
     """mpv 可执行文件查找链（打包零配置运行，2026-10-18）：
 
     1. settings.yaml 用户显式配置且文件存在 → 用之（尊重用户路径）
@@ -155,9 +155,9 @@ class Config:
     """单例配置管理器"""
 
     _instance: Optional["Config"] = None
-    _data: Dict[str, Any] = {}
+    _data: dict[str, Any] = {}
 
-    def __new__(cls, config_path: Optional[str] = None):
+    def __new__(cls, config_path: str | None = None):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._load(config_path)
@@ -169,7 +169,7 @@ class Config:
         cls._instance = None
         cls._data = {}
 
-    def _load(self, config_path: Optional[str] = None):
+    def _load(self, config_path: str | None = None):
         """加载配置文件；不存在 → 使用内置默认配置并自动写盘（不抛异常）。"""
         if config_path is None:
             # 默认路径: 项目根目录/config/settings.yaml
@@ -232,15 +232,15 @@ class Config:
                 return default
         return value
 
-    def get_section(self, section: str) -> Dict[str, Any]:
+    def get_section(self, section: str) -> dict[str, Any]:
         """获取整个配置段"""
         return self._data.get(section, {})
 
     @property
-    def data(self) -> Dict[str, Any]:
+    def data(self) -> dict[str, Any]:
         return self._data.copy()
 
 
-def get_config(config_path: Optional[str] = None) -> Config:
+def get_config(config_path: str | None = None) -> Config:
     """获取全局配置单例"""
     return Config(config_path)

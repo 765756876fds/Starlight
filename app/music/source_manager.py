@@ -4,10 +4,10 @@
 """
 import json
 import os
-from typing import Any, Dict, List, Optional
+from dataclasses import asdict, dataclass
+from typing import Any
 
 from app.core.path_resolve import PROJECT_ROOT
-from dataclasses import dataclass, field, asdict
 
 
 @dataclass
@@ -22,11 +22,11 @@ class MusicSource:
     source_type: str = "online"  # online / local
     added_time: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MusicSource":
+    def from_dict(cls, data: dict[str, Any]) -> "MusicSource":
         return cls(
             name=data.get("name", "未命名音源"),
             api_url=data.get("api_url", ""),
@@ -46,7 +46,7 @@ class MusicSourceManager:
             config_dir = str(PROJECT_ROOT / config_dir)
         self.config_dir = config_dir
         self.sources_file = os.path.join(config_dir, "music_sources.json")
-        self.sources: List[MusicSource] = []
+        self.sources: list[MusicSource] = []
         self._load()
 
     def _load(self):
@@ -93,7 +93,7 @@ class MusicSourceManager:
                 break
         self._save()
 
-    def get_enabled_sources(self) -> List[MusicSource]:
+    def get_enabled_sources(self) -> list[MusicSource]:
         """获取所有启用的音源"""
         return [s for s in self.sources if s.enabled]
 
@@ -141,6 +141,6 @@ class MusicSourceManager:
         self.add_source(source)
         return source
 
-    def get_all_sources(self) -> List[MusicSource]:
+    def get_all_sources(self) -> list[MusicSource]:
         """获取所有音源"""
         return self.sources.copy()

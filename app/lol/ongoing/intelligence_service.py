@@ -20,12 +20,13 @@ UI ViewModel
 from __future__ import annotations
 
 import time
-from typing import Dict, Optional, List
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from .champion_mastery import ChampionMasteryProvider, ChampionMasteryRecord, AVAILABLE
-from .intelligence import PlayerIntelligenceService, PlayerIntelligenceResult, ChampionStat
-from .match_model import MatchRecord
+from .champion_mastery import AVAILABLE, ChampionMasteryProvider, ChampionMasteryRecord
+from .intelligence import (
+    ChampionStat,
+    PlayerIntelligenceService,
+)
 
 
 @dataclass
@@ -35,8 +36,8 @@ class PlayerIntelligenceCacheEntry:
 
     # Mastery
     mastery_status: str = ""
-    mastery_top3: List[ChampionMasteryRecord] = None
-    current_champion_is_mastery_top3: Optional[bool] = None
+    mastery_top3: list[ChampionMasteryRecord] = None
+    current_champion_is_mastery_top3: bool | None = None
 
     # 最近20场
     recent_status: str = ""  # AVAILABLE / EMPTY / UNAVAILABLE / NO_PUUID
@@ -47,10 +48,10 @@ class PlayerIntelligenceCacheEntry:
     recent_wins: int = 0           # 有胜负结果场次的胜数
     recent_losses: int = 0         # 有胜负结果场次的负数
     recent_unknown_count: int = 0  # win 缺失场次数（不计胜负）
-    habitual_positions: List[str] = None  # ["UTILITY"] 等
+    habitual_positions: list[str] = None  # ["UTILITY"] 等
 
     # B 行数据：近期英雄统计（analyze 产物，场次→KDA 排序）
-    champion_stats: List[ChampionStat] = None
+    champion_stats: list[ChampionStat] = None
 
     # 称号判定：连胜/连败 + 辅助占比
     streak: int = 0
@@ -86,8 +87,8 @@ class OngoingIntelligenceService:
         self._sgp = sgp_provider
         self._sgp_factory = None  # 动态创建 SGP provider 的回调
         self._intelligence = intelligence_service or PlayerIntelligenceService()
-        self._cache: Dict[str, PlayerIntelligenceCacheEntry] = {}
-        self._last_fail: Dict[str, float] = {}  # puuid -> 失败时间戳（30s 节流防风暴）
+        self._cache: dict[str, PlayerIntelligenceCacheEntry] = {}
+        self._last_fail: dict[str, float] = {}  # puuid -> 失败时间戳（30s 节流防风暴）
 
     def set_sgp_factory(self, factory):
         """注入动态创建 SGP provider 的回调（解决 LCU 后连问题）。"""
@@ -137,7 +138,7 @@ class OngoingIntelligenceService:
                     m.champion_id == current_champion_id
                     for m in top3
                 )
-        except Exception as e:
+        except Exception:
             entry.mastery_status = "UNAVAILABLE"
             entry.mastery_top3 = []
             entry.queried_mastery = True
@@ -179,7 +180,7 @@ class OngoingIntelligenceService:
                         entry.recent_status = "EMPTY"
                 else:
                     entry.recent_status = "EMPTY"
-            except Exception as e:
+            except Exception:
                 entry.recent_status = "UNAVAILABLE"
         else:
             entry.recent_status = "UNAVAILABLE"
@@ -197,7 +198,7 @@ class OngoingIntelligenceService:
         """失败节流：最近失败在 window 秒内返回 True（不重试），防止每秒风暴。"""
         return time.monotonic() - self._last_fail.get(puuid, 0.0) < window
 
-    def get_cached(self, puuid: str) -> Optional[PlayerIntelligenceCacheEntry]:
+    def get_cached(self, puuid: str) -> PlayerIntelligenceCacheEntry | None:
         """只读缓存命中（不触发任何请求）。未查询过返回 None。"""
         if not puuid:
             return None

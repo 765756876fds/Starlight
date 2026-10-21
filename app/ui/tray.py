@@ -1,7 +1,14 @@
 """QSystemTrayIcon 版托盘（星芒）。"""
 from pathlib import Path
 
-from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap, QPainter, QColor, QBrush
+from PySide6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QIcon,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from app.ui.theme.colors import Colors

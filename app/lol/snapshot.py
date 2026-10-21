@@ -5,7 +5,7 @@
 所有下游模块（StateDiff、GameAlarm、UI、SpeechJudge）都基于这个结构。
 """
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -28,10 +28,10 @@ class PlayerInfo:
     assists: int = 0
     cs: int = 0  # 补刀数
     position: str = ""  # top / jungle / mid / bot / utility
-    items: List[Dict[str, Any]] = field(default_factory=list)
-    summoner_spells: List[Dict[str, Any]] = field(default_factory=list)
-    abilities: Dict[str, Any] = field(default_factory=dict)
-    runes: List[Dict[str, Any]] = field(default_factory=list)
+    items: list[dict[str, Any]] = field(default_factory=list)
+    summoner_spells: list[dict[str, Any]] = field(default_factory=list)
+    abilities: dict[str, Any] = field(default_factory=dict)
+    runes: list[dict[str, Any]] = field(default_factory=list)
     respawn_timer: float = 0.0
     health: float = 0.0
     max_health: float = 0.0
@@ -68,53 +68,53 @@ class GameSnapshot:
     is_paused: bool = False
 
     # 玩家
-    current_player: Optional[PlayerInfo] = None
-    players: List[PlayerInfo] = field(default_factory=list)
-    ally_team: List[PlayerInfo] = field(default_factory=list)
-    enemy_team: List[PlayerInfo] = field(default_factory=list)
+    current_player: PlayerInfo | None = None
+    players: list[PlayerInfo] = field(default_factory=list)
+    ally_team: list[PlayerInfo] = field(default_factory=list)
+    enemy_team: list[PlayerInfo] = field(default_factory=list)
 
     # 队伍信息
     ally_team_name: str = "ORDER"
     enemy_team_name: str = "CHAOS"
-    ally_champions: List[str] = field(default_factory=list)
-    enemy_champions: List[str] = field(default_factory=list)
+    ally_champions: list[str] = field(default_factory=list)
+    enemy_champions: list[str] = field(default_factory=list)
 
     # 中立资源
-    objectives: List[ObjectiveState] = field(default_factory=list)
+    objectives: list[ObjectiveState] = field(default_factory=list)
 
     # 事件（从 /eventdata 获取）
-    recent_events: List[Dict[str, Any]] = field(default_factory=list)
+    recent_events: list[dict[str, Any]] = field(default_factory=list)
 
     # 原始数据（用于调试）
-    raw_data: Dict[str, Any] = field(default_factory=dict)
+    raw_data: dict[str, Any] = field(default_factory=dict)
 
     # 元信息
     snapshot_time: float = 0.0
     data_source: str = "live_client"
 
-    def get_player_by_name(self, name: str) -> Optional[PlayerInfo]:
+    def get_player_by_name(self, name: str) -> PlayerInfo | None:
         """按名字查找玩家"""
         for p in self.players:
             if p.summoner_name == name or p.champion_name == name:
                 return p
         return None
 
-    def get_player_by_champion(self, champion: str) -> Optional[PlayerInfo]:
+    def get_player_by_champion(self, champion: str) -> PlayerInfo | None:
         """按英雄查找玩家"""
         for p in self.players:
             if p.champion_name.lower() == champion.lower():
                 return p
         return None
 
-    def get_enemy_players(self) -> List[PlayerInfo]:
+    def get_enemy_players(self) -> list[PlayerInfo]:
         """获取敌方玩家"""
         return self.enemy_team
 
-    def get_ally_players(self) -> List[PlayerInfo]:
+    def get_ally_players(self) -> list[PlayerInfo]:
         """获取友方玩家"""
         return self.ally_team
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典（用于 UI 显示和日志）"""
         return {
             "game_time": self.game_time,
@@ -126,7 +126,7 @@ class GameSnapshot:
             "snapshot_time": self.snapshot_time,
         }
 
-    def _player_to_dict(self, player: Optional[PlayerInfo]) -> Optional[Dict[str, Any]]:
+    def _player_to_dict(self, player: PlayerInfo | None) -> dict[str, Any] | None:
         if player is None:
             return None
         return {
@@ -148,14 +148,14 @@ class SnapshotBuilder:
     """
 
     @staticmethod
-    def from_api_data(all_data: Dict[str, Any],
-                      active_player: Optional[Dict[str, Any]] = None,
-                      player_list: Optional[List[Dict[str, Any]]] = None,
-                      player_scores: Optional[List[Dict[str, Any]]] = None,
-                      player_items: Optional[List[Dict[str, Any]]] = None,
-                      summoner_spells: Optional[List[Dict[str, Any]]] = None,
-                      game_stats: Optional[Dict[str, Any]] = None,
-                      event_data: Optional[Dict[str, Any]] = None) -> GameSnapshot:
+    def from_api_data(all_data: dict[str, Any],
+                      active_player: dict[str, Any] | None = None,
+                      player_list: list[dict[str, Any]] | None = None,
+                      player_scores: list[dict[str, Any]] | None = None,
+                      player_items: list[dict[str, Any]] | None = None,
+                      summoner_spells: list[dict[str, Any]] | None = None,
+                      game_stats: dict[str, Any] | None = None,
+                      event_data: dict[str, Any] | None = None) -> GameSnapshot:
         """
         从 API 数据构建快照
 
@@ -228,7 +228,7 @@ class SnapshotBuilder:
         return snapshot
 
     @staticmethod
-    def _parse_player(p_data: Dict[str, Any],
+    def _parse_player(p_data: dict[str, Any],
                       active_player_name: str) -> PlayerInfo:
         """解析单个玩家数据"""
         player = PlayerInfo()
@@ -300,7 +300,7 @@ class SnapshotBuilder:
         return player
 
     @staticmethod
-    def _parse_active_player(p_data: Dict[str, Any]) -> PlayerInfo:
+    def _parse_active_player(p_data: dict[str, Any]) -> PlayerInfo:
         """解析当前玩家数据"""
         player = PlayerInfo()
         player.summoner_name = p_data.get("summonerName", "")

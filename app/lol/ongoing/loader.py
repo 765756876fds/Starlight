@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from .cache import SnapshotCache
-from .match_model import MatchHistoryResult, MatchRecord, NO_DATA, _VALID_QUEUE_IDS
+from .match_model import _VALID_QUEUE_IDS, NO_DATA, MatchHistoryResult, MatchRecord
 from .models import PlayerSnapshot
 from .summoner_privacy import SummonerPrivacyService
 
@@ -32,8 +33,8 @@ class OngoingGameLoader:
     def __init__(
         self,
         lcu_get: Callable[[str], Any],
-        on_event: Optional[Callable[[str, dict], None]] = None,
-        cache: Optional[SnapshotCache] = None,
+        on_event: Callable[[str, dict], None] | None = None,
+        cache: SnapshotCache | None = None,
         max_workers: int = 4,
         rps: float = 20.0,
         recent_matches_count: int = 20,
@@ -48,7 +49,7 @@ class OngoingGameLoader:
         self._recent_n = recent_matches_count
         self._fetch_count = fetch_count
         self._acct = account_history_service
-        self._errors: List[str] = []
+        self._errors: list[str] = []
         self._loading = False
         self.on_name_resolved = None  # 名字先出回调：查到名字立即通知（service 绑定）
 
@@ -99,7 +100,7 @@ class OngoingGameLoader:
             and not getattr(s, "display_name", "")
         )
 
-    def get_cached(self, puuid: str) -> Optional[PlayerSnapshot]:
+    def get_cached(self, puuid: str) -> PlayerSnapshot | None:
         return self._cache.get(puuid)
 
     def status(self) -> dict:
@@ -115,7 +116,7 @@ class OngoingGameLoader:
     # ERROR/其他: 请求失败 -> 不能复用；force 重试时必须绕过缓存重新请求
     _REUSABLE_STATES = ("AVAILABLE", "NO_DATA")
 
-    def load_for_champ_select(self, session: dict, force: bool = False) -> List[PlayerSnapshot]:
+    def load_for_champ_select(self, session: dict, force: bool = False) -> list[PlayerSnapshot]:
         players = self._extract_players(session)
         if not players:
             return []
@@ -128,8 +129,8 @@ class OngoingGameLoader:
         self._loading = True
         self._on_event("ongoing.started", {"count": len(players)})
 
-        snapshots: List[PlayerSnapshot] = []
-        pending_puuid: List[str] = []
+        snapshots: list[PlayerSnapshot] = []
+        pending_puuid: list[str] = []
         for p in players:
             cached = self._cache.get(p["puuid"])
             if cached is not None:
@@ -188,7 +189,7 @@ class OngoingGameLoader:
         return snapshots
 
     # ----- internals -----
-    def _extract_players(self, session: dict) -> List[dict]:
+    def _extract_players(self, session: dict) -> list[dict]:
         """从 myTeam / theirTeam 提取 10 个 (puuid, summonerId, cellId, team, position)。"""
         out = []
         for team_key in ("myTeam", "theirTeam"):
@@ -214,7 +215,7 @@ class OngoingGameLoader:
                 })
         return out
 
-    def _load_one(self, base: dict) -> Optional[PlayerSnapshot]:
+    def _load_one(self, base: dict) -> PlayerSnapshot | None:
         puuid = base["puuid"]
         summoner_id = base.get("summoner_id") or 0
         summoner_failed = False
@@ -384,7 +385,7 @@ class OngoingGameLoader:
         )
 
     @staticmethod
-    def _summarize(records: List[MatchRecord]):
+    def _summarize(records: list[MatchRecord]):
         """Top3 常用英雄(次数降序, 同次数最近优先) + 主要位置(出现最多)。"""
         if not records:
             return [], None
@@ -404,7 +405,7 @@ class OngoingGameLoader:
         return top3, main_pos
 
     @staticmethod
-    def _streak(records: List[MatchRecord]) -> int:
+    def _streak(records: list[MatchRecord]) -> int:
         """最新→最旧的连续胜/负。返回 >0 连胜, <0 连败。"""
         if not records:
             return 0

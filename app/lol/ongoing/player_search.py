@@ -5,11 +5,12 @@ Riot ID 格式：name#tag，如 果子#48230。
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional, List
+
 import requests
 
-from .match_model import MatchRecord, MatchHistoryResult, AVAILABLE, NO_DATA, ERROR
+from .match_model import NO_DATA, MatchRecord
 from .sgp_server import SgpServerResolver
 
 FOUND = "FOUND"
@@ -21,10 +22,10 @@ SEARCH_UNAVAILABLE = "SEARCH_UNAVAILABLE"
 @dataclass
 class PlayerSearchResult:
     status: str
-    puuid: Optional[str] = None
+    puuid: str | None = None
     game_name: str = ""
     tag_line: str = ""
-    matches: Optional[List[MatchRecord]] = None
+    matches: list[MatchRecord] | None = None
     message: str = ""
     privacy: str = ""  # PUBLIC / PRIVATE / ERROR / ""
 

@@ -8,7 +8,7 @@ Summoner Spell Haste。**不使用 Ability Haste 代替 SSH**。
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 # 已知提供 Summoner Spell Haste 的来源（26.18，经 Flash 实测锚点验证）。
 # 符文：星界洞悉 Cosmic Insight（+18 SSH）
@@ -38,7 +38,7 @@ _ITEM_NAME_SSH = {
 _INSPIRATION_TREE_IDS = {8300}
 
 
-def _has_inspiration_runes(runes: List[Any]) -> bool:
+def _has_inspiration_runes(runes: list[Any]) -> bool:
     """检查是否主系或副系是启迪（Inspiration）。"""
     for r in runes or []:
         if not isinstance(r, dict):
@@ -58,7 +58,7 @@ def _has_inspiration_runes(runes: List[Any]) -> bool:
     return False
 
 
-def summoner_spell_haste(items: List[Any], runes: List[Any]) -> Tuple[float, List[str], str]:
+def summoner_spell_haste(items: list[Any], runes: list[Any]) -> tuple[float, list[str], str]:
     """从敌方快照 items / runes 计算 SSH。
 
     返回 (ssh, sources, status)。
@@ -67,7 +67,7 @@ def summoner_spell_haste(items: List[Any], runes: List[Any]) -> Tuple[float, Lis
       source 标记为 cosmic_insight_assumed。
     """
     total = 0.0
-    sources: List[str] = []
+    sources: list[str] = []
 
     # 1. 直接检测星界洞悉符文
     cosmic_detected = False

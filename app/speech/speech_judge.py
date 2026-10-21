@@ -8,11 +8,10 @@ Speech Judge - 播报控制
 监控可以详细，播报必须稀疏。
 """
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from ..core.event_bus import EventBus, Event, EventType, get_event_bus
-from .speech_queue import SpeechItem, PRIORITY_S, PRIORITY_A, PRIORITY_B
-
+from ..core.event_bus import Event, EventType, get_event_bus
+from .speech_queue import PRIORITY_A, PRIORITY_B, PRIORITY_S, SpeechItem
 
 # 等级 → 数字优先级映射
 LEVEL_TO_PRIORITY = {
@@ -81,7 +80,7 @@ class SpeechJudge:
         EventType.ALARM_CREATED: SpeechLevel.C,
     }
 
-    def __init__(self, config: Dict[str, Any], queue=None):
+    def __init__(self, config: dict[str, Any], queue=None):
         self.config = config
         self.intensity = config.get("intensity", "sparse")
         self.min_level = config.get("min_level", "B")
@@ -92,7 +91,7 @@ class SpeechJudge:
         # SpeechQueue（可选，传入则直接入队；否则发布 SPEECH_SAY 事件）
         self.queue = queue
 
-        self._last_speech_time: Dict[str, float] = {}
+        self._last_speech_time: dict[str, float] = {}
         self._running = False
 
         # 等级排序
@@ -397,7 +396,7 @@ class SpeechJudge:
         # 防御塔
         if event_type == EventType.TOWER_DESTROYED:
             tower = data.get("tower_name", "")
-            return f"防御塔被摧毁。"
+            return "防御塔被摧毁。"
 
         # 提醒触发（Objective Reminder 等）
         if event_type == EventType.ALARM_TRIGGERED:

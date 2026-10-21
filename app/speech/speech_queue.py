@@ -18,8 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
-
+from typing import Any
 
 # 优先级常量
 PRIORITY_S = 0
@@ -67,8 +66,8 @@ class SpeechQueue:
         self.tts = tts_controller
 
         # 队列状态
-        self._pending: List[Tuple[int, int, SpeechItem]] = []  # (priority, seq, item)
-        self._current: Optional[SpeechItem] = None
+        self._pending: list[tuple[int, int, SpeechItem]] = []  # (priority, seq, item)
+        self._current: SpeechItem | None = None
         self._sequence = 0
 
         # 去重
@@ -77,7 +76,7 @@ class SpeechQueue:
         # 线程控制
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
-        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_thread: threading.Thread | None = None
         self._running = False
 
     def start(self):
@@ -223,7 +222,7 @@ class SpeechQueue:
         """pending 是否为空"""
         return self.size() == 0
 
-    def get_current(self) -> Optional[SpeechItem]:
+    def get_current(self) -> SpeechItem | None:
         """获取当前正在播放的项"""
         with self._lock:
             return self._current
@@ -258,7 +257,6 @@ class SpeechQueue:
                 # 停止当前播放（不在锁内）
                 self._current_status = "stopping"
                 # 先退出锁，再调用 TTS
-                pass
 
         # 停止当前播放（如果有打断请求）
         if self._current and self._current.status == "cancelled":

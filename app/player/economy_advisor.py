@@ -5,7 +5,7 @@
 """
 import time
 
-from ..speech.speech_queue import SpeechItem, PRIORITY_B
+from ..speech.speech_queue import PRIORITY_B, SpeechItem
 from .current_game_analysis import economy
 from .economy_state_detector import EconomyStateDetector
 

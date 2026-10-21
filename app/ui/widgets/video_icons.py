@@ -7,7 +7,7 @@ QIcon 直接渲染 SVG（QtSvg 插件，PySide6 自带）。
 按钮只换图标（setIcon），文本为空；tooltip 负责可读性（S5 已有惯例）。
 """
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QPixmap, QPainter
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
 
@@ -49,7 +49,7 @@ def _render(name: str, size: int = 20, color: str = "#ddd") -> QPixmap:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
         f'viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2" '
         f'stroke-linecap="round" stroke-linejoin="round">{body}</svg>'
-    ).encode("utf-8")
+    ).encode()
     renderer = QSvgRenderer()
     if not renderer.load(svg):
         return QPixmap(size, size)

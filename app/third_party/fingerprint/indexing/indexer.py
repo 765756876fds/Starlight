@@ -15,7 +15,13 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import FIRST_COMPLETED, Executor, Future, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Executor,
+    Future,
+    ThreadPoolExecutor,
+    wait,
+)
 from dataclasses import dataclass, field
 from typing import Any
 

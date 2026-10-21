@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
-from app.speech.speech_queue import SpeechQueue, SpeechItem, PRIORITY_B
+from app.speech.speech_queue import PRIORITY_B, SpeechItem, SpeechQueue
 
 # 特殊四件 itemID（16.18.1 DataDragon zh_CN 实证）
 # 2420 探索者的护臂 / 3041 梅贾的窃魂卷 / 3157 中娅沙漏 / 3026 守护天使
@@ -32,7 +32,7 @@ FIRST_ITEM_PRICE_THRESHOLD = 2000
 FALLBACK_ENEMY_TEAM = "CHAOS"
 
 
-def _price_of(item: Dict[str, Any]) -> float:
+def _price_of(item: dict[str, Any]) -> float:
     """安全取 item price；非数字/缺失返回 0"""
     try:
         v = item.get("price")
@@ -43,7 +43,7 @@ def _price_of(item: Dict[str, Any]) -> float:
         return 0.0
 
 
-def _item_id_of(item: Dict[str, Any]) -> int:
+def _item_id_of(item: dict[str, Any]) -> int:
     """安全取 itemID；缺失/非数字返回 0"""
     try:
         v = item.get("itemID")
@@ -54,7 +54,7 @@ def _item_id_of(item: Dict[str, Any]) -> int:
         return 0
 
 
-def _item_name_of(item: Dict[str, Any]) -> str:
+def _item_name_of(item: dict[str, Any]) -> str:
     """取装备显示名"""
     name = str(item.get("displayName") or item.get("name") or "")
     return name or "未知装备"
@@ -64,7 +64,7 @@ def _item_name_of(item: Dict[str, Any]) -> str:
 class PlayerEquipmentHistory:
     """单个玩家的装备播报状态"""
     first_announced: bool = False       # 是否已播"第一件成装"
-    special_announced: Set[int] = field(default_factory=set)  # 已播过的特殊四件 itemID
+    special_announced: set[int] = field(default_factory=set)  # 已播过的特殊四件 itemID
     initialized: bool = False           # 是否已完成首帧静默记录
 
 
@@ -81,12 +81,12 @@ class EquipmentUpdateNotifier:
 
     def __init__(self, speech_queue: SpeechQueue):
         self.speech = speech_queue
-        self._history: Dict[str, PlayerEquipmentHistory] = {}
+        self._history: dict[str, PlayerEquipmentHistory] = {}
         self._game_initialized: bool = False
 
     # ---------- 对外接口 ----------
 
-    def update(self, players: List[Any]):
+    def update(self, players: list[Any]):
         """
         用最新玩家列表更新装备状态。
 
@@ -126,7 +126,7 @@ class EquipmentUpdateNotifier:
             return
 
         enemy_team = self._resolve_enemy_team(players)
-        announcements: List[str] = []
+        announcements: list[str] = []
 
         for p in players:
             team = getattr(p, "team", "") or ""
@@ -200,7 +200,7 @@ class EquipmentUpdateNotifier:
         return ""
 
     @staticmethod
-    def _resolve_enemy_team(players: List[Any]) -> str:
+    def _resolve_enemy_team(players: list[Any]) -> str:
         """确定敌方队伍：找当前玩家（is_current_player）的 team，取反；找不到兜底 CHAOS"""
         for p in players:
             if getattr(p, "is_current_player", False):
@@ -212,7 +212,7 @@ class EquipmentUpdateNotifier:
                 break
         return FALLBACK_ENEMY_TEAM
 
-    def _push(self, announcements: List[str]):
+    def _push(self, announcements: list[str]):
         """合并成一条语音推送到 SpeechQueue（全部播，不丢数据）"""
         if len(announcements) == 1:
             text = announcements[0] + "。"

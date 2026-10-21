@@ -15,15 +15,31 @@ import os
 import zlib
 
 from PySide6.QtCore import (
-    QPointF, QPropertyAnimation, QRunnable, QRectF, QSize,
-    Qt, QThreadPool, QUrl, QObject, Signal,
+    QObject,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    QRunnable,
+    QSize,
+    Qt,
+    QThreadPool,
+    QUrl,
+    Signal,
 )
 from PySide6.QtGui import (
-    QColor, QFont, QFontMetrics, QImage, QLinearGradient, QPainter,
-    QPainterPath, QPen, QPixmap, QPolygonF,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
-from PySide6.QtWidgets import QAbstractItemView, QStyledItemDelegate, QStyle
+from PySide6.QtWidgets import QAbstractItemView, QStyle, QStyledItemDelegate
 
 from ..theme import motion
 from ..theme.tokens import Tokens
@@ -90,7 +106,7 @@ class _LocalCoverTask(QRunnable):
                         data = tags["APIC:"].data
                     elif "APIC" in tags:
                         data = tags["APIC"].data
-                    elif "covr" in tags and tags["covr"]:
+                    elif tags.get("covr"):
                         data = bytes(tags["covr"][0])
                 # FLAC 封面是 PICTURE 块（pictures 属性，tags 通常为 None）——
                 # 必须在 tags 分支之外检查，否则永远提取不到 FLAC 内嵌封面
@@ -144,11 +160,12 @@ class _CoverLoader(QObject):
     # ---- 微光时钟 ----
     def register_view(self, view) -> None:
         """登记使用本 loader 的列表（tick 时只重绘这些 viewport）。"""
-        if id(view) in self._views:
+        _vid = id(view)
+        if _vid in self._views:
             return
-        self._views[id(view)] = view
+        self._views[_vid] = view
         view.destroyed.connect(
-            lambda *_, _id=id(view): self._views.pop(_id, None))
+            lambda *_, _id=_vid: self._views.pop(_id, None))
 
     def _start_shimmer(self) -> None:
         if motion.reduced_motion_enabled():
@@ -192,7 +209,7 @@ class _CoverLoader(QObject):
             reply = self._qnam.get(req)
             reply.setProperty("cover_key", key)
         else:
-            path = key[6:] if key.startswith("local:") else key
+            path = key.removeprefix("local:")
             self._pool.start(_LocalCoverTask(key, path, self._bridge))
 
     def _finish_key(self, key: str) -> None:

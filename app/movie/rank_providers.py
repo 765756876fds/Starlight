@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """电影榜单多平台 Provider 架构（批：多平台榜单）。
 
 BaseRankProvider 定义榜单源统一契约；DoubanProvider 封装现有豆瓣逻辑（无损）；
@@ -8,11 +7,11 @@ TgmengProvider 接入糖果梦开放平台热榜 API（热点检索式榜单）�
 import hashlib
 import json
 import os
-from pathlib import Path
 import urllib.request
 
-from . import douban_rank
 from app.core.path_resolve import PROJECT_ROOT
+
+from . import douban_rank
 
 # 糖果梦密钥本地配置（*.local.yaml 已被 .gitignore 忽略，不入库）
 _TGMENG_CONFIG = PROJECT_ROOT / "config" / "tgmeng.local.yaml"

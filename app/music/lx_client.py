@@ -2,8 +2,9 @@
 洛雪音乐(LX Music) 开放API客户端
 用于通过HTTP控制本地运行的落雪音乐播放器
 """
+from typing import Any
+
 import requests
-from typing import Any, Dict, List, Optional
 
 
 class LxMusicClient:
@@ -13,7 +14,7 @@ class LxMusicClient:
         self.base_url = f"http://{host}:{port}"
         self.timeout = 5
 
-    def _get(self, path: str) -> Dict[str, Any]:
+    def _get(self, path: str) -> dict[str, Any]:
         """GET请求"""
         try:
             resp = requests.get(f"{self.base_url}{path}", timeout=self.timeout)
@@ -23,7 +24,7 @@ class LxMusicClient:
             print(f"[落雪API] GET {path} 失败: {e}")
             return {}
 
-    def _post(self, path: str, data: Dict = None) -> Dict[str, Any]:
+    def _post(self, path: str, data: dict = None) -> dict[str, Any]:
         """POST请求"""
         try:
             resp = requests.post(f"{self.base_url}{path}", json=data or {}, timeout=self.timeout)
@@ -72,17 +73,17 @@ class LxMusicClient:
         return bool(self._post("/api/player/volume", {"volume": volume}))
 
     # ============ 状态查询 ============
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """获取播放状态"""
         return self._get("/api/player/status")
 
-    def get_play_list(self) -> List[Dict[str, Any]]:
+    def get_play_list(self) -> list[dict[str, Any]]:
         """获取播放列表"""
         data = self._get("/api/playlist")
         return data.get("list", [])
 
     # ============ 搜索播放 ============
-    def search(self, keyword: str, source: str = "kw") -> List[Dict[str, Any]]:
+    def search(self, keyword: str, source: str = "kw") -> list[dict[str, Any]]:
         """搜索音乐"""
         data = self._post("/api/search", {
             "keyword": keyword,
@@ -100,7 +101,7 @@ class LxMusicClient:
             }
         }))
 
-    def search_and_play(self, keyword: str) -> Optional[Dict[str, Any]]:
+    def search_and_play(self, keyword: str) -> dict[str, Any] | None:
         """搜索并播放第一首"""
         results = self.search(keyword)
         if results:

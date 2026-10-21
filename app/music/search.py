@@ -6,7 +6,7 @@
 """
 import re
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .database import MusicDatabase
 
@@ -39,7 +39,7 @@ class MusicSearch:
     def __init__(self, db: MusicDatabase):
         self.db = db
 
-    def search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """
         综合搜索
 
@@ -80,7 +80,7 @@ class MusicSearch:
 
         return scored[:limit]
 
-    def search_by_artist(self, artist: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search_by_artist(self, artist: str, limit: int = 20) -> list[dict[str, Any]]:
         """按歌手搜索"""
         query = f"%{artist}%"
         cursor = self.db._conn.execute("""
@@ -91,7 +91,7 @@ class MusicSearch:
         """, (query, query, limit))
         return [dict(row) for row in cursor.fetchall()]
 
-    def search_by_album(self, album: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search_by_album(self, album: str, limit: int = 20) -> list[dict[str, Any]]:
         """按专辑搜索"""
         query = f"%{album}%"
         cursor = self.db._conn.execute("""
@@ -102,7 +102,7 @@ class MusicSearch:
         """, (query, limit))
         return [dict(row) for row in cursor.fetchall()]
 
-    def search_similar(self, song: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
+    def search_similar(self, song: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
         """
         搜索相似歌曲
 
@@ -143,7 +143,7 @@ class MusicSearch:
 
         return results[:limit]
 
-    def _like_search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def _like_search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """LIKE 模糊搜索兜底"""
         like_query = f"%{query}%"
         cursor = self.db._conn.execute("""
@@ -154,7 +154,7 @@ class MusicSearch:
         """, (like_query, like_query, like_query, limit))
         return [dict(row) for row in cursor.fetchall()]
 
-    def _calculate_similarity(self, query: str, song: Dict[str, Any]) -> float:
+    def _calculate_similarity(self, query: str, song: dict[str, Any]) -> float:
         """
         计算查询与歌曲的相似度得分
 
@@ -215,7 +215,7 @@ class MusicSearch:
         # 取最高分
         return max(scores) if scores else 0.0
 
-    def parse_search_intent(self, query: str) -> Dict[str, Any]:
+    def parse_search_intent(self, query: str) -> dict[str, Any]:
         """
         解析搜索意图（规则匹配，不走 LLM）
 

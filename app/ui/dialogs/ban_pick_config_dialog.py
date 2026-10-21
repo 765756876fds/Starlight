@@ -1,15 +1,19 @@
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QLineEdit, QPushButton,
-)
 import json
 import os
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+)
+
+from ..theme.tokens import Tokens
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import glass_info
-from ..widgets.icon_utils import lucide_icon
-from ..theme.tokens import Tokens
 
 # 别名表（俗称/本名 → 称号）：导入失败则退化为 中文名/英文名/称号 三字段匹配
 try:

@@ -14,7 +14,6 @@ import re
 import time
 import urllib.request
 from pathlib import Path
-from typing import Dict
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 OUT = ROOT / "data" / "lol_data"
@@ -41,7 +40,7 @@ def _save(name: str, data) -> None:
     os.replace(tmp, p)
 
 
-def update_champions_and_abilities(timeout: float = 10.0) -> Dict[str, object]:
+def update_champions_and_abilities(timeout: float = 10.0) -> dict[str, object]:
     """拉取英雄 + 技能 CD → champions.json / abilities.json / version.json。
 
     返回 {"ok": True, "champions": N, "abilities": M, "failed": K}；网络/解析失败抛异常。
@@ -105,7 +104,7 @@ def update_champions_and_abilities(timeout: float = 10.0) -> Dict[str, object]:
             "failed": len(failed)}
 
 
-def update_items(timeout: float = 10.0) -> Dict[str, object]:
+def update_items(timeout: float = 10.0) -> dict[str, object]:
     """拉取 DataDragon zh_CN item.json → items.json（id → 中文名）。
 
     注意：DataDragon 返回 data["data"] 为 dict，key 即装备 id（item 对象内无 id 字段）；
@@ -128,7 +127,7 @@ def update_items(timeout: float = 10.0) -> Dict[str, object]:
     return {"ok": True, "items": len(out)}
 
 
-def update_all(timeout: float = 10.0) -> Dict[str, object]:
+def update_all(timeout: float = 10.0) -> dict[str, object]:
     """英雄 + 技能 + 装备一次更新。任一步失败抛异常（旧文件保留）。"""
     stats = update_champions_and_abilities(timeout)
     items = update_items(timeout)

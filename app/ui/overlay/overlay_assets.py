@@ -10,13 +10,12 @@
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPainter, QPixmap
 
 from app.core.path_resolve import PROJECT_ROOT
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap, QIcon, QPainter
 
 # Data Dragon 版本
 _DDRAGON_VERSION = "16.18.1"
@@ -50,11 +49,11 @@ def _download_file(url: str, cache_path: Path) -> bool:
 # 模块级内存缓存：原始 QPixmap 常驻内存，首次磁盘读后不再 IO
 # 不清理：总量有限（~173 头像 + ~10 技能图标，合计几 MB）
 # 失败不缓存：保持"下次可重试"的降级行为（调用方有占位图兜底）
-_portrait_cache: dict[str, Optional[QPixmap]] = {}
-_spell_icon_cache: dict[str, Optional[QPixmap]] = {}
+_portrait_cache: dict[str, QPixmap | None] = {}
+_spell_icon_cache: dict[str, QPixmap | None] = {}
 
 
-def get_champion_portrait(name_en: str) -> Optional[QPixmap]:
+def get_champion_portrait(name_en: str) -> QPixmap | None:
     """获取英雄头像（自动下载并缓存，内存缓存命中后无磁盘 IO）。"""
     if not name_en:
         return None
@@ -94,7 +93,7 @@ def get_champion_portrait(name_en: str) -> Optional[QPixmap]:
     return result
 
 
-def get_summoner_spell_icon(name_en: str) -> Optional[QPixmap]:
+def get_summoner_spell_icon(name_en: str) -> QPixmap | None:
     """获取召唤师技能图标（自动下载并缓存，内存缓存命中后无磁盘 IO）。"""
     if not name_en:
         return None
@@ -192,7 +191,7 @@ _SPELL_SID_TO_EN = {
 }
 
 
-def get_summoner_spell_icon_by_sid(sid: int) -> Optional[QPixmap]:
+def get_summoner_spell_icon_by_sid(sid: int) -> QPixmap | None:
     """根据 sid 获取召唤师技能图标。"""
     name_en = _SPELL_SID_TO_EN.get(sid)
     if not name_en:
@@ -200,7 +199,7 @@ def get_summoner_spell_icon_by_sid(sid: int) -> Optional[QPixmap]:
     return get_summoner_spell_icon(name_en)
 
 
-def get_summoner_spell_icon_by_zh(name_zh: str) -> Optional[QPixmap]:
+def get_summoner_spell_icon_by_zh(name_zh: str) -> QPixmap | None:
     """根据中文名获取召唤师技能图标。"""
     name_en = _SPELL_ZH_TO_EN.get(name_zh)
     if not name_en:

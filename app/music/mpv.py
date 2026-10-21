@@ -9,31 +9,32 @@ import os
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 
 class MpvController:
     """mpv JSON IPC 控制器"""
 
     def __init__(self, mpv_path: str, ipc_pipe: str = "\\\\.\\pipe\\lol_music_mpv",
-                 video: bool = False, watch_later_dir: Optional[str] = None,
-                 extra_video_args: Optional[list] = None):
+                 video: bool = False, watch_later_dir: str | None = None,
+                 extra_video_args: list | None = None):
         self.mpv_path = mpv_path
         self.ipc_pipe = ipc_pipe
         self._base_ipc_pipe = ipc_pipe  # P0-2：每次 launch 从 base 重建（不追加累积）
         self.video = video
         self.watch_later_dir = watch_later_dir
         self.extra_video_args = extra_video_args or []  # 电影缓冲参数（仅 video 分支追加）
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
         self._pipe = None
         self._running = False
 
         self._request_id = 0
-        self._properties: Dict[str, Any] = {}
-        self._property_watchers: Dict[str, Any] = {}
+        self._properties: dict[str, Any] = {}
+        self._property_watchers: dict[str, Any] = {}
         self._pipe_lock = threading.Lock()
 
-    def start(self, taskkill: bool = True, wid: Optional[int] = None,
+    def start(self, taskkill: bool = True, wid: int | None = None,
               pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
         """启动 mpv 进程；成功返回 True，失败返回 False（不抛异常）。
         taskkill=True 时先清场（杀残留 mpv.exe，正常冷启动语义）；
@@ -73,7 +74,7 @@ class MpvController:
         print(f"[mpv] 未找到 mpv 可执行文件: {self.mpv_path}")
         return False
 
-    def _launch(self, wid: Optional[int] = None,
+    def _launch(self, wid: int | None = None,
                 pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
         """Popen + 等待 IPC 管道就绪。任何一步失败 → 返回 False（不抛）。"""
         # 旧 pipe 可能来自已自死的进程（窗口关闭路径），先清理再重开
@@ -164,8 +165,8 @@ class MpvController:
             except Exception:
                 pass
 
-    def _send_command(self, command: str, params: Optional[List[Any]] = None,
-                       timeout: float = 3.0) -> Optional[Dict[str, Any]]:
+    def _send_command(self, command: str, params: list[Any] | None = None,
+                       timeout: float = 3.0) -> dict[str, Any] | None:
         if not self._pipe:
             raise ConnectionError("mpv IPC 未连接")
         with self._pipe_lock:

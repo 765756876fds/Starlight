@@ -3,8 +3,8 @@
 点击控件后直接按键盘即可捕获并即时回显（无弹窗、无全局键盘钩子），
 根除自建 TriggerCaptureDialog 弹窗"确认后不回填"的问题。
 """
-from PySide6.QtWidgets import QKeySequenceEdit
 from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import QKeySequenceEdit
 
 
 class SingleKeyEdit(QKeySequenceEdit):

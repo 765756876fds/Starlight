@@ -19,15 +19,20 @@ from __future__ import annotations
 import json
 import ssl
 import urllib.request
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .match_model import (
-    MatchHistoryResult, MatchRecord,
-    AVAILABLE, NO_DATA, AUTH_REQUIRED, SGP_UNAVAILABLE, ERROR,
+    AUTH_REQUIRED,
+    AVAILABLE,
+    ERROR,
+    NO_DATA,
+    SGP_UNAVAILABLE,
+    MatchHistoryResult,
+    MatchRecord,
 )
 
 
-def _extract_own_participant(json_block: dict, puuid: str) -> Optional[dict]:
+def _extract_own_participant(json_block: dict, puuid: str) -> dict | None:
     for p in json_block.get("participants", []) or []:
         if p.get("puuid") == puuid:
             return p
@@ -84,9 +89,9 @@ class SgpMatchHistoryProvider:
 
     def __init__(
         self,
-        entitlements_token: Callable[[], Optional[str]],
-        sgp_base: Callable[[], Optional[str]],
-        https_get: Optional[Callable[[str, dict], dict]] = None,
+        entitlements_token: Callable[[], str | None],
+        sgp_base: Callable[[], str | None],
+        https_get: Callable[[str, dict], dict] | None = None,
     ):
         self._token = entitlements_token
         self._base = sgp_base
@@ -128,7 +133,7 @@ class SgpMatchHistoryProvider:
         return parse_sgp_summary(payload, puuid)
 
 
-def tencent_sgp_base_from_platform(platform_id: str) -> Optional[str]:
+def tencent_sgp_base_from_platform(platform_id: str) -> str | None:
     if not platform_id:
         return None
     return _TENCENT_SGP.get(platform_id.upper())

@@ -9,20 +9,22 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from ..core.event_bus import Event, EventType, get_event_bus
-from .history_recorder import HistoryRecorder
 from ..core.command_bus import Command, CommandType, get_command_bus
+from ..core.event_bus import Event, EventType, get_event_bus
+from ..core.logger import get_logger
 from ..core.state_store import StateNamespace, get_state_store
-
 from .database import MusicDatabase
-from .scanner import MusicScanner
-from .mpv import MpvController
-from .queue import PlayQueue, PlayMode
-from .search import MusicSearch
+from .history_recorder import HistoryRecorder
 from .lx_client import LxMusicClient
-from .online.events import ONLINE_SEARCH_DONE, ONLINE_ERROR
+from .mpv import MpvController
+from .online.events import ONLINE_ERROR, ONLINE_SEARCH_DONE
+from .queue import PlayMode, PlayQueue
+from .scanner import MusicScanner
+from .search import MusicSearch
+
+logger = get_logger()
 
 
 # mpv http-header-fields 用逗号分隔，值含逗号会破坏语法；只转发安全字段。
@@ -140,7 +142,7 @@ class MusicController:
     整合所有音乐子模块，提供统一接口。
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         # 路径绝对化（P0-2）：相对路径（如 ./data/music.db）基于 PROJECT_ROOT，不依赖 CWD
         from app.core.path_resolve import resolve_under_root
@@ -175,9 +177,9 @@ class MusicController:
         self.lx_client = LxMusicClient()
         self.lx_connected = self.lx_client.is_connected()
         if self.lx_connected:
-            print('[音乐] 落雪音乐已连接，语音控制将优先控制落雪')
+            logger.info('[音乐] 落雪音乐已连接，语音控制将优先控制落雪')
         else:
-            print('[音乐] 本地 mpv 播放引擎已就绪')
+            logger.info('[音乐] 本地 mpv 播放引擎已就绪')
 
         # Online sources（延迟构造，可选）
         self.online_manager = None
@@ -192,7 +194,7 @@ class MusicController:
         # 状态
         self._running = False
         self._lock = threading.Lock()
-        self._current_song: Optional[Dict[str, Any]] = None
+        self._current_song: dict[str, Any] | None = None
         # P1 候选旁路：最近一次语音搜歌的候选（事件只带展示，track 本体留本对象）
         self._candidate_generation: int = 0
         self._active_candidates: list = []
@@ -212,16 +214,16 @@ class MusicController:
         self._mpv_restart_pending = False  # 一次重启进行中（防重入 + UI 侧跳过）
         # 播报 ducking（TTS 播报期间压低音乐音量）
         self._duck_active = False
-        self._duck_original_volume: Optional[int] = None
+        self._duck_original_volume: int | None = None
         self.duck_volume_pct = int(config.get("duck_volume_pct", 50))
 
         # Highlight Mode 状态
         self._highlight_mode: bool = False
         self._highlight_gen: int = 0  # 每首歌一个 token，旧 poller 失效
-        self._highlight_end_time: Optional[float] = None
-        self._highlight_song_id: Optional[int] = None
+        self._highlight_end_time: float | None = None
+        self._highlight_song_id: int | None = None
         self._highlight_stop: threading.Event = threading.Event()
-        self._highlight_poller: Optional[threading.Thread] = None
+        self._highlight_poller: threading.Thread | None = None
         self._skip_pending: bool = False  # 坏文件自动跳过防重入
         # UI「音源管理」导入的自定义 HTTP 源，sync_custom_sources() 维护的注册名单
         self._custom_http_sources: set = set()
@@ -245,11 +247,11 @@ class MusicController:
         try:
             ok = bool(self.mpv.start())
         except Exception as e:
-            print(f"[Music] mpv 启动异常: {e!r}")
+            logger.info(f"[Music] mpv 启动异常: {e!r}")
             ok = False
         if not ok:
             self._mpv_available = False
-            print("[Music] mpv 不可用，音乐模块降级运行（播放/音量控制禁用）")
+            logger.info("[Music] mpv 不可用，音乐模块降级运行（播放/音量控制禁用）")
             self._running = True
             self._subscribe_speech_events()
             self.state_store.set(StateNamespace.MUSIC, "volume", self.default_volume)
@@ -287,7 +289,7 @@ class MusicController:
                     now_idle = bool(self.mpv.get_property("idle-active", timeout=0.5))
                     self._mpv_fail_streak = 0
                 except Exception as e:
-                    print(f"[Music] idle poll error: {e!r}")
+                    logger.error(f"[Music] idle poll error: {e!r}")
                     self._mpv_fail_streak += 1
                     if self._mpv_fail_streak >= 3:
                         self._mpv_fail_streak = 0
@@ -300,14 +302,14 @@ class MusicController:
                 except Exception:
                     alive = True
                 if not alive:
-                    print("[Music] mpv 进程已退出")
+                    logger.info("[Music] mpv 进程已退出")
                     self._try_restart_mpv("process-dead")
                     _time.sleep(0.8)
                     continue
                 # 3) 原逻辑：idle 上升沿 → 自动切歌
                 if now_idle and not self._last_idle:
                     _time.sleep(0.5)  # 等 mpv 稳定
-                    print("[Music] 检测到播放结束，自动切下一首")
+                    logger.info("[Music] 检测到播放结束，自动切下一首")
                     self._auto_next()
                 self._last_idle = now_idle
                 _time.sleep(0.8)
@@ -319,7 +321,7 @@ class MusicController:
         self.state_store.set(StateNamespace.MUSIC, "playing", False)
         self.state_store.set(StateNamespace.MUSIC, "current_song", None)
 
-        print("[Music] 模块已启动")
+        logger.info("[Music] 模块已启动")
         return True
 
     def _subscribe_speech_events(self):
@@ -343,10 +345,10 @@ class MusicController:
             if self._mpv_restart_count >= 3:
                 if not self._mpv_gave_up:
                     self._mpv_gave_up = True
-                    print("[Music] mpv 多次重启失败，放弃自动恢复（音乐模块停止自愈）")
+                    logger.error("[Music] mpv 多次重启失败，放弃自动恢复（音乐模块停止自愈）")
                 return
             self._mpv_restart_count += 1
-            print(f"[Music] mpv 异常({reason})，尝试自动重启 {self._mpv_restart_count}/3")
+            logger.info(f"[Music] mpv 异常({reason})，尝试自动重启 {self._mpv_restart_count}/3")
             self._mpv_restart_pending = True
             restart_song = self._current_song
         threading.Thread(
@@ -356,7 +358,7 @@ class MusicController:
             name="mpv-restart",
         ).start()
 
-    def _restart_mpv_worker(self, restart_song: Optional[Dict[str, Any]]):
+    def _restart_mpv_worker(self, restart_song: dict[str, Any] | None):
         """后台执行实际重启；状态更新后持锁收尾清 pending。"""
         try:
             try:
@@ -366,12 +368,12 @@ class MusicController:
             try:
                 ok = bool(self.mpv.start(taskkill=False, pipe_timeout=3.0, prop_timeout=0.5))
             except Exception as e:
-                print(f"[Music] mpv 重启异常: {e!r}")
+                logger.info(f"[Music] mpv 重启异常: {e!r}")
                 ok = False
             if not ok:
                 with self._lock:
                     self._mpv_available = False
-                print("[Music] mpv 重启失败，模块降级")
+                logger.error("[Music] mpv 重启失败，模块降级")
                 return
             with self._lock:
                 self._mpv_available = True
@@ -387,7 +389,7 @@ class MusicController:
             with self._lock:
                 self._mpv_restart_pending = False
 
-    def _try_resume_after_restart(self, restart_song: Optional[Dict[str, Any]]):
+    def _try_resume_after_restart(self, restart_song: dict[str, Any] | None):
         """重启后恢复播放（用重启时点快照）：本地文件重新 loadfile（从头播）；
         在线 URL 不恢复（源已断），把 _last_idle 置 False 产生上升沿自动切歌。"""
         if not restart_song:
@@ -408,7 +410,7 @@ class MusicController:
             except Exception:
                 pass
         self.mpv.stop_process()
-        print("[Music] 模块已停止")
+        logger.info("[Music] 模块已停止")
 
     def _register_commands(self):
         """注册命令处理器"""
@@ -436,7 +438,7 @@ class MusicController:
     def play(self):
         """播放"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         # 优先控制落雪
         if self.lx_connected:
@@ -450,7 +452,7 @@ class MusicController:
                     ))
                     return
             except Exception as e:
-                print(f"[Music] 落雪 play 失败，回落 mpv: {e}")
+                logger.error(f"[Music] 落雪 play 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         if self.queue.is_empty():
@@ -491,7 +493,7 @@ class MusicController:
     def pause(self):
         """暂停"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         # 优先控制落雪
         if self.lx_connected:
@@ -499,7 +501,7 @@ class MusicController:
                 if self.lx_client.pause():
                     return
             except Exception as e:
-                print(f"[Music] 落雪 pause 失败，回落 mpv: {e}")
+                logger.error(f"[Music] 落雪 pause 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         self.mpv.pause()
@@ -514,7 +516,7 @@ class MusicController:
     def resume(self):
         """继续播放"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         self.mpv.play()
         # 实时同步状态
@@ -534,7 +536,7 @@ class MusicController:
     def toggle(self):
         """切换播放/暂停（直接让 mpv 处理，不依赖缓存状态）"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         # 优先控制落雪
         if self.lx_connected:
@@ -542,7 +544,7 @@ class MusicController:
                 if self.lx_client.toggle_play():
                     return
             except Exception as e:
-                print(f"[Music] 落雪 toggle 失败，回落 mpv: {e}")
+                logger.error(f"[Music] 落雪 toggle 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         self.mpv.toggle_pause()
@@ -554,18 +556,18 @@ class MusicController:
             pass
 
     @_cancel_switch_on_user_action
-    def next(self, _timeout: Optional[float] = None):
+    def next(self, _timeout: float | None = None):
         """下一首。
 
         _timeout 非空时：业务锁忙则放弃本轮（自动跳过路径用，防无限等锁）。
         """
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         # 防抖：语音 + UI 并发双触发（<300ms）只跳一首，避免一次跳两首
         now = time.time()
         if now - self._last_next_ts < 0.3:
-            print("[Music] next 防抖：300ms 内重复触发已忽略")
+            logger.info("[Music] next 防抖：300ms 内重复触发已忽略")
             return
         self._last_next_ts = now
         # 优先控制落雪
@@ -574,12 +576,12 @@ class MusicController:
                 if self.lx_client.next():
                     return
             except Exception as e:
-                print(f"[Music] 落雪 next 失败，回落 mpv: {e}")
+                logger.error(f"[Music] 落雪 next 失败，回落 mpv: {e}")
                 self.lx_connected = False
 
         if _timeout is not None:
             if not self._lock.acquire(timeout=_timeout):
-                print("[Music] next：业务锁忙，放弃本轮")
+                logger.info("[Music] next：业务锁忙，放弃本轮")
                 return
             try:
                 self._next_locked()
@@ -604,7 +606,7 @@ class MusicController:
                     self.queue.add_all(all_songs)
                     song = self.queue.next()
             except Exception as e:
-                print(f"加载本地队列失败: {e}")
+                logger.error(f"加载本地队列失败: {e}")
             if not song:
                 songs = self.db.get_random_songs(10)
                 if songs:
@@ -619,7 +621,7 @@ class MusicController:
     def prev(self):
         """上一首"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         # 优先控制落雪
         if self.lx_connected:
@@ -627,7 +629,7 @@ class MusicController:
                 if self.lx_client.prev():
                     return
             except Exception as e:
-                print(f"[Music] 落雪 prev 失败，回落 mpv: {e}")
+                logger.error(f"[Music] 落雪 prev 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
         with self._lock:
@@ -637,14 +639,14 @@ class MusicController:
                 self._play_song(song)
 
     @_cancel_switch_on_user_action
-    def play_song(self, song: Dict[str, Any]):
+    def play_song(self, song: dict[str, Any]):
         """播放指定歌曲"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         with self._lock:
             if self._mpv_restart_pending:
-                print("[Music] mpv 重启中，忽略播放请求")
+                logger.info("[Music] mpv 重启中，忽略播放请求")
                 return
             self._invalidate_highlight()
             # 如果队列是空的（语音首次播放本地歌曲），自动把整个本地库加进队列
@@ -654,7 +656,7 @@ class MusicController:
                     if all_songs:
                         self.queue.add_all(all_songs)
                 except Exception as e:
-                    print(f"加载本地队列失败: {e}")
+                    logger.error(f"加载本地队列失败: {e}")
             # 添加到队列并播放
             self.queue.add(song)
             self.queue.play_at(self.queue.size() - 1)
@@ -666,7 +668,7 @@ class MusicController:
             rows = self.db.get_history(limit=limit)
             return [self._enrich_cover(dict(r)) for r in rows]
         except Exception as e:
-            print(f"[Music] get_history error: {e}")
+            logger.error(f"[Music] get_history error: {e}")
             return []
 
     # ---- 历史/歌单封面补全（本地反查 path / 在线查最近封面缓存） ----
@@ -710,7 +712,7 @@ class MusicController:
                 if url:
                     row["cover_url"] = url
         except Exception as e:
-            print(f"[Music] enrich cover error: {e}")
+            logger.error(f"[Music] enrich cover error: {e}")
         return row
 
     def lookup_cover(self, row: dict) -> dict:
@@ -722,7 +724,7 @@ class MusicController:
         try:
             self.db.clear_history()
         except Exception as e:
-            print(f"[Music] clear_history error: {e}")
+            logger.error(f"[Music] clear_history error: {e}")
 
     def play_history_item(self, item: dict) -> bool:
         """历史重播：本地按 music_id 找歌；在线按 歌名+歌手 重搜。失败返回 False。"""
@@ -742,7 +744,7 @@ class MusicController:
             r = self.play_search_result(q, 0)
             return r is not None
         except Exception as e:
-            print(f"[Music] play_history_item error: {e}")
+            logger.error(f"[Music] play_history_item error: {e}")
             return False
 
     # ---- 歌单 ----
@@ -752,7 +754,7 @@ class MusicController:
         try:
             return self.db.create_playlist(name)
         except Exception as e:
-            print(f"[Music] create_playlist error: {e}")
+            logger.error(f"[Music] create_playlist error: {e}")
             return None
 
     def delete_playlist(self, playlist_id: int):
@@ -760,14 +762,14 @@ class MusicController:
         try:
             self.db.delete_playlist(playlist_id)
         except Exception as e:
-            print(f"[Music] delete_playlist error: {e}")
+            logger.error(f"[Music] delete_playlist error: {e}")
 
     def rename_playlist(self, playlist_id: int, name: str) -> bool:
         """重命名歌单；重名返回 False。"""
         try:
             return self.db.rename_playlist(playlist_id, name)
         except Exception as e:
-            print(f"[Music] rename_playlist error: {e}")
+            logger.error(f"[Music] rename_playlist error: {e}")
             return False
 
     def get_playlists(self) -> list:
@@ -775,7 +777,7 @@ class MusicController:
         try:
             return self.db.get_playlists()
         except Exception as e:
-            print(f"[Music] get_playlists error: {e}")
+            logger.error(f"[Music] get_playlists error: {e}")
             return []
 
     def add_to_playlist(self, playlist_id: int, song: dict) -> bool:
@@ -783,7 +785,7 @@ class MusicController:
         try:
             return self.db.add_to_playlist(playlist_id, song)
         except Exception as e:
-            print(f"[Music] add_to_playlist error: {e}")
+            logger.error(f"[Music] add_to_playlist error: {e}")
             return False
 
     def remove_from_playlist(self, playlist_id: int, song_id: int) -> bool:
@@ -791,7 +793,7 @@ class MusicController:
         try:
             return self.db.remove_from_playlist(playlist_id, song_id)
         except Exception as e:
-            print(f"[Music] remove_from_playlist error: {e}")
+            logger.error(f"[Music] remove_from_playlist error: {e}")
             return False
 
     def get_playlist_songs(self, playlist_id: int) -> list:
@@ -800,7 +802,7 @@ class MusicController:
             rows = self.db.get_playlist_songs(playlist_id)
             return [self._enrich_cover(dict(r)) for r in rows]
         except Exception as e:
-            print(f"[Music] get_playlist_songs error: {e}")
+            logger.error(f"[Music] get_playlist_songs error: {e}")
             return []
 
     def play_playlist_item(self, item: dict) -> bool:
@@ -826,14 +828,14 @@ class MusicController:
                             self.play_song(row2)
                             return True
                 except Exception as e:
-                    print(f"[Music] 已下载歌优先本地失败: {e}")
+                    logger.error(f"[Music] 已下载歌优先本地失败: {e}")
             q = " ".join(x for x in (item.get("title"), item.get("artist")) if x).strip()
             if not q:
                 return False
             r = self.play_search_result(q, 0)
             return r is not None
         except Exception as e:
-            print(f"[Music] play_playlist_item error: {e}")
+            logger.error(f"[Music] play_playlist_item error: {e}")
             return False
 
     def get_song_path(self, music_id: int) -> str:
@@ -843,7 +845,7 @@ class MusicController:
             if row and row.get("path") and os.path.exists(row["path"]):
                 return row["path"]
         except Exception as e:
-            print(f"[Music] get_song_path error: {e}")
+            logger.error(f"[Music] get_song_path error: {e}")
         return ""
 
     def add_next(self, song: dict):
@@ -852,7 +854,7 @@ class MusicController:
             pos = self.queue.get_current_index() + 1
             self.queue.add(song, position=pos)
         except Exception as e:
-            print(f"[Music] add_next error: {e}")
+            logger.error(f"[Music] add_next error: {e}")
 
     def delete_local_file(self, song: dict) -> tuple:
         """删除本地文件（不可逆）：删磁盘 + 从 music 表移除（FTS 同步）+ 从歌单移除（历史保留）。
@@ -874,7 +876,7 @@ class MusicController:
             self.db.delete_playlist_songs_by_music_id(music_id)
             return True, ""
         except Exception as e:
-            print(f"[Music] delete_local_file error: {e}")
+            logger.error(f"[Music] delete_local_file error: {e}")
             return False, f"删除失败: {e!r}"
 
     def _cancel_candidate_switch(self):
@@ -907,7 +909,7 @@ class MusicController:
     def play_search_result(self, query: str, index: int = 0):
         """搜索并播放第 N 个结果，本地找不到自动走在线fallback"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return None
         results = self.search.search(query, limit=10)
         if results and 0 <= index < len(results):
@@ -918,7 +920,7 @@ class MusicController:
         if self.online_manager is not None:
             _t_online_start = time.time()
             try:
-                print(f"[Music] 本地未找到'{query}'，尝试在线搜索...")
+                logger.info(f"[Music] 本地未找到'{query}'，尝试在线搜索...")
                 online_dict = self.online_manager.search_all(query, limit_per_source=5)
                 _t_search_ms = int((time.time() - _t_online_start) * 1000)
                 # 该行耗时/源列表不再打印到控制台（用户要求保持控制台简洁）
@@ -936,7 +938,7 @@ class MusicController:
                     try:
                         self._publish_candidates(query, candidates)
                     except Exception as _e:
-                        print(f"[Music] 候选推送失败（不影响播放）: {_e}")
+                        logger.error(f"[Music] 候选推送失败（不影响播放）: {_e}")
                     _t_url_start = time.time()
                     chosen, play_result = None, None
                     for cand in candidates:
@@ -946,17 +948,17 @@ class MusicController:
                             break
 
                     if chosen is None:
-                        print(f"[Music] 获取播放URL失败（{len(candidates)} 个候选均无 URL），无法在线播放")
+                        logger.error(f"[Music] 获取播放URL失败（{len(candidates)} 个候选均无 URL），无法在线播放")
                         return None
 
-                    print(f"[Music] 在线找到: {chosen.title} - {chosen.artist} (音源: {chosen.source_name})")
+                    logger.info(f"[Music] 在线找到: {chosen.title} - {chosen.artist} (音源: {chosen.source_name})")
                     # 定向取 URL：只调 chosen 对应的音源（manager 按 track.source_name 路由）。
                     # 旧逻辑遍历所有源串行调 get_play_url，demo/archive 对陌生 track 各自
                     # 发起 HTTP（超时 8s/个），导致在线播放最高 ~16s 延迟。
                     _t_url_ms = int((time.time() - _t_url_start) * 1000)
-                    print(f"[Music] 获取播放URL，耗时 {_t_url_ms}ms")
+                    logger.info(f"[Music] 获取播放URL，耗时 {_t_url_ms}ms")
                     if play_result:
-                        print(f"[Music] 获取播放URL成功，开始在线播放...")
+                        logger.info("[Music] 获取播放URL成功，开始在线播放...")
                         play_url = play_result.get("url")
                         # 在线URL需要HTTP头。mpv 的 http-header-fields 是持久属性，
                         # 某源 Referer 一旦设置会跨源残留。因此每次播放前无条件重设
@@ -1019,17 +1021,17 @@ class MusicController:
                             source="music"
                         ))
                         _t_total_ms = int((time.time() - _t_online_start) * 1000)
-                        print(f"[Music] 在线播放就绪，总耗时 {_t_total_ms}ms（搜索{_t_search_ms}ms + URL{_t_url_ms}ms）")
+                        logger.info(f"[Music] 在线播放就绪，总耗时 {_t_total_ms}ms（搜索{_t_search_ms}ms + URL{_t_url_ms}ms）")
                         return online_song
                     else:
                         # 定向/兜底取 URL 均失败：明确提示，避免静默不播放
-                        print(f"[Music] 获取播放URL失败（音源: {chosen.source_name}），无法在线播放")
+                        logger.error(f"[Music] 获取播放URL失败（音源: {chosen.source_name}），无法在线播放")
             except Exception as e:
-                print(f"[Music] 在线搜索失败: {e}")
+                logger.error(f"[Music] 在线搜索失败: {e}")
 
         return None
 
-    def _play_online_queue_item(self, song: Dict[str, Any]):
+    def _play_online_queue_item(self, song: dict[str, Any]):
         """队列在线歌播放：网络解析（重搜+取URL）放后台线程，不阻塞调用线程。
         解析完成后在同一 worker 线程执行 loadfile（mpv IPC 有锁、db 有锁、
         状态只写 state_store——轮询/Timer 线程早已多线程调用，安全）。
@@ -1040,7 +1042,7 @@ class MusicController:
         直接 record_song 记历史。"""
         query = f"{song.get('title', '')} {song.get('artist', '')}".strip()
         if not query:
-            print("[Music] 队列在线歌无 title，跳过")
+            logger.info("[Music] 队列在线歌无 title，跳过")
             self._schedule_skip_online(song)
             return
         self._online_resolve_gen += 1
@@ -1050,14 +1052,14 @@ class MusicController:
             args=(song, query, gen), daemon=True,
             name="music-online-resolve").start()
 
-    def _resolve_online_worker(self, song: Dict[str, Any], query: str, gen: int):
+    def _resolve_online_worker(self, song: dict[str, Any], query: str, gen: int):
         """后台线程：重搜 → 逐个候选取 URL → loadfile → 状态/历史。
         解析完成时 gen 已过期（期间用户又切歌）→ 丢弃结果，不覆盖新歌。"""
         try:
             online_dict = self.online_manager.search_all(query, limit_per_source=5)
             all_tracks = [t for tracks in online_dict.values() for t in tracks]
             if not all_tracks:
-                print("[Music] 队列在线歌重搜无结果，跳过")
+                logger.info("[Music] 队列在线歌重搜无结果，跳过")
                 self._schedule_skip_online(song)
                 return
             candidates = _pick_candidates(all_tracks, self.online_manager)
@@ -1068,14 +1070,14 @@ class MusicController:
                     chosen = cand
                     break
             if chosen is None:
-                print("[Music] 队列在线歌重搜 URL 均失败，跳过")
+                logger.error("[Music] 队列在线歌重搜 URL 均失败，跳过")
                 self._schedule_skip_online(song)
                 return
             if gen != self._online_resolve_gen:
-                print("[Music] 在线解析已过期（期间已切歌），丢弃结果")
+                logger.info("[Music] 在线解析已过期（期间已切歌），丢弃结果")
                 return
             url = play_result["url"]
-            print(f"[Music] 队列在线歌重搜播放: {chosen.title} - {chosen.artist} ({chosen.source_name})")
+            logger.info(f"[Music] 队列在线歌重搜播放: {chosen.title} - {chosen.artist} ({chosen.source_name})")
             # http-header-fields 持久属性：每次无条件重设，避免 Referer 跨源残留
             hdr = _pick_play_headers(play_result.get("headers"))
             need_kw_header = ("kw" in chosen.source_name.lower()
@@ -1126,27 +1128,27 @@ class MusicController:
                     "track_id": chosen.track_id,
                 })
             except Exception as e:
-                print(f"[Music] 记录播放历史失败: {e}")
+                logger.error(f"[Music] 记录播放历史失败: {e}")
         except Exception as e:
-            print(f"[Music] 队列在线歌播放失败: {e}")
+            logger.error(f"[Music] 队列在线歌播放失败: {e}")
             self._schedule_skip_online(song)
 
 
 
-    def _schedule_skip_online(self, song: Dict[str, Any]):
+    def _schedule_skip_online(self, song: dict[str, Any]):
         """延迟 next() 跳过队列在线歌（不依赖轮询上升沿——会被 _last_idle 覆盖吞掉）。"""
         threading.Timer(0.2, lambda: self._do_skip_online(song)).start()
 
-    def _do_skip_online(self, song: Dict[str, Any]):
+    def _do_skip_online(self, song: dict[str, Any]):
         """跳队列在线歌：队列 current 仍是该 song 才跳（防覆盖用户切歌操作）。"""
         try:
             if self.queue.get_current() is not song:
                 return
             self.next(_timeout=0.5)
         except Exception as e:
-            print(f"[Music] 跳过队列在线歌 next() 异常: {e!r}")
+            logger.info(f"[Music] 跳过队列在线歌 next() 异常: {e!r}")
 
-    def _play_song(self, song: Dict[str, Any]):
+    def _play_song(self, song: dict[str, Any]):
         """实际播放歌曲"""
         if not song:
             return
@@ -1165,17 +1167,17 @@ class MusicController:
 
         filepath = song.get("path")
         if not filepath or not os.path.exists(filepath):
-            print(f"[Music] 文件不存在: {filepath}")
+            logger.info(f"[Music] 文件不存在: {filepath}")
             self._missing_file_streak += 1
             if self._missing_file_streak >= 3:
                 # 限次保护：连续 3 次文件不可用 → 放弃播放，避免无限空转
                 self._missing_file_streak = 0
-                print("[Music] 连续 3 次文件不可用，停止播放")
+                logger.info("[Music] 连续 3 次文件不可用，停止播放")
                 self.stop()
                 return
             # 单曲循环 + 文件不存在 → 跳出循环，顺序切下一首（防卡死）
             if self.queue.get_play_mode() == PlayMode.REPEAT_ONE:
-                print("[Music] 单曲循环文件不存在，顺序切下一首")
+                logger.info("[Music] 单曲循环文件不存在，顺序切下一首")
                 self.queue.skip_current()
             # 防御性明确：本分支 return 前重置轮询状态（L673 已置过，
             # 保留以防御未来该行被移动后回归）
@@ -1233,7 +1235,7 @@ class MusicController:
 
     # ===== 坏文件自动跳过 =====
 
-    def _confirm_playback(self, song: Dict[str, Any], filepath: str):
+    def _confirm_playback(self, song: dict[str, Any], filepath: str):
         """loadfile 后异步确认播放是否真正开始。
         判定失败（mpv 仍 idle / 拿不到播放时间）→ 自动切下一首跳过坏文件。"""
         import time as _t
@@ -1252,14 +1254,14 @@ class MusicController:
             # 坏文件自动跳过静默执行（不再打印到控制台）
             self._schedule_skip_bad(song)
 
-    def _schedule_skip_bad(self, song: Dict[str, Any]):
+    def _schedule_skip_bad(self, song: dict[str, Any]):
         """延后执行 next() 跳过坏文件（防重入 + 防覆盖用户操作）"""
         if self._current_song is not song or self._skip_pending:
             return
         self._skip_pending = True
         threading.Timer(0.2, lambda: self._do_skip_bad(song)).start()
 
-    def _do_skip_bad(self, song: Dict[str, Any]):
+    def _do_skip_bad(self, song: dict[str, Any]):
         self._skip_pending = False
         if self._current_song is not song:
             return
@@ -1267,7 +1269,7 @@ class MusicController:
             # 抢锁 0.5s：锁忙（UI/重启持锁）则放弃本轮，下轮 confirm/轮询再处理
             self.next(_timeout=0.5)
         except Exception as e:
-            print(f"[Music] 跳过坏文件时 next() 异常: {e!r}")
+            logger.info(f"[Music] 跳过坏文件时 next() 异常: {e!r}")
 
     # ===== 音量控制 =====
 
@@ -1280,9 +1282,9 @@ class MusicController:
                 self.downloader = DownloadManager(
                     manager, self.db, self.download_dir, max_workers=3)
             except Exception as e:
-                print(f"[Music] 下载器初始化失败: {e}")
+                logger.error(f"[Music] 下载器初始化失败: {e}")
 
-    def download_song(self, song: Dict[str, Any], callbacks=None) -> bool:
+    def download_song(self, song: dict[str, Any], callbacks=None) -> bool:
         """在线歌下载入队（薄代理）。callbacks: on_progress/on_done/on_fail/on_exists。"""
         if self.downloader is None:
             if callbacks and callbacks.get("on_fail"):
@@ -1292,7 +1294,7 @@ class MusicController:
         try:
             return self.downloader.download(song, callbacks)
         except Exception as e:
-            print(f"[Music] download_song error: {e}")
+            logger.error(f"[Music] download_song error: {e}")
             return False
 
     def is_downloaded(self, title: str, artist: str) -> bool:
@@ -1304,7 +1306,7 @@ class MusicController:
         except Exception:
             return False
 
-    def remove_download(self, song: Dict[str, Any]) -> tuple:
+    def remove_download(self, song: dict[str, Any]) -> tuple:
         """删除下载副本：删文件 + 从 music 表移除（历史保留）。返回 (ok, path, err)。"""
         if self.downloader is None:
             return False, "", "下载服务未就绪"
@@ -1319,7 +1321,7 @@ class MusicController:
                 if row:
                     self.db.delete_song(row["id"])
             except Exception as e:
-                print(f"[Music] 移除下载记录失败: {e}")
+                logger.error(f"[Music] 移除下载记录失败: {e}")
         return ok, path, err
 
     def sync_custom_sources(self) -> int:
@@ -1331,8 +1333,8 @@ class MusicController:
         返回本次注册成功的源数量。任何源失效只影响自身，不影响其他源。"""
         if self.online_manager is None:
             return 0
-        from app.music.source_manager import MusicSourceManager
         from app.music.online.sources.http_source import HttpJsonSource
+        from app.music.source_manager import MusicSourceManager
 
         # 1) 注销上次同步的自定义 HTTP 源
         for name in list(self._custom_http_sources):
@@ -1350,11 +1352,11 @@ class MusicController:
             # 保留旧配置兼容（如 ikun 音源）。若协议不符，搜索失败会记入 _errors
             # 且不影响其他音源。api_url 为空的源在上一行已被跳过。
             if s.source_type == "js":
-                print(f"[Music] 自定义源 '{s.name}' 为 js 元信息，尝试按 HTTP JSON 协议注册"
+                logger.info(f"[Music] 自定义源 '{s.name}' 为 js 元信息，尝试按 HTTP JSON 协议注册"
                       f"（若失效请在 UI 中改用 JSON 导入）")
             # 重名保护：name 已被内置/插件源占用时跳过，避免覆盖 js_bridge 等
             if s.name in self.online_manager._sources:
-                print(f"[Music] 自定义源 '{s.name}' 与已注册音源重名，跳过")
+                logger.info(f"[Music] 自定义源 '{s.name}' 与已注册音源重名，跳过")
                 continue
             src = HttpJsonSource(
                 name=s.name,
@@ -1366,7 +1368,7 @@ class MusicController:
             self._custom_http_sources.add(s.name)
             registered += 1
         if registered:
-            print(f"[Music] 自定义音源已同步: {sorted(self._custom_http_sources)}")
+            logger.info(f"[Music] 自定义音源已同步: {sorted(self._custom_http_sources)}")
         return registered
 
     def search_online(self, keyword: str) -> dict:
@@ -1386,7 +1388,7 @@ class MusicController:
         try:
             return self.online_manager.get_top_lists()
         except Exception as e:
-            print(f"[Music] get_top_lists fail: {e}")
+            logger.info(f"[Music] get_top_lists fail: {e}")
             return {}
 
     def get_top_list_detail(self, source: str, list_id: str, page: int = 1):
@@ -1396,7 +1398,7 @@ class MusicController:
         try:
             return self.online_manager.get_top_list_detail(source, list_id, page)
         except Exception as e:
-            print(f"[Music] get_top_list_detail fail: {e}")
+            logger.info(f"[Music] get_top_list_detail fail: {e}")
             return None
 
     def search_local(self, keyword: str, limit: int = 200) -> list:
@@ -1419,7 +1421,7 @@ class MusicController:
                 for r in rows
             ]
         except Exception as e:
-            print(f"[Music] search_local error: {e}")
+            logger.error(f"[Music] search_local error: {e}")
             return []
 
     def play_online_resume(self, generation: int, idx: int) -> bool:
@@ -1464,7 +1466,7 @@ class MusicController:
 
                     for src in src_order:
                         if my_token != self._candidate_switch_token:
-                            print("[Music] 换源被用户操作取消")
+                            logger.info("[Music] 换源被用户操作取消")
                             return
                         src_cands = [c for c in cands if c.source_name == src][:2]
                         for c in src_cands:
@@ -1492,10 +1494,10 @@ class MusicController:
                             if played:
                                 if my_token != self._candidate_switch_token:
                                     return
-                                print(f"[Music] 换源成功: {src}")
+                                logger.info(f"[Music] 换源成功: {src}")
                                 return
                     if my_token == self._candidate_switch_token:
-                        print("[Music] 该歌所有音源均无法播放")
+                        logger.info("[Music] 该歌所有音源均无法播放")
                         try:
                             self.event_bus.publish(Event(
                                 event_type=ONLINE_ERROR,
@@ -1511,22 +1513,22 @@ class MusicController:
             threading.Thread(target=_try_switch, daemon=True, name="music-resume-failover").start()
             return True
         except Exception as e:
-            print(f"[Music] play_online_resume error: {e}")
+            logger.error(f"[Music] play_online_resume error: {e}")
             return False
 
     def play_online(self, track, _before_load=None) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return False
         if self.online_manager is None:
             return False
         result = self.online_manager.get_play_url(track)
         if not result:
-            print(f"[Music] online 无 URL: {track.title}")
+            logger.info(f"[Music] online 无 URL: {track.title}")
             return False
         url = result.get("url")
-        print(f"[Music] play online: {track.title} -> {url[:80]}")
+        logger.info(f"[Music] play online: {track.title} -> {url[:80]}")
         try:
             # mpv 的 http-header-fields 是持久属性：每次播放前无条件重设，
             # 避免某源 Referer 跨源残留（覆盖式 set_property）。
@@ -1556,9 +1558,9 @@ class MusicController:
             if _before_load is not None and not _before_load():
                 return False
             self.mpv.loadfile(url)
-            print("[Music] mpv loadfile ok")
+            logger.info("[Music] mpv loadfile ok")
         except Exception as e:
-            print(f"[Music] mpv loadfile fail: {e}")
+            logger.info(f"[Music] mpv loadfile fail: {e}")
             return False
         self.remember_cover(
             title=track.title or "",
@@ -1601,13 +1603,13 @@ class MusicController:
                 "track_id": getattr(track, "track_id", "") or "",
             })
         except Exception as e:
-            print(f"[Music] 记录播放历史失败: {e}")
+            logger.error(f"[Music] 记录播放历史失败: {e}")
         return True
 
     def set_volume(self, volume: int):
         """设置音量"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         volume = max(0, min(100, volume))
         self.mpv.set_volume(volume)
@@ -1616,7 +1618,7 @@ class MusicController:
     def volume_up(self, step: int = 5):
         """音量增加"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         current = self.mpv.get_volume()
         self.set_volume(current + step)
@@ -1624,7 +1626,7 @@ class MusicController:
     def volume_down(self, step: int = 5):
         """音量减少"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         current = self.mpv.get_volume()
         self.set_volume(current - step)
@@ -1639,7 +1641,7 @@ class MusicController:
     def seek(self, seconds: float, mode: str = "relative"):
         """跳转"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         self.mpv.seek(seconds, mode)
 
@@ -1647,7 +1649,7 @@ class MusicController:
     def jump_to_highlight(self):
         """跳到高潮部分（一次性）"""
         if not self._mpv_available:
-            print("[Music] mpv 不可用，忽略操作")
+            logger.info("[Music] mpv 不可用，忽略操作")
             return
         if not self._current_song:
             return
@@ -1669,7 +1671,7 @@ class MusicController:
             try:
                 self.mpv.seek(target, "absolute")
             except Exception as e:
-                print(f"[Music] highlight seek 失败: {e}")
+                logger.error(f"[Music] highlight seek 失败: {e}")
                 return
             self.event_bus.publish(Event(
                 event_type=EventType.MUSIC_HIGHLIGHT,
@@ -1682,7 +1684,7 @@ class MusicController:
                 try:
                     self.mpv.seek(duration * 0.6, "absolute")
                 except Exception as e:
-                    print(f"[Music] highlight fallback seek 失败: {e}")
+                    logger.error(f"[Music] highlight fallback seek 失败: {e}")
 
     # ===== Highlight Mode =====
 
@@ -1712,13 +1714,13 @@ class MusicController:
             return False
         end = min(pos + 35.0, self.mpv.get_duration() or pos + 35.0)
         self.db.save_highlight(song["id"], pos, end, confidence=1.0, source="manual")
-        print(f"[Music] manual highlight {song.get('title')}: {pos:.1f}-{end:.1f}s")
+        logger.info(f"[Music] manual highlight {song.get('title')}: {pos:.1f}-{end:.1f}s")
         return True
 
     def get_play_mode(self) -> str:
         return self.queue.get_play_mode()
 
-    def _start_highlight_segment(self, song: Dict[str, Any]):
+    def _start_highlight_segment(self, song: dict[str, Any]):
         """为当前歌曲启动 highlight 播放段"""
         song_id = song.get("id")
         highlight = self.db.get_highlight(song_id)
@@ -1739,9 +1741,9 @@ class MusicController:
                 return
             try:
                 self.mpv.seek(start_sec, "absolute")
-                print(f"[Music] highlight seek to {start_sec:.1f}s")
+                logger.info(f"[Music] highlight seek to {start_sec:.1f}s")
             except Exception as e:
-                print(f"[Music] highlight seek failed: {e}")
+                logger.info(f"[Music] highlight seek failed: {e}")
 
         # 生成新 generation，使旧 poller 失效
         self._highlight_gen += 1
@@ -1846,20 +1848,20 @@ class MusicController:
 
     # ===== 扫描 =====
 
-    def rescan(self, full: bool = False) -> Dict[str, int]:
+    def rescan(self, full: bool = False) -> dict[str, int]:
         """重新扫描音乐库"""
-        print(f"[Music] 开始扫描音乐库 (full={full})...")
+        logger.info(f"[Music] 开始扫描音乐库 (full={full})...")
         result = self.scanner.scan(full_rescan=full)
-        print(f"[Music] 扫描完成: {result}")
+        logger.info(f"[Music] 扫描完成: {result}")
         self.state_store.set(StateNamespace.MUSIC, "song_count", self.db.get_song_count())
         # 扫描完成后后台计算highlight，不阻塞
         self.scanner.start_highlight_background()
         return result
 
-    def cleanup_missing(self) -> Dict[str, int]:
+    def cleanup_missing(self) -> dict[str, int]:
         """清理文件已不存在的歌曲记录（含其 highlight）"""
         result = self.db.delete_missing_songs()
-        print(f"[Music] 清理失效歌曲: {result}")
+        logger.info(f"[Music] 清理失效歌曲: {result}")
         self.state_store.set(StateNamespace.MUSIC, "song_count", self.db.get_song_count())
         return result
 
@@ -1869,7 +1871,7 @@ class MusicController:
 
     # ===== 队列管理 =====
 
-    def get_queue(self) -> List[Dict[str, Any]]:
+    def get_queue(self) -> list[dict[str, Any]]:
         """获取播放队列"""
         return self.queue.get_queue()
 
@@ -1898,9 +1900,9 @@ class MusicController:
             from app.ui.settings_store import save_settings_yaml
             save_settings_yaml({"music": {"play_mode": mode}})
         except Exception as e:
-            print(f"[Music] 播放模式写回配置失败: {e!r}")
+            logger.error(f"[Music] 播放模式写回配置失败: {e!r}")
 
-    def get_current_song(self) -> Optional[Dict[str, Any]]:
+    def get_current_song(self) -> dict[str, Any] | None:
         """获取当前播放歌曲"""
         return self._current_song
 
@@ -1957,7 +1959,7 @@ class MusicController:
     def _auto_next(self):
         """自动播放下一首"""
         if self._candidate_switching:
-            print("[Music] 换源中，跳过自动切歌")
+            logger.info("[Music] 换源中，跳过自动切歌")
             return
         if not self._running:
             return
@@ -1968,17 +1970,17 @@ class MusicController:
         try:
             idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
         except Exception as e:
-            print(f"[Music] auto_next idle check error: {e!r}")
+            logger.error(f"[Music] auto_next idle check error: {e!r}")
             return
         if not idle_now:
-            print("[Music] auto_next: idle-active 实时为 False，跳过切歌")
+            logger.info("[Music] auto_next: idle-active 实时为 False，跳过切歌")
             return
-        print("[Music] auto_next: 已确认 idle，执行 next()")
+        logger.info("[Music] auto_next: 已确认 idle，执行 next()")
         try:
             self.next()
-            print("[Music] auto_next: next() 完成")
+            logger.info("[Music] auto_next: next() 完成")
         except Exception as e:
-            print(f"[Music] auto_next: next() 异常: {e!r}")
+            logger.info(f"[Music] auto_next: next() 异常: {e!r}")
 
     def _update_state(self, **kwargs):
         """更新状态存储"""

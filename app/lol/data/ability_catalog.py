@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -16,7 +14,7 @@ class Ability:
     cooldown_by_level: tuple = field(default_factory=tuple)  # 完整数组
 
 
-_BUILTIN: List[Ability] = [
+_BUILTIN: list[Ability] = [
     Ability(157, "Q", "Steel Tempest", 4.0, (4.0, 4.0, 4.0, 4.0, 4.0, 4.0)),
     Ability(157, "W", "Wind Wall", 25.0, (25.0, 23.0, 21.0, 19.0, 17.0, 15.0)),
     Ability(157, "E", "Sweeping Blade", 0.5, (0.5, 0.4, 0.3, 0.2, 0.1, 0.1)),
@@ -37,15 +35,15 @@ DEFAULT_DATA = PROJECT_ROOT / "data" / "lol_data" / "abilities.json"
 
 
 class AbilityCatalog:
-    def __init__(self, abilities: Optional[List[Ability]] = None):
+    def __init__(self, abilities: list[Ability] | None = None):
         if abilities is None:
             abilities = self._load_default()
-        self._key: Dict[tuple, Ability] = {
+        self._key: dict[tuple, Ability] = {
             (a.champion_id, a.slot.upper()): a for a in abilities
         }
 
     @staticmethod
-    def _load_default() -> List[Ability]:
+    def _load_default() -> list[Ability]:
         try:
             p = DEFAULT_DATA
             if p.exists():
@@ -66,10 +64,10 @@ class AbilityCatalog:
             print(f"[data] abilities.json 加载失败：{e}")
         return list(_BUILTIN)
 
-    def get_ability(self, champion_id: int, slot: str) -> Optional[Ability]:
+    def get_ability(self, champion_id: int, slot: str) -> Ability | None:
         return self._key.get((champion_id, (slot or "").upper()))
 
-    def get_cooldown(self, champion_id: int, slot: str) -> Optional[float]:
+    def get_cooldown(self, champion_id: int, slot: str) -> float | None:
         """1 级 CD；CD<=0（无固定 CD，如艾希 Q）返回 None。"""
         a = self.get_ability(champion_id, slot)
         if a is None:
@@ -77,7 +75,7 @@ class AbilityCatalog:
         return a.cooldown if a.cooldown > 0 else None
 
     def get_cooldown_by_level(self, champion_id: int, slot: str,
-                               level: int = 1) -> Optional[float]:
+                               level: int = 1) -> float | None:
         """指定等级（1-6）的 CD；越界 clamp。CD<=0 返回 None。"""
         a = self.get_ability(champion_id, slot)
         if a is None:

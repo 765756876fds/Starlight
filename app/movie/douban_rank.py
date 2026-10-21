@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """豆瓣榜单数据模块（批 2：电影榜单）。
 
 豆瓣网页版接口（movie.douban.com/j/）——之前 api.douban.com/v2 403 是旧接口反爬，

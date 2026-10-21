@@ -194,3 +194,4 @@ config/music_sources.json
 /Starlight_Setup_Full.exe
 /third_party/ffmpeg/
 config/settings.yaml
+.claude/

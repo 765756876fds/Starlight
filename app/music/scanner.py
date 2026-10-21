@@ -4,13 +4,12 @@
 使用 mutagen 读取 ID3/FLAC/MP4 等标签。
 支持增量扫描（根据文件修改时间判断是否需要更新）。
 """
+import logging
 import os
 import shutil
 import subprocess
-import time
 import threading
-import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ except ImportError:
     MUTAGEN_AVAILABLE = False
 
 from .database import MusicDatabase
-from .highlight_detector import detect_highlight, get_source_tag, ALGORITHM_VERSION
+from .highlight_detector import detect_highlight, get_source_tag
 
 
 class MusicScanner:
@@ -35,9 +34,9 @@ class MusicScanner:
 
     VERIFY_TIMEOUT = 8.0  # 可播验证：mpv 进程超时秒数
 
-    def __init__(self, db: MusicDatabase, scan_dirs: List[str],
-                 extensions: Optional[Set[str]] = None,
-                 mpv_path: Optional[str] = None):
+    def __init__(self, db: MusicDatabase, scan_dirs: list[str],
+                 extensions: set[str] | None = None,
+                 mpv_path: str | None = None):
         self.db = db
         self.scan_dirs = scan_dirs
         self.extensions = extensions or self.SUPPORTED_EXTENSIONS
@@ -52,7 +51,7 @@ class MusicScanner:
         self._unplayable_count = 0
         self._highlight_running = False  # 防止重复启动worker
 
-    def scan(self, full_rescan: bool = False) -> Dict[str, int]:
+    def scan(self, full_rescan: bool = False) -> dict[str, int]:
         """
         执行扫描
 
@@ -95,7 +94,7 @@ class MusicScanner:
             "unplayable": self._unplayable_count,
         }
 
-    def _collect_files(self) -> List[str]:
+    def _collect_files(self) -> list[str]:
         """收集所有音乐文件"""
         files = []
         for scan_dir in self.scan_dirs:
@@ -196,7 +195,7 @@ class MusicScanner:
             print(f"[Scanner] 可播验证异常（降级照常入库）: {e!r}")
             return True
 
-    def _extract_metadata(self, filepath: str) -> Dict[str, Any]:
+    def _extract_metadata(self, filepath: str) -> dict[str, Any]:
         """
         从音乐文件提取元数据
 
@@ -244,7 +243,7 @@ class MusicScanner:
 
         return data
 
-    def _parse_tags(self, tags, data: Dict[str, Any], filepath: str):
+    def _parse_tags(self, tags, data: dict[str, Any], filepath: str):
         """解析各种格式的标签"""
         ext = os.path.splitext(filepath)[1].lower()
 
@@ -287,14 +286,14 @@ class MusicScanner:
             data["genre"] = self._get_tag(tags, "genre")
             data["year"] = self._parse_year(self._get_tag(tags, "date"))
 
-    def _get_tag(self, tags, key: str) -> Optional[str]:
+    def _get_tag(self, tags, key: str) -> str | None:
         """获取 Vorbis 风格标签"""
         values = tags.get(key)
         if values and len(values) > 0:
             return str(values[0]).strip()
         return None
 
-    def _get_id3_tag(self, tags, key: str) -> Optional[str]:
+    def _get_id3_tag(self, tags, key: str) -> str | None:
         """获取 ID3 标签"""
         if key in tags:
             tag = tags[key]
@@ -302,14 +301,14 @@ class MusicScanner:
                 return str(tag.text[0]).strip()
         return None
 
-    def _get_mp4_tag(self, tags, key: str) -> Optional[str]:
+    def _get_mp4_tag(self, tags, key: str) -> str | None:
         """获取 MP4 标签"""
         values = tags.get(key)
         if values and len(values) > 0:
             return str(values[0]).strip()
         return None
 
-    def _parse_mp4_track(self, tags) -> Optional[int]:
+    def _parse_mp4_track(self, tags) -> int | None:
         """解析 MP4 轨道号"""
         trkn = tags.get("trkn")
         if trkn and len(trkn) > 0:
@@ -319,7 +318,7 @@ class MusicScanner:
                 pass
         return None
 
-    def _parse_year(self, value: Optional[str]) -> Optional[int]:
+    def _parse_year(self, value: str | None) -> int | None:
         """解析年份"""
         if not value:
             return None
@@ -329,7 +328,7 @@ class MusicScanner:
         except (ValueError, TypeError):
             return None
 
-    def _parse_track_number(self, value: Optional[str]) -> Optional[int]:
+    def _parse_track_number(self, value: str | None) -> int | None:
         """解析轨道号"""
         if not value:
             return None
@@ -339,7 +338,7 @@ class MusicScanner:
         except (ValueError, TypeError):
             return None
 
-    def _parse_name_parts(self, filepath: str) -> List[str]:
+    def _parse_name_parts(self, filepath: str) -> list[str]:
         """从文件名解析"歌名 - 歌手"，返回 [歌名, 歌手]；无 " - " 时返回 [整名]"""
         filename = os.path.basename(filepath)
         name, _ = os.path.splitext(filename)

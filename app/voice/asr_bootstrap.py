@@ -18,7 +18,6 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 import requests
 
@@ -32,7 +31,7 @@ HEALTH_URL = f"http://127.0.0.1:{PORT}/v1/models"
 
 # 国内直连镜像（hf-mirror.com = HuggingFace 官方镜像站，直连免代理）
 _MODEL_REPO = "ggml-org/Qwen3-ASR-0.6B-GGUF"
-_MODEL_URLS: Dict[str, str] = {
+_MODEL_URLS: dict[str, str] = {
     "Qwen3-ASR-0.6B-Q8_0.gguf":
         f"https://hf-mirror.com/{_MODEL_REPO}/resolve/main/Qwen3-ASR-0.6B-Q8_0.gguf",
     "mmproj-Qwen3-ASR-0.6B-bf16.gguf":
@@ -40,7 +39,7 @@ _MODEL_URLS: Dict[str, str] = {
 }
 
 # 模块级：被自举拉起的 llama-server 进程（atexit 清理，防僵尸）
-_server_proc: Optional[subprocess.Popen] = None
+_server_proc: subprocess.Popen | None = None
 _atexit_registered = False
 _lock = threading.Lock()
 
@@ -57,12 +56,12 @@ def _is_server_up(timeout: float = 0.8) -> bool:
         if r.status_code != 200:
             return False
         payload = r.json()
-        return bool((payload.get("data") or []))
+        return bool(payload.get("data") or [])
     except Exception:
         return False
 
 
-def resolve_model_paths(asr_config: dict) -> Tuple[str, str]:
+def resolve_model_paths(asr_config: dict) -> tuple[str, str]:
     """模型路径解析（不下载时直接可用）：配置显式路径(isfile) → 打包内置 models/ → 空。
 
     返回 (model_path, mmproj_path)；空串表示缺失，交由 ensure_assets 下载。
@@ -140,7 +139,7 @@ def ensure_assets(asr_config: dict) -> bool:
     return ok
 
 
-def ensure_and_launch(asr_config: dict) -> Optional[subprocess.Popen]:
+def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
     """自举总入口（ASRManager.initialize 调用）：
 
     模型缺失→下载；8080 无服务→拉起 llama-server（atexit 清理）；全部就绪→返回进程。

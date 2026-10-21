@@ -9,11 +9,10 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
 
 from ...lol.data.summoner_spell_catalog import SummonerSpellCatalog
-
 
 # LeagueAkari：TOP JUNGLE MIDDLE BOTTOM UTILITY
 _POSITION_ORDER = {"TOP": 0, "JUNGLE": 1, "MIDDLE": 2, "BOTTOM": 3, "UTILITY": 4}
@@ -116,10 +115,10 @@ class OverlayModel:
 
     def __init__(
         self,
-        snapshot_provider: Optional[Callable[[], object]] = None,
-        phase_provider: Optional[Callable[[], str]] = None,
-        catalog: Optional[SummonerSpellCatalog] = None,
-        cooldown_manager_provider: Optional[Callable[[], object]] = None,
+        snapshot_provider: Callable[[], object] | None = None,
+        phase_provider: Callable[[], str] | None = None,
+        catalog: SummonerSpellCatalog | None = None,
+        cooldown_manager_provider: Callable[[], object] | None = None,
     ):
         self._snapshot_provider = snapshot_provider or (lambda: None)
         self._phase_provider = phase_provider or (lambda: "None")
@@ -137,7 +136,7 @@ class OverlayModel:
         return self._enabled
 
     # ----- 渲染数据 -----
-    def get_rows(self) -> List[OverlayEnemyRow]:
+    def get_rows(self) -> list[OverlayEnemyRow]:
         """按敌方 5 人、position 排序返回；非 InProgress / 无数据返回 []。"""
         if not self._enabled:
             return []
@@ -156,7 +155,7 @@ class OverlayModel:
         gt = float(getattr(snap, "game_time", 0.0) or 0.0)
 
         # 从 CooldownManager 读取活跃技能冷却
-        active_skills: Dict[str, Dict[str, OverlaySkill]] = {}
+        active_skills: dict[str, dict[str, OverlaySkill]] = {}
         try:
             cm = self._cooldown_manager_provider()
             if cm is not None:
@@ -167,7 +166,6 @@ class OverlayModel:
                     if not cname or not skill:
                         continue
                     # 用 champion_id 作为 key，避免不同中文名不匹配
-                    from app.lol.data.champion_catalog import ChampionCatalog
                     champ = self._champions.get_by_name(cname)
                     cid_key = champ.cid if champ else 0
                     if cid_key not in active_skills:
@@ -181,7 +179,7 @@ class OverlayModel:
         except Exception:
             pass
 
-        rows: List[OverlayEnemyRow] = []
+        rows: list[OverlayEnemyRow] = []
         for p in (getattr(snap, "enemy_team", None) or []):
             cname = getattr(p, "champion_name", "") or ""
             if not cname:

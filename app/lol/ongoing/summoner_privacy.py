@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import ssl
 import urllib.request
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .sgp_server import SgpServerResolver
 
@@ -36,7 +36,7 @@ class SummonerPrivacyService:
         self._lcu_get = lcu_get
         self._https_post = https_post or self._default_post
 
-    def _league_session_token(self) -> Optional[str]:
+    def _league_session_token(self) -> str | None:
         # 返回裸 JSON 字符串
         r = self._lcu_get("/lol-league-session/v1/league-session-token")
         if isinstance(r, str) and r:

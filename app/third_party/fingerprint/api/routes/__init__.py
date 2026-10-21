@@ -18,4 +18,4 @@ def runtime() -> Runtime:
     return current_app.extensions["audiofp"]
 
 
-from . import jobs, search, system, tracks  # noqa: E402,F401  (register routes)
+from . import jobs, search, system, tracks  # noqa: F401  (register routes)

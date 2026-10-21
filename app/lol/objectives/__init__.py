@@ -3,6 +3,9 @@ from .rules import ObjectiveRule, ObjectiveRuleset, load_ruleset
 from .tracker import ObjectiveState, ObjectiveTracker
 
 __all__ = [
-    "ObjectiveRule", "ObjectiveRuleset", "load_ruleset",
-    "ObjectiveState", "ObjectiveTracker",
+    "ObjectiveRule",
+    "ObjectiveRuleset",
+    "ObjectiveState",
+    "ObjectiveTracker",
+    "load_ruleset",
 ]

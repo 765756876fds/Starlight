@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional
 
 from app.core.path_resolve import PROJECT_ROOT
 
@@ -25,7 +23,7 @@ class SummonerSpell:
 
 # 内置 fallback（与 JSON 保持一致；JSON 不可读时使用）
 # 版本：26.18
-_BUILTIN: List[SummonerSpell] = [
+_BUILTIN: list[SummonerSpell] = [
     SummonerSpell(4, "Flash", "闪现", 300.0),
     SummonerSpell(12, "Teleport", "传送", 300.0),  # 旧版360s，当前版本改为300s
     SummonerSpell(14, "Ignite", "点燃", 180.0),
@@ -40,7 +38,7 @@ _BUILTIN: List[SummonerSpell] = [
 ]
 
 
-def _load_spells() -> tuple[List[SummonerSpell], str, str]:
+def _load_spells() -> tuple[list[SummonerSpell], str, str]:
     """(spells, data_version, patch)"""
     try:
         if _SPELLS_PATH.exists():
@@ -58,7 +56,7 @@ def _load_spells() -> tuple[List[SummonerSpell], str, str]:
 
 
 # 中文名别名 → 英文名
-_ZH_ALIAS: Dict[str, str] = {
+_ZH_ALIAS: dict[str, str] = {
     "闪现": "Flash", "闪": "Flash",
     "传送": "Teleport", "tp": "Teleport", "TP": "Teleport",
     "点燃": "Ignite", "点火": "Ignite", "引燃": "Ignite",
@@ -72,21 +70,21 @@ _ZH_ALIAS: Dict[str, str] = {
 class SummonerSpellCatalog:
     """召唤师技能查询。"""
 
-    def __init__(self, spells: Optional[List[SummonerSpell]] = None):
+    def __init__(self, spells: list[SummonerSpell] | None = None):
         if spells is None:
             spells, self.data_version, self.patch = _load_spells()
         else:
             self.data_version, self.patch = "injected", "injected"
-        self._by_id: Dict[int, SummonerSpell] = {s.sid: s for s in spells}
-        self._by_en: Dict[str, SummonerSpell] = {s.name_en.lower(): s for s in spells}
-        self._by_zh: Dict[str, SummonerSpell] = {}
+        self._by_id: dict[int, SummonerSpell] = {s.sid: s for s in spells}
+        self._by_en: dict[str, SummonerSpell] = {s.name_en.lower(): s for s in spells}
+        self._by_zh: dict[str, SummonerSpell] = {}
         for s in spells:
             self._by_zh[s.name_zh] = s
 
-    def get_by_id(self, sid: int) -> Optional[SummonerSpell]:
+    def get_by_id(self, sid: int) -> SummonerSpell | None:
         return self._by_id.get(sid)
 
-    def get_by_name(self, name: str) -> Optional[SummonerSpell]:
+    def get_by_name(self, name: str) -> SummonerSpell | None:
         if not name:
             return None
         n = name.strip()
@@ -101,5 +99,5 @@ class SummonerSpellCatalog:
             return self._by_en[_ZH_ALIAS[n].lower()]
         return None
 
-    def all(self) -> List[SummonerSpell]:
+    def all(self) -> list[SummonerSpell]:
         return list(self._by_id.values())

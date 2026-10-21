@@ -16,10 +16,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
-from ..core.event_bus import EventBus, Event, EventType, get_event_bus
-from ..core.state_store import StateStore, StateNamespace, get_state_store
+from ..core.event_bus import Event, EventType, get_event_bus
+from ..core.state_store import StateNamespace, get_state_store
 
 
 class AlarmType(Enum):
@@ -51,8 +51,8 @@ class Alarm:
     time_base: str = "game"       # 计时基准："game"=游戏时间（默认）/"wall"=现实时间
     status: AlarmStatus = AlarmStatus.ACTIVE
     created_at: float = field(default_factory=time.time)
-    triggered_at: Optional[float] = None
-    data: Dict[str, Any] = field(default_factory=dict)
+    triggered_at: float | None = None
+    data: dict[str, Any] = field(default_factory=dict)
 
     @property
     def game_time_end(self) -> float:
@@ -99,20 +99,20 @@ class GameAlarmEngine:
         "control_ward": 0.0,  # 真眼不消失
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or {}
-        self.alarms: Dict[str, Alarm] = {}
+        self.alarms: dict[str, Alarm] = {}
         self._lock = threading.Lock()
         self._current_game_time: float = 0.0
         self._running = False
-        self._wall_thread: Optional[threading.Thread] = None
+        self._wall_thread: threading.Thread | None = None
 
         # 核心服务
         self.event_bus = get_event_bus()
         self.state_store = get_state_store()
 
         # 中立资源状态（从游戏数据读取）
-        self._objective_states: Dict[str, Dict[str, Any]] = {}
+        self._objective_states: dict[str, dict[str, Any]] = {}
 
         # 注册事件监听
         self._register_events()
@@ -149,9 +149,9 @@ class GameAlarmEngine:
     # ===== 公共 API =====
 
     def create_flash_alarm(self, champion_name: str,
-                            game_time: Optional[float] = None,
+                            game_time: float | None = None,
                             cooldown: float = 300.0,
-                            source_snapshot: Optional[Dict[str, Any]] = None) -> Optional[Alarm]:
+                            source_snapshot: dict[str, Any] | None = None) -> Alarm | None:
         """
         记录敌方闪现
 
@@ -191,7 +191,7 @@ class GameAlarmEngine:
 
     def create_spell_alarm(self, champion_name: str, spell_name: str,
                             cooldown: float,
-                            game_time: Optional[float] = None) -> Alarm:
+                            game_time: float | None = None) -> Alarm:
         """
         记录技能使用
 
@@ -218,7 +218,7 @@ class GameAlarmEngine:
         return alarm
 
     def create_ward_alarm(self, location: str = "未知位置",
-                           game_time: Optional[float] = None,
+                           game_time: float | None = None,
                            duration: float = 120.0) -> Alarm:
         """
         记录眼位
@@ -246,7 +246,7 @@ class GameAlarmEngine:
         return alarm
 
     def create_custom_alarm(self, title: str, duration: float,
-                            game_time: Optional[float] = None,
+                            game_time: float | None = None,
                             lead_time: float = 10.0,
                             content: str = "") -> Alarm:
         """
@@ -294,7 +294,7 @@ class GameAlarmEngine:
 
     def schedule_objective_reminder(self, title: str, game_time_end: float,
                                      lead_time: float = 40.0,
-                                     data: Optional[Dict] = None) -> Optional[Alarm]:
+                                     data: dict | None = None) -> Alarm | None:
         """
         创建一个在指定游戏时间提前 lead_time 秒触发的提醒。
 
@@ -325,13 +325,13 @@ class GameAlarmEngine:
         ))
         return alarm
 
-    def get_active_alarms(self) -> List[Alarm]:
+    def get_active_alarms(self) -> list[Alarm]:
         """获取所有活跃提醒"""
         with self._lock:
             return [a for a in self.alarms.values()
                     if a.status == AlarmStatus.ACTIVE]
 
-    def get_user_memories(self) -> List[Alarm]:
+    def get_user_memories(self) -> list[Alarm]:
         """获取用户主动创建的临时记忆（USER_MEMORY，排除系统提醒）"""
         with self._lock:
             return [a for a in self.alarms.values()
@@ -359,12 +359,12 @@ class GameAlarmEngine:
         ))
         return a
 
-    def get_alarm_by_id(self, alarm_id: str) -> Optional[Alarm]:
+    def get_alarm_by_id(self, alarm_id: str) -> Alarm | None:
         """按 ID 获取提醒"""
         with self._lock:
             return self.alarms.get(alarm_id)
 
-    def update_objective_state(self, objective_type: str, state: Dict[str, Any]):
+    def update_objective_state(self, objective_type: str, state: dict[str, Any]):
         """
         更新中立资源状态（从游戏数据读取）
 
@@ -460,7 +460,7 @@ class GameAlarmEngine:
 
     # ===== 内部方法 =====
 
-    def _fire_triggers(self, alarms: List[Alarm]) -> None:
+    def _fire_triggers(self, alarms: list[Alarm]) -> None:
         """把到期提醒置为 TRIGGERED 并发 ALARM_TRIGGERED（now 按各 alarm 基准取值）。"""
         for alarm in alarms:
             alarm.status = AlarmStatus.TRIGGERED
@@ -554,7 +554,7 @@ class GameAlarmEngine:
             [self._alarm_to_dict(a) for a in active]
         )
 
-    def _alarm_to_dict(self, alarm: Alarm) -> Dict[str, Any]:
+    def _alarm_to_dict(self, alarm: Alarm) -> dict[str, Any]:
         """提醒转字典"""
         return {
             "alarm_id": alarm.alarm_id,

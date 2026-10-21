@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 from .models import PlayerSnapshot
 
@@ -33,7 +32,7 @@ class CurrentGamePlayer:
     display_name: str = ""
     cell_id: int = 0
     team: str = "myTeam"  # myTeam / theirTeam
-    assigned_position: Optional[str] = None
+    assigned_position: str | None = None
     champion_id: int = 0
     is_self: bool = False
 
@@ -41,12 +40,12 @@ class CurrentGamePlayer:
     live_kills: int = 0
     live_deaths: int = 0
     live_assists: int = 0
-    live_position: Optional[str] = None
+    live_position: str | None = None
     live_level: int = 0
     realtime_available: bool = False
 
     # ----- history (loader -> SGP/LCU) -----
-    history: Optional[PlayerSnapshot] = None
+    history: PlayerSnapshot | None = None
 
 
 @dataclass
@@ -54,13 +53,13 @@ class CurrentGameSession:
     """当前对局 session。game_id 为生命周期锚点（gameflow 无 gameId 时才允许 fallback key）。"""
     game_id: int = 0
     phase: str = ""
-    my_team: List[CurrentGamePlayer] = field(default_factory=list)
-    their_team: List[CurrentGamePlayer] = field(default_factory=list)
+    my_team: list[CurrentGamePlayer] = field(default_factory=list)
+    their_team: list[CurrentGamePlayer] = field(default_factory=list)
     started_at: float = 0.0
     updated_at: float = 0.0
 
     @property
-    def players(self) -> List[CurrentGamePlayer]:
+    def players(self) -> list[CurrentGamePlayer]:
         return self.my_team + self.their_team
 
     @property

@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Dict, Optional, Set
+from collections.abc import Callable
 
 from .action_executor import ChampSelectActionExecutor
-from .models import ActionOutcome, AutomationConfig, PendingAction
+from .models import AutomationConfig, PendingAction
 from .priority import pick_available
-
 
 SESSION_URL = "/lol-champ-select/v1/session"
 PICKABLE_URL = "/lol-champ-select/v1/pickable-champion-ids"
@@ -18,7 +17,7 @@ CURRENT_SUMMONER_URL = "/lol-summoner/v1/current-summoner"
 class ChampSelectController:
     def __init__(
         self,
-        request_with_status: Callable[[str, str, Optional[dict]], tuple],
+        request_with_status: Callable[[str, str, dict | None], tuple],
         executor: ChampSelectActionExecutor,
         stop_event: threading.Event,
         on_event: Callable[[str, dict], None],
@@ -28,9 +27,9 @@ class ChampSelectController:
         self._stop = stop_event
         self._on_event = on_event
 
-        self._pending: Dict[int, PendingAction] = {}
-        self._rejected: Dict[int, Set[int]] = {}
-        self._no_candidate_actions: Set[int] = set()
+        self._pending: dict[int, PendingAction] = {}
+        self._rejected: dict[int, set[int]] = {}
+        self._no_candidate_actions: set[int] = set()
 
     # ---- 状态清理 ----
     def clear_state(self) -> None:
@@ -111,7 +110,7 @@ class ChampSelectController:
             atype = action.get("type")
             if atype == "ban" and config.auto_ban:
                 priority = config.ban_priority_for(None)
-                unavailable: Set[int] = set(completed_bans)
+                unavailable: set[int] = set(completed_bans)
                 server_set = bannable
                 event_code = "automation.ban_attempted"
             elif atype == "pick" and config.auto_pick:
@@ -230,7 +229,7 @@ class ChampSelectController:
             )
 
     # ---- helpers ----
-    def _local_cell_id(self, session: dict) -> Optional[int]:
+    def _local_cell_id(self, session: dict) -> int | None:
         v = session.get("localPlayerCellId")
         if v is not None:
             return int(v)
@@ -243,7 +242,7 @@ class ChampSelectController:
                 return int(m.get("cellId"))
         return None
 
-    def _fetch_set(self, url: str) -> Optional[Set[int]]:
+    def _fetch_set(self, url: str) -> set[int] | None:
         # 与 Syronss bot.py 的 _get_server_available 一致：拉取失败不阻断动作，
         # 由 PATCH 结果决定 reject。不做连续失败熔断。
         status, body = self._request("GET", url, None)
@@ -255,8 +254,8 @@ class ChampSelectController:
             return None
 
     @staticmethod
-    def _completed_bans(session: dict) -> Set[int]:
-        out: Set[int] = set()
+    def _completed_bans(session: dict) -> set[int]:
+        out: set[int] = set()
         for group in session.get("actions", []):
             for a in group:
                 if a.get("type") == "ban" and a.get("completed"):
@@ -266,8 +265,8 @@ class ChampSelectController:
         return out
 
     @staticmethod
-    def _current_picks(session: dict) -> Set[int]:
-        out: Set[int] = set()
+    def _current_picks(session: dict) -> set[int]:
+        out: set[int] = set()
         for side in ("myTeam", "theirTeam"):
             for m in session.get(side, []):
                 cid = int(m.get("championId") or 0)

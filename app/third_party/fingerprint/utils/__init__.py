@@ -18,7 +18,13 @@ from .exceptions import (
     UnsupportedFormatError,
     ValidationError,
 )
-from .logging import configure_logging, get_logger, job_id_var, log_extra, request_id_var
+from .logging import (
+    configure_logging,
+    get_logger,
+    job_id_var,
+    log_extra,
+    request_id_var,
+)
 
 __all__ = [
     "AudioDecodeError",

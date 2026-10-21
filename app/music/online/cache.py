@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import List, Optional, Tuple
 
 from .models import OnlineTrack
 
@@ -18,7 +17,7 @@ class OnlineCache:
         self._data: dict = {}
         self._lock = threading.Lock()
 
-    def get(self, source: str, keyword: str, limit: int) -> Optional[List[OnlineTrack]]:
+    def get(self, source: str, keyword: str, limit: int) -> list[OnlineTrack] | None:
         key = (source, keyword.lower(), limit)
         with self._lock:
             entry = self._data.get(key)
@@ -29,7 +28,7 @@ class OnlineCache:
                 return None
             return list(tracks)
 
-    def set(self, source: str, keyword: str, limit: int, tracks: List[OnlineTrack]) -> None:
+    def set(self, source: str, keyword: str, limit: int, tracks: list[OnlineTrack]) -> None:
         key = (source, keyword.lower(), limit)
         with self._lock:
             now = time.monotonic()

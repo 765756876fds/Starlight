@@ -13,7 +13,6 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 

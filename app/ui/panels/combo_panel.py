@@ -9,19 +9,29 @@
 from __future__ import annotations
 
 import json
-from app.ui.theme.colors import Colors
-from app.ui.theme.tokens import Tokens
-from app.ui.widgets.icon_utils import lucide_icon
 import os
-from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QSizePolicy, QStyledItemDelegate, QStyle,
-    QStyleOptionViewItem, QVBoxLayout, QWidget,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QVBoxLayout,
+    QWidget,
 )
+
+from app.ui.theme.colors import Colors
+from app.ui.theme.tokens import Tokens
+from app.ui.widgets.icon_utils import lucide_icon
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 CHAMPIONS_JSON = os.path.join(PROJECT_ROOT, "data", "lol_data", "champions.json")
@@ -79,8 +89,8 @@ class ComboPanel(QWidget):
     def __init__(self, combo_manager=None, parent=None):
         super().__init__(parent)
         self._combo = combo_manager
-        self._champions: List[Tuple[int, str, str]] = []  # (id, name, alias)
-        self._item_to_cid: Dict[str, int] = {}
+        self._champions: list[tuple[int, str, str]] = []  # (id, name, alias)
+        self._item_to_cid: dict[str, int] = {}
         self._load_champions()
 
         layout = QVBoxLayout(self)
@@ -160,7 +170,7 @@ class ComboPanel(QWidget):
             print(f"[Combo] 加载 champions.json 失败: {e}")
             self._champions = []
 
-    def _sorted_champions(self) -> List[Tuple[int, str, str]]:
+    def _sorted_champions(self) -> list[tuple[int, str, str]]:
         """排序：盲僧/锤石固定前二，其余按使用频率降序。"""
         usage = {
             cid: self._combo.get_usage(cid) if self._combo else 0
@@ -223,7 +233,7 @@ class ComboPanel(QWidget):
 
     # ---------- 交互 ----------
 
-    def _on_select(self, cur: Optional[QListWidgetItem], _prev=None) -> None:
+    def _on_select(self, cur: QListWidgetItem | None, _prev=None) -> None:
         if cur is None:
             return
         cid = cur.data(Qt.UserRole) or 0

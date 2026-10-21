@@ -8,20 +8,18 @@ LoL 运行时 - 整合 2999 数据读取、快照、状态差异、GameAlarm
 - 管理 GameAlarm
 - 通过 EventBus 发布所有游戏事件
 """
-from typing import Any, Dict, Optional
+from typing import Any
 
-from ..core.event_bus import EventBus, Event, EventType, get_event_bus
-from ..core.scheduler import Scheduler, get_scheduler
-from ..core.state_store import StateStore, StateNamespace, get_state_store
-
+from ..core.event_bus import Event, EventType, get_event_bus
+from ..core.scheduler import get_scheduler
+from ..core.state_store import StateNamespace, get_state_store
+from ..player import PlayerAnalysisService, PlayerRepository
+from .game_alarm import GameAlarmEngine
+from .lcu import LCUConnection
 from .live_client import LiveClientAPI
+from .objective_timer import ObjectiveTimer
 from .snapshot import GameSnapshot, SnapshotBuilder
 from .state_diff import StateDiff
-from .game_alarm import GameAlarmEngine
-from .objective_timer import ObjectiveTimer
-from .lcu import LCUConnection
-from ..player import PlayerRepository, PlayerAnalysisService
-
 
 # LCU phase 仍处于"加载/对局中"的集合：2999 暂时不可用 / game_time 停滞均不算游戏结束。
 # Unknown（LCU 返回未识别 phase）也按"仍在游戏中"处理——宁可延迟判结束，不可误杀清 snapshot
@@ -35,7 +33,7 @@ class LoLRuntime:
     整合所有 LoL 相关子系统。
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.live_config = config.get("live_client", {})
         self.lcu_config = config.get("lcu", {})
@@ -63,25 +61,25 @@ class LoLRuntime:
 
         # 状态
         self._running = False
-        self._current_snapshot: Optional[GameSnapshot] = None
+        self._current_snapshot: GameSnapshot | None = None
         self._game_active = False
 
         # LCU GameFlow 状态
-        self._last_lcu_phase: Optional[str] = None
+        self._last_lcu_phase: str | None = None
         # 最近一次有效的 LCU phase（断连时 _last_lcu_phase 会被清 None，本字段保留旧值，
         # 供游戏结束守卫判断"是否仍在加载/对局中"，避免 2999 暂不可用被误判成游戏结束）
-        self._last_known_phase: Optional[str] = None
+        self._last_known_phase: str | None = None
         self._lcu_was_connected = False
 
         # LCU Summoner 状态
-        self._last_summoner: Optional[Dict[str, Any]] = None
+        self._last_summoner: dict[str, Any] | None = None
 
         # LCU Champ Select 状态
-        self._last_champ_select: Optional[Dict[str, Any]] = None
+        self._last_champ_select: dict[str, Any] | None = None
         self._champ_select_active: bool = False
 
         # GameEnd 缓存和 grace window
-        self._cached_game_end_result: Optional[str] = None
+        self._cached_game_end_result: str | None = None
         self._game_end_published: bool = False
         self._game_end_retry_count: int = 0
         self._max_game_end_retries: int = 2
@@ -539,7 +537,7 @@ class LoLRuntime:
                     source="lol"
                 ))
 
-    def _normalize_champ_select(self, session: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_champ_select(self, session: dict[str, Any]) -> dict[str, Any]:
         """
         从原始 Champ Select session JSON 提取 V1 有用字段
 
@@ -602,7 +600,7 @@ class LoLRuntime:
 
         return normalized
 
-    def _champ_select_key(self, state: Optional[Dict[str, Any]]) -> tuple:
+    def _champ_select_key(self, state: dict[str, Any] | None) -> tuple:
         """
         生成用于比较的 key（比较所有真正影响 V1 Champ Select 状态的字段）
 
@@ -685,7 +683,7 @@ class LoLRuntime:
         ])
 
     @property
-    def current_snapshot(self) -> Optional[GameSnapshot]:
+    def current_snapshot(self) -> GameSnapshot | None:
         return self._current_snapshot
 
     @property

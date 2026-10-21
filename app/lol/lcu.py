@@ -16,11 +16,11 @@ import os
 import ssl
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 import urllib3
-from websocket import create_connection, WebSocketConnectionClosedException
+from websocket import WebSocketConnectionClosedException, create_connection
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -34,28 +34,28 @@ class LCUConnection:
     """
 
     def __init__(self, process_name: str = "LeagueClientUx.exe",
-                 lockfile_path: Optional[str] = None,
+                 lockfile_path: str | None = None,
                  reconnect_interval: float = 5.0):
         self.process_name = process_name
         self.lockfile_path = lockfile_path
         self.reconnect_interval = reconnect_interval
 
         self._host = "127.0.0.1"
-        self._port: Optional[int] = None
-        self._auth_token: Optional[str] = None
+        self._port: int | None = None
+        self._auth_token: str | None = None
         self._protocol = "https"
-        self._session: Optional[requests.Session] = None
-        self._ws: Optional[Any] = None
+        self._session: requests.Session | None = None
+        self._ws: Any | None = None
 
         self._connected = False
         self._running = False
-        self._reconnect_thread: Optional[threading.Thread] = None
-        self._event_listeners: List[callable] = []
+        self._reconnect_thread: threading.Thread | None = None
+        self._event_listeners: list[callable] = []
         self._lock = threading.Lock()
 
         # 游戏流程状态
         self._gameflow_phase = "None"
-        self._champ_select_data: Optional[Dict[str, Any]] = None
+        self._champ_select_data: dict[str, Any] | None = None
 
     @property
     def connected(self) -> bool:
@@ -220,7 +220,7 @@ class LCUConnection:
             return "****"
         return f"{token[:4]}...{token[-2:]}"
 
-    def _find_lockfile(self) -> Optional[str]:
+    def _find_lockfile(self) -> str | None:
         """查找 LCU 锁文件"""
         if self.lockfile_path and os.path.exists(self.lockfile_path):
             return self.lockfile_path
@@ -301,7 +301,7 @@ class LCUConnection:
                     print(f"[LCU] WebSocket 错误: {e}")
                 time.sleep(0.1)
 
-    def _handle_ws_event(self, event: Dict[str, Any]):
+    def _handle_ws_event(self, event: dict[str, Any]):
         """处理 WebSocket 事件"""
         uri = event.get("uri", "")
         data = event.get("data")
@@ -345,7 +345,7 @@ class LCUConnection:
     # ===== 公共 API =====
 
     def request(self, method: str, endpoint: str,
-                data: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+                data: dict[str, Any] | None = None) -> Any | None:
         """
         发送 LCU API 请求
 
@@ -363,7 +363,7 @@ class LCUConnection:
         return None
 
     def request_raw(self, method: str, endpoint: str,
-                    data: Optional[Dict[str, Any]] = None) -> tuple:
+                    data: dict[str, Any] | None = None) -> tuple:
         """
         发送 LCU API 请求，返回 (status_code, parsed_body_or_text_or_None)。
 
@@ -409,11 +409,11 @@ class LCUConnection:
         finally:
             self._request_lock.release()
 
-    def get(self, endpoint: str) -> Optional[Any]:
+    def get(self, endpoint: str) -> Any | None:
         """GET 请求"""
         return self.request("GET", endpoint)
 
-    def post(self, endpoint: str, data: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+    def post(self, endpoint: str, data: dict[str, Any] | None = None) -> Any | None:
         """POST 请求"""
         return self.request("POST", endpoint, data)
 
@@ -425,7 +425,7 @@ class LCUConnection:
                 self._gameflow_phase = phase
         return self._gameflow_phase
 
-    def get_current_summoner(self) -> Optional[Dict[str, Any]]:
+    def get_current_summoner(self) -> dict[str, Any] | None:
         """获取当前登录召唤师信息"""
         if not self._connected:
             return None
@@ -434,7 +434,7 @@ class LCUConnection:
         except Exception:
             return None
 
-    def get_champ_select_session(self) -> Optional[Dict[str, Any]]:
+    def get_champ_select_session(self) -> dict[str, Any] | None:
         """获取英雄选择会话"""
         if self._champ_select_data:
             return self._champ_select_data

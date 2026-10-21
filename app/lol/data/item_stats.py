@@ -12,15 +12,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 _DATA_PATH = Path(__file__).parent.parent.parent.parent / "data" / "lol_data" / "item_stats.json"
 
-_cache: Optional[Dict] = None
+_cache: dict | None = None
 _version: str = "unknown"
 
 
-def _load() -> Dict:
+def _load() -> dict:
     global _cache, _version
     if _cache is not None:
         return _cache
@@ -35,7 +34,7 @@ def _load() -> Dict:
     return _cache
 
 
-def get_item_lethality(item_id: int) -> Optional[float]:
+def get_item_lethality(item_id: int) -> float | None:
     """查询单个装备的 Lethality。
     
     返回：
@@ -49,7 +48,7 @@ def get_item_lethality(item_id: int) -> Optional[float]:
     return float(entry.get("lethality", 0))
 
 
-def sum_lethality(item_ids: Tuple[int, ...]) -> float:
+def sum_lethality(item_ids: tuple[int, ...]) -> float:
     """计算多个装备的总 Lethality。
     
     未知装备忽略（不影响总和）。

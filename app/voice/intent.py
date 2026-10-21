@@ -8,7 +8,7 @@ AI 不参与意图识别。规则要求明确动词才产生写操作副作用�
 裸陈述（如"对面莎弥拉闪现了"）返回 system.unknown。
 """
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..core.command_bus import CommandType
 
@@ -17,12 +17,12 @@ class Intent:
     """结构化意图"""
 
     def __init__(self, intent_type: str, confidence: float = 1.0,
-                 params: Optional[Dict[str, Any]] = None):
+                 params: dict[str, Any] | None = None):
         self.intent_type = intent_type
         self.confidence = confidence
         self.params = params or {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "intent": self.intent_type,
             "confidence": self.confidence,
@@ -126,8 +126,7 @@ class RuleBasedIntent:
         """语音集数：中文/阿拉伯数字 → int（"第五集"→5、"25集"→25）；不支持返回 None。"""
         if not s:
             return None
-        if s.startswith("第"):
-            s = s[1:]
+        s = s.removeprefix("第")
         if s.isdigit():
             return int(s)
         digits = {"零": 0, "一": 1, "两": 2, "二": 2, "三": 3, "四": 4,
@@ -247,7 +246,7 @@ class RuleBasedIntent:
             return 1.0  # 默认 1
 
     @classmethod
-    def match(cls, text: str) -> Optional[Intent]:
+    def match(cls, text: str) -> Intent | None:
         """
         规则匹配
 
@@ -463,7 +462,7 @@ class IntentRouter:
     裸陈述（如"对面莎弥拉闪现了"）不会产生任何副作用。
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.rule_based = RuleBasedIntent()
 

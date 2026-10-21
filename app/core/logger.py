@@ -6,7 +6,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class Logger:
@@ -15,7 +15,7 @@ class Logger:
     def __init__(self, log_dir: str = "./logs", level: str = "INFO"):
         self.log_dir = log_dir
         self.level = self._level_to_int(level)
-        self._current_date: Optional[str] = None
+        self._current_date: str | None = None
         self._file = None
         os.makedirs(log_dir, exist_ok=True)
 
@@ -33,7 +33,7 @@ class Logger:
             self._file = open(filepath, "a", encoding="utf-8")
             self._current_date = today
 
-    def _write(self, level: str, message: str, extra: Optional[Dict[str, Any]] = None):
+    def _write(self, level: str, message: str, extra: dict[str, Any] | None = None):
         """写入日志"""
         if self._level_to_int(level) < self.level:
             return
@@ -92,7 +92,7 @@ class Logger:
 
 
 # 全局日志单例
-_logger: Optional[Logger] = None
+_logger: Logger | None = None
 
 
 def get_logger(log_dir: str = "./logs", level: str = "INFO") -> Logger:

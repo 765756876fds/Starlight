@@ -18,7 +18,7 @@ Live Client Data API (2999) 客户端
 import json
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 import urllib3
@@ -76,12 +76,12 @@ class LiveClientAPI:
                 timeout=self.timeout
             )
             self._available = resp.status_code == 200
-        except (requests.RequestException, OSError) as e:
+        except (requests.RequestException, OSError):
             self._available = False
 
         return self._available
 
-    def _get(self, endpoint: str) -> Optional[Dict[str, Any]]:
+    def _get(self, endpoint: str) -> dict[str, Any] | None:
         """发送 GET 请求"""
         url = f"{self.base_url}{endpoint}"
         try:
@@ -90,46 +90,46 @@ class LiveClientAPI:
             if resp.status_code == 200:
                 return resp.json()
             return None
-        except (requests.RequestException, json.JSONDecodeError, OSError) as e:
+        except (requests.RequestException, json.JSONDecodeError, OSError):
             return None
 
-    def get_all_game_data(self) -> Optional[Dict[str, Any]]:
+    def get_all_game_data(self) -> dict[str, Any] | None:
         """获取完整游戏数据（用于测试和探索）"""
         return self._get(self.ENDPOINTS["allgamedata"])
 
-    def get_active_player(self) -> Optional[Dict[str, Any]]:
+    def get_active_player(self) -> dict[str, Any] | None:
         """获取当前玩家信息"""
         return self._get(self.ENDPOINTS["activeplayer"])
 
-    def get_active_player_abilities(self) -> Optional[Dict[str, Any]]:
+    def get_active_player_abilities(self) -> dict[str, Any] | None:
         """获取当前玩家技能"""
         return self._get(self.ENDPOINTS["activeplayerabilities"])
 
-    def get_active_player_runes(self) -> Optional[Dict[str, Any]]:
+    def get_active_player_runes(self) -> dict[str, Any] | None:
         """获取当前玩家符文"""
         return self._get(self.ENDPOINTS["activeplayerrunes"])
 
-    def get_player_list(self) -> Optional[List[Dict[str, Any]]]:
+    def get_player_list(self) -> list[dict[str, Any]] | None:
         """获取所有玩家列表"""
         return self._get(self.ENDPOINTS["playerlist"])
 
-    def get_player_scores(self) -> Optional[List[Dict[str, Any]]]:
+    def get_player_scores(self) -> list[dict[str, Any]] | None:
         """获取所有玩家分数"""
         return self._get(self.ENDPOINTS["playerscores"])
 
-    def get_player_summoner_spells(self) -> Optional[List[Dict[str, Any]]]:
+    def get_player_summoner_spells(self) -> list[dict[str, Any]] | None:
         """获取所有玩家召唤师技能"""
         return self._get(self.ENDPOINTS["playersummonerspells"])
 
-    def get_player_items(self) -> Optional[List[Dict[str, Any]]]:
+    def get_player_items(self) -> list[dict[str, Any]] | None:
         """获取所有玩家物品"""
         return self._get(self.ENDPOINTS["playeritems"])
 
-    def get_game_stats(self) -> Optional[Dict[str, Any]]:
+    def get_game_stats(self) -> dict[str, Any] | None:
         """获取游戏统计（包含游戏时间）"""
         return self._get(self.ENDPOINTS["gamestats"])
 
-    def get_event_data(self) -> Optional[Dict[str, Any]]:
+    def get_event_data(self) -> dict[str, Any] | None:
         """获取事件数据"""
         return self._get(self.ENDPOINTS["eventdata"])
 

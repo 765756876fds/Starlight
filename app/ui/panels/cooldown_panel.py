@@ -1,12 +1,18 @@
 """计时器面板：手动添加 + 列表。"""
 import time
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
-    QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
-
 
 _SKILLS = ["Q", "W", "E", "R", "闪现", "传送", "点燃", "治疗", "屏障",
            "虚弱", "疾跑", "净化", "惩戒"]

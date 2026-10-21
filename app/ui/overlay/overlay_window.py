@@ -11,19 +11,29 @@ from __future__ import annotations
 
 import os
 import sys
+
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
+
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 
-from PySide6.QtCore import Qt, QTimer, Signal, QSize, QSettings
-from PySide6.QtGui import QFont, QPixmap, QPainter, QPainterPath, QColor
-from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget, QFrame,
-)
-
-from .overlay_model import OverlayModel, OverlaySpell, OverlaySkill, fmt_remaining
-from .overlay_assets import get_champion_portrait, get_summoner_spell_icon_by_sid, get_summoner_spell_icon_by_zh
 from ...lol.data.champion_catalog import ChampionCatalog
 from ..settings_store import load_ui_prefs
+from .overlay_assets import (
+    get_champion_portrait,
+    get_summoner_spell_icon_by_sid,
+    get_summoner_spell_icon_by_zh,
+)
+from .overlay_model import OverlayModel, OverlaySkill, OverlaySpell, fmt_remaining
 
 # 全局 ChampionCatalog 实例
 _champion_catalog = ChampionCatalog()
@@ -320,7 +330,7 @@ class OverlayWindow(QWidget):
             txt = fmt_remaining(sk.remaining)
             w.setStyleSheet(f"""
                 QFrame {{
-                    background-color: rgba({int(int(color[1:3],16))},{int(int(color[3:5],16))},{int(int(color[5:7],16))},200);
+                    background-color: rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},200);
                     border: 1px solid rgba(255,255,255,0.3);
                     border-radius: 4px;
                 }}
@@ -333,12 +343,12 @@ class OverlayWindow(QWidget):
             lbl.setFont(QFont("Microsoft YaHei", max(6, int(7 * self._scale)), QFont.Bold))
             layout.addWidget(lbl)
         else:
-            w.setStyleSheet(f"""
-                QFrame {{
+            w.setStyleSheet("""
+                QFrame {
                     background-color: rgba(76, 175, 80, 150);
                     border: 1px solid rgba(255,255,255,0.2);
                     border-radius: 4px;
-                }}
+                }
             """)
             layout = QVBoxLayout(w)
             layout.setContentsMargins(0, 0, 0, 0)

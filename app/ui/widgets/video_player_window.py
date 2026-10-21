@@ -17,10 +17,18 @@ NOACTIVATE 方案 S2 实测桌面不显示，已整体弃用）。
 mpv 崩溃恢复（S8）：窗口 _tick 轮询检测。
 """
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QColor, QLinearGradient, QPainter
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
-                               QListWidgetItem, QMenu, QPushButton, QSlider,
-                               QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.ui.widgets.video_icons import icon as _icon
 

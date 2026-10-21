@@ -1,8 +1,7 @@
 """主界面 Tab 容器：5 个 Tab + 底部状态栏。"""
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QLabel
+from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from app.ui.panels.automation_panel import AutomationPanel
-from app.ui.panels.cooldown_panel import CooldownPanel
 from app.ui.panels.console_panel import ConsolePanel
 from app.ui.panels.current_game_panel import CurrentGamePanel
 from app.ui.panels.movie_panel import MoviePanel

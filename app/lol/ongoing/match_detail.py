@@ -8,9 +8,8 @@ DETAILS 主要是时间线 frames，10 人核心统计在 SUMMARY 单场里。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 
-from .match_model import AVAILABLE, NO_DATA, ERROR
+from .match_model import AVAILABLE
 
 AVAILABLE = AVAILABLE
 
@@ -22,41 +21,41 @@ class DetailPlayer:
     champion_name: str
     team_id: int
     position: str
-    win: Optional[bool]
-    kills: Optional[int]
-    deaths: Optional[int]
-    assists: Optional[int]
-    cs: Optional[int]
-    gold: Optional[int]
-    items: List[int]
-    spell1: Optional[int]
-    spell2: Optional[int]
-    level: Optional[int] = None
-    double_kills: Optional[int] = None
-    triple_kills: Optional[int] = None
-    quadra_kills: Optional[int] = None
-    penta_kills: Optional[int] = None
-    vision_score: Optional[int] = None
-    wards_placed: Optional[int] = None
-    wards_killed: Optional[int] = None
-    dmg_to_champ: Optional[int] = None
-    dmg_taken: Optional[int] = None
-    magic_dmg: Optional[int] = None
-    phys_dmg: Optional[int] = None
-    true_dmg: Optional[int] = None
+    win: bool | None
+    kills: int | None
+    deaths: int | None
+    assists: int | None
+    cs: int | None
+    gold: int | None
+    items: list[int]
+    spell1: int | None
+    spell2: int | None
+    level: int | None = None
+    double_kills: int | None = None
+    triple_kills: int | None = None
+    quadra_kills: int | None = None
+    penta_kills: int | None = None
+    vision_score: int | None = None
+    wards_placed: int | None = None
+    wards_killed: int | None = None
+    dmg_to_champ: int | None = None
+    dmg_taken: int | None = None
+    magic_dmg: int | None = None
+    phys_dmg: int | None = None
+    true_dmg: int | None = None
     # 符文：(主系 tree id, 副系 tree id, [主系 perk ids], [副系 perk ids], {小符文:id})
-    primary_style: Optional[int] = None
-    secondary_style: Optional[int] = None
-    primary_perks: List[int] = field(default_factory=list)
-    secondary_perks: List[int] = field(default_factory=list)
-    stat_perks: List[int] = field(default_factory=list)
+    primary_style: int | None = None
+    secondary_style: int | None = None
+    primary_perks: list[int] = field(default_factory=list)
+    secondary_perks: list[int] = field(default_factory=list)
+    stat_perks: list[int] = field(default_factory=list)
     privacy: str = ""  # PUBLIC / PRIVATE / 空（未知）
 
 
 @dataclass
 class MatchDetail:
     game_id: int
-    players: List[DetailPlayer]
+    players: list[DetailPlayer]
 
 
 def _parse_perks(perks: dict):
@@ -93,7 +92,9 @@ class MatchDetailService:
         if not base or not sub_id:
             raise RuntimeError(f"sgp server unresolved: state={state}")
         url = f"{base}/match-history-query/v1/products/lol/{sub_id}_{game_id}/SUMMARY"
-        import json, ssl, urllib.request
+        import json
+        import ssl
+        import urllib.request
         ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {token}",
@@ -144,12 +145,12 @@ class MatchDetailService:
 class MatchTimelineEvent:
     timestamp_ms: int
     event_type: str
-    participant_id: Optional[int] = None
-    item_id: Optional[int] = None
-    building_type: Optional[str] = None
-    monster_type: Optional[str] = None
-    killer_id: Optional[int] = None
-    victim_id: Optional[int] = None
+    participant_id: int | None = None
+    item_id: int | None = None
+    building_type: str | None = None
+    monster_type: str | None = None
+    killer_id: int | None = None
+    victim_id: int | None = None
     assist_ids: list = field(default_factory=list)
 
 
@@ -200,7 +201,9 @@ class MatchTimelineService:
         if not base or not sub_id:
             raise RuntimeError(f"sgp server unresolved: state={state}")
         url = f"{base}/match-history-query/v1/products/lol/{sub_id}_{game_id}/DETAILS"
-        import json, ssl, urllib.request
+        import json
+        import ssl
+        import urllib.request
         ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {token}",

@@ -11,14 +11,13 @@
 import queue
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
-from ..core.event_bus import EventBus, Event, EventType, get_event_bus
-from ..core.command_bus import CommandBus, Command, CommandType, get_command_bus
-from ..core.state_store import StateStore, StateNamespace, get_state_store
-
+from ..core.command_bus import Command, CommandType, get_command_bus
+from ..core.event_bus import Event, EventType, get_event_bus
+from ..core.state_store import StateNamespace, get_state_store
 from .asr import ASRManager
-from .intent import IntentRouter, Intent
+from .intent import Intent, IntentRouter
 
 
 def fold_duplicated_text(text: str) -> str:
@@ -74,7 +73,7 @@ class VoiceRuntime:
     整合语音输入全流程。
     """
 
-    def __init__(self, config: Dict[str, Any], tts_provider=None,
+    def __init__(self, config: dict[str, Any], tts_provider=None,
                  speech_queue_provider=None):
         self.config = config
         self.asr_config = config.get("asr", {})
@@ -119,22 +118,22 @@ class VoiceRuntime:
 
         # 麦克风
         self._audio_stream = None
-        self._mic_thread: Optional[threading.Thread] = None
+        self._mic_thread: threading.Thread | None = None
 
         # 采集/识别解耦（场景 6/25）：
         # 采集线程（voice-mic）只读麦克风 + VAD → 语音段入有界队列；
         # 识别线程（voice-asr）串行消费队列 → ASR → Intent → 命令执行。
         # 有界队列满时丢最旧（用户最新指令优先）。
-        self._speech_queue: "queue.Queue" = queue.Queue(maxsize=8)
-        self._asr_thread: Optional[threading.Thread] = None
+        self._speech_queue: queue.Queue = queue.Queue(maxsize=8)
+        self._asr_thread: threading.Thread | None = None
         # 代际标记：stop 后立即 start 时，旧识别线程（若 transcribe 卡住未及时退出）
         # 发现代际过期后自动退出 → 防止双消费者同时取队列。
         self._asr_generation = 0
 
         # 打断旁路队列（Side-channel）：TTS 播放期间采集的段（is_interrupt=True）
         # 绝不进主 ASR 队列，只进这里；offer_latest 语义（满丢旧塞新，最新打断意图优先）。
-        self._interrupt_queue: "queue.Queue" = queue.Queue(maxsize=2)
-        self._interrupt_thread: Optional[threading.Thread] = None
+        self._interrupt_queue: queue.Queue = queue.Queue(maxsize=2)
+        self._interrupt_thread: threading.Thread | None = None
         self._interrupt_stop = threading.Event()
 
     def start(self):
@@ -619,14 +618,7 @@ class VoiceRuntime:
                              CommandType.MUSIC_HIGHLIGHT_MODE,
                              CommandType.MUSIC_SET_PLAY_MODE,
                              CommandType.MUSIC_CLEAR_QUEUE,
-                             CommandType.MUSIC_IDENTIFY):
-            self.command_bus.execute(Command(
-                command_type=intent_type,
-                params=params,
-                source="voice",
-            ))
-
-        elif intent_type == CommandType.MUSIC_VOLUME_SET:
+                             CommandType.MUSIC_IDENTIFY) or intent_type == CommandType.MUSIC_VOLUME_SET:
             self.command_bus.execute(Command(
                 command_type=intent_type,
                 params=params,
@@ -684,7 +676,6 @@ class VoiceRuntime:
         elif intent_type == "alarm.flash":
             champion = params.get("champion", "")
             if champion:
-                from ..lol.game_alarm import GameAlarmEngine
                 # 通过事件触发
                 self.event_bus.publish(Event(
                     event_type="alarm.create_flash",

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -16,7 +14,7 @@ class Champion:
 
 
 # 内置 fallback（网络失败且无缓存时）
-_BUILTIN: List[Champion] = [
+_BUILTIN: list[Champion] = [
     Champion(157, "Yasuo", "亚索", ("风男", "疾风剑豪")),
     Champion(22, "Ashe", "艾希", ("寒冰", "冰弓")),
     Champion(99, "Lux", "拉克丝", ("光辉", "光女")),
@@ -27,7 +25,7 @@ from app.core.path_resolve import PROJECT_ROOT
 DEFAULT_DATA = PROJECT_ROOT / "data" / "lol_data" / "champions.json"
 
 # 俗称 / 常见 ASR 误听 → 官方中文名（key 必须是 champions.json 里的 name）
-_NAME_ALIASES: Dict[str, tuple] = {
+_NAME_ALIASES: dict[str, tuple] = {
     # 上单 / 坦克
     "墨菲特": ("石头人", "大石头", "制图人"),
     "盖伦": ("大宝剑", "草丛伦", "德玛"),
@@ -94,11 +92,11 @@ _NAME_ALIASES: Dict[str, tuple] = {
 class ChampionCatalog:
     """英雄查询，支持按 id / 中文名 / 别名。"""
 
-    def __init__(self, champions: Optional[List[Champion]] = None):
+    def __init__(self, champions: list[Champion] | None = None):
         if champions is None:
             champions = self._load_default()
-        self._by_id: Dict[int, Champion] = {c.cid: c for c in champions}
-        self._by_zh: Dict[str, Champion] = {}
+        self._by_id: dict[int, Champion] = {c.cid: c for c in champions}
+        self._by_zh: dict[str, Champion] = {}
         for c in champions:
             self._by_zh[c.name_zh] = c
             if c.name_en:
@@ -110,7 +108,7 @@ class ChampionCatalog:
                 self._by_zh[a] = c
 
     @staticmethod
-    def _load_default() -> List[Champion]:
+    def _load_default() -> list[Champion]:
         try:
             p = DEFAULT_DATA
             if p.exists():
@@ -136,10 +134,10 @@ class ChampionCatalog:
         print("[data] 使用内置 fallback（仅 3 英雄），完整数据不可用")
         return list(_BUILTIN)
 
-    def get_by_id(self, cid: int) -> Optional[Champion]:
+    def get_by_id(self, cid: int) -> Champion | None:
         return self._by_id.get(cid)
 
-    def get_by_name(self, name: str) -> Optional[Champion]:
+    def get_by_name(self, name: str) -> Champion | None:
         if not name:
             return None
         n = name.strip()
@@ -151,7 +149,7 @@ class ChampionCatalog:
                 return v
         return None
 
-    def resolve_raw_champion_name(self, raw_name: str) -> Optional[Champion]:
+    def resolve_raw_champion_name(self, raw_name: str) -> Champion | None:
         """从 2999 rawChampionName（如 game_character_displayname_Hecarim）解析出 Champion。"""
         if not raw_name:
             return None
@@ -162,7 +160,7 @@ class ChampionCatalog:
         # 其他格式直接尝试
         return self.get_by_name(raw_name)
 
-    def resolve_player_champion(self, champion_name: str, raw_champion_name: str = "") -> Optional[Champion]:
+    def resolve_player_champion(self, champion_name: str, raw_champion_name: str = "") -> Champion | None:
         """从 2999 PlayerInfo 的 championName / rawChampionName 解析出 Champion。"""
         # 优先用 rawChampionName（英文名，更可靠）
         if raw_champion_name:
@@ -174,5 +172,5 @@ class ChampionCatalog:
             return self.get_by_name(champion_name)
         return None
 
-    def all(self) -> List[Champion]:
+    def all(self) -> list[Champion]:
         return list(self._by_id.values())

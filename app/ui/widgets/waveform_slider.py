@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """律动波形进度条（酷狗风格）：QTimer 60ms 更新频谱缓冲（平滑随机漫步+正弦包络），
 paintEvent 用 QPainter 自绘——波形在进度条上方，已播放区亮蓝、未播放半透明，
 handle 纯白圆点带微光。播放中跳动、暂停时降到低电平，CPU 占用极低。
@@ -10,8 +9,8 @@ from __future__ import annotations
 import math
 import random
 
-from PySide6.QtCore import Qt, QTimer, QRectF
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath
+from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QSlider
 
 from ..theme.colors import Colors
@@ -34,6 +33,16 @@ class WaveformSlider(QSlider):
         self._timer.setInterval(_TICK_MS)
         self._timer.timeout.connect(self._step)
         self._timer.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
 
     def set_active(self, on: bool) -> None:
         self._active = bool(on)

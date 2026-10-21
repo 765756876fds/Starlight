@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from app.core.path_resolve import PROJECT_ROOT
 
@@ -21,10 +20,10 @@ class ObjectiveRule:
     type: str
     name_zh: str
     enabled: bool
-    first_spawn: Optional[float]      # 首次刷新（游戏内秒）；None=由事件触发
-    respawn: Optional[float]          # 击杀后刷新间隔（秒）；None=不刷新
+    first_spawn: float | None      # 首次刷新（游戏内秒）；None=由事件触发
+    respawn: float | None          # 击杀后刷新间隔（秒）；None=不刷新
     one_per_game: bool
-    despawn: Optional[float] = None  # 离场时间（游戏内秒）
+    despawn: float | None = None  # 离场时间（游戏内秒）
     leads: tuple = field(default_factory=tuple)  # 提前提醒秒数
     trigger: str = ""                 # 如 after_dragon_soul
     patch: str = ""
@@ -36,16 +35,16 @@ class ObjectiveRuleset:
     patch: str
     data_version: str
     source: str
-    rules: Dict[str, ObjectiveRule]  # by type
+    rules: dict[str, ObjectiveRule]  # by type
 
-    def get(self, objective_type: str) -> Optional[ObjectiveRule]:
+    def get(self, objective_type: str) -> ObjectiveRule | None:
         return self.rules.get(objective_type)
 
-    def enabled_types(self) -> List[ObjectiveRule]:
+    def enabled_types(self) -> list[ObjectiveRule]:
         return [r for r in self.rules.values() if r.enabled]
 
 
-_FALLBACK: Dict[str, ObjectiveRule] = {
+_FALLBACK: dict[str, ObjectiveRule] = {
     "void_grubs": ObjectiveRule("void_grubs", "巢虫", True, 480.0, None, True, 885.0, (60.0,)),
     "dragon": ObjectiveRule("dragon", "小龙", True, 300.0, 300.0, False, None, (40.0)),
     "baron": ObjectiveRule("baron", "大龙", True, 1200.0, 360.0, False, None, (40.0)),
@@ -63,7 +62,7 @@ def load_ruleset(path: Path = DEFAULT_PATH, mode: str = "classic") -> ObjectiveR
             src = data.get("source", "")
             modes = data.get("modes", {})
             rules_list = modes.get(mode, {}).get("objectives", [])
-            rules: Dict[str, ObjectiveRule] = {}
+            rules: dict[str, ObjectiveRule] = {}
             for r in rules_list:
                 rules[r["type"]] = ObjectiveRule(
                     type=r["type"],

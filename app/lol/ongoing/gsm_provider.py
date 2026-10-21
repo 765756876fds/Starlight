@@ -23,7 +23,7 @@ import json
 import ssl
 import urllib.error
 import urllib.request
-from typing import Callable, Optional, Tuple
+from collections.abc import Callable
 
 from .sgp_server import SgpServerResolver
 
@@ -58,9 +58,9 @@ class SgpGsmProvider:
 
     def __init__(
         self,
-        lcu_get: Optional[Callable[[str], object]] = None,
+        lcu_get: Callable[[str], object] | None = None,
         lcu_conn=None,
-        https_get: Optional[Callable[[str, dict], dict]] = None,
+        https_get: Callable[[str, dict], dict] | None = None,
     ):
         self._lcu_get = lcu_get
         self._lcu_conn = lcu_conn
@@ -85,7 +85,7 @@ class SgpGsmProvider:
                     return None
         return self._lcu_get(ep) if self._lcu_get is not None else None
 
-    def _league_session_token(self) -> Optional[str]:
+    def _league_session_token(self) -> str | None:
         """league-session token：GET /lol-league-session/v1/league-session-token（裸字符串）。
 
         与 entitlements token 不同，绝不混用。
@@ -96,7 +96,7 @@ class SgpGsmProvider:
         return None
 
     # ---- GSM 查询 ----
-    def get_current_game(self, self_puuid: str) -> Tuple[str, Optional[dict]]:
+    def get_current_game(self, self_puuid: str) -> tuple[str, dict | None]:
         """查询 self 当前对局（GSM）。返回 (结果标记, game payload dict 或 None)。"""
         if not self_puuid:
             return NO_GAME, None
@@ -140,7 +140,7 @@ def _gsm_cell(m: dict) -> dict:
     }
 
 
-def _gsm_game_id(gsm_game: dict) -> Optional[int]:
+def _gsm_game_id(gsm_game: dict) -> int | None:
     """从 GSM payload 取 gameId：优先 playerCredentials.gameId，其次 game.id。"""
     pc = gsm_game.get("playerCredentials")
     if isinstance(pc, dict):
@@ -158,8 +158,8 @@ def _gsm_game_id(gsm_game: dict) -> Optional[int]:
 def merge_gsm_players(
     gameflow_session: dict,
     gsm_game: dict,
-    me_puuid: Optional[str],
-) -> Tuple[dict, int, bool]:
+    me_puuid: str | None,
+) -> tuple[dict, int, bool]:
     """按 puuid 追加 GSM 独有玩家到 gameflow session（myTeam/theirTeam）。
 
     返回 (session, added_count, matched)：

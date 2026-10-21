@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, Tuple
 
 _PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..",
                      "data", "lol_data", "item_haste.json")
 
-_CACHE: Dict[int, int] = {}
+_CACHE: dict[int, int] = {}
 _VERSION = ""
 
 
@@ -35,7 +34,7 @@ def data_version() -> str:
     return _VERSION
 
 
-def sum_ability_haste(item_ids) -> Tuple[float, str]:
+def sum_ability_haste(item_ids) -> tuple[float, str]:
     """itemID 列表 -> (总 Ability Haste, source)。
 
     source: live_inventory | unavailable

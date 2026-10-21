@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Dict, Optional
 
 from .models import PlayerSnapshot
 
@@ -14,11 +13,11 @@ class SnapshotCache:
     # 跨局污染由新局加载 put 覆盖（同 puuid 新快照直接替换）。
     def __init__(self, ttl_seconds: float = 7200.0):
         self._ttl = ttl_seconds
-        self._data: Dict[str, PlayerSnapshot] = {}
-        self._name_index: Dict[str, str] = {}  # display_name → puuid 反查索引
+        self._data: dict[str, PlayerSnapshot] = {}
+        self._name_index: dict[str, str] = {}  # display_name → puuid 反查索引
         self._lock = threading.Lock()
 
-    def get(self, puuid: str) -> Optional[PlayerSnapshot]:
+    def get(self, puuid: str) -> PlayerSnapshot | None:
         with self._lock:
             s = self._data.get(puuid)
             if s is None:
@@ -27,7 +26,7 @@ class SnapshotCache:
                 return None
             return s
 
-    def get_by_display_name(self, display_name: str) -> Optional[PlayerSnapshot]:
+    def get_by_display_name(self, display_name: str) -> PlayerSnapshot | None:
         """按 display_name 反查 PlayerSnapshot（本局匹配用）。"""
         if not display_name:
             return None

@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 # 段位中文映射（与 UI 一致，title 模块自带避免循环依赖）
 TIER_ZH = {
@@ -61,7 +60,7 @@ def _kda_ge(kda: float, level: int, is_support: bool) -> bool:
     return kda >= th
 
 
-def _make(level: int, tier: Optional[str]) -> TitleResult:
+def _make(level: int, tier: str | None) -> TitleResult:
     """有段位：X境·称号；无段位：纯称号。"""
     name = _NAMES[level]
     if tier:
@@ -77,7 +76,7 @@ def compute_title(
     average_kda: float,
     streak: int,
     utility_ratio: float,
-    tier: Optional[str],
+    tier: str | None,
 ) -> TitleResult:
     """8 档判定（从上到下第一命中，档 8 兜底全覆盖）。
 

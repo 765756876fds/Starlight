@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class AutomationState(Enum):
@@ -45,10 +45,10 @@ class PendingAction:
 
 @dataclass(slots=True)
 class AutomationPreset:
-    ban_priority: List[int] = field(default_factory=list)
-    pick_priority: List[int] = field(default_factory=list)
-    primary_role: Optional[str] = None
-    secondary_role: Optional[str] = None
+    ban_priority: list[int] = field(default_factory=list)
+    pick_priority: list[int] = field(default_factory=list)
+    primary_role: str | None = None
+    secondary_role: str | None = None
 
 
 @dataclass(slots=True)
@@ -61,19 +61,19 @@ class AutomationConfig:
     accept_delay: float = 0.0
     max_action_attempts: int = 3
     polling_interval: float = 0.5
-    presets: Dict[str, AutomationPreset] = field(default_factory=dict)
+    presets: dict[str, AutomationPreset] = field(default_factory=dict)
     auto_queue_mode: str = "bot"
-    auto_queue_primary_role: Optional[str] = None
-    auto_queue_secondary_role: Optional[str] = None
+    auto_queue_primary_role: str | None = None
+    auto_queue_secondary_role: str | None = None
     # 顶层默认优先级（UI配置直接写这里，优先于presets）
-    pick_priority: List[int] = field(default_factory=list)
-    ban_priority: List[int] = field(default_factory=list)
+    pick_priority: list[int] = field(default_factory=list)
+    ban_priority: list[int] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "AutomationConfig":
+    def from_dict(cls, data: dict[str, Any] | None) -> AutomationConfig:
         data = data or {}
         presets_raw = data.get("presets") or {}
-        presets: Dict[str, AutomationPreset] = {}
+        presets: dict[str, AutomationPreset] = {}
         for name, pv in presets_raw.items():
             pv = pv or {}
             presets[name] = AutomationPreset(
@@ -99,7 +99,7 @@ class AutomationConfig:
             ban_priority=list(data.get("ban_priority") or []),
         )
 
-    def pick_priority_for(self, role: Optional[str]) -> List[int]:
+    def pick_priority_for(self, role: str | None) -> list[int]:
         # 优先读顶层默认pick_priority（UI配置直接写这里）
         if self.pick_priority:
             return list(self.pick_priority)
@@ -119,7 +119,7 @@ class AutomationConfig:
                 return list(p.pick_priority)
         return []
 
-    def ban_priority_for(self, role: Optional[str]) -> List[int]:
+    def ban_priority_for(self, role: str | None) -> list[int]:
         # 优先读顶层默认ban_priority
         if self.ban_priority:
             return list(self.ban_priority)

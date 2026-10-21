@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
 
 from ...core.event_bus import Event, EventBus, get_event_bus
 from .action_executor import ChampSelectActionExecutor
@@ -21,15 +21,15 @@ class LoLAutomationService:
     def __init__(
         self,
         lcu,  # LCUConnection
-        config: Optional[AutomationConfig] = None,
-        event_bus: Optional[EventBus] = None,
+        config: AutomationConfig | None = None,
+        event_bus: EventBus | None = None,
     ):
         self._lcu = lcu
         self._config = config or AutomationConfig()
         self._bus = event_bus or get_event_bus()
 
         self._stop_event = threading.Event()
-        self._worker: Optional[threading.Thread] = None
+        self._worker: threading.Thread | None = None
         self._lock = threading.RLock()
         self._state = AutomationState.IDLE
         self._last_phase: str = "None"
@@ -64,14 +64,14 @@ class LoLAutomationService:
         }
 
     @staticmethod
-    def print_feature_banner(cfg: "AutomationConfig") -> None:
+    def print_feature_banner(cfg: AutomationConfig) -> None:
         print(f"[FEATURE] auto_queue     enabled={cfg.auto_queue}")
         print(f"[FEATURE] auto_accept    enabled={cfg.auto_accept}")
         print(f"[FEATURE] auto_ban       enabled={cfg.auto_ban}")
         print(f"[FEATURE] auto_pick      enabled={cfg.auto_pick}")
-        print(f"[FEATURE] fallback       enabled=True")
-        print(f"[FEATURE] verification   enabled=True")
-        print(f"[FEATURE] safe_stop      enabled=True")
+        print("[FEATURE] fallback       enabled=True")
+        print("[FEATURE] verification   enabled=True")
+        print("[FEATURE] safe_stop      enabled=True")
 
     # ---- config / toggles ----
     def update_config(self, cfg: AutomationConfig) -> None:

@@ -7,7 +7,7 @@ gold 是 2999 playerlist 提供的可靠字段；缺失则依次回退 level、c
 """
 from __future__ import annotations
 
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 from ..lol.snapshot import GameSnapshot, PlayerInfo
 
@@ -17,7 +17,7 @@ def _team_of_self(snapshot: GameSnapshot) -> str:
     return (cp.team if cp else "") or ""
 
 
-def _players_in_side(snapshot: GameSnapshot, side: str) -> List[PlayerInfo]:
+def _players_in_side(snapshot: GameSnapshot, side: str) -> list[PlayerInfo]:
     """side: 'self' / 'enemy'。按 team 过滤。"""
     self_team = _team_of_self(snapshot)
     out = []
@@ -38,7 +38,7 @@ def _score(p: PlayerInfo) -> tuple:
     return (int(p.gold), int(p.level), int(p.cs))
 
 
-def richest(snapshot: GameSnapshot, side: str = "enemy") -> Optional[Dict[str, Any]]:
+def richest(snapshot: GameSnapshot, side: str = "enemy") -> dict[str, Any] | None:
     """返回该方最肥玩家（gold/level/cs 排序第一）。无数据返回 None。
 
     richness_basis:
@@ -69,7 +69,7 @@ def richest(snapshot: GameSnapshot, side: str = "enemy") -> Optional[Dict[str, A
     }
 
 
-def self_kda(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
+def self_kda(snapshot: GameSnapshot) -> dict[str, Any] | None:
     """当前对局自己的 KDA。"""
     cp = snapshot.current_player
     if cp is None:
@@ -84,7 +84,7 @@ def self_kda(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
     }
 
 
-def team_kda(snapshot: GameSnapshot, side: str = "self") -> Dict[str, int]:
+def team_kda(snapshot: GameSnapshot, side: str = "self") -> dict[str, int]:
     players = _players_in_side(snapshot, side)
     return {
         "kills": sum(int(p.kills) for p in players),
@@ -98,7 +98,7 @@ def team_kda(snapshot: GameSnapshot, side: str = "self") -> Dict[str, int]:
 ECONOMY_EVEN_THRESHOLD = 2000
 
 
-def economy(snapshot: GameSnapshot) -> Dict[str, Any]:
+def economy(snapshot: GameSnapshot) -> dict[str, Any]:
     """双方总经济 + 差值 + 领先/落后/接近。纯确定性，不用 LLM/胜率。
 
     “接近/领先/落后”只基于固定阈值 ECONOMY_EVEN_THRESHOLD。
@@ -126,7 +126,7 @@ def economy(snapshot: GameSnapshot) -> Dict[str, Any]:
     }
 
 
-def team_rankings(snapshot: GameSnapshot, side: str = "self") -> List[Dict[str, Any]]:
+def team_rankings(snapshot: GameSnapshot, side: str = "self") -> list[dict[str, Any]]:
     """该方按发育排序的完整列表（gold↓→level↓→cs↓）。"""
     players = _players_in_side(snapshot, side)
     ordered = sorted(players, key=_score, reverse=True)
@@ -137,7 +137,7 @@ def team_rankings(snapshot: GameSnapshot, side: str = "self") -> List[Dict[str, 
     ]
 
 
-def enemy_roster(snapshot: GameSnapshot) -> List[Dict[str, Any]]:
+def enemy_roster(snapshot: GameSnapshot) -> list[dict[str, Any]]:
     """返回敌方玩家列表（英雄 + 等级）。"""
     players = _players_in_side(snapshot, "enemy")
     return [
@@ -146,7 +146,7 @@ def enemy_roster(snapshot: GameSnapshot) -> List[Dict[str, Any]]:
     ]
 
 
-def most_deaths(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
+def most_deaths(snapshot: GameSnapshot) -> dict[str, Any] | None:
     """返回全场死亡最多的玩家。并列时返回所有。"""
     players = [p for p in (snapshot.players or []) if p.champion_name]
     if not players:
@@ -165,7 +165,7 @@ def most_deaths(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
     }
 
 
-def find_player_by_champion_name(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> Optional[PlayerInfo]:
+def find_player_by_champion_name(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> PlayerInfo | None:
     """通过 champion_name / rawChampionName 查找玩家（使用 ChampionCatalog 解析）。"""
     if champion_catalog is None:
         from ..lol.data.champion_catalog import ChampionCatalog
@@ -189,7 +189,7 @@ def find_player_by_champion_name(snapshot: GameSnapshot, champion_name: str, cha
     return None
 
 
-def champion_level(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> Optional[Dict[str, Any]]:
+def champion_level(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> dict[str, Any] | None:
     """查询某英雄等级。"""
     p = find_player_by_champion_name(snapshot, champion_name, champion_catalog)
     if p is None:
@@ -201,7 +201,7 @@ def champion_level(snapshot: GameSnapshot, champion_name: str, champion_catalog=
     }
 
 
-def champion_kda(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> Optional[Dict[str, Any]]:
+def champion_kda(snapshot: GameSnapshot, champion_name: str, champion_catalog=None) -> dict[str, Any] | None:
     """查询某英雄战绩。"""
     p = find_player_by_champion_name(snapshot, champion_name, champion_catalog)
     if p is None:
@@ -215,7 +215,7 @@ def champion_kda(snapshot: GameSnapshot, champion_name: str, champion_catalog=No
     }
 
 
-def self_level(snapshot: GameSnapshot) -> Optional[Dict[str, Any]]:
+def self_level(snapshot: GameSnapshot) -> dict[str, Any] | None:
     """查询自己当前等级。"""
     cp = snapshot.current_player
     if cp is None:

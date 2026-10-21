@@ -10,8 +10,9 @@
 """
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 
 class ScheduledTask:
@@ -26,11 +27,11 @@ class ScheduledTask:
         self.immediate = immediate
         self.enabled = enabled
         self.run_async = run_async  # 耗时任务：提交线程池执行，不阻塞主循环
-        self.last_run: Optional[float] = None
-        self.next_run: Optional[float] = None
+        self.last_run: float | None = None
+        self.next_run: float | None = None
         self.run_count = 0
         self.error_count = 0
-        self.last_error: Optional[str] = None
+        self.last_error: str | None = None
         self._lock = threading.Lock()
         self._running = False  # 防重入：同一任务不允许并发执行
 
@@ -65,7 +66,7 @@ class ScheduledTask:
             with self._lock:
                 self._running = False
 
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "task_id": self.task_id,
@@ -88,11 +89,11 @@ class Scheduler:
     """
 
     def __init__(self, tick_interval: float = 0.1):
-        self._tasks: Dict[str, ScheduledTask] = {}
-        self._oneshot_cancelled: Dict[str, bool] = {}
+        self._tasks: dict[str, ScheduledTask] = {}
+        self._oneshot_cancelled: dict[str, bool] = {}
         self._lock = threading.Lock()
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._tick_interval = tick_interval
         self._stop_event = threading.Event()  # stop() 置位以立即唤醒主循环
         # run_async 任务的有界线程池（进程退出时由解释器 atexit 收尾）
@@ -114,7 +115,7 @@ class Scheduler:
             self._tasks.pop(task_id, None)
 
     def schedule_once(self, delay_seconds: float, func: Callable,
-                      task_id: Optional[str] = None) -> str:
+                      task_id: str | None = None) -> str:
         """一次性任务：delay_seconds 秒后执行一次，然后自动移除。"""
         import uuid as _uuid
         tid = task_id or ("once-" + _uuid.uuid4().hex[:8])
@@ -158,12 +159,12 @@ class Scheduler:
             if task_id in self._tasks:
                 self._tasks[task_id].enabled = False
 
-    def get_task(self, task_id: str) -> Optional[ScheduledTask]:
+    def get_task(self, task_id: str) -> ScheduledTask | None:
         """获取任务"""
         with self._lock:
             return self._tasks.get(task_id)
 
-    def list_tasks(self) -> Dict[str, Dict[str, Any]]:
+    def list_tasks(self) -> dict[str, dict[str, Any]]:
         """列出所有任务状态"""
         with self._lock:
             return {tid: task.status() for tid, task in self._tasks.items()}
@@ -220,7 +221,7 @@ class Scheduler:
 
 
 # 全局调度器单例
-_scheduler: Optional[Scheduler] = None
+_scheduler: Scheduler | None = None
 
 
 def get_scheduler() -> Scheduler:
