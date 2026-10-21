@@ -306,10 +306,11 @@ class TestIdlePollAutoNext:
             ctrl.stop()
         db.close()
 
-    def test_next_reloads_library_when_queue_at_end(self, tmp_path):
-        """回归：顺序播放到队尾，next() 重载全库后必须真正播放第一首。
-        旧代码只在 random 兜底分支内调 _play_song，全库重载路径 song 非空时漏播：
-        表现为 next() 无异常、无 loadfile，UI 停在旧歌。"""
+    def test_next_stays_idle_when_queue_at_end(self, tmp_path):
+        """回归：顺序播放到队尾，next() 保持空闲，绝不跨界加载本地库。
+        旧逻辑在队列空时自动 db.get_all_songs 重载整个本地库续播——在线歌单
+        播完因此错误跳转到本地歌曲。新契约：队列尾 → mpv.stop() 回 idle、
+        不 loadfile、无新 current_song（等待用户主动操作）。"""
         from app.music.controller import MusicController
         db_path = str(tmp_path / "next_end.db")
         db = MusicDatabase(db_path)
@@ -317,7 +318,7 @@ class TestIdlePollAutoNext:
         s2 = str(tmp_path / "b.flac")
         open(s1, "w").close()
         open(s2, "w").close()
-        # 库里 2 首歌（get_all_songs 重载来源）
+        # 库里 2 首歌（旧逻辑 get_all_songs 重载来源，新逻辑不得触碰）
         db.insert_song({"path": s1, "filename": "a.flac", "title": "A",
                         "artist": "x", "album": "", "format": "flac"})
         db.insert_song({"path": s2, "filename": "b.flac", "title": "B",
@@ -342,9 +343,10 @@ class TestIdlePollAutoNext:
         ctrl._running = True
 
         ctrl.next()
-        # 顺序到末尾 → 重载全库 → 必须播放（loadfile 被调用）
-        assert ctrl.mpv.loadfile.called, "全库重载后必须真正播放下一首"
-        assert ctrl._current_song is not None
+        # 顺序到末尾 → 保持空闲：不 loadfile、无新歌、mpv 回 idle
+        ctrl.mpv.loadfile.assert_not_called()
+        assert ctrl.mpv.stop.called, "队列尾必须 mpv.stop() 回到 idle"
+        assert ctrl._current_song is None, "不得自动载入本地库续播"
         db.close()
 
     def test_play_song_resets_idle_poll_state_on_bad_file(self, tmp_path):

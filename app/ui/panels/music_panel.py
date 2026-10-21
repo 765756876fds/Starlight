@@ -1489,7 +1489,12 @@ class MusicPanel(QWidget):
                 cover_url=data.get("cover_url") or None,
                 extra=data.get("extra") or {},
             )
-        self._play_async(self._music.play_online, track,
+        # 在线歌单连续播放：点击第 index 首，其后歌曲批量入队（play_online_list 内部
+        # 替换队列 + 剩余歌入队），播完队列空保持空闲——不再错误跳转本地歌曲。
+        idx = self.list_rank_songs.row(item)
+        if idx < 0 or idx >= len(self._rank_tracks):
+            idx = 0
+        self._play_async(self._music.play_online_list, self._rank_tracks, idx,
                          ok_msg=f"正在播放：{track.title}",
                          fail_msg="该曲目无法播放",
                          status_label=self.lbl_rank_status)

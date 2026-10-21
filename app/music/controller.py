@@ -643,23 +643,17 @@ class MusicController:
         if song:
             self._play_song(song)
         else:
-            # 队列空了，自动加载整个本地库再切
+            # 队列空（顺序模式播完队列尾）：停止当前播放、保持空闲，
+            # 绝不跨界加载本地库——在线歌单播完不得突然切到本地歌曲
+            # （旧逻辑 db.get_all_songs 自动加载整个本地库续播，是 bug 根源）。
+            # 只 mpv.stop() 回 idle（同缺失文件 3 次保护），mpv 实例与轮询线程继续存活。
+            self._current_song = None
+            self._last_idle = True
             try:
-                all_songs = self.db.get_all_songs(limit=1000)
-                if all_songs:
-                    self.queue.add_all(all_songs)
-                    song = self.queue.next()
-            except Exception as e:
-                logger.error(f"加载本地队列失败: {e}")
-            if not song:
-                songs = self.db.get_random_songs(10)
-                if songs:
-                    self.queue.add_all(songs)
-                    song = self.queue.next()
-            # 统一出口：无论 song 来自重载全库还是随机兜底，都必须播放
-            # （旧代码只在 random 分支内调 _play_song，全库重载路径 song 非空时漏播）
-            if song:
-                self._play_song(song)
+                self.mpv.stop()
+            except Exception:
+                pass
+            self._update_state(playing=False, current_song=None)
 
     @_cancel_switch_on_user_action
     def prev(self):
@@ -1620,6 +1614,39 @@ class MusicController:
         except Exception as e:
             logger.error(f"[Music] play_online_resume error: {e}")
             return False
+
+    def play_online_list(self, tracks: list, index: int = 0) -> bool:
+        """在线歌单播放（酷狗式）：点击第 index 首立即播放，其后歌曲批量入队。
+
+        队列内在线歌由 _play_song 的 online 分支重搜播放（title+artist 重查 URL）；
+        播完整个歌单队列为空 → _next_locked 保持空闲，绝不跨界加载本地库。
+        切歌单即替换队列（clear + add_all 剩余），符合"在当前来源内连续播放"语义。
+        tracks 为 OnlineTrack 列表（panel 榜单缓存 self._rank_tracks）。"""
+        if not self._mpv_available or self.online_manager is None:
+            return False
+        if not tracks or not 0 <= index < len(tracks):
+            return False
+        rest = []
+        for t in tracks[index + 1:]:
+            rest.append({
+                "title": getattr(t, "title", "") or "",
+                "artist": getattr(t, "artist", "") or "",
+                "album": getattr(t, "album", "") or "",
+                "duration": getattr(t, "duration_seconds", 0) or 0,
+                "source_type": "online",
+                "source_name": getattr(t, "source_name", "") or "",
+                "track_id": getattr(t, "track_id", "") or "",
+                "path": "",
+                "filename": "",
+                "music_id": 0,
+                "id": 0,
+            })
+        with self._lock:
+            # 切换歌单 = 替换队列：清掉旧队列（本地/其它在线残留），只留本歌单剩余歌
+            self.queue.clear()
+            if rest:
+                self.queue.add_all(rest)
+        return self.play_online(tracks[index])
 
     def play_online(self, track, _before_load=None) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
