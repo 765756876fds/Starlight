@@ -47,8 +47,10 @@ class ComboExecutor:
             for step in combo.sequence:
                 self._key_sender(step.key)
                 delay = int(step.delay_after_ms or 0)
-                if delay > 0:
-                    time.sleep(delay / 1000.0)
+                # 强制每个步骤至少 15ms 物理缓冲：极速连招（delay=0）时
+                # keyboard.press_and_release 自身约 50ms 按下 + 此间隔，
+                # 保证游戏引擎稳吃按键，防止极短间隔被吞键。
+                time.sleep(max(delay, 15) / 1000.0)
             return True
         finally:
             self._executing = False

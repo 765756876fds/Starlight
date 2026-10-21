@@ -139,7 +139,8 @@ class ComboConfig:
         return {
             "version": 1,
             "defaults": dict(self.defaults or {}),
-            "champions": {c.name: c.to_dict() for c in self.champions},
+            "champions": {f"{c.name}_{int(c.champion_id)}": c.to_dict()
+                          for c in self.champions},
         }
 
     def save(self, path: Optional[str] = None) -> bool:

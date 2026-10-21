@@ -51,7 +51,7 @@ def test_serialize_roundtrip(tmp_path):
     path = str(tmp_path / "combos.yaml")
     cfg1 = ComboConfig.load(path)
     data = cfg1.to_yaml_dict()
-    assert set(data["champions"]) == {"盲僧", "锤石"}
+    assert set(data["champions"]) == {"盲僧_64", "锤石_412"}  # 顶层 key 含 champion_id 防同名覆盖
     dumped = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     (tmp_path / "combos.yaml").write_text(dumped, encoding="utf-8")
     cfg2 = ComboConfig.load(path)

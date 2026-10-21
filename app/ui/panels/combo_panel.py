@@ -331,11 +331,21 @@ class ComboPanel(QWidget):
             self._after_save(champ)
 
     def _after_save(self, champ) -> None:
-        """保存后：写回 combos.yaml + reload + 刷新 UI。"""
+        """保存后：写回 combos.yaml + reload + 用最新 config 重取英雄刷新 UI。
+
+        save_config() 成功后 reload_config 会替换 self.config 为全新对象，
+        旧 champ 对象（编辑按钮闭包捕获）可能已过期——必须按 champion_id
+        从最新 config 重新获取，避免 UI 继续显示旧数据。
+        """
         if self._combo and self._combo.save_config():
             print("[Combo] 配置已保存")
         self._refresh_current()
-        self._show_detail(champ.champion_id)
+        fresh = (self._combo.find_champion_by_id(champ.champion_id)
+                 if self._combo else None)
+        if fresh is not None:
+            self._show_detail(fresh.champion_id)
+        else:
+            self._show_detail(champ.champion_id)
 
     # ---------- 二期第二步：删除 ----------
 

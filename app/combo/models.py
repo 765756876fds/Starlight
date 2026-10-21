@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -108,7 +109,11 @@ def parse_combo(d: dict) -> Optional[Combo]:
 
 
 def parse_champion(name: str, d: dict) -> Optional[ChampionCombos]:
-    """champion 条目 → ChampionCombos；结构损坏时返回 None（跳过不崩）。"""
+    """champion 条目 → ChampionCombos；结构损坏时返回 None（跳过不崩）。
+
+    YAML 顶层 key 形如 "英雄名_championId"（to_yaml_dict 防同名覆盖）；
+    解析时若 key 后缀与 champion_id 一致则还原英雄名，兼容无后缀旧文件。
+    """
     if not isinstance(d, dict):
         return None
     try:
@@ -122,8 +127,17 @@ def parse_champion(name: str, d: dict) -> Optional[ChampionCombos]:
         cb = parse_combo(c) if isinstance(c, dict) else None
         if cb is not None:
             combos.append(cb)
+    raw_name = str(name or "")
+    m = re.match(r"^(.*)_(\d+)$", raw_name)
+    if m:
+        try:
+            key_cid = int(m.group(2))
+        except ValueError:
+            key_cid = 0
+        if key_cid == cid:
+            raw_name = m.group(1)
     return ChampionCombos(
-        name=str(name or ""),
+        name=raw_name,
         champion_id=cid,
         aliases=[str(a) for a in (d.get("aliases") or []) if a],
         combos=combos,

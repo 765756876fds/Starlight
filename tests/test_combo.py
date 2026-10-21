@@ -89,7 +89,7 @@ def test_executor_sequence_order_and_delay(tmp_path, monkeypatch):
     ])
     assert exec_.run(combo) is True
     assert sender.keys == ["4", "w", "w", "d"]
-    assert slept == [0.05, 0.05, 0.05]  # 0ms 步骤不 sleep
+    assert slept == [0.05, 0.015, 0.05, 0.05]  # 0ms 步骤强制 15ms 物理缓冲
 
 
 def test_executor_rejects_concurrent_run(tmp_path, monkeypatch):
