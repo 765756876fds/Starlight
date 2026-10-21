@@ -64,15 +64,26 @@ def test_pause_resume_flow():
 
 
 def test_pause_ignored_when_not_playing():
-    """非 PLAYING 态收到 PAUSE_REQUESTED / RESUME_REQUESTED 应被忽略。"""
-    for st in (PlaybackStatus.IDLE, PlaybackStatus.LOADING, PlaybackStatus.PAUSED,
-               PlaybackStatus.FAILED):
+    """非 PLAYING/LOADING 态收到 PAUSE 应忽略；非 PAUSED 态收到 RESUME 应忽略。"""
+    for st in (PlaybackStatus.IDLE, PlaybackStatus.PAUSED, PlaybackStatus.FAILED):
         s = PlaybackState(status=st, epoch=0)
         s2, fx = reduce(s, _ev(PlaybackEventType.PAUSE_REQUESTED))
         assert s2 is s and fx == [], f"{st} 下 PAUSE 应被忽略"
-    s = PlaybackState(status=PlaybackStatus.IDLE, epoch=0)
-    s2, fx = reduce(s, _ev(PlaybackEventType.RESUME_REQUESTED))
-    assert s2 is s and fx == [], "IDLE 下 RESUME 应被忽略"
+    # RESUME 仅在 PAUSED 生效（PAUSED 是合法恢复状态，不在此列）
+    for st in (PlaybackStatus.IDLE, PlaybackStatus.FAILED):
+        s = PlaybackState(status=st, epoch=0)
+        s2, fx = reduce(s, _ev(PlaybackEventType.RESUME_REQUESTED))
+        assert s2 is s and fx == [], f"{st} 下 RESUME 应被忽略"
+
+
+def test_pause_in_loading_sets_pause_pending():
+    """LOADING 态收到 PAUSE_REQUESTED：挂起 pause_pending（不忽略、不立即 PAUSE_MPV）。"""
+    s = PlaybackState(status=PlaybackStatus.LOADING, epoch=1)
+    ev = PlaybackEvent(type=PlaybackEventType.PAUSE_REQUESTED, epoch=1)
+    new_state, effects = reduce(s, ev)
+    assert new_state.status == PlaybackStatus.LOADING
+    assert new_state.pause_pending is True
+    assert effects == [], "LOADING 期间不立即产生 PAUSE_MPV"
 
 
 def test_epoch_race_old_load_success_dropped():
@@ -141,9 +152,48 @@ def test_circuit_breaker_after_3_failures():
                           epoch=s.epoch, error="boom"))
     assert s.status == PlaybackStatus.IDLE, "熔断后应回 IDLE（停止自动重试）"
     assert s.fail_streak == 3
-    assert _types(fx) == [PlaybackEffectType.NOTIFY_UI], \
-        "熔断时只通知 UI，不得产生 ADVANCE_QUEUE"
+    assert _types(fx) == [PlaybackEffectType.NOTIFY_UI, PlaybackEffectType.STOP_MPV], \
+        "熔断时通知 UI 且必须追加 STOP_MPV（状态已 IDLE 但 mpv 可能还在响）"
     assert "连续 3 次" in fx[0].payload["error_msg"]
+
+
+def test_pause_pending_during_loading():
+    """LOADING 态收到 PAUSE_REQUESTED：挂起暂停标记；LOAD_SUCCESS 后转 PAUSED + PAUSE_MPV。"""
+    s, _ = reduce(PlaybackState(), PlaybackEvent(
+        PlaybackEventType.PLAY_REQUESTED, track=TRACK_A, origin="user"))
+    s2, fx = reduce(s, PlaybackEvent(PlaybackEventType.PAUSE_REQUESTED))
+    assert s2.status == PlaybackStatus.LOADING, "加载中暂停不立即改状态"
+    assert s2.pause_pending is True
+    assert fx == [], "加载中暂停不产生即时 effect"
+    s3, fx = reduce(s2, _ev(PlaybackEventType.LOAD_SUCCESS, epoch=s2.epoch, track=TRACK_A))
+    assert s3.status == PlaybackStatus.PAUSED, "起播即暂停（防'起播即响'）"
+    assert s3.pause_pending is False, "挂起标记已清空"
+    assert s3.current_track == TRACK_A
+    assert _types(fx) == [PlaybackEffectType.PAUSE_MPV]
+
+
+def test_pause_pending_cleared_on_new_play():
+    """PLAY_REQUESTED 清空 pause_pending（新播放意图不继承挂起暂停）。"""
+    s, _ = reduce(PlaybackState(), PlaybackEvent(
+        PlaybackEventType.PLAY_REQUESTED, track=TRACK_A, origin="user"))
+    s2, _ = reduce(s, PlaybackEvent(PlaybackEventType.PAUSE_REQUESTED))
+    assert s2.pause_pending is True
+    s3, _ = reduce(s2, PlaybackEvent(
+        PlaybackEventType.PLAY_REQUESTED, track=TRACK_B, origin="user"))
+    assert s3.pause_pending is False
+    assert s3.status == PlaybackStatus.LOADING
+    assert s3.epoch == s2.epoch + 1
+
+
+def test_pause_pending_not_left_after_load_failed():
+    """挂起暂停不泄漏：LOAD_FAILED（未熔断）转 FAILED 时清空 pause_pending。"""
+    s, _ = reduce(PlaybackState(), PlaybackEvent(
+        PlaybackEventType.PLAY_REQUESTED, track=TRACK_A, origin="user"))
+    s2, _ = reduce(s, PlaybackEvent(PlaybackEventType.PAUSE_REQUESTED))
+    s3, fx = reduce(s2, _ev(PlaybackEventType.LOAD_FAILED, epoch=s2.epoch, error="boom"))
+    assert s3.status == PlaybackStatus.FAILED
+    assert _types(fx) == [PlaybackEffectType.ADVANCE_QUEUE]
+    assert s3.pause_pending is False, "失败后不再挂起暂停"
 
 
 def test_user_play_resets_circuit_breaker():

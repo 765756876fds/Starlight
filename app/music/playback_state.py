@@ -75,13 +75,16 @@ class PlaybackEffect:
 @dataclass
 class PlaybackState:
     """播放状态快照（不可变：reducer 每次返回新实例）。
-    fail_streak：连续加载失败计数（>=3 触发熔断，停止自动重试）。"""
+    fail_streak：连续加载失败计数（>=3 触发熔断，停止自动重试）。
+    pause_pending：LOADING 期间收到暂停请求的挂起标记（LOAD_SUCCESS 后立即生效，
+    防止"起播即响"；PLAY_REQUESTED 时清空）。"""
 
     status: PlaybackStatus = PlaybackStatus.IDLE
     current_track: Optional[dict[str, Any]] = None
     epoch: int = 0
     error_msg: Optional[str] = None
     fail_streak: int = 0
+    pause_pending: bool = False
 
 
 def _same_epoch(state: PlaybackState, event: PlaybackEvent) -> bool:
@@ -105,6 +108,7 @@ def reduce(
     if event.type == PlaybackEventType.PLAY_REQUESTED:
         # 新播放意图：进入加载态，epoch 递增（作废一切在途的旧异步结果）。
         # 熔断语义：用户主动切歌清零失败计数；自动切歌保留（连续失败由 auto 累积）。
+        # 清空 pause_pending：新播放意图不继承旧挂起暂停。
         new_fail_streak = 0 if event.origin == "user" else state.fail_streak
         return replace(
             state,
@@ -113,17 +117,25 @@ def reduce(
             epoch=state.epoch + 1,
             error_msg=None,
             fail_streak=new_fail_streak,
+            pause_pending=False,
         ), [PlaybackEffect(PlaybackEffectType.LOAD_FILE, {"track": event.track})]
 
     if event.type == PlaybackEventType.PAUSE_REQUESTED:
-        # 仅播放中可暂停
-        if state.status != PlaybackStatus.PLAYING:
-            return state, effects
-        return replace(
-            state,
-            status=PlaybackStatus.PAUSED,
-            error_msg=None,
-        ), [PlaybackEffect(PlaybackEffectType.PAUSE_MPV)]
+        # 播放中：立即暂停
+        if state.status == PlaybackStatus.PLAYING:
+            return replace(
+                state,
+                status=PlaybackStatus.PAUSED,
+                error_msg=None,
+            ), [PlaybackEffect(PlaybackEffectType.PAUSE_MPV)]
+        # 加载中：挂起暂停请求——LOAD_SUCCESS 后立即转 PAUSED（防止"起播即响"）
+        if state.status == PlaybackStatus.LOADING:
+            return replace(
+                state,
+                pause_pending=True,
+                error_msg=None,
+            ), effects
+        return state, effects
 
     if event.type == PlaybackEventType.RESUME_REQUESTED:
         # 仅暂停态可恢复
@@ -149,6 +161,16 @@ def reduce(
         # 双条件防污染：PAUSED/PLAYING 收到迟到的 LOAD_SUCCESS 绝不能变回/维持错误状态。
         if not _same_epoch(state, event) or state.status != PlaybackStatus.LOADING:
             return state, effects
+        if state.pause_pending:
+            # 加载期间用户已请求暂停：起播即暂停（清空挂起标记）
+            return replace(
+                state,
+                status=PlaybackStatus.PAUSED,
+                current_track=event.track or state.current_track,
+                error_msg=None,
+                fail_streak=0,  # 加载成功清零连续失败计数
+                pause_pending=False,
+            ), [PlaybackEffect(PlaybackEffectType.PAUSE_MPV)]
         return replace(
             state,
             status=PlaybackStatus.PLAYING,
@@ -163,23 +185,29 @@ def reduce(
             return state, effects
         new_streak = state.fail_streak + 1
         if new_streak >= 3:
-            # 熔断：连续 3 次失败，停止自动重试——转 IDLE + 通知 UI，不产生 ADVANCE_QUEUE
+            # 熔断：连续 3 次失败，停止自动重试——转 IDLE + 通知 UI，不产生 ADVANCE_QUEUE。
+            # 必须追加 STOP_MPV：状态已 IDLE 但 mpv 可能还在响（如上次 loadfile 悬挂）。
             return replace(
                 state,
                 status=PlaybackStatus.IDLE,
                 current_track=None,
                 error_msg=event.error_msg,
                 fail_streak=new_streak,
-            ), [PlaybackEffect(
-                PlaybackEffectType.NOTIFY_UI,
-                {"error_msg": f"连续 {new_streak} 次加载失败，已停止播放"},
-            )]
+                pause_pending=False,  # 加载已失败，清空挂起暂停意图
+            ), [
+                PlaybackEffect(
+                    PlaybackEffectType.NOTIFY_UI,
+                    {"error_msg": f"连续 {new_streak} 次加载失败，已停止播放"},
+                ),
+                PlaybackEffect(PlaybackEffectType.STOP_MPV),
+            ]
         # 未达熔断阈值：转 FAILED 并请求队列前进（自动跳过坏歌）
         return replace(
             state,
             status=PlaybackStatus.FAILED,
             error_msg=event.error_msg,
             fail_streak=new_streak,
+            pause_pending=False,  # 加载已失败，清空挂起暂停意图
         ), [PlaybackEffect(
             PlaybackEffectType.ADVANCE_QUEUE, {"reason": "load_failed"}
         )]

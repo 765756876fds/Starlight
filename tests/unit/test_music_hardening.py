@@ -171,8 +171,20 @@ class TestIdlePollAutoNext:
         with patch("app.music.controller.MpvController"):
             ctrl = MusicController(cfg)
         ctrl.mpv = MagicMock()
-        # idle 序列：前两轮 False（未播完），之后 True（播完触发 auto_next）
-        ctrl.mpv.get_property.side_effect = [False, False, True, True, True]
+        # idle 序列：前两轮 False（未播完），之后 True（播完触发 auto_next）。
+        # 按属性名分发的 fake：idle-active 消费序列；playback-time/duration 返回固定值——
+        # 新增的快照读取（_poll_idle 每轮多一次 playback-time）不会耗尽 side_effect 列表。
+        idle_seq = [False, False] + [True] * 8
+        idle_it = iter(idle_seq)
+
+        def _fake_get_property(name, **kwargs):
+            if name == "playback-time":
+                return 5.0
+            if name == "duration":
+                return 10.0
+            return next(idle_it)
+
+        ctrl.mpv.get_property.side_effect = _fake_get_property
         # 注意：不再 mock is_idle()——_auto_next 守卫必须与轮询同源（实时 get_property），
         # 真实环境 is_idle() 读启动时缓存且从不更新（默认 False），不能作为切歌守卫。
         ctrl.mpv.is_paused.return_value = False
