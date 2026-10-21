@@ -110,15 +110,20 @@ def reduce(
         # 熔断语义：用户主动切歌清零失败计数；自动切歌保留（连续失败由 auto 累积）。
         # 清空 pause_pending：新播放意图不继承旧挂起暂停。
         new_fail_streak = 0 if event.origin == "user" else state.fail_streak
+        new_epoch = state.epoch + 1
         return replace(
             state,
             status=PlaybackStatus.LOADING,
             current_track=event.track,
-            epoch=state.epoch + 1,
+            epoch=new_epoch,
             error_msg=None,
             fail_streak=new_fail_streak,
             pause_pending=False,
-        ), [PlaybackEffect(PlaybackEffectType.LOAD_FILE, {"track": event.track})]
+        ), [PlaybackEffect(
+            PlaybackEffectType.LOAD_FILE,
+            # epoch 必须带上：未来异步执行器校验请求代际，旧指令绝不覆盖新指令
+            {"track": event.track, "epoch": new_epoch},
+        )]
 
     if event.type == PlaybackEventType.PAUSE_REQUESTED:
         # 播放中：立即暂停
@@ -139,13 +144,27 @@ def reduce(
 
     if event.type == PlaybackEventType.RESUME_REQUESTED:
         # 仅暂停态可恢复
-        if state.status != PlaybackStatus.PAUSED:
-            return state, effects
-        return replace(
-            state,
-            status=PlaybackStatus.PLAYING,
-            error_msg=None,
-        ), [PlaybackEffect(PlaybackEffectType.RESUME_MPV)]
+        if state.status == PlaybackStatus.PAUSED:
+            return replace(
+                state,
+                status=PlaybackStatus.PLAYING,
+                error_msg=None,
+            ), [PlaybackEffect(PlaybackEffectType.RESUME_MPV)]
+        # FAILED 态：用户显式恢复 → 重新走加载流程（同一曲目重试）。
+        # 不递增 epoch（非新播放意图），fail_streak 清零（用户主动重试）；
+        # LOAD_FILE 携带当前 epoch，异步执行器据此校验。
+        if state.status == PlaybackStatus.FAILED:
+            return replace(
+                state,
+                status=PlaybackStatus.LOADING,
+                error_msg=None,
+                fail_streak=0,
+                pause_pending=False,
+            ), [PlaybackEffect(
+                PlaybackEffectType.LOAD_FILE,
+                {"track": state.current_track, "epoch": state.epoch},
+            )]
+        return state, effects
 
     if event.type == PlaybackEventType.STOP_REQUESTED:
         return replace(
@@ -153,6 +172,7 @@ def reduce(
             status=PlaybackStatus.IDLE,
             current_track=None,
             error_msg=None,
+            pause_pending=False,  # 清空挂起暂停意图：IDLE 态不得残留任何挂起标记
         ), [PlaybackEffect(PlaybackEffectType.STOP_MPV)]
 
     # ---- 异步结果事件（epoch 契约 + 状态防污染） ----
@@ -238,6 +258,7 @@ def reduce(
 # 加载确认宽限期：本地文件解码快（0.8s），在线流媒体握手慢（3.0s）
 _LOAD_GRACE_SEC = {"local": 0.8, "online": 3.0}
 _ONLINE_TIMEOUT_SEC = 10.0
+_LOCAL_TIMEOUT_SEC = 15.0  # local 加载超时兜底：防坏文件永久卡 LOADING
 
 
 def classify_status(
@@ -284,11 +305,15 @@ def classify_status(
                 epoch=state.epoch,
                 track=state.current_track,
             )
-        if kind == "online" and elapsed_sec > _ONLINE_TIMEOUT_SEC:
+        # 超时兜底（local 也生效，不再只保护 online）：
+        # 过了宽限期、未 idle、但迟迟未起播（无播放时间/时长）→ 判定加载失败，
+        # 防止坏文件导致永久卡在 LOADING（黑屏黑洞）。
+        timeout = _LOCAL_TIMEOUT_SEC if kind == "local" else _ONLINE_TIMEOUT_SEC
+        if elapsed_sec > timeout:
             return PlaybackEvent(
                 PlaybackEventType.LOAD_FAILED,
                 epoch=state.epoch,
-                error_msg="在线加载超时",
+                error_msg=f"{kind} 加载超时（{timeout:.0f}s 未起播）",
             )
         return None
 

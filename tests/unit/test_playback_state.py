@@ -11,6 +11,7 @@ from app.music.playback_state import (
     PlaybackEventType,
     PlaybackState,
     PlaybackStatus,
+    classify_status,
     reduce,
 )
 
@@ -64,16 +65,16 @@ def test_pause_resume_flow():
 
 
 def test_pause_ignored_when_not_playing():
-    """非 PLAYING/LOADING 态收到 PAUSE 应忽略；非 PAUSED 态收到 RESUME 应忽略。"""
+    """非 PLAYING/LOADING 态收到 PAUSE 应忽略；非 PAUSED/FAILED 态收到 RESUME 应忽略。"""
     for st in (PlaybackStatus.IDLE, PlaybackStatus.PAUSED, PlaybackStatus.FAILED):
         s = PlaybackState(status=st, epoch=0)
         s2, fx = reduce(s, _ev(PlaybackEventType.PAUSE_REQUESTED))
         assert s2 is s and fx == [], f"{st} 下 PAUSE 应被忽略"
-    # RESUME 仅在 PAUSED 生效（PAUSED 是合法恢复状态，不在此列）
-    for st in (PlaybackStatus.IDLE, PlaybackStatus.FAILED):
-        s = PlaybackState(status=st, epoch=0)
-        s2, fx = reduce(s, _ev(PlaybackEventType.RESUME_REQUESTED))
-        assert s2 is s and fx == [], f"{st} 下 RESUME 应被忽略"
+    # RESUME 在 PAUSED 生效（合法恢复）；FAILED 态为"重新走加载流程"（见
+    # test_resume_in_failed_restarts_load），均不在此列——仅 IDLE 忽略。
+    s = PlaybackState(status=PlaybackStatus.IDLE, epoch=0)
+    s2, fx = reduce(s, _ev(PlaybackEventType.RESUME_REQUESTED))
+    assert s2 is s and fx == [], "IDLE 下 RESUME 应被忽略"
 
 
 def test_pause_in_loading_sets_pause_pending():
@@ -255,8 +256,8 @@ def test_classify_failed_and_timeout():
     ev3 = classify_status(s, {"idle": False, "playback_time": 0.0, "duration": 0.0},
                           elapsed_sec=11.0, kind="online")
     assert ev3 is not None and ev3.type == PlaybackEventType.LOAD_FAILED
-    assert ev3.error_msg == "在线加载超时"
-    # 超时判定仅限 online：local 无此语义
+    assert "online" in ev3.error_msg and "超时" in ev3.error_msg
+    # local 超时阈值 15s：11s 未到阈值 → 仍等待（None）；到 15s 后同样判失败
     ev4 = classify_status(s, {"idle": False, "playback_time": 0.0, "duration": 0.0},
                           elapsed_sec=11.0, kind="local")
     assert ev4 is None
@@ -342,4 +343,48 @@ def test_reducer_pure_no_side_effect_on_error():
     assert s == before, "reducer 不得修改入参状态（返回新实例）"
     assert s2 is not s
     assert isinstance(s2, PlaybackState)
+
+
+def test_local_timeout_fails_loading():
+    """P0：classify_status 对 local 超时兜底——15s 未起播 → LOAD_FAILED，不再永久卡 LOADING。"""
+    s = PlaybackState(status=PlaybackStatus.LOADING, epoch=1)
+    # 过宽限期、非 idle、无播放时间/时长，但 elapsed 超过 local 超时（15s）
+    ev = classify_status(s, {"idle": False}, 15.1, "local")
+    assert ev is not None and ev.type == PlaybackEventType.LOAD_FAILED
+    assert ev.epoch == 1
+    # 未到超时（如 10s）仍返回 None（继续等待）
+    assert classify_status(s, {"idle": False}, 10.0, "local") is None
+    # online 超时（10s）同样生效
+    ev2 = classify_status(s, {"idle": False}, 10.1, "online")
+    assert ev2 is not None and ev2.type == PlaybackEventType.LOAD_FAILED
+
+
+def test_stop_clears_pause_pending():
+    """P0：STOP_REQUESTED 必须清空 pause_pending，维护状态不变量。"""
+    s = PlaybackState(status=PlaybackStatus.LOADING, epoch=1, pause_pending=True)
+    s2, fx = reduce(s, _ev(PlaybackEventType.STOP_REQUESTED))
+    assert s2.status == PlaybackStatus.IDLE
+    assert s2.pause_pending is False, "IDLE 态不得残留挂起暂停意图"
+
+
+def test_resume_in_failed_restarts_load():
+    """P0：FAILED 态收到 RESUME_REQUESTED → 重新走加载流程（捞起死态）。"""
+    s = PlaybackState(status=PlaybackStatus.FAILED, current_track=TRACK_A,
+                      epoch=2, fail_streak=2, error_msg="boom")
+    s2, fx = reduce(s, _ev(PlaybackEventType.RESUME_REQUESTED))
+    assert s2.status == PlaybackStatus.LOADING
+    assert s2.current_track == TRACK_A
+    assert s2.epoch == 2, "FAILED 重试不递增代际（非新播放意图）"
+    assert s2.fail_streak == 0, "用户主动重试应清零连续失败计数"
+    assert _types(fx) == [PlaybackEffectType.LOAD_FILE]
+    assert fx[0].payload["epoch"] == 2, "重试 LOAD_FILE 必须携带当前 epoch"
+
+
+def test_load_file_effect_carries_epoch():
+    """P0：LOAD_FILE effect 必须携带新 epoch，供未来异步执行器防旧指令覆盖新指令。"""
+    s = PlaybackState(status=PlaybackStatus.IDLE, epoch=0)
+    s2, fx = reduce(s, _ev(PlaybackEventType.PLAY_REQUESTED, track=TRACK_A))
+    assert s2.epoch == 1
+    assert _types(fx) == [PlaybackEffectType.LOAD_FILE]
+    assert fx[0].payload.get("epoch") == 1, "LOAD_FILE 需携带执行时代际号"
     assert isinstance(fx[0], PlaybackEffect)

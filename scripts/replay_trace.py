@@ -99,34 +99,54 @@ def _intent_to_event(rec: dict[str, Any]) -> Optional[PlaybackEvent]:
     )
 
 
-def _sample_from_get_property(rec: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """mpv get_property 记录 → classify 采样（idle/playback_time/duration）。"""
+def _sample_from_get_property(rec: dict[str, Any]) -> tuple[str, Any] | None | tuple[None, None]:
+    """mpv get_property 记录 → classify 采样键值对。
+
+    返回：
+    - (key, value)：属性属于采样集（idle/playback_time/duration），键已映射为下划线命名；
+    - (None, None)：属性不在采样集（如 volume），正常跳过（不计 dropped）；
+    - None：args 结构无法解析（如 {"name": ...} 或空），计入 dropped 统计，
+      防止静默丢弃导致对拍失真。
+    """
     args = rec.get("args") or {}
     alist = args.get("args") if isinstance(args, dict) else (args if isinstance(args, list) else [])
-    name = alist[0] if isinstance(alist, list) and alist else None
+    if not isinstance(alist, list) or not alist:
+        return None
+    name = alist[0]
     key = _PROP_TO_SAMPLE.get(name)
     if key is None:
-        return None
-    return {key: rec.get("res")}
+        return (None, None)
+    return (key, rec.get("res"))
 
 
 def _match_actual(effect: PlaybackEffect, t: float,
-                  actual_log: list[tuple[float, str]]) -> Optional[str]:
-    """在 actual_log 中找与 effect 匹配的实际动作（容差按 effect 类型）。"""
+                  actual_log: list[tuple[float, str]],
+                  consumed: set[int]) -> Optional[tuple[int, str]]:
+    """在 actual_log 中找与 effect 匹配的实际动作。
+
+    上下界匹配（t - tolerance <= at <= t + tolerance）防止跨事件误配；
+    consumed 记录已匹配的索引，同一实际动作绝不被多个 effect 重复消费。"""
     tolerance = _EFFECT_TOLERANCE.get(effect.type, 0.05)
-    for at, method in actual_log:
-        if method in _EXPECTED_ACTUAL.get(effect.type, set()) and at >= t - tolerance:
-            return method
+    expected = _EXPECTED_ACTUAL.get(effect.type, set())
+    for i, (at, method) in enumerate(actual_log):
+        if i in consumed:
+            continue
+        if method in expected and t - tolerance <= at <= t + tolerance:
+            return i, method
     return None
 
 
 def _match_schedule(effect: PlaybackEffect, t: float,
                     intents: list[tuple[float, PlaybackEvent]],
-                    tolerance: float = 2.0) -> Optional[str]:
-    """调度类 effect（切歌/推进队列）：实际体现为随后出现的 next/prev 意图。"""
-    for at, ev in intents:
-        if ev.type == PlaybackEventType.PLAY_REQUESTED and at >= t - tolerance:
-            return "intent next/prev"
+                    consumed: set[int]) -> Optional[tuple[int, str]]:
+    """调度类 effect（切歌/推进队列）：实际体现为同时刻附近的 next/prev 意图。
+    同样带时间上界与单次消费标记。"""
+    tolerance = _EFFECT_TOLERANCE.get(effect.type, 2.0)
+    for i, (at, ev) in enumerate(intents):
+        if i in consumed:
+            continue
+        if ev.type == PlaybackEventType.PLAY_REQUESTED and t - tolerance <= at <= t + tolerance:
+            return i, "intent next/prev"
     return None
 
 
@@ -154,6 +174,9 @@ def replay(jsonl_path: str) -> dict[str, Any]:
     last_file_kind = "local"
     records_parsed = 0
     mismatches: list[str] = []
+    current_sample: dict[str, Any] = {}
+    samples_parsed = 0
+    samples_dropped = 0
 
     with open(jsonl_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -189,12 +212,21 @@ def replay(jsonl_path: str) -> dict[str, Any]:
                 elif m in _ACTUAL_MARKERS:
                     actual_log.append((t, m))
                 if m == "get_property":
-                    sample = _sample_from_get_property(rec)
-                    if sample is not None:
-                        elapsed = (t - last_loadfile_t) if last_loadfile_t is not None else 0.0
-                        ev = classify_status(state, sample, elapsed, last_file_kind)
-                        if ev is not None:
-                            pending.append((t, ev))
+                    parsed = _sample_from_get_property(rec)
+                    if parsed is None:
+                        # args 结构无法解析：计入 dropped，防静默丢弃导致对拍失真
+                        samples_dropped += 1
+                    else:
+                        key, value = parsed
+                        if key is not None:
+                            # 采样累计：维护完整的 current_sample 再分类——
+                            # 单属性喂三属性分类器会让缺失键默认 0/False，严重误判
+                            current_sample[key] = value
+                            samples_parsed += 1
+                            elapsed = (t - last_loadfile_t) if last_loadfile_t is not None else 0.0
+                            ev = classify_status(state, current_sample, elapsed, last_file_kind)
+                            if ev is not None:
+                                pending.append((t, ev))
 
             # 每条记录后立即消费 pending：保证后续采样分类看到已推进的 state。
             # （若统一在循环外消费，classify 看到的永远是初始 IDLE 态，LOAD_SUCCESS 无法产生。）
@@ -207,15 +239,22 @@ def replay(jsonl_path: str) -> dict[str, Any]:
                 state = new_state
 
     # 读完整个 trace 后，在完整日志视野下核对 effects 与旧逻辑实际动作
-    # （即时匹配会因 loadfile 等实际记录晚于 intent 记录而误报不一致）
+    # （即时匹配会因 loadfile 等实际记录晚于 intent 记录而误报不一致）。
+    # consumed 集合保证每条实际动作最多被一个 effect 消费（单次消费校验）。
+    consumed_actual: set[int] = set()
+    consumed_intents: set[int] = set()
     for t, eff in effects_log:
         if eff.type in _IGNORED_EFFECTS:
             continue
-        matched = _match_actual(eff, t, actual_log)
-        if matched is None and eff.type in (
+        m = _match_actual(eff, t, actual_log, consumed_actual)
+        if m is not None:
+            consumed_actual.add(m[0])
+        elif eff.type in (
             PlaybackEffectType.SCHEDULE_NEXT_EPISODE, PlaybackEffectType.ADVANCE_QUEUE):
-            matched = _match_schedule(eff, t, intents_log)
-        if matched is None:
+            m = _match_schedule(eff, t, intents_log, consumed_intents)
+            if m is not None:
+                consumed_intents.add(m[0])
+        if m is None:
             mismatches.append(
                 f"t={t:.2f} 状态机要求 {eff.type.value}，但旧逻辑日志未见对应实际动作"
                 f"（期望 {sorted(_EXPECTED_ACTUAL.get(eff.type, set())) or 'intent next/prev'}）")
@@ -227,6 +266,10 @@ def replay(jsonl_path: str) -> dict[str, Any]:
         "effects": effects_log,
         "actual": actual_log,
         "mismatches": [m for m in mismatches if m is not None],
+        "stats": {
+            "samples_parsed": samples_parsed,
+            "samples_dropped": samples_dropped,
+        },
         "final_state": state,
     }
 
@@ -262,6 +305,8 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     print(f"[replay] 文件: {result['file']}")
     print(f"[replay] 解析记录: {result['records_parsed']} 条（不含 header）")
+    print(f"[replay] 采样: 解析 {result['stats']['samples_parsed']} 次"
+          f" | 丢弃 {result['stats']['samples_dropped']} 条（args 结构无法解析）")
     print(f"[replay] 状态机事件: {len(result['events'])} | effects: {len(result['effects'])}"
           f" | 旧逻辑实际动作: {len(result['actual'])}")
     print()

@@ -174,3 +174,67 @@ class TestReplayLatestTrace:
         assert result["records_parsed"] == 1   # 只算 intent（decision 跳过）
         assert len(result["events"]) == 1
         assert result["final_state"].status == PlaybackStatus.LOADING
+
+
+class TestReplayP0Fixes:
+    def test_match_actual_respects_upper_bound(self, tmp_path):
+        """P0：匹配必须有时间上界——实际动作超出容差窗口不得跨事件误配。"""
+        path = _write(tmp_path, [
+            _intent("play_song", t=100.0),
+            _loadfile(t=110.0),   # 超出 LOAD_FILE 5s 上界（t=100 → ≤105）
+        ])
+        result = replay(path)
+        # LOAD_FILE(100) 与 loadfile(110) 相差 10s → 不匹配 → 报告不一致
+        assert any("load_file" in m for m in result["mismatches"])
+        # 界内场景：4s 后到达的 loadfile 正常匹配
+        path2 = _write(tmp_path, [
+            _intent("play_song", t=100.0),
+            _loadfile(t=104.0),
+        ])
+        assert replay(path2)["mismatches"] == []
+
+    def test_actual_consumed_once(self, tmp_path):
+        """P0：同一实际动作只能被一个 effect 消费——重复 LOAD_FILE 不得复用同一 loadfile。"""
+        path = _write(tmp_path, [
+            _intent("play_song", t=100.0),
+            _loadfile(t=100.1),
+            _getp("playback-time", 1.5, t=101.0),   # → LOAD_SUCCESS / PLAYING
+            _intent("pause", t=102.0),
+            _mpv("pause", t=102.01),
+            _intent("next", t=103.0),                # 第二次 LOAD_FILE，无新 loadfile
+        ])
+        result = replay(path)
+        # 第一次 LOAD_FILE 消费 loadfile(100.1)；第二次 LOAD_FILE 无可用实际动作 → mismatch
+        assert any("load_file" in m for m in result["mismatches"])
+        # pause_mpv 已由 pause(102.01) 兑现
+        assert not any("pause_mpv" in m for m in result["mismatches"])
+
+    def test_sample_accumulates_full_context(self, tmp_path):
+        """P0：采样必须累计——单属性喂三属性分类器会让缺失键默认 0/False，严重误判。
+
+        构造：idle-active=True 先到（宽限内，不判定），playback-time=1.5 后到。
+        完整 sample {idle:True, playback_time:1.5} → 过宽限后 idle 优先 → LOAD_FAILED；
+        若只传 playback_time（idle 缺失默认 False）会误判 LOAD_SUCCESS。"""
+        path = _write(tmp_path, [
+            _intent("play_song", t=100.0),
+            _loadfile(t=100.1),
+            _getp("idle-active", True, t=100.5),     # 宽限内（elapsed=0.4<0.8）→ 不判定
+            _getp("playback-time", 1.5, t=101.0),    # elapsed=0.9≥0.8，完整 sample → LOAD_FAILED
+        ])
+        result = replay(path)
+        # 累计后：idle=True 且过宽限 → LOAD_FAILED（而非单属性的 LOAD_SUCCESS）
+        assert PlaybackEventType.LOAD_FAILED in _event_types(result)
+        assert PlaybackEventType.LOAD_SUCCESS not in _event_types(result)
+        assert result["final_state"].status == PlaybackStatus.FAILED
+
+    def test_unparsable_get_property_counted_as_dropped(self, tmp_path):
+        """P0：无法解析的 args（如 {"name": ...}）计入 dropped 统计，不静默丢弃。"""
+        path = _write(tmp_path, [
+            _intent("play_song", t=100.0),
+            _loadfile(t=100.1),
+            {"kind": "mpv", "m": "get_property",
+             "args": {"name": "idle-active"}, "res": False, "t": 100.5},
+        ])
+        result = replay(path)
+        assert result["stats"]["samples_dropped"] == 1
+        assert result["stats"]["samples_parsed"] == 0
