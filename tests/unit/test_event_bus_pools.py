@@ -125,8 +125,36 @@ def test_compat_alias_async_executor():
         bus.shutdown()
 
 
+def test_state_pool_converges_to_latest_while_running():
+    """运行中 key 的新状态被缓存，执行完后立即消费，最终收敛到最新状态。"""
+    bus = _make_bus()
+    got = []
+
+    def handler(e):
+        got.append(e.get("t"))
+        time.sleep(0.15)  # 制造执行窗口，暴露运行中竞态
+
+    bus.subscribe(EventType.GAME_TIME_UPDATE, handler)
+    try:
+        bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 1}))
+        # 等 t=1 真正开始执行（running key 已登记，确定竞态窗口）
+        deadline = time.time() + 2
+        while EventType.GAME_TIME_UPDATE not in bus._running_state_keys and time.time() < deadline:
+            time.sleep(0.01)
+        assert EventType.GAME_TIME_UPDATE in bus._running_state_keys
+        # 执行期间同 key 到达 2 次：中间值 2 应被覆盖，最终收敛到 3
+        bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 2}))
+        bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 3}))
+        deadline = time.time() + 3
+        while len(got) < 2 and time.time() < deadline:
+            time.sleep(0.02)
+        assert got == [1, 3], f"最终应收敛到最新状态（1 播报后只播 3），got={got}"
+    finally:
+        bus.shutdown(timeout=0.5)
+
+
 def test_shutdown_waits_for_both_pools():
-    """shutdown 优雅关闭双池：提交的事件都能执行完。"""
+    """shutdown 有界等待：已开始执行的任务能完成；未开始的允许被取消（不阻塞不抛异常）。"""
     bus = _make_bus()
     got = []
     done = threading.Event()
@@ -138,11 +166,14 @@ def test_shutdown_waits_for_both_pools():
     bus.subscribe("test.both", handler)
     try:
         bus.publish_async(Event(event_type="test.both", data={"n": 1}))
-        bus.shutdown()
-        assert done.wait(0.5), "shutdown 后事件未执行完"
+        time.sleep(0.15)  # 确保 worker 已取走任务开始执行（不被 cancel）
+        t0 = time.monotonic()
+        bus.shutdown(timeout=1.0)
+        assert time.monotonic() - t0 < 3, "shutdown 应有界返回，不无限阻塞"
+        assert done.wait(0.5), "已开始执行的事件应能完成"
         assert got == [1]
     finally:
-        bus.shutdown()
+        bus.shutdown(timeout=0.5)
 
 
 # 供测试访问的模块级集合（已在顶部 import，此处不再重复）

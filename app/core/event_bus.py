@@ -142,6 +142,10 @@ class EventBus:
         self._event_history: list[Event] = []
         self._max_history = 1000
         self._running = True
+        # 状态合并竞态治理：正在执行的 state key + 执行期间同 key 的最新待处理事件
+        self._running_state_keys: set[str] = set()
+        self._pending_latest_state: dict[str, Event] = {}
+        self._is_shutting_down = False
         # ---- 异步事件物理隔离：双池 ----
         # 状态池：高频可丢弃事件（time_update/snapshot 等），按 key 合并保最新、上限 64
         self._state_executor = ThreadPoolExecutor(
@@ -243,9 +247,15 @@ class EventBus:
 
     def _submit_state(self, event: Event):
         """状态池：按 key 合并保最新（同 key 新事件替换旧事件，保留最新状态）；
-        无同 key 时追加到队尾；达到硬上限（64）且无同 key 可替换时，丢弃最早的事件。"""
+        无同 key 时追加到队尾；达到硬上限（64）且无同 key 可替换时，丢弃最早的事件；
+        若 key 正在执行，缓存为最新待处理，等当前执行完立即消费（最终收敛到最新）。"""
         key = self._state_key(event)
         with self._pool_lock:
+            # 该 key 正在执行：不丢弃，缓存为最新待处理（放在"同 key 替换队列"之前，
+            # 避免执行中的 key 被队列里的旧记录覆盖/混淆）
+            if key in self._running_state_keys:
+                self._pending_latest_state[key] = event
+                return
             for i, pending in enumerate(self._state_queue):
                 if self._state_key(pending) == key:
                     # 同 key：新事件替换旧事件（不追加、不重复执行）
@@ -257,7 +267,7 @@ class EventBus:
                     self._state_queue.popleft()
                 self._state_queue.append(event)
         try:
-            future = self._state_executor.submit(self.publish, event)
+            future = self._state_executor.submit(self._run_state_event, event)
         except RuntimeError:
             # 总线正在关闭，不再接受新事件；避免回退同步阻塞调用方
             with self._pool_lock:
@@ -266,6 +276,21 @@ class EventBus:
             logger.warning("EventBus 关闭中，事件 %s 被丢弃", event.event_type)
             return
         future.add_done_callback(lambda _f: self._dec_state(event))
+
+    def _run_state_event(self, event: Event):
+        """状态池 worker 执行体：登记运行中 key，执行后释放并立即消费缓存的最新状态。"""
+        key = self._state_key(event)
+        with self._pool_lock:
+            self._running_state_keys.add(key)
+        try:
+            self.publish(event)
+        finally:
+            with self._pool_lock:
+                self._running_state_keys.discard(key)
+                latest = self._pending_latest_state.pop(key, None)
+            # 执行期间同 key 有更新到达：立即重新入队消费（保证最终收敛到最新）
+            if latest is not None:
+                self._submit_state(latest)
 
     def _submit_critical(self, event: Event):
         """临界池：容量足够大，拥堵时记录 ERROR 但绝不静默丢弃。"""
@@ -277,7 +302,7 @@ class EventBus:
                 )
             self._critical_pending += 1
         try:
-            future = self._critical_executor.submit(self.publish, event)
+            future = self._critical_executor.submit(self._run_critical_event, event)
         except RuntimeError:
             # 总线正在关闭，不再接受新事件；避免回退同步阻塞调用方
             with self._pool_lock:
@@ -285,6 +310,19 @@ class EventBus:
             logger.warning("EventBus 关闭中，事件 %s 被丢弃", event.event_type)
             return
         future.add_done_callback(lambda _f: self._dec_pending("critical"))
+
+    def _run_critical_event(self, event: Event):
+        """临界池 worker 执行体：对单 worker 的关键任务做耗时监控。"""
+        start_ts = time.monotonic()
+        try:
+            self.publish(event)
+        finally:
+            elapsed_ms = (time.monotonic() - start_ts) * 1000
+            if elapsed_ms > 1000:
+                logger.warning(
+                    "[EventBus] 关键任务 %s 耗时 %.0fms，请检查是否误放长任务",
+                    event.event_type, elapsed_ms,
+                )
 
     def _dec_state(self, event: Event):
         """状态池事件执行完成：从待处理队列移除（可能已被同 key 新事件替换，忽略即可）。"""
@@ -310,20 +348,56 @@ class EventBus:
         with self._lock:
             self._event_history.clear()
 
-    def shutdown(self):
+    def shutdown(self, timeout: float = 3.0):
         """
-        关闭事件总线（优雅关闭）
+        关闭事件总线（有界等待）
 
-        先拒绝新事件，再等待已提交的异步 handler 全部执行完毕
-        （wait=True）。注意：订阅者 handler 应避免无限阻塞，否则退出
-        流程会一直等待。
+        先拒绝新事件，取消未开始的排队任务；对已开始执行的任务做有界等待
+        （timeout 秒），超时后记录日志并放弃等待，避免无限阻塞退出流程。
         """
+        self._is_shutting_down = True
         self._running = False
-        self._state_executor.shutdown(wait=True, cancel_futures=True)
-        self._critical_executor.shutdown(wait=True, cancel_futures=True)
+        try:
+            pending = -1
+            q = getattr(self._critical_executor, '_work_queue', None)
+            if q is not None:
+                pending = q.qsize()
+            if pending > 0:
+                logger.info("[EventBus] 关闭前有 %d 个关键任务待完成", pending)
+        except Exception:
+            pass
+        try:
+            self._state_executor.shutdown(wait=False, cancel_futures=True)
+            self._critical_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception as e:
+            logger.warning("[EventBus] executor shutdown 异常: %s", e)
+        # 有界等待：轮询是否还有未完成（执行中/排队）任务
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._has_running_tasks():
+                break
+            time.sleep(0.1)
+        else:
+            logger.warning("[EventBus] 关闭超时（%ss），部分任务被强制放弃", timeout)
         with self._lock:
             self._subscribers.clear()
             self._wildcard_subscribers.clear()
+        with self._pool_lock:
+            self._state_queue.clear()
+            self._pending_latest_state.clear()
+            self._running_state_keys.clear()
+        logger.info("[EventBus] shutdown 完成")
+
+    def _has_running_tasks(self) -> bool:
+        """检测双池是否仍有未完成任务（unfinished_tasks：排队 + 执行中都计入）。"""
+        try:
+            for ex in (self._state_executor, self._critical_executor):
+                q = getattr(ex, '_work_queue', None)
+                if q is not None and q.unfinished_tasks > 0:
+                    return True
+            return False
+        except Exception:
+            return False
 
 
 # 全局事件总线单例
