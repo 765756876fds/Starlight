@@ -149,7 +149,18 @@ class ComboPanel(QWidget):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_current)
-        self._timer.start(2000)
+        self._timer.setInterval(2000)
+        # 不在此 start：showEvent 启动、hideEvent 停止（面板隐藏时定时器不空转）
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
 
         self._refresh_list()
         self._refresh_current()

@@ -129,6 +129,8 @@ class MusicPanel(QWidget):
     _identify_trigger = Signal()
     # 下载进度：后台线程 emit → 主线程渲染（跨线程安全）；pct None=无总量，-1=完成，-2=失败
     _dl_signal = Signal(str, object)  # key, pct
+    _dl_finish_signal = Signal(str, str)  # (key, 状态: done/fail/exists)：下载回调只 emit，UI 刷新主线程做
+    _status_signal = Signal(str)          # 跨线程状态栏消息桥（换源错误等事件，禁直接 setText）
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
     _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
 
@@ -465,6 +467,8 @@ class MusicPanel(QWidget):
 
         # P1 候选旁路：订阅 controller 推送的候选事件（Signal 桥到主线程）
         self._search_event.connect(self._on_search_show)
+        self._dl_finish_signal.connect(self._on_dl_finish)
+        self._status_signal.connect(self._on_status_msg)
         try:
             get_event_bus().subscribe(ONLINE_SEARCH_DONE, self._on_search_event)
             get_event_bus().subscribe(ONLINE_ERROR, self._on_error_event)
@@ -854,9 +858,10 @@ class MusicPanel(QWidget):
         if ret != QMessageBox.StandardButton.Yes:
             return
         try:
-            # 后台线程执行：clear_queue 在主线程持 controller._lock + mpv.stop()（IPC），
-            # 直接调用会卡住 GUI——丢 _safe_call 出主线程。
-            self._safe_call(self._music.clear_queue)
+            # 真后台线程：clear_queue 在主线程持 controller._lock + mpv.stop()（IPC），
+            # 直接/同步 _safe_call 都会卡住 GUI——daemon 线程执行（对齐 next/toggle 路径）。
+            threading.Thread(target=self._safe_call, args=(self._music.clear_queue,),
+                             daemon=True, name="ui-music-clear").start()
         except Exception as e:
             print(f"[MusicPanel] 清空队列失败: {e}")
 
@@ -1328,16 +1333,18 @@ class MusicPanel(QWidget):
             self.lbl_rank_status.setText("暂无平台提供榜单（插件无榜单能力或加载失败）")
         else:
             self.list_rank_sources.setCurrentRow(0)
-        # 最新请求补偿：运行期间又有切 tab → 自动补拉一轮
+        # 最新请求补偿：运行期间又有切 tab → 自动补拉一轮。
+        # QTimer.singleShot(0) 延后一拍：旧 _rank_thread 的 quit 此刻可能仍在排队
+        # （isRunning 仍 True），直接重入会被防重入守卫吞掉——排队到线程彻底退出后执行。
         if self._pending_rank_lists:
             self._pending_rank_lists = False
-            self._load_top_lists()
+            QTimer.singleShot(0, self._load_top_lists)
 
     def _on_rank_lists_failed(self, err: str):
         self.lbl_rank_status.setText(f"榜单加载失败: {err}")
         if self._pending_rank_lists:
             self._pending_rank_lists = False
-            self._load_top_lists()
+            QTimer.singleShot(0, self._load_top_lists)
 
     def _on_rank_source_selected(self, current, previous):
         """平台选中变化 → 下方榜单列表（该平台全部分组的榜单）。"""
@@ -1432,18 +1439,21 @@ class MusicPanel(QWidget):
             self.list_rank_songs.addItem(item)
         n = len(tracks)
         self.lbl_rank_status.setText(f"共 {n} 首，双击播放" if n else "榜单无歌曲")
-        # 最新请求补偿：加载期间用户又点了其他榜单 → 自动加载最新的
+        # 最新请求补偿：加载期间用户又点了其他榜单 → 自动加载最新的。
+        # singleShot(0) 延后一拍，避免旧详情线程尚未彻底 quit 时重入被吞。
         if self._pending_rank_detail:
             req = self._pending_rank_detail
             self._pending_rank_detail = None
-            self._load_rank_detail(req["source"], req["list_id"], req["title"])
+            QTimer.singleShot(0, lambda: self._load_rank_detail(
+                req["source"], req["list_id"], req["title"]))
 
     def _on_rank_detail_failed(self, err: str):
         self.lbl_rank_status.setText(f"榜单详情加载失败: {err}")
         if self._pending_rank_detail:
             req = self._pending_rank_detail
             self._pending_rank_detail = None
-            self._load_rank_detail(req["source"], req["list_id"], req["title"])
+            QTimer.singleShot(0, lambda: self._load_rank_detail(
+                req["source"], req["list_id"], req["title"]))
 
     def _on_rank_song_play(self, item: QListWidgetItem):
         data = item.data(Qt.UserRole)
@@ -1710,18 +1720,16 @@ class MusicPanel(QWidget):
             self._dl_signal.emit(k, pct)
 
         def on_done(k, path):
+            # 下载回调在工作线程：只 emit 信号，UI 刷新（setText/_refresh）丢主线程槽
             self._dl_signal.emit(k, -1)
-            self.lbl_status.setText(f"已下载：{song.get('title', '')}")
-            self._refresh_local_list(self.edit_local.text().strip())
-            if self.tabs.currentIndex() == 3:
-                self._refresh_playlists()
+            self._dl_finish_signal.emit(k, "done")
 
         def on_fail(k, reason):
             self._dl_signal.emit(k, -2)
-            self.lbl_status.setText(f"下载失败：{reason}")
+            self._dl_finish_signal.emit(k, "fail")
 
         def on_exists(k):
-            self.lbl_status.setText("该歌已下载，跳过（不覆盖）")
+            self._dl_finish_signal.emit(k, "exists")
 
         self.lbl_status.setText(f"开始下载：{song.get('title', '')}")
         self._music.download_song(song, {
@@ -1850,11 +1858,31 @@ class MusicPanel(QWidget):
         menu = self._build_song_menu(song, playlist_song_id=row.get("id"))
         menu.exec_(self.list_playlist_songs.mapToGlobal(pos))
 
+    def _on_dl_finish(self, key, status):
+        """主线程槽：下载结束统一刷新状态栏/本地列表（回调线程只 emit，禁直接刷 UI）。"""
+        base = (self._dl_markers.get(key) or {}).get("base") or ""
+        if status == "done":
+            self.lbl_status.setText(f"已下载：{base}")
+            try:
+                self._refresh_local_list(self.edit_local.text().strip())
+                if self.tabs.currentIndex() == 3:
+                    self._refresh_playlists()
+            except Exception as e:
+                print(f"[MusicPanel] 下载后刷新失败: {e}")
+        elif status == "fail":
+            self.lbl_status.setText("下载失败")
+        elif status == "exists":
+            self.lbl_status.setText("该歌已下载，跳过（不覆盖）")
+
+    def _on_status_msg(self, msg):
+        """主线程槽：跨线程状态栏消息（仅主线程允许直接 setText）。"""
+        self.lbl_status.setText(msg)
+
     def _on_error_event(self, event):
-        """换源全部失败 -> 状态栏提示（不跳下一首）。"""
+        """换源全部失败 -> 状态栏提示（不跳下一首）。跨线程事件 → 信号桥主线程刷新。"""
         try:
             msg = (event.data or {}).get("message", "在线播放失败")
-            self.lbl_status.setText(msg)
+            self._status_signal.emit(msg)
         except Exception as e:
             print(f"[MusicPanel] 错误事件处理失败: {e}")
 
@@ -1881,7 +1909,8 @@ class MusicPanel(QWidget):
         if self._music is None:
             return
         frac = self.slider_pos.value() / 1000.0
-        self._safe_call(self._do_seek, frac)
+        threading.Thread(target=self._safe_call, args=(self._do_seek, frac),
+                         daemon=True, name="ui-music-seek").start()
 
     def _do_seek(self, frac: float) -> None:
         """后台线程执行 seek（IPC 出主线程；失败静默，不炸线程）。"""

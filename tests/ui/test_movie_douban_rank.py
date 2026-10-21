@@ -451,7 +451,9 @@ def test_db_poster_worker_uses_concurrency():
 
 
 def test_make_thumb_pixmap_rounds_and_scales():
-    """缩略：SmoothTransformation 缩放 + 圆角输出（对齐爱奇艺海报样式）。"""
+    """缩略：SmoothTransformation 缩放 + 圆角输出（对齐爱奇艺海报样式）。
+    新契约：_make_thumb_pixmap 统一返回 QImage（下载 worker 跨线程安全），
+    QPixmap 入参自动 toImage；主线程展示时再 QPixmap.fromImage。"""
     from app.ui.panels.movie_panel import _make_thumb_pixmap
     from PySide6.QtGui import QColor, QPixmap
     src = QPixmap(540, 770)
@@ -460,8 +462,8 @@ def test_make_thumb_pixmap_rounds_and_scales():
     assert not out.isNull()
     assert out.width() == 140 and out.height() == 210  # _POSTER_SIZE
     # 透明角（圆角裁剪生效：角部为透明）
-    assert out.toImage().pixelColor(1, 1).alpha() == 0
-    assert out.toImage().pixelColor(70, 105).alpha() == 255
+    assert out.pixelColor(1, 1).alpha() == 0
+    assert out.pixelColor(70, 105).alpha() == 255
 
 
 def test_db_poster_worker_failure_emits_empty(tmp_path):

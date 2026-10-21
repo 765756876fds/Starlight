@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QFont,
     QFontMetrics,
     QIcon,
+    QImage,
     QPainter,
     QPainterPath,
     QPixmap,
@@ -81,17 +82,21 @@ def _make_poster_placeholder(name):
 
 def _make_thumb_pixmap(pix, size=_POSTER_SIZE, radius=8):
     """海报缩略：KeepAspectRatio + SmoothTransformation 缩放（防锯齿）+ 圆角。
-    对齐爱奇艺海报样式；仅榜单海报用（搜索海报墙 _PosterBatchWorker 不受影响）。"""
+    统一 QImage 通道：QPixmap 入参自动 toImage()。海报下载 worker 在后台线程
+    （ThreadPoolExecutor）调用，QPainter 只绘制 QImage——QImage 是值语义、
+    跨线程安全，杜绝 QPixmap（依赖平台 GUI 资源）跨线程崩溃。"""
+    if isinstance(pix, QPixmap):
+        pix = pix.toImage()
     if pix.isNull():
         return pix
     scaled = pix.scaled(size[0], size[1], Qt.KeepAspectRatio, Qt.SmoothTransformation)
-    out = QPixmap(size[0], size[1])
+    out = QImage(size[0], size[1], QImage.Format_ARGB32)
     out.fill(Qt.transparent)
     p = QPainter(out)
     path = QPainterPath()
     path.addRoundedRect(0, 0, size[0], size[1], radius, radius)
     p.setClipPath(path)
-    p.drawPixmap((size[0] - scaled.width()) // 2, (size[1] - scaled.height()) // 2, scaled)
+    p.drawImage((size[0] - scaled.width()) // 2, (size[1] - scaled.height()) // 2, scaled)
     p.end()
     return out
 
@@ -329,10 +334,10 @@ class _DbPosterBatchWorker(QObject):
                 r = requests.get(cand, headers=douban_rank.HEADERS, timeout=douban_rank.TIMEOUT)
                 if r.status_code == 200 and len(r.content) >= 5000 \
                         and r.content[:2] == b"\xff\xd8":
-                    pix = QPixmap()
-                    if pix.loadFromData(r.content):
+                    img = QImage()
+                    if img.loadFromData(r.content):
                         path = _POSTER_DIR / f"{key}.jpg"
-                        thumb = _make_thumb_pixmap(pix)
+                        thumb = _make_thumb_pixmap(img)
                         if thumb.save(str(path)):
                             return str(path)
             except Exception as e:
@@ -497,6 +502,8 @@ class MoviePanel(QWidget):
     # QTimer.singleShot 从工作线程排队会永不执行（无事件循环，根因）；经信号
     # QueuedConnection 投递到本窗口所在线程（主线程）后再延后接管。
     _voice_attach_requested = Signal()
+    # 语音反馈跨线程桥：语音 worker 线程 → 本信号（QueuedConnection）→ 主线程槽
+    _voice_msg_signal = Signal(str)
     # 链接解析结果转发（worker 在子线程 emit → Python callable 槽默认 Direct 同线程执行，
     # 弹窗/UI 必须在主线程 → 经本窗口信号 QueuedConnection 转投主线程）。
     _parse_done = Signal(str, str, str)    # (title, play_url, display_url)
@@ -511,6 +518,7 @@ class MoviePanel(QWidget):
         except Exception:
             pass
         self._voice_attach_requested.connect(self._on_voice_attach_requested)
+        self._voice_msg_signal.connect(self._on_voice_msg)
         self._parse_done.connect(self._on_parse_done)
         self._parse_failed.connect(self._on_parse_failed)
         self._thread = None
@@ -529,6 +537,9 @@ class MoviePanel(QWidget):
         self._rank_db_worker = None
         self._pending_poster_jobs = None
         self._pending_db_jobs = None
+        # 自动字幕 QThread（防重入）：同一时刻只持一个引用，运行中绝不覆盖
+        self._sub_thread = None
+        self._sub_worker = None
         # 链接解析线程（防重入：同一时刻只持一个引用，运行中忽略新任务）
         self._parse_thread = None
         self._parse_worker = None
@@ -793,7 +804,7 @@ class MoviePanel(QWidget):
             # 退出清理（QThread 崩溃修复）：先 cancel（循环快速停）→ quit → 有界 wait。
             # 最坏情况当前网络请求阻塞：requests 超时 TIMEOUT=8s 收尾，wait 上限 9s 覆盖。
             for w in (self._worker, self._rank_worker, self._poster_worker,
-                      self._rank_db_worker):
+                      self._rank_db_worker, self._sub_worker):
                 cancel = getattr(w, "cancel", None)
                 if cancel is not None:
                     try:
@@ -801,7 +812,7 @@ class MoviePanel(QWidget):
                     except Exception:
                         pass
             for t in (self._thread, self._rank_thread, self._poster_thread,
-                      self._rank_db_thread, self._parse_thread):
+                      self._rank_db_thread, self._parse_thread, self._sub_thread):
                 if t is not None and t.isRunning():
                     t.quit()
                     t.wait(9000)
@@ -812,6 +823,9 @@ class MoviePanel(QWidget):
     # ---- 搜索 ----
 
     def _do_search(self):
+        # 防重入：搜索线程仍在运行则忽略本次（QThread 同一时刻只持一个引用）
+        if self._thread is not None and self._thread.isRunning():
+            return
         kw = self.edit_kw.text().strip()
         if not kw:
             self.lbl_status.setText("请输入片名")
@@ -1037,10 +1051,11 @@ class MoviePanel(QWidget):
             self.list_rank.addItem(pit)
             pix = _get_poster(key)
             if pix is not None:
-                pit.setIcon(QIcon(_make_thumb_pixmap(pix)))
+                pit.setIcon(QIcon(QPixmap.fromImage(_make_thumb_pixmap(pix))))
             else:
                 # 占位先行（thumb 化圆角），下载完成后替换
-                pit.setIcon(QIcon(_make_thumb_pixmap(_make_poster_placeholder(s.get("title") or ""))))
+                pit.setIcon(QIcon(QPixmap.fromImage(_make_thumb_pixmap(
+                    _make_poster_placeholder(s.get("title") or "")))))
                 if s.get("cover") and s["cover"] not in _db_poster_failed:
                     jobs.append((key, s["cover"]))
         if jobs:
@@ -1092,11 +1107,11 @@ class MoviePanel(QWidget):
 
     def _on_voice_feedback(self, msg):
         """语音搜电影结果反馈 → 状态栏（未找到/只有1集/越界/开始播放）。
-        内嵌模式："开始播放" → 播放窗口接管（mpv 已用注入 winId 内嵌，show 即显示画面）。
-        语音命令在工作线程 execute_async——窗口接管/懒建等 UI 动作经 _voice_attach_requested
-        信号投递主线程（QTimer.singleShot 跨线程排队永不执行——实机日志实证的根因）。"""
+        语音命令在工作线程 execute_async 直接回调本方法：**绝不在此直接刷 UI**，
+        setText 经 _voice_msg_signal（QueuedConnection）投递主线程槽 _on_voice_msg。
+        窗口接管/懒建等 UI 动作同样经 _voice_attach_requested 信号投递主线程。"""
         if msg:
-            self.lbl_status.setText(str(msg))
+            self._voice_msg_signal.emit(str(msg))
             hit = str(msg).startswith("开始播放")
             embed = False
             try:
@@ -1104,9 +1119,11 @@ class MoviePanel(QWidget):
             except Exception:
                 pass
             if hit and embed:
-                # 跨线程投递（QueuedConnection）：主线程 _on_voice_attach_requested 里
-                # 懒建窗口 + 延后一拍接管（P0 卡死修复同手动路径）。
                 self._voice_attach_requested.emit()
+
+    def _on_voice_msg(self, msg):
+        """主线程槽：语音反馈实际刷新状态栏（仅主线程允许直接碰 QWidget）。"""
+        self.lbl_status.setText(str(msg))
 
     def _on_voice_attach_requested(self):
         """主线程收到语音接管请求：懒建窗口 + 延后一拍执行接管（同手动 _do_embed_play）。"""
@@ -1278,7 +1295,11 @@ class MoviePanel(QWidget):
                     continue
                 key = str(data.get("vod_id", "")) or str(data.get("db_key", ""))
                 if key == vod_id:
-                    icon_pix = _make_thumb_pixmap(pix) if lst is self.list_rank else pix
+                    # 榜单列需缩略（QImage）；QIcon 在本 PySide6 版本不接受裸 QImage，
+                    # 主线程（本槽）内 QPixmap.fromImage 转回再设图标——跨线程安全由
+                    # _make_thumb_pixmap 的 QImage 通道保证。
+                    icon_pix = (QPixmap.fromImage(_make_thumb_pixmap(pix))
+                                if lst is self.list_rank else pix)
                     it.setIcon(QIcon(icon_pix))
                     break
 
@@ -1376,6 +1397,9 @@ class MoviePanel(QWidget):
             self._movie.maybe_mark_sub_searched(it)
             kw = it.get("vod_name") or ""
             if not kw:
+                return
+            # 防重入：字幕搜索线程仍在运行则忽略本次（不覆盖运行中的 QThread）
+            if self._sub_thread is not None and self._sub_thread.isRunning():
                 return
             self._sub_thread = QThread()
             self._sub_worker = _SubtitleSearchWorker(self._movie, kw)
@@ -1643,6 +1667,9 @@ class _SubtitleDialog(GlassDialog):
         self.list_subs.itemDoubleClicked.connect(self._on_pick)
 
     def _do_search(self):
+        # 防重入：字幕搜索线程仍在运行则忽略本次
+        if self._thread is not None and self._thread.isRunning():
+            return
         kw = self.edit_kw.text().strip()
         if not kw:
             self.lbl_state.setText("请输入片名")

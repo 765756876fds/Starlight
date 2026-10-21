@@ -32,7 +32,7 @@ class WaveformSlider(QSlider):
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
         self._timer.timeout.connect(self._step)
-        self._timer.start()
+        # 不在此 start：生命周期完全交给 showEvent/hideEvent（隐藏时停、显示时启，防空转）
 
     def showEvent(self, event):
         super().showEvent(event)

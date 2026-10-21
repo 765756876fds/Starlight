@@ -58,7 +58,18 @@ class CooldownPanel(QWidget):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
-        self._timer.start(1000)
+        self._timer.setInterval(1000)
+        # 不在此 start：showEvent 启动、hideEvent 停止（面板隐藏时定时器不空转）
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
 
     def _on_add(self):
         if self._mgr is None:
