@@ -28,6 +28,7 @@ class Combo:
     trigger: str
     note: str = ""
     sequence: List[ComboStep] = field(default_factory=list)
+    cooldown_ms: int = 1000  # 同一连招触发冷却（毫秒），防连按误触
 
     @property
     def summary(self) -> str:
@@ -39,6 +40,7 @@ class Combo:
             "trigger": self.trigger,
             "note": self.note,
             "sequence": [s.to_dict() for s in self.sequence],
+            "cooldown_ms": int(self.cooldown_ms),
         }
 
 
@@ -93,10 +95,15 @@ def parse_combo(d: dict) -> Optional[Combo]:
             steps.append(st)
     if not steps:
         return None
+    try:
+        cooldown_ms = int(d.get("cooldown_ms", 1000) or 1000)
+    except (TypeError, ValueError):
+        cooldown_ms = 1000
     return Combo(
         trigger=str(trigger).strip().lower(),
         note=str(d.get("note", "") or ""),
         sequence=steps,
+        cooldown_ms=cooldown_ms,
     )
 
 

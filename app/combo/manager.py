@@ -80,6 +80,7 @@ class ComboManager:
         self._current_champion_id: Optional[int] = None
         self._current_champion_name: Optional[str] = None
         self._ignore_until: float = 0.0
+        self._last_exec_time: dict = {}  # trigger -> 上次执行时间戳（冷却保护）
         self._log_lock = threading.Lock()  # 保护切换日志不重复刷屏
         # 前台检测缓存（200ms，monotonic）：钩子回调里避免每次按键都调 win32/psutil
         self._fg_cache: Optional[bool] = None
@@ -226,6 +227,11 @@ class ComboManager:
         combo = champ.find_by_trigger(key)
         if combo is None:
             return
+        # 冷却保护：同一连招冷却期内忽略重复触发（默认 1000ms）
+        cooldown_sec = float(getattr(combo, "cooldown_ms", 1000) or 1000) / 1000.0
+        if now - self._last_exec_time.get(combo.trigger, 0.0) < cooldown_sec:
+            return
+        self._last_exec_time[combo.trigger] = now
         print(f"[Combo] 触发 {champ.name} [{combo.trigger}] {combo.note}")
         self._spawn_combo_exec(combo)
 

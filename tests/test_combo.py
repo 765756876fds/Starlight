@@ -223,6 +223,7 @@ def test_manager_no_self_loop_after_grace(tmp_path, monkeypatch):
     assert _wait_until(lambda: len(sender.keys) == 3)
     assert _wait_until(lambda: not m._executor.is_executing)  # 后台线程完全结束
     m._ignore_until = time.time() - 0.1  # 模拟窗口已过
+    m._last_exec_time["4"] = 0.0  # 冷却计时已过（默认 1000ms），只验证 grace 后恢复响应
     m._handle_key("4")
     assert _wait_until(lambda: len(sender.keys) == 6)
     assert sender.keys == ["4", "w", "w", "4", "w", "w"]

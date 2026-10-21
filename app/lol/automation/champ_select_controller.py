@@ -273,4 +273,7 @@ class ChampSelectController:
                 cid = int(m.get("championId") or 0)
                 if cid:
                     out.add(cid)
+                intent = int(m.get("championPickIntent") or 0)
+                if intent:
+                    out.add(intent)
         return out
