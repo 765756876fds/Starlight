@@ -17,16 +17,23 @@ from typing import Any
 # 需要包装拦截的方法
 _WRAPPED = frozenset({
     "get_property",
+    "set_property",
     "loadfile",
     "pause",
     "play",
     "toggle_pause",
     "stop",
+    "start",
+    "stop_process",
+    "is_running",
     "is_idle",
     "get_filename",
 })
 
 _HTTP_PREFIXES = ("http://", "https://")
+
+# set_property 白名单：只有这些属性记录真实 value（其余只记 key）
+_SET_PROPERTY_VALUE_WHITELIST = frozenset({"pause"})
 
 
 class RecordingMpv:
@@ -55,7 +62,7 @@ class RecordingMpv:
                 res = fn(*args, **kwargs)
                 return res
             except Exception as e:  # 原样 re-raise，绝不吞业务异常
-                exc = f"{type(e).__name__}: {e}"
+                exc = self._exc_summary(e)
                 raise
             finally:
                 dur_ms = round((time.perf_counter() - start) * 1000, 2)
@@ -65,6 +72,16 @@ class RecordingMpv:
                     pass  # 记录失败绝不影响业务
         _wrapper.__name__ = f"recording_{name}"
         return _wrapper
+
+    @staticmethod
+    def _exc_summary(e: Exception) -> str:
+        """异常文本只记类型名与首行，截断到 100 字符。"""
+        msg = str(e)
+        first_line = msg.splitlines()[0].strip() if msg else ""
+        text = f"{type(e).__name__}: {first_line}" if first_line else type(e).__name__
+        if len(text) > 100:
+            text = text[:100] + "..."
+        return text
 
     # ---- 记录与脱敏 ----
 
@@ -84,17 +101,17 @@ class RecordingMpv:
 
     @staticmethod
     def _hash_url(url: str) -> str:
+        """在线 URL 只留 host + 短 hash：不落完整 URL（防签名参数/令牌泄漏）。"""
         try:
             digest = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
         except Exception:
             digest = "?"
-        # host + 短 hash：不落完整 URL（防签名参数/令牌泄漏）
         try:
             from urllib.parse import urlsplit
-            host = urlsplit(url).netloc
+            host = urlsplit(url).netloc or "unknown"
         except Exception:
-            host = url[:30]
-        return f"{host} {url[:30]}...{digest}"
+            host = "unknown"
+        return f"{host}...{digest}"
 
     @staticmethod
     def _sanitize_path(fp: str) -> str:
@@ -117,6 +134,15 @@ class RecordingMpv:
             parts += [self._sanitize_value(a) for a in args[1:]]
             kws = self._sanitize_kwargs(kwargs)
             return {"args": parts, "kwargs": kws}
+        if name == "set_property":
+            # set_property(name, value)：除 pause 白名单外，值一律脱敏为 <redacted>
+            if args:
+                pname, pvalue = args[0], (args[1] if len(args) > 1 else None)
+            else:
+                pname, pvalue = kwargs.get("name"), kwargs.get("value")
+            if pname != "pause":
+                pvalue = "<redacted>"
+            return {"args": [self._sanitize_value(pname), pvalue], "kwargs": {}}
         return {"args": [self._sanitize_value(a) for a in args],
                 "kwargs": self._sanitize_kwargs(kwargs)}
 

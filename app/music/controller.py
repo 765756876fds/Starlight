@@ -142,7 +142,10 @@ class MusicController:
         self._play_request_id = 0
         # 播放时间内存快照（后台轮询/确认线程更新）：GUI 高频刷新（歌词 200ms / 进度条）
         # 只读此快照，绝不再发 mpv IPC——消除 GUI 线程卡顿源。
-        self._playback_time_cache: float = 0.0
+        # 结构 (pos, perf_counter_ts, paused)：读取时按 (now - ts) 外推，暂停时不外推，
+        # 消除 0.8s 采样 × 200ms 读取的阶梯感。
+        self._playback_time_cache: tuple = (0.0, 0.0, False)
+        self._paused_snapshot: bool = False  # 暂停标志快照（供快照外推判断）
 
         # mpv 可用性（mpv 未安装/路径错/启动失败 → 模块降级运行，不崩主程序）
         self._mpv_available = True
@@ -230,11 +233,18 @@ class MusicController:
                     self._mpv_fail_streak = 0
                     # 顺带更新播放时间快照（同一轮询线程的 IPC 会话内）
                     # —— 供歌词/进度条读内存，GUI 线程禁调 IPC。
-                    try:
-                        self._playback_time_cache = float(
-                            self.mpv.get_property("playback-time", timeout=0.5) or 0.0)
-                    except Exception:
-                        pass
+                    if now_idle:
+                        # idle 为真：位置归零（避免残留旧值/抖动导致进度跳回开头）
+                        self._playback_time_cache = (0.0, _time.perf_counter(), False)
+                    else:
+                        try:
+                            pt = self.mpv.get_property("playback-time", timeout=0.5)
+                            if pt is not None:
+                                # 只有非 None 才更新；IPC 抖动返回 None 时保留旧快照
+                                self._playback_time_cache = (
+                                    float(pt), _time.perf_counter(), self._paused_snapshot)
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.error(f"[Music] idle poll error: {e!r}")
                     self._mpv_fail_streak += 1
@@ -452,6 +462,7 @@ class MusicController:
                 self.lx_connected = False
         
         self.mpv.pause()
+        self._paused_snapshot = True
         # 实时同步状态
         try:
             self.mpv._properties["pause"] = True
@@ -466,6 +477,7 @@ class MusicController:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
         self.mpv.play()
+        self._paused_snapshot = False
         # 实时同步状态
         try:
             self.mpv._properties["pause"] = False
@@ -498,6 +510,7 @@ class MusicController:
         # 同步更新状态
         try:
             paused = self.mpv.get_property("pause", timeout=1.0)
+            self._paused_snapshot = bool(paused)
             self._update_state(playing=(paused is False))
         except Exception:
             pass
@@ -1074,6 +1087,9 @@ class MusicController:
         # 播放请求代际号（request_id 契约）：一切新播放意图在此递增，作废在途的
         # 在线解析结果——旧网络请求（_resolve_online_worker）锁内校验不过，绝不 loadfile。
         self._play_request_id += 1
+        # 切歌重置播放时间快照与暂停标志：防止旧位置外推污染新歌的进度显示
+        self._playback_time_cache = (0.0, time.perf_counter(), False)
+        self._paused_snapshot = False
 
         # 每次“尝试播放”都重置 idle 轮询状态，让轮询重新感知新歌：
         # - 正常：mpv 进入 playing，轮询读到 idle-active=False，与 _last_idle=False 一致；
@@ -1178,7 +1194,8 @@ class MusicController:
             # 顺带更新播放时间快照（同一次后台确认的 IPC 会话内）
             if pt is not None:
                 try:
-                    self._playback_time_cache = float(pt)
+                    self._playback_time_cache = (
+                        float(pt), _t.perf_counter(), self._paused_snapshot)
                 except Exception:
                     pass
         except Exception:
@@ -1542,6 +1559,16 @@ class MusicController:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
         self.mpv.seek(seconds, mode)
+        # seek 成功后同步快照目标值（绝对 → 目标；相对 → 当前外推位置 + delta），
+        # 避免切歌/seek 后进度跳回旧缓存。
+        try:
+            if mode == "absolute":
+                target = max(0.0, float(seconds))
+            else:
+                target = max(0.0, self.current_playback_time + float(seconds))
+            self._playback_time_cache = (target, time.perf_counter(), self._paused_snapshot)
+        except Exception:
+            pass
 
     @_cancel_switch_on_user_action
     def jump_to_highlight(self):
@@ -1904,11 +1931,19 @@ class MusicController:
 
     @property
     def current_playback_time(self) -> float:
-        """当前播放位置（秒）——读内存快照，禁调 IPC。
+        """当前播放位置（秒）——读内存快照并外推，禁调 IPC。
 
-        快照由后台轮询/播放确认线程更新（_poll_idle / _confirm_playback）。
+        快照为 (pos, perf_counter, paused)，由后台线程更新（_poll_idle /
+        _confirm_playback）或 seek/_play_song 同步写入。读取时按 (now - ts) 外推，
+        消除 0.8s 采样 × 200ms 读取的阶梯感；暂停时不外推（位置冻结）。
         GUI 高频刷新（歌词 200ms、进度条）必须走本属性，绝不直接调 mpv。"""
-        return self._playback_time_cache
+        try:
+            pos, ts, paused = self._playback_time_cache
+            if paused:
+                return float(pos)
+            return float(pos + (time.perf_counter() - ts))
+        except Exception:
+            return 0.0
 
     def is_playing(self) -> bool:
         """是否正在播放"""
