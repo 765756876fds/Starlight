@@ -27,11 +27,12 @@ from ...movie import douban_rank
 from ...movie.rank_providers import BaseRankProvider, TgmengProvider, default_provider
 
 from app.core.logger import get_logger
+from app.core.path_resolve import PROJECT_ROOT
 
 logger = get_logger()
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
-_POSTER_DIR = Path("data/movie/posters")
+_POSTER_DIR = PROJECT_ROOT / "data" / "movie" / "posters"
 _POSTER_DIR.mkdir(parents=True, exist_ok=True)
 _POSTER_SIZE = (140, 210)  # 竖版 2:3（对齐爱奇艺 PC 海报墙）
 _posters_cache: dict = {}
@@ -738,6 +739,16 @@ class MoviePanel(QWidget):
         self._embed_playing = False
         self._video_win = None
         self._ensure_video_win()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
 
     def _ensure_video_win(self):
         """内嵌播放窗口懒建（embed 开 + 未建时创建；__init__ 与语音路径共用兜底）。

@@ -50,6 +50,16 @@ class StatusBar(QStatusBar):
         self._timer.start(1000)
         self.refresh()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
+
     # ---- 图标 + 状态色渲染 ----
     @staticmethod
     def _update_state(lbl: QLabel, icon_name: str, ok: bool, label: str):

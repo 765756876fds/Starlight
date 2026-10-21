@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
+
+from app.core.path_resolve import PROJECT_ROOT
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap, QIcon, QPainter
 
@@ -21,7 +23,7 @@ _DDRAGON_VERSION = "16.18.1"
 _DDRAGON_BASE = f"https://ddragon.leagueoflegends.com/cdn/{_DDRAGON_VERSION}/img"
 
 # 缓存目录
-_CACHE_DIR = Path("data/assets")
+_CACHE_DIR = PROJECT_ROOT / "data" / "assets"
 _CHAMPIONS_DIR = _CACHE_DIR / "champions" / _DDRAGON_VERSION
 _SUMMONER_SPELLS_DIR = _CACHE_DIR / "summoner_spells" / _DDRAGON_VERSION
 

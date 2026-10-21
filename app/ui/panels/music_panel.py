@@ -453,6 +453,16 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] 订阅候选事件失败: {e}")
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
+
     # ---- 卡片网格（只改 UI 绘制，不动数据流） ----
     def _setup_card_view(self, w: QListWidget) -> MusicCardDelegate:
         """歌曲类列表 → IconMode 卡片网格 + 自绘 Delegate。"""

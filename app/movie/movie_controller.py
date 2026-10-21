@@ -22,6 +22,7 @@ import requests
 from ..core.config import get_config, resolve_mpv_path
 from ..core.event_bus import EventType, get_event_bus
 from ..core.state_store import StateNamespace, get_state_store
+from ..core.path_resolve import PROJECT_ROOT
 from ..music.mpv import MpvController
 from .source_manager import MovieSourceManager, _SingleSourceManager
 
@@ -134,7 +135,7 @@ class MovieController:
         pipe = ipc_pipe or self._config.get("movie.mpv_ipc_pipe") or DEFAULT_IPC_PIPE
         # 断点续播目录（仅电影实例；音乐链不加——用户明确不要）
         watch_dir = (self._config.get("movie.watch_later_dir")
-                     or os.path.join(self._config.get("app.data_dir", "./data"),
+                     or os.path.join(self._config.get("app.data_dir", str(PROJECT_ROOT / "data")),
                                      "movie", "watch_later"))
         try:
             os.makedirs(watch_dir, exist_ok=True)
@@ -611,7 +612,7 @@ class MovieController:
 
     def subtitle_dir(self) -> str:
         d = (self._config.get("movie.subtitle_dir")
-             or os.path.join(self._config.get("app.data_dir", "./data"),
+             or os.path.join(self._config.get("app.data_dir", str(PROJECT_ROOT / "data")),
                              "movie", "subtitles"))
         try:
             os.makedirs(d, exist_ok=True)

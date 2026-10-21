@@ -5,6 +5,8 @@
 import json
 import os
 from typing import Any, Dict, List, Optional
+
+from app.core.path_resolve import PROJECT_ROOT
 from dataclasses import dataclass, field, asdict
 
 
@@ -40,6 +42,8 @@ class MusicSourceManager:
     """音乐源管理器"""
 
     def __init__(self, config_dir: str = "config"):
+        if not os.path.isabs(config_dir):
+            config_dir = str(PROJECT_ROOT / config_dir)
         self.config_dir = config_dir
         self.sources_file = os.path.join(config_dir, "music_sources.json")
         self.sources: List[MusicSource] = []

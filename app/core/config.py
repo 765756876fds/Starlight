@@ -186,8 +186,26 @@ class Config:
             except Exception as e:
                 print(f"[Config] 默认配置写盘失败（继续用内存默认）: {e}")
         else:
-            with open(config_path, "r", encoding="utf-8") as f:
-                self._data = yaml.safe_load(f) or {}
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    self._data = yaml.safe_load(f) or {}
+            except Exception as e:
+                # 配置文件损坏，备份原文件，使用默认配置
+                import shutil
+                import time
+                bak_path = str(config_path) + f".bak_{int(time.time())}"
+                try:
+                    shutil.copy2(config_path, bak_path)
+                except Exception:
+                    pass
+                print(f"[Config] 配置文件损坏，已备份至 {bak_path}，将使用默认配置恢复。错误: {e}")
+                self._data = _default_config()
+                # 恢复后自动重新写一份干净的
+                try:
+                    with open(config_path, "w", encoding="utf-8") as f:
+                        yaml.safe_dump(self._data, f, allow_unicode=True, sort_keys=False)
+                except Exception:
+                    pass
         # 相对路径键 → 基于 PROJECT_ROOT 绝对化（不依赖 CWD）
         self._data = _absolutize(dict(self._data))
 

@@ -223,6 +223,16 @@ class CurrentGamePanel(QWidget):
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
+
     def _try_create_sgp_provider(self):
         # 优先走 OngoingGameService 的独立直连 getter（绕开共享连接断连窗口），
         # 与 loader 的 SGP 通道同款；拿不到再退化共享 lcu_get（当前行为）。

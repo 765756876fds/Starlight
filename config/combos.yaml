@@ -5,7 +5,7 @@ defaults:
   delay_item_ms: 80
   delay_summoner_ms: 50
 champions:
-  盲僧:
+  盲僧_64:
     champion_id: 64
     aliases:
     - lee sin
@@ -23,6 +23,7 @@ champions:
         delay_after_ms: 0
       - key: w
         delay_after_ms: 50
+      cooldown_ms: 1000
     - trigger: '4'
       note: 4眼位移
       sequence:
@@ -32,18 +33,22 @@ champions:
         delay_after_ms: 0
       - key: w
         delay_after_ms: 50
+      cooldown_ms: 1000
     - trigger: a
-      note: 4wd（插眼-摸眼-闪现补距离）
+      note: 双保险插眼（冗余防吞）
       sequence:
       - key: '4'
-        delay_after_ms: 50
+        delay_after_ms: 30
+      - key: '4'
+        delay_after_ms: 120
       - key: d
-        delay_after_ms: 50
+        delay_after_ms: 60
       - key: w
-        delay_after_ms: 0
+        delay_after_ms: 10
       - key: w
         delay_after_ms: 50
-  锤石:
+      cooldown_ms: 1000
+  锤石_412:
     champion_id: 412
     aliases:
     - thresh
@@ -59,3 +64,4 @@ champions:
         delay_after_ms: 50
       - key: q
         delay_after_ms: 50
+      cooldown_ms: 1000

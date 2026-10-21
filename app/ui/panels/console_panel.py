@@ -107,6 +107,16 @@ class ConsolePanel(QWidget):
         self._timer.timeout.connect(self._drain)
         self._timer.start()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
+
     # ---- UI ----
     def _build_ui(self):
         root = QVBoxLayout(self)

@@ -12,9 +12,10 @@ from pathlib import Path
 import urllib.request
 
 from . import douban_rank
+from app.core.path_resolve import PROJECT_ROOT
 
 # 糖果梦密钥本地配置（*.local.yaml 已被 .gitignore 忽略，不入库）
-_TGMENG_CONFIG = Path("config/tgmeng.local.yaml")
+_TGMENG_CONFIG = PROJECT_ROOT / "config" / "tgmeng.local.yaml"
 
 
 class BaseRankProvider:

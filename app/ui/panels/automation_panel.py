@@ -94,6 +94,16 @@ class AutomationPanel(QWidget):
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_timer") and self._timer is not None:
+            self._timer.stop()
+
     def _open_combo_manager(self):
         """打开连招管理弹窗（非模态，关闭即销毁，ComboPanel 原样装入）。"""
         from app.ui.dialogs.combo_manager_dialog import ComboManagerDialog
