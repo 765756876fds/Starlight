@@ -1981,7 +1981,9 @@ class MusicPanel(QWidget):
             while self._progress_polling:
                 try:
                     if self._music is not None and hasattr(self._music, "mpv"):
-                        pos = self._music.mpv.get_live_playback_time()
+                        # 读 controller 受控缓存（_poll_idle 内带代次/切歌闸门，
+                        # 在线解析窗口内旧歌位置不会污染）——绝不直连 mpv 实时值。
+                        pos = self._music.current_playback_time
                         dur = self._music.mpv.get_duration()
                         self._progress_signal.emit(pos, dur)
                 except Exception:
@@ -2000,7 +2002,9 @@ class MusicPanel(QWidget):
             # 旧歌实时位置，禁止渲染——保持归零 + "加载中"，新歌 loadfile 起播
             # （controller 置 False）后恢复渲染。
             if getattr(self._music, "_is_switching_track", False):
-                self.slider_pos.setValue(0)
+                # 正在拖动时不强刷回零（拖动中的 setValue 由用户控制）
+                if not self.slider_pos.isSliderDown():
+                    self.slider_pos.setValue(0)
                 self.lbl_time.setText("加载中...")
                 return
             if dur > 0:

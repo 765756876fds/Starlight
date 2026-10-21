@@ -32,6 +32,7 @@ class WaveformSlider(QSlider):
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
         self._timer.timeout.connect(self._step)
+        self._clicked_to_seek = False   # 点击 groove 精确跳转标志（release 时手动发 seek）
         # 不在此 start：生命周期完全交给 showEvent/hideEvent（隐藏时停、显示时启，防空转）
 
     def showEvent(self, event):
@@ -124,3 +125,42 @@ class WaveformSlider(QSlider):
         p.setBrush(QColor(Colors.ACCENT_HOVER))
         p.drawEllipse(QRectF(hx - 10, cx - 10, 2, 2))
         p.end()
+
+    # ---- 鼠标：点击 groove 精确跳转；命中 handle 时交还基类拖拽 ----
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and not self._hit_handle(event.position().x()):
+            w = self.width()
+            if w > 0:
+                x = event.position().x()
+                frac = max(0.0, min(1.0, x / w))
+                val = self.minimum() + int(frac * (self.maximum() - self.minimum()))
+                self.setValue(val)
+                self.sliderMoved.emit(val)  # 通知预览（_on_seek_preview 只改时间标签）
+                self.update()
+                # 不调用 super().mousePressEvent：基类对 groove 的 PageStep 步进
+                # 会覆盖精确值；拖拽状态（handle 按下）由下方 super 路径正常建立。
+                self._clicked_to_seek = True
+                event.accept()
+                return
+        self._clicked_to_seek = False
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # 点击路径：手动发 sliderReleased 触发真正 seek（后台线程），
+        # 不调 super 防基类重复 emit；拖拽路径由基类 release 正常 emit。
+        if event.button() == Qt.LeftButton and self._clicked_to_seek:
+            self._clicked_to_seek = False
+            self.sliderReleased.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _hit_handle(self, x: float) -> bool:
+        """按下点是否命中 handle（半径 10px，与自绘 handle 尺寸一致）。"""
+        rng = self.maximum() - self.minimum()
+        if rng <= 0:
+            return True
+        ratio = (self.value() - self.minimum()) / rng
+        pad = 6.0
+        hx = pad + (self.width() - pad * 2) * ratio
+        return abs(x - hx) <= 10.0

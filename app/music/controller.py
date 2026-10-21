@@ -162,6 +162,20 @@ class MusicController:
         # 播放请求代际号（request_id 契约）：每次用户发出新的播放意图（本地/在线/切歌）
         # 自增；后台在线解析完成后必须核对代际号，过期即丢弃，防止旧解析覆盖最新播放请求。
         self._play_request_id = 0
+        # seek 防抖：seek 指令发出后 mpv 会短暂进入 idle（缓冲/seek 窗口），
+        # 若不加拦截，_poll_idle 会把"seek 导致的瞬时 idle"误判为播放结束而自动切歌。
+        # 置位/复位均由线程写布尔值（GIL 原子），轮询线程读即可，无需加锁。
+        self._is_seeking = False
+        # 代次隔离（epoch 契约）：_play_request_id 即最新播放意图代次；
+        # _last_loadfile_epoch 记录最后一次真正 loadfile 的代次。
+        # 两者不相等 = "切歌已发起但新歌尚未 loadfile"（在线解析窗口）
+        # → _poll_idle 必须跳过 playback-time 缓存写入，旧歌实时位置不得污染新歌进度。
+        self._last_loadfile_epoch = 0
+        # UI 切换态：置 True 期间 UI 禁止渲染旧进度（显示"加载中"），
+        # 新歌 loadfile 起播（本地/在线统一入口）后置 False 恢复渲染。
+        # 状态位在 __init__ 初始化（start 仅置运行标志）：测试/注入路径不调
+        # start() 也能持有完整状态（播放/切歌逻辑直接读取）。
+        self._is_switching_track = False
         # 播放时间内存快照（后台轮询/确认线程更新）：GUI 高频刷新（歌词 200ms / 进度条）
         # 只读此快照，绝不再发 mpv IPC——消除 GUI 线程卡顿源。
         # 结构 (pos, perf_counter_ts, paused)：读取时按 (now - ts) 外推，暂停时不外推，
@@ -228,18 +242,8 @@ class MusicController:
 
         # 注册事件
         self._running = True
-        # seek 防抖：seek 指令发出后 mpv 会短暂进入 idle（缓冲/seek 窗口），
-        # 若不加拦截，_poll_idle 会把"seek 导致的瞬时 idle"误判为播放结束而自动切歌。
-        # 置位/复位均由线程写布尔值（GIL 原子），轮询线程读即可，无需加锁。
-        self._is_seeking = False
-        # 代次隔离（epoch 契约）：_play_request_id 即最新播放意图代次；
-        # _last_loadfile_epoch 记录最后一次真正 loadfile 的代次。
-        # 两者不相等 = "切歌已发起但新歌尚未 loadfile"（在线解析窗口）
-        # → _poll_idle 必须跳过 playback-time 缓存写入，旧歌实时位置不得污染新歌进度。
-        self._last_loadfile_epoch = 0
-        # UI 切换态：置 True 期间 UI 禁止渲染旧进度（显示"加载中"），
-        # 新歌 loadfile 起播（本地/在线统一入口）后置 False 恢复渲染。
-        self._is_switching_track = False
+        # 状态位（_is_seeking/_last_loadfile_epoch/_is_switching_track）已在
+        # __init__ 初始化（构造即持有，不依赖 start 调用顺序）
         self._subscribe_speech_events()
 
         # 启动后台轮询：每0.8秒实时查mpv idle状态，播完自动切下一首。
@@ -1284,9 +1288,13 @@ class MusicController:
             # 防御性明确：本分支 return 前重置轮询状态（L673 已置过，
             # 保留以防御未来该行被移动后回归）
             self._last_idle = False
-            # 切歌失败（文件缺失）：结束切换态，UI 恢复渲染（缓存已为 0.0，
-            # 且代次不匹配使 _poll_idle 不会写入旧值）
-            self._is_switching_track = False
+            # 切歌失败（文件缺失）：仅在"当前代次已真正 loadfile 过"时才结束切换态
+            # （此时旧歌已停播、缓存已钉 0.0，UI 恢复渲染无污染）。
+            # 否则（首次播放即失败 / 本轮尚未起播任何文件）保持切换态="加载中"，
+            # 防止 mpv 仍在播旧歌时 UI 提前恢复渲染而露出旧进度（倒退）；
+            # 后续由 confirm/auto_next 推进队列处理。
+            if self._play_request_id == self._last_loadfile_epoch:
+                self._is_switching_track = False
             return
 
         # 影子模式：记录 loadfile 发起时刻与文件类型（classify 的 elapsed/kind 依据）
