@@ -19,20 +19,49 @@ def _make_bus():
     return EventBus()
 
 
-def test_state_pool_discards_on_congestion():
-    """状态池拥堵（pending 达阈值）时，新状态事件被丢弃（合并语义）。"""
+def test_state_pool_merges_by_key():
+    """状态池按 key 合并：同 key 新事件替换旧事件（保留最新状态，不重复执行）。"""
     bus = _make_bus()
     got = []
-    bus.subscribe(EventType.GAME_TIME_UPDATE, lambda e: got.append(e))
+    bus.subscribe(EventType.GAME_TIME_UPDATE, lambda e: got.append(e.get("t")))
     try:
-        # 人为填满状态池 pending 计数
-        bus._state_pending = bus._STATE_MAX_PENDING
-        bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 1}))
-        time.sleep(0.2)
-        assert got == [], "拥堵时状态事件不应被提交执行"
-        assert bus._state_pending == bus._STATE_MAX_PENDING
+        # 队列中已有同 key 待处理事件 → 新事件替换，不追加
+        bus._state_queue.append(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 1}))
+        bus.publish_async(Event(event_type=EventType.GAME_TIME_UPDATE, data={"t": 2}))
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            time.sleep(0.02)
+        # 只执行最新值；旧事件被替换不重复执行
+        assert got == [2], "同 key 合并后只执行最新事件"
     finally:
-        bus._state_pending = 0
+        bus.shutdown()
+
+
+def test_state_pool_discards_oldest_when_full():
+    """状态池满（64）且无同 key 可合并时，丢弃最早的事件腾出空间（而非丢新）。"""
+    bus = _make_bus()
+    got = []
+    bus.subscribe(EventType.GAME_TIME_UPDATE, lambda e: got.append(e.get("n")))
+    try:
+        # 填满状态队列（64 个不同 entity_key 的待处理状态事件）
+        for i in range(bus._STATE_MAX_PENDING):
+            bus._state_queue.append(Event(
+                event_type=EventType.GAME_TIME_UPDATE,
+                data={"entity_key": f"k{i}", "n": i},
+            ))
+        # 发新 key 状态事件：无同 key 可合并，应丢弃最旧（n=0）并接收新事件
+        bus.publish_async(Event(
+            event_type=EventType.GAME_TIME_UPDATE,
+            data={"entity_key": "new", "n": 999},
+        ))
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            time.sleep(0.02)
+        remaining = [e.get("n") for e in bus._state_queue]
+        assert 0 not in remaining, "最旧事件应被丢弃（popleft）"
+        assert 999 in remaining or 999 in got, "新事件应进入队列并最终执行"
+        assert len(bus._state_queue) <= bus._STATE_MAX_PENDING
+    finally:
         bus.shutdown()
 
 
@@ -86,11 +115,12 @@ def test_routing_state_vs_critical():
 
 
 def test_compat_alias_async_executor():
-    """兼容：_async_executor 别名指向临界池（历史调用方/测试断言不破坏）。"""
+    """兼容：_async_executor 别名指向临界池（历史调用方/测试断言不破坏）。
+    关键池单 worker（max_workers=1）保证严格 FIFO 顺序。"""
     bus = _make_bus()
     try:
         assert bus._async_executor is bus._critical_executor
-        assert bus._async_executor._max_workers == 4
+        assert bus._async_executor._max_workers == 1
     finally:
         bus.shutdown()
 

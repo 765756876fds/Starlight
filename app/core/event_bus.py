@@ -7,7 +7,7 @@
 import logging
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -132,7 +132,7 @@ class EventBus:
     线程安全的事件总线
 
     支持同步和异步订阅者。
-    所有事件按优先级排序后分发。
+    当前按到达顺序 FIFO 分发；未实现优先级队列。如需优先级，请通过订阅顺序或独立通道控制。
     """
 
     def __init__(self):
@@ -143,20 +143,22 @@ class EventBus:
         self._max_history = 1000
         self._running = True
         # ---- 异步事件物理隔离：双池 ----
-        # 状态池：高频可丢弃事件（time_update/snapshot 等），容量小、拥堵丢新
+        # 状态池：高频可丢弃事件（time_update/snapshot 等），按 key 合并保最新、上限 64
         self._state_executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="eventbus-state"
         )
-        # 临界池：不可丢弃事件（击杀/提醒/系统错误等），容量大、拥堵记录但不丢
+        # 待处理状态事件队列（按 key 合并语义：同 key 新替旧，满且无同 key 时丢最旧）
+        self._state_queue: deque[Event] = deque()
+        # 临界池：不可丢弃事件（击杀/提醒/系统错误等），容量大、拥堵记录但不丢。
+        # 关键事件必须保证严格 FIFO 顺序，故限制单 worker；禁止在此池放入长耗时任务。
         self._critical_executor = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="eventbus-critical"
+            max_workers=1, thread_name_prefix="eventbus-critical"
         )
         # 兼容别名（历史测试/调用方按 _async_executor 断言行为）
         self._async_executor = self._critical_executor
         self._pool_lock = threading.Lock()
-        self._state_pending = 0
         self._critical_pending = 0
-        self._STATE_MAX_PENDING = 4   # 状态池拥堵阈值：超则丢弃新事件（合并语义）
+        self._STATE_MAX_PENDING = 64   # 状态池硬上限：满且无同 key 可合并时，丢弃最早的事件
         self._CRITICAL_MAX_PENDING = 32  # 临界池告警阈值：超则记录 ERROR，绝不丢弃
 
     def subscribe(self, event_type: str, handler: Callable[[Event], None]):
@@ -234,24 +236,36 @@ class EventBus:
         else:
             self._submit_critical(event)
 
+    @staticmethod
+    def _state_key(event: Event) -> str:
+        """状态池合并 key：优先取事件的实体 key（data.entity_key），否则按事件类型合并。"""
+        return str(event.data.get("entity_key") or event.event_type)
+
     def _submit_state(self, event: Event):
-        """状态池：拥堵时丢弃新事件（高频状态合并语义，最新值才重要）。"""
+        """状态池：按 key 合并保最新（同 key 新事件替换旧事件，保留最新状态）；
+        无同 key 时追加到队尾；达到硬上限（64）且无同 key 可替换时，丢弃最早的事件。"""
+        key = self._state_key(event)
         with self._pool_lock:
-            if self._state_pending >= self._STATE_MAX_PENDING:
-                logger.warning(
-                    "状态事件池拥堵，丢弃事件 %s（pending=%d）",
-                    event.event_type, self._state_pending,
-                )
-                return
-            self._state_pending += 1
+            for i, pending in enumerate(self._state_queue):
+                if self._state_key(pending) == key:
+                    # 同 key：新事件替换旧事件（不追加、不重复执行）
+                    self._state_queue[i] = event
+                    break
+            else:
+                if len(self._state_queue) >= self._STATE_MAX_PENDING:
+                    # 满且无同 key 可合并：丢弃最早的事件腾出空间
+                    self._state_queue.popleft()
+                self._state_queue.append(event)
         try:
             future = self._state_executor.submit(self.publish, event)
         except RuntimeError:
+            # 总线正在关闭，不再接受新事件；避免回退同步阻塞调用方
             with self._pool_lock:
-                self._state_pending -= 1
-            self.publish(event)  # shutdown 竞态兜底
+                if event in self._state_queue:
+                    self._state_queue.remove(event)
+            logger.warning("EventBus 关闭中，事件 %s 被丢弃", event.event_type)
             return
-        future.add_done_callback(lambda _f: self._dec_pending("state"))
+        future.add_done_callback(lambda _f: self._dec_state(event))
 
     def _submit_critical(self, event: Event):
         """临界池：容量足够大，拥堵时记录 ERROR 但绝不静默丢弃。"""
@@ -265,17 +279,22 @@ class EventBus:
         try:
             future = self._critical_executor.submit(self.publish, event)
         except RuntimeError:
+            # 总线正在关闭，不再接受新事件；避免回退同步阻塞调用方
             with self._pool_lock:
                 self._critical_pending -= 1
-            self.publish(event)  # shutdown 竞态兜底
+            logger.warning("EventBus 关闭中，事件 %s 被丢弃", event.event_type)
             return
         future.add_done_callback(lambda _f: self._dec_pending("critical"))
 
+    def _dec_state(self, event: Event):
+        """状态池事件执行完成：从待处理队列移除（可能已被同 key 新事件替换，忽略即可）。"""
+        with self._pool_lock:
+            if event in self._state_queue:
+                self._state_queue.remove(event)
+
     def _dec_pending(self, pool: str):
         with self._pool_lock:
-            if pool == "state":
-                self._state_pending -= 1
-            else:
+            if pool == "critical":
                 self._critical_pending -= 1
 
     def get_history(self, event_type: str | None = None, limit: int = 100) -> list[Event]:

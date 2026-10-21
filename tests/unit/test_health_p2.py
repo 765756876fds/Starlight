@@ -40,10 +40,10 @@ def test_publish_after_shutdown_ignored():
 
 
 def test_publish_async_thread_bound():
-    """publish_async 线程数有上限（max_workers=4）。"""
+    """publish_async 线程数有上限（关键池单 worker，max_workers=1，严格 FIFO）。"""
     bus, Event, _ = _make_bus()
-    assert bus._async_executor._max_workers == 4
-    # 行为验证：慢 handler，多发事件，同时活跃线程 ≤ 4
+    assert bus._async_executor._max_workers == 1
+    # 行为验证：慢 handler，多发事件，同时活跃线程 ≤ 1（严格顺序）
     active = []
     lock = threading.Lock()
     count = [0]
@@ -65,7 +65,7 @@ def test_publish_async_thread_bound():
     deadline = time.time() + 5
     while count[0] > 0 and time.time() < deadline:
         time.sleep(0.02)
-    assert peak[0] <= 4
+    assert peak[0] <= 1
 
 
 def test_publish_async_after_shutdown_ignored():
