@@ -6,7 +6,6 @@
 通过 CommandBus 接收音乐命令。
 """
 import os
-import re
 import threading
 import time
 from typing import Any
@@ -20,6 +19,15 @@ from .history_recorder import HistoryRecorder
 from .lx_client import LxMusicClient
 from .mpv import MpvController
 from .online.events import ONLINE_ERROR, ONLINE_SEARCH_DONE
+from .online.resolver import (
+    OnlineResolver,
+    _kw_bonus,
+    _normalize,
+    _pick_best,
+    _pick_candidates,
+    _pick_play_headers,
+    _quality_score,
+)
 from .queue import PlayMode, PlayQueue
 from .scanner import MusicScanner
 from .search import MusicSearch
@@ -27,101 +35,9 @@ from .search import MusicSearch
 logger = get_logger()
 
 
-# mpv http-header-fields 用逗号分隔，值含逗号会破坏语法；只转发安全字段。
-_HEADER_WHITELIST = ("Referer", "User-Agent", "Cookie", "Authorization")
-_WL_LOWER = {h.lower() for h in _HEADER_WHITELIST}
-
-
-def _pick_play_headers(headers):
-    """过滤插件 headers：只留白名单字段（大小写不敏感，HTTP 头大小写不敏感），
-    值含逗号跳过；空返回 None。"""
-    if not headers or not isinstance(headers, dict):
-        return None
-    out = {}
-    for k, v in headers.items():
-        if k.lower() not in _WL_LOWER:
-            continue
-        if not isinstance(v, str) or "," in v:
-            continue
-        out[k] = v
-    return out or None
-
-
-# ---------- 在线选源：同一首歌多源时，音质最优 → 同音质选最快 ----------
-
-def _quality_score(source_name: str, raw) -> int:
-    """从插件原始 item 提取音质等级：4=HiRes 3=高品/无损 2=标准 1=低 0=未知。
-    字段名来自真实搜索结果核对（kg/kw/wy 用 qualities 档位；溯音用 URL 码率）。"""
-    if not isinstance(raw, dict):
-        return 0
-    src = (source_name or "").lower()
-    # 溯音网易：search 直接给 url（share.duanx.cn/.../128k）→ 按 URL 实际码率
-    if "溯音" in src:
-        m = re.search(r"/(\d+)k", str(raw.get("url") or ""))
-        if m:
-            b = int(m.group(1))
-            return 3 if b >= 320 else (2 if b >= 192 else 1)
-        return 0
-    # 通用 qualities 档位（kg/kw/wy 真实结构）
-    q = raw.get("qualities")
-    if isinstance(q, dict):
-        keys = set(q.keys())
-        if keys & {"super", "lossless", "hires"}: return 4
-        if "high" in keys: return 3
-        if "standard" in keys: return 2
-        if "low" in keys: return 1
-        return 0
-    # tx 腾讯（当前搜索返回 0 条，留字段兼容）
-    if "tx" in src or "腾讯" in src:
-        if raw.get("size_flac"): return 3
-        if raw.get("size_320mp3"): return 2
-        return 0
-    return 0
-
-
-def _normalize(s: str) -> str:
-    """归一化：小写 + 去标点空格 + 去 feat. 后缀。归一化相同 = 同一首歌。"""
-    s = (s or "").strip().lower()
-    s = re.sub(r"[\[\(]feat\..*?[\]\)]", "", s)   # (feat. xx) / [feat. xx]
-    s = re.sub(r"\W+", "", s)                      # 去标点/空格/符号
-    return s
-
-
-def _kw_bonus(name: str) -> int:
-    """酷我系优先（验证过能播）——同音质同耗时的兜底 tie-break。"""
-    n = (name or "").lower()
-    return 0 if ("kw" in n or "酷我" in n) else 1
-
-
-def _pick_candidates(all_tracks, manager):
-    """首选组（同一首歌）内按 (音质降序, 耗时升序, 酷我优先, 原顺序) 排序的
-    候选列表——调用方逐个试 get_play_url，直到拿到 URL（failover）。
-    组间取"首个 source 第一条"所在组（保留原"搜到啥播啥"的相关性语义，
-    不全局抢音质）。"""
-    if not all_tracks:
-        return []
-    groups = {}
-    for idx, r in enumerate(all_tracks):
-        key = _normalize(r.title) + "|" + _normalize(r.artist)
-        groups.setdefault(key, []).append((idx, r))
-    # 首选组 = 首个 source 第一条所在组（原行为 all_tracks[0] 的歌，相关性最高）
-    first_key = _normalize(all_tracks[0].title) + "|" + _normalize(all_tracks[0].artist)
-    group = groups[first_key]
-
-    def _lat(name):
-        v = manager.get_latency(name) if hasattr(manager, "get_latency") else None
-        return v if isinstance(v, (int, float)) else 99.0
-    group.sort(key=lambda t: (-_quality_score(t[1].source_name, t[1].extra.get("_raw")),
-                              _lat(t[1].source_name),
-                              _kw_bonus(t[1].source_name),
-                              t[0]))
-    return [t[1] for t in group]
-
-
-def _pick_best(all_tracks, manager):
-    """首选（兼容旧接口）：候选列表第一个，无候选返回 None。"""
-    cands = _pick_candidates(all_tracks, manager)
-    return cands[0] if cands else None
+# 在线解析纯函数（_pick_play_headers/_quality_score/_normalize/_kw_bonus/
+# _pick_candidates/_pick_best）已迁往 app/music/online/resolver.py，
+# controller 顶部 re-export 以保持调用点与测试 import 兼容。
 
 
 def _cancel_switch_on_user_action(method):
@@ -201,8 +117,11 @@ class MusicController:
         # B 方案：换源取消令牌 + 抑制跳歌标记
         self._candidate_switch_token: int = 0
         self._candidate_switching: bool = False
-        # 在线切歌解析 generation：快速连切时丢弃过期 resolve（防旧 URL 覆盖新歌）
-        self._online_resolve_gen = 0
+        # 在线解析器（manager 注入后创建，见 set_online_manager；纯网络解析，不碰 mpv/队列）
+        self._resolver: OnlineResolver | None = None
+        # 播放请求代际号（request_id 契约）：每次用户发出新的播放意图（本地/在线/切歌）
+        # 自增；后台在线解析完成后必须核对代际号，过期即丢弃，防止旧解析覆盖最新播放请求。
+        self._play_request_id = 0
 
         # mpv 可用性（mpv 未安装/路径错/启动失败 → 模块降级运行，不崩主程序）
         self._mpv_available = True
@@ -644,6 +563,8 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
+        # 新播放意图：递增代际号，作废在途的在线解析结果（防旧 URL 覆盖本地歌）
+        self._play_request_id += 1
         with self._lock:
             if self._mpv_restart_pending:
                 logger.info("[Music] mpv 重启中，忽略播放请求")
@@ -911,6 +832,8 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return None
+        # 新播放意图：递增代际号，作废在途的在线解析结果（统一 request_id 契约）
+        self._play_request_id += 1
         results = self.search.search(query, limit=10)
         if results and 0 <= index < len(results):
             self.play_song(results[index])
@@ -1035,7 +958,7 @@ class MusicController:
         """队列在线歌播放：网络解析（重搜+取URL）放后台线程，不阻塞调用线程。
         解析完成后在同一 worker 线程执行 loadfile（mpv IPC 有锁、db 有锁、
         状态只写 state_store——轮询/Timer 线程早已多线程调用，安全）。
-        快速连切时用 generation token 丢弃过期 resolve，防止旧 URL 覆盖新歌。
+        快速连切时用 request_id 代际号丢弃过期 resolve，防止旧 URL 覆盖新歌。
         失败 → 延迟 next() 主动跳过：轮询上升沿会被 _last_idle=now_idle 覆盖吞掉
         （_play_song 的 reset 在 auto_next 同步返回后被 L295 覆盖），必须主动跳，
         不能等轮询。不发 MUSIC_TRACK_CHANGED（rule_engine/speech_judge 语音订阅者），
@@ -1045,38 +968,33 @@ class MusicController:
             logger.info("[Music] 队列在线歌无 title，跳过")
             self._schedule_skip_online(song)
             return
-        self._online_resolve_gen += 1
-        gen = self._online_resolve_gen
+        self._play_request_id += 1
+        req_id = self._play_request_id
         threading.Thread(
             target=self._resolve_online_worker,
-            args=(song, query, gen), daemon=True,
+            args=(song, query, req_id), daemon=True,
             name="music-online-resolve").start()
 
-    def _resolve_online_worker(self, song: dict[str, Any], query: str, gen: int):
+    def _resolve_online_worker(self, song: dict[str, Any], query: str, req_id: int):
         """后台线程：重搜 → 逐个候选取 URL → loadfile → 状态/历史。
-        解析完成时 gen 已过期（期间用户又切歌）→ 丢弃结果，不覆盖新歌。"""
+        解析完成时 req_id 已过期（期间用户又切歌）→ 丢弃结果，不覆盖新歌。
+        网络解析经 OnlineResolver（纯解析，不碰 mpv/队列/Qt 信号）。"""
         try:
-            online_dict = self.online_manager.search_all(query, limit_per_source=5)
-            all_tracks = [t for tracks in online_dict.values() for t in tracks]
-            if not all_tracks:
-                logger.info("[Music] 队列在线歌重搜无结果，跳过")
+            if self._resolver is None:
+                logger.error("[Music] 在线解析器未就绪，跳过")
                 self._schedule_skip_online(song)
                 return
-            candidates = _pick_candidates(all_tracks, self.online_manager)
-            chosen, play_result = None, None
-            for cand in candidates:
-                play_result = self.online_manager.get_play_url(cand)
-                if play_result and play_result.get("url"):
-                    chosen = cand
-                    break
-            if chosen is None:
-                logger.error("[Music] 队列在线歌重搜 URL 均失败，跳过")
+            result = self._resolver.resolve(query, limit_per_source=5)
+            if not result:
+                logger.info("[Music] 队列在线歌重搜无结果/URL 均失败，跳过")
                 self._schedule_skip_online(song)
                 return
-            if gen != self._online_resolve_gen:
+            if req_id != self._play_request_id:
                 logger.info("[Music] 在线解析已过期（期间已切歌），丢弃结果")
                 return
-            url = play_result["url"]
+            chosen = result["track"]
+            url = result["url"]
+            play_result = result["play_result"]
             logger.info(f"[Music] 队列在线歌重搜播放: {chosen.title} - {chosen.artist} ({chosen.source_name})")
             # http-header-fields 持久属性：每次无条件重设，避免 Referer 跨源残留
             hdr = _pick_play_headers(play_result.get("headers"))
@@ -1275,6 +1193,11 @@ class MusicController:
 
     def set_online_manager(self, manager) -> None:
         self.online_manager = manager
+        # 在线解析器随源就绪创建（纯网络解析，不碰 mpv/队列/Qt 信号）
+        if self._resolver is None:
+            self._resolver = OnlineResolver(manager)
+        else:
+            self._resolver.set_manager(manager)
         # 下载器随在线源就绪创建（不阻塞 UI、独立线程池，不碰本对象 mpv）
         if self.downloader is None:
             try:

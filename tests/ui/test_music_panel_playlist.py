@@ -43,6 +43,9 @@ class FakeMusic:
     def get_volume(self):
         return 70
 
+    def set_volume(self, v):
+        self._volume = v
+
     def get_online_sources(self):
         return []
 

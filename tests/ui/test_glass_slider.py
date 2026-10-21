@@ -179,6 +179,9 @@ def test_music_panel_volume_uses_glass_ui(qapp):
         def get_volume(self):
             return 66
 
+        def set_volume(self, v):
+            self._volume = v
+
         def get_online_sources(self):
             return []
 

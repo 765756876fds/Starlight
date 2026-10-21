@@ -123,6 +123,9 @@ def test_music_panel_history_logs_and_carries_cover(qapp, capsys):
         def get_volume(self):
             return 70
 
+        def set_volume(self, v):
+            self._volume = v
+
         def get_online_sources(self):
             return []
 
