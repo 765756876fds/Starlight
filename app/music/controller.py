@@ -1558,6 +1558,12 @@ class MusicController:
             if _before_load is not None and not _before_load():
                 return False
             self.mpv.loadfile(url)
+            # 确保新歌开始播放（不继承之前的暂停状态）
+            self.mpv.set_property("pause", False)
+            try:
+                self.mpv._properties["pause"] = False
+            except Exception:
+                pass
             logger.info("[Music] mpv loadfile ok")
         except Exception as e:
             logger.info(f"[Music] mpv loadfile fail: {e}")
