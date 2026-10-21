@@ -97,6 +97,16 @@ class MusicController:
         else:
             self.mpv = MpvController(self.mpv_path, self.mpv_ipc_pipe)
 
+        # 影子模式对拍基建：trace_enabled=True 时包一层 RecordingMpv（只记录，不改行为）。
+        # 开关读 config/settings.yaml 的 music.trace_enabled，默认关闭。
+        if self._load_trace_enabled():
+            try:
+                from .trace_recorder import get_trace_recorder
+                from .recording_mpv import RecordingMpv
+                self.mpv = RecordingMpv(self.mpv, get_trace_recorder(enabled=True))
+            except Exception:
+                pass
+
         # 落雪音乐客户端
         self.lx_client = LxMusicClient()
         self.lx_connected = self.lx_client.is_connected()
@@ -1869,6 +1879,23 @@ class MusicController:
             logger.info("[Music] auto_next: next() 完成")
         except Exception as e:
             logger.info(f"[Music] auto_next: next() 异常: {e!r}")
+
+    @staticmethod
+    def _load_trace_enabled() -> bool:
+        """影子对拍开关：读 config/settings.yaml 的 music.trace_enabled（默认 False）。
+        读失败静默降级 False，绝不阻断启动。"""
+        try:
+            import os as _os
+            import yaml
+            from app.core.path_resolve import PROJECT_ROOT
+            p = _os.path.join(PROJECT_ROOT, "config", "settings.yaml")
+            if _os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as _f:
+                    data = yaml.safe_load(_f) or {}
+                return bool((data.get("music") or {}).get("trace_enabled", False))
+        except Exception:
+            pass
+        return False
 
     def _update_state(self, **kwargs):
         """更新状态存储"""
