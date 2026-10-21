@@ -128,6 +128,7 @@ class MusicPanel(QWidget):
     _identify_trigger = Signal()
     # 下载进度：后台线程 emit → 主线程渲染（跨线程安全）；pct None=无总量，-1=完成，-2=失败
     _dl_signal = Signal(str, object)  # key, pct
+    _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
 
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
@@ -139,6 +140,7 @@ class MusicPanel(QWidget):
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
+        self._play_result.connect(self._on_play_result)
         self._playing_card_key = None   # 当前播放卡片 key（由 _refresh 同步到各 Delegate）
         # 榜单 tab 状态
         self._rank_groups = {}          # 插件名 -> [分组{title, lists}]
@@ -715,10 +717,8 @@ class MusicPanel(QWidget):
         if not s or self._music is None:
             return
         print(f"[UI] local play: {s.get('title')} id={s.get('id')}")
-        try:
-            self._music.play_song(s)
-        except Exception as e:
-            print(f"[UI] local play error: {e}")
+        self._play_async(self._music.play_song, s,
+                         ok_msg=f"正在播放：{s.get('title', '')}")
 
     def _on_highlight(self, on: bool):
         self.btn_highlight.setText(f"高潮模式：{'开' if on else '关'}")
@@ -737,6 +737,32 @@ class MusicPanel(QWidget):
             fn(*args)
         except Exception as e:
             print(f"[MusicPanel] 后台调用失败: {e!r}")
+
+    def _play_async(self, target, *args, ok_msg: str = "", fail_msg: str = "该曲目无法播放",
+                    status_label=None) -> None:
+        """播放类操作后台线程化：UI 只发信号，不等待网络/mpv 结果（双击播放不卡窗）。
+        结果经 _play_result 信号回主线程更新状态栏（跨线程 Signal 自动排队）。
+        status_label：失败提示的目标状态栏（默认顶部 lbl_status）。"""
+        if self._music is None:
+            return
+        lbl = status_label or self.lbl_status
+        if ok_msg:
+            lbl.setText(ok_msg)
+
+        def run():
+            try:
+                ok = target(*args)
+                if not ok:
+                    self._play_result.emit(False, fail_msg, lbl)
+            except Exception as e:
+                self._play_result.emit(False, f"播放失败: {e}", lbl)
+
+        threading.Thread(target=run, daemon=True,
+                         name="ui-music-play-async").start()
+
+    def _on_play_result(self, ok: bool, msg: str, lbl) -> None:
+        if not ok:
+            lbl.setText(msg)
 
     def _on_prev(self):
         if self._music is None:
@@ -1082,15 +1108,9 @@ class MusicPanel(QWidget):
         row = item.data(Qt.UserRole)
         if not row or self._music is None:
             return
-        ok = False
-        try:
-            ok = self._music.play_history_item(row)
-        except Exception as e:
-            print(f"[MusicPanel] history play error: {e}")
-        if ok:
-            self.lbl_status.setText(f"正在播放：{row.get('title', '')}")
-        else:
-            self.lbl_status.setText("该歌已不可用")
+        self._play_async(self._music.play_history_item, row,
+                         ok_msg=f"正在播放：{row.get('title', '')}",
+                         fail_msg="该歌已不可用")
 
     def _on_clear_history(self):
         if self._music is None:
@@ -1245,15 +1265,9 @@ class MusicPanel(QWidget):
         row = item.data(Qt.UserRole)
         if not row or self._music is None:
             return
-        ok = False
-        try:
-            ok = self._music.play_playlist_item(row)
-        except Exception as e:
-            print(f"[MusicPanel] playlist song play error: {e}")
-        if ok:
-            self.lbl_status.setText(f"正在播放：{row.get('title', '')}")
-        else:
-            self.lbl_status.setText("该歌已不可用")
+        self._play_async(self._music.play_playlist_item, row,
+                         ok_msg=f"正在播放：{row.get('title', '')}",
+                         fail_msg="该歌已不可用")
 
     # ---- 榜单 ----
 
@@ -1439,16 +1453,10 @@ class MusicPanel(QWidget):
                 cover_url=data.get("cover_url") or None,
                 extra=data.get("extra") or {},
             )
-        try:
-            ok = self._music.play_online(track)
-        except Exception as e:
-            ok = False
-            self.lbl_rank_status.setText(f"播放失败: {e}")
-            return
-        if ok:
-            self.lbl_rank_status.setText(f"正在播放：{track.title}")
-        else:
-            self.lbl_rank_status.setText("该曲目无法播放")
+        self._play_async(self._music.play_online, track,
+                         ok_msg=f"正在播放：{track.title}",
+                         fail_msg="该曲目无法播放",
+                         status_label=self.lbl_rank_status)
 
     # ---- 右键菜单 ----
 
@@ -1843,29 +1851,19 @@ class MusicPanel(QWidget):
         row = self.list_results.row(item)
         if row < 0:
             return
-        # P1 候选换源：语音候选列表（_voice_generation 非 None）→ 换源续播
+        # P1 候选换源：语音候选列表（_voice_generation 非 None）→ 换源续播（后台线程）
         if self._voice_generation is not None:
-            try:
-                if self._music.play_online_resume(self._voice_generation, row):
-                    self.lbl_status.setText("正在换源…")
-                    return
-            except Exception as e:
-                self.lbl_status.setText(f"换源失败: {e}")
-                return
-        # 手动搜索路径（原样）
+            self.lbl_status.setText("正在换源…")
+            self._play_async(self._music.play_online_resume,
+                             self._voice_generation, row,
+                             fail_msg="换源失败")
+            return
+        # 手动搜索路径：后台线程播放（UI 不等待网络/播放器）
         if row >= len(self._tracks_by_row):
             return
         track = self._tracks_by_row[row]
-        try:
-            ok = self._music.play_online(track)
-        except Exception as e:
-            ok = False
-            self.lbl_status.setText(f"播放失败: {e}")
-            return
-        if ok:
-            self.lbl_status.setText(f"正在播放：{track.title}")
-        else:
-            self.lbl_status.setText("该曲目无法播放")
+        self._play_async(self._music.play_online, track,
+                         ok_msg=f"正在播放：{track.title}")
 
     def _on_seek(self):
         if self._music is None:

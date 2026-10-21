@@ -23,6 +23,18 @@ from app.music.online.sources.js_source import JSMusicSource
 from app.music.online.models import OnlineTrack
 
 
+def _wait_text(lbl, sub, timeout=2.0):
+    """榜单播放已异步化：等待状态栏文本变化（QTest.qWait 驱动事件循环，投递跨线程信号）。"""
+    import time
+    from PySide6.QtTest import QTest
+    start = time.time()
+    while time.time() - start < timeout:
+        if sub in lbl.text():
+            return True
+        QTest.qWait(50)
+    return False
+
+
 # ---------- bridge.js / mf_loader.js 协议暴露（静态断言） ----------
 
 def test_bridge_js_exposes_rank_protocol():
@@ -329,7 +341,7 @@ def test_rank_song_play_calls_play_online(qapp):
     p.list_rank_songs.addItem(item)
     p._on_rank_song_play(item)
     p._music.play_online.assert_called_once_with(t)
-    assert "正在播放" in p.lbl_rank_status.text()
+    assert _wait_text(p.lbl_rank_status, "正在播放"), "榜单播放后状态栏未显示正在播放"
 
 
 def test_rank_song_play_failure_degrades(qapp):
@@ -343,7 +355,7 @@ def test_rank_song_play_failure_degrades(qapp):
     p.list_rank_songs.addItem(item)
     p._on_rank_song_play(item)
     p._music.play_online.assert_called_once_with(t)
-    assert "无法播放" in p.lbl_rank_status.text()
+    assert _wait_text(p.lbl_rank_status, "无法播放"), "榜单播放失败未降级提示"
 
 
 # ---------- worker（不起线程，同步 run） ----------
@@ -550,7 +562,7 @@ def test_rank_song_play_converts_dict_to_onlinetrack(qapp, monkeypatch):
     assert got.duration_seconds == 210
     assert got.cover_url == "https://img/c.jpg"
     assert got.extra.get("_raw") == raw, "extra 必须原样携带 _raw，否则 getUrl 报'无法获取播放链接'"
-    assert "正在播放" in p.lbl_rank_status.text()
+    assert _wait_text(p.lbl_rank_status, "正在播放"), "榜单播放后状态栏未显示正在播放"
 
 
 def test_rank_song_play_already_onlinetrack_passthrough(qapp, monkeypatch):
@@ -568,7 +580,7 @@ def test_rank_song_play_already_onlinetrack_passthrough(qapp, monkeypatch):
     p._on_rank_song_play(item)
     got = p._music.play_online.call_args[0][0]
     assert got is t
-    assert "无法播放" in p.lbl_rank_status.text()
+    assert _wait_text(p.lbl_rank_status, "无法播放"), "榜单播放失败未降级提示"
 
 
 def test_rank_song_play_missing_extra_still_ok(qapp, monkeypatch):
