@@ -1071,19 +1071,54 @@ class MusicController:
                 logger.error("[Music] 在线解析器未就绪，跳过")
                 self._schedule_skip_online(song)
                 return
-            result = self._resolver.resolve(query, limit_per_source=5)
-            if not result:
-                logger.info("[Music] 队列在线歌重搜无结果/URL 均失败，跳过")
-                self._schedule_skip_online(song)
-                return
+            # 直取优先：榜单歌带完整 source_name/track_id/extra._raw 时，直接消费
+            # ID 取流（js_source.get_play_url + bridge getUrl 原生支持），避免重搜
+            # 命中片段版/试听版与音源错乱；直取失败才降级重搜兜底。
+            url = None
+            headers = None
+            chosen_track = None
+            play_result = None
+            track_id = song.get("track_id")
+            source_name = song.get("source_name")
+            if track_id and source_name:
+                try:
+                    from app.music.online.models import OnlineTrack
+                    direct_track = OnlineTrack(
+                        source_name=source_name,
+                        track_id=str(track_id),
+                        title=song.get("title", "") or "",
+                        artist=song.get("artist", "") or "",
+                        album=song.get("album", "") or "",
+                        duration_seconds=int(song.get("duration") or 0),
+                        extra=song.get("extra") or {},
+                    )
+                    play_res = self.online_manager.get_play_url(
+                        direct_track, quality="high")
+                    if play_res and play_res.get("url"):
+                        url = play_res["url"]
+                        headers = play_res.get("headers")
+                        chosen_track = direct_track
+                        play_result = play_res
+                        logger.info(
+                            f"[Music] 队列在线歌直取成功: {direct_track.title} "
+                            f"- {direct_track.artist} ({source_name})")
+                except Exception as e:
+                    logger.warning(f"[Music] 队列在线歌直取失败，准备重搜: {e!r}")
+            if not url:
+                # 降级重搜兜底
+                logger.info(f"[Music] 队列在线歌走重搜兜底: {query}")
+                result = self._resolver.resolve(query, limit_per_source=5)
+                if not result:
+                    logger.info("[Music] 队列在线歌重搜无结果/URL 均失败，跳过")
+                    self._schedule_skip_online(song)
+                    return
+                chosen_track = result["track"]
+                url = result["url"]
+                play_result = result["play_result"]
             # 无锁快速检查：已过期直接放弃（省一次 IPC）
             if req_id != self._play_request_id:
                 logger.info("[Music] 在线解析已过期（期间已切歌），丢弃结果")
                 return
-            chosen = result["track"]
-            url = result["url"]
-            play_result = result["play_result"]
-            logger.info(f"[Music] 队列在线歌重搜播放: {chosen.title} - {chosen.artist} ({chosen.source_name})")
             # 锁内权威校验 + 播放：校验失败绝不 loadfile；
             # 锁内执行保证与 play_song（本地持锁）互斥，杜绝旧请求覆盖新歌
             with self._lock:
@@ -1091,15 +1126,16 @@ class MusicController:
                     logger.info("[Music] 在线解析已过期（期间已切歌），锁内丢弃结果")
                     return
                 online_song = self._apply_stream(
-                    chosen, url, play_result.get("headers"))
+                    chosen_track, url,
+                    headers if headers is not None else play_result.get("headers"))
             try:
                 self.history_recorder.record_song({
                     "id": -1,
-                    "title": chosen.title,
-                    "artist": chosen.artist,
+                    "title": chosen_track.title,
+                    "artist": chosen_track.artist,
                     "source": "online",
-                    "source_name": chosen.source_name,
-                    "track_id": chosen.track_id,
+                    "source_name": chosen_track.source_name,
+                    "track_id": chosen_track.track_id,
                 })
             except Exception as e:
                 logger.error(f"[Music] 记录播放历史失败: {e}")
@@ -1640,6 +1676,9 @@ class MusicController:
                 "filename": "",
                 "music_id": 0,
                 "id": 0,
+                # 完整 extra 随队（含 _raw 原始歌曲对象）：_resolve_online_worker 直取
+                # 播放依赖 raw_item 构造插件 URL（缺了会退化到重搜，命中片段版）。
+                "extra": getattr(t, "extra", None) or {},
             })
         with self._lock:
             # 切换歌单 = 替换队列：清掉旧队列（本地/其它在线残留），只留本歌单剩余歌

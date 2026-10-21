@@ -1,4 +1,5 @@
-"""队列在线歌播放：按 title+artist 真重搜（不用旧 track_id）；失败主动跳过；本地不变。"""
+"""队列在线歌播放：直取优先（消费存的 track_id/raw_item），直取失败才重搜兜底；
+失败主动跳过；本地歌不受影响。"""
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -52,19 +53,43 @@ def _mk_track(name="夜曲", artist="周杰伦", tid="new-1", source="kw"):
     return OnlineTrack(source_name=source, track_id=tid, title=name, artist=artist)
 
 
-def test_queue_online_song_researches_and_plays(tmp_path):
-    """真重搜：按 title+artist 经 OnlineResolver 拿新 track → URL → 播放；未直接用存的 track_id。"""
+def test_queue_online_song_direct_url_first(tmp_path):
+    """直取优先：队列在线歌带 source_name+track_id → 直接用存的 ID 取流，
+    不重搜（避免重搜命中片段版/试听版）；历史记录直取 track 的 id。"""
+    c = _make_ctrl(tmp_path)
+    c.online_manager = MagicMock()
+    c._resolver = MagicMock()
+    # 直取成功（底层 get_play_url 消费 track_id/raw_item 返回直链）
+    c.online_manager.get_play_url.return_value = {
+        "url": "http://x/direct.mp3", "headers": None}
+    c._play_song(_online_song())  # 存的 track_id 是 old-1
+    # 直取用存的 track_id，不走 resolver
+    got = c.online_manager.get_play_url.call_args.args[0]
+    assert got.track_id == "old-1" and got.source_name == "kw"
+    assert c._resolver.resolve.call_count == 0, "直取成功不得触发重搜"
+    assert _wait_until(lambda: c.mpv.loadfile.call_count == 1, timeout=2.0), "后台切歌超时未执行 loadfile"
+    c.mpv.loadfile.assert_called_once_with("http://x/direct.mp3")
+    rows = c.db.get_history()
+    assert len(rows) == 1 and rows[0]["source_type"] == "online"
+    assert rows[0]["track_id"] == "old-1", "历史应记录直取 track 的 id"
+
+
+def test_queue_online_song_researches_when_direct_fails(tmp_path):
+    """直取失败（get_play_url 返回 None）→ 降级重搜兜底：按 title+artist 经
+    OnlineResolver 拿新 track → URL → 播放。"""
     c = _make_ctrl(tmp_path)
     c.online_manager = MagicMock()
     c._resolver = MagicMock()  # OnlineResolver 契约：resolve(query) -> {url, track, play_result}
     new_track = _mk_track()
+    c.online_manager.get_play_url.return_value = None   # 直取失败
     c._resolver.resolve.return_value = {
         "url": "http://x/new.mp3",
         "track": new_track,
         "play_result": {"headers": None, "url": "http://x/new.mp3"},
     }
     c._play_song(_online_song())  # 存的 track_id 是 old-1
-    # 搜索用 title+artist
+    # 重搜兜底在后台线程执行：先等 resolve 被调用，再断言 query
+    assert _wait_until(lambda: c._resolver.resolve.called, timeout=2.0), "直取失败后未触发重搜兜底"
     assert c._resolver.resolve.call_args.args[0] == "夜曲 周杰伦"
     assert _wait_until(lambda: c.mpv.loadfile.call_count == 1, timeout=2.0), "后台切歌超时未执行 loadfile"
     c.mpv.loadfile.assert_called_once_with("http://x/new.mp3")
@@ -74,10 +99,11 @@ def test_queue_online_song_researches_and_plays(tmp_path):
 
 
 def test_queue_online_song_not_found_skips(tmp_path):
-    """重搜无结果（resolver 返回 None）→ 主动跳到下一首（不卡；Timer 0.2s 后 next 到本地歌）。"""
+    """直取失败且重搜无结果（resolver 返回 None）→ 主动跳到下一首（不卡；Timer 0.2s 后 next 到本地歌）。"""
     c = _make_ctrl(tmp_path)
     c.online_manager = MagicMock()
     c._resolver = MagicMock()
+    c.online_manager.get_play_url.return_value = None   # 直取失败
     c._resolver.resolve.return_value = None
     c.queue.add_all([
         _online_song(),
@@ -95,10 +121,11 @@ def test_queue_online_song_not_found_skips(tmp_path):
 
 
 def test_queue_online_url_all_fail_skips(tmp_path):
-    """搜到候选但 URL 全拿不到（resolver 无结果）→ 同样主动跳过。"""
+    """直取失败且搜到候选但 URL 全拿不到（resolver 无结果）→ 同样主动跳过。"""
     c = _make_ctrl(tmp_path)
     c.online_manager = MagicMock()
     c._resolver = MagicMock()
+    c.online_manager.get_play_url.return_value = None   # 直取失败
     c._resolver.resolve.return_value = None
     c.queue.add_all([
         _online_song(),
@@ -116,6 +143,7 @@ def test_skip_does_not_hijack_user_switch(tmp_path):
     c = _make_ctrl(tmp_path)
     c.online_manager = MagicMock()
     c._resolver = MagicMock()
+    c.online_manager.get_play_url.return_value = None   # 直取失败
     c._resolver.resolve.return_value = None
     c.queue.add_all([
         _online_song(),
@@ -147,12 +175,8 @@ def test_queue_online_then_local_auto_next(tmp_path):
     c = _make_ctrl(tmp_path)
     c.online_manager = MagicMock()
     c._resolver = MagicMock()
-    new_track = _mk_track()
-    c._resolver.resolve.return_value = {
-        "url": "http://x/new.mp3",
-        "track": new_track,
-        "play_result": {"headers": None, "url": "http://x/new.mp3"},
-    }
+    c.online_manager.get_play_url.return_value = {
+        "url": "http://x/direct.mp3", "headers": None}
     c.queue.add_all([
         _online_song(),
         {"id": 2, "title": "本地", "artist": "C", "path": "C:/l.mp3"},
