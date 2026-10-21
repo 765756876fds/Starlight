@@ -18,6 +18,7 @@ from .database import MusicDatabase
 from .history_recorder import HistoryRecorder
 from .lx_client import LxMusicClient
 from .mpv import MpvController
+from .mpv_adapter import MpvAdapter
 from .online.events import ONLINE_ERROR, ONLINE_SEARCH_DONE
 from .online.resolver import (
     OnlineResolver,
@@ -58,7 +59,10 @@ class MusicController:
     整合所有音乐子模块，提供统一接口。
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any], mpv_adapter: MpvAdapter | None = None):
+        """mpv_adapter: 可选注入的播放器替身（满足 MpvAdapter 协议）。
+        注入时 controller 不再实例化真实 MpvController——测试可挂
+        不发真声音的 Fake，构造/播放全程无 IPC、无子进程。"""
         self.config = config
         # 路径绝对化（P0-2）：相对路径（如 ./data/music.db）基于 PROJECT_ROOT，不依赖 CWD
         from app.core.path_resolve import resolve_under_root
@@ -87,7 +91,11 @@ class MusicController:
                 pass  # 非法模式值 → 保持默认，不崩
         self._missing_file_streak = 0   # 连续文件不可用计数（限次保护）
         self._last_next_ts = 0.0        # next() 防抖时间戳（语音+UI 并发双触发合并）
-        self.mpv = MpvController(self.mpv_path, self.mpv_ipc_pipe)
+        if mpv_adapter is not None:
+            # 外部注入（Fake/替身）：controller 依赖协议而非具体类
+            self.mpv = mpv_adapter
+        else:
+            self.mpv = MpvController(self.mpv_path, self.mpv_ipc_pipe)
 
         # 落雪音乐客户端
         self.lx_client = LxMusicClient()

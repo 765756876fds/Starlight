@@ -83,6 +83,128 @@ class TestMusicDatabase:
         assert len(songs) == 3
 
 
+class FakeMpvAdapter:
+    """不发真声音的 mpv 替身：满足 MpvAdapter 协议（controller 调用面）。
+    无子进程、无 IPC——所有调用只记录到 calls，属性写进 _properties。"""
+
+    def __init__(self):
+        self.calls = []
+        self._properties = {}
+        self.volume = 70
+
+    def on_property_change(self, name, cb):
+        self.calls.append(("on_property_change", name))
+
+    def start(self, taskkill=True, pipe_timeout=3.0, prop_timeout=0.5):
+        self.calls.append(("start",))
+        return True
+
+    def stop(self):
+        self.calls.append(("stop",))
+
+    def stop_process(self):
+        self.calls.append(("stop_process",))
+
+    def is_running(self):
+        return True
+
+    def loadfile(self, filepath, mode="replace"):
+        self.calls.append(("loadfile", filepath))
+
+    def play(self):
+        self.calls.append(("play",))
+
+    def pause(self):
+        self.calls.append(("pause",))
+
+    def toggle_pause(self):
+        self.calls.append(("toggle_pause",))
+
+    def seek(self, seconds, mode="relative"):
+        self.calls.append(("seek", seconds, mode))
+
+    def get_property(self, name, timeout=2.0):
+        if name == "idle-active":
+            return False
+        if name == "playback-time":
+            return 0.0
+        if name == "duration":
+            return 180.0
+        if name == "pause":
+            return bool(self._properties.get("pause", False))
+        return self._properties.get(name)
+
+    def set_property(self, name, value):
+        self._properties[name] = value
+
+    def get_live_playback_time(self):
+        return 0.0
+
+    def get_duration(self):
+        return 180.0
+
+    def get_current_time(self):
+        return 0.0
+
+    def get_volume(self):
+        return self.volume
+
+    def set_volume(self, volume):
+        self.volume = volume
+
+    def is_idle(self):
+        return False
+
+    def is_paused(self):
+        return bool(self._properties.get("pause", False))
+
+    def get_filename(self):
+        return None
+
+
+class TestControllerMpvAdapterInjection:
+    """MpvAdapter 协议注入：controller 不实例化真实 mpv，可挂 Fake 播放。"""
+
+    def test_injects_fake_and_play_song_is_instant(self, tmp_path):
+        import time
+        from unittest.mock import patch
+
+        from app.music.controller import MusicController
+
+        fake = FakeMpvAdapter()
+        db_path = str(tmp_path / "mpv_adapter.db")
+        cfg = {
+            "database": db_path,
+            "scan_dirs": [],
+            "extensions": [".flac"],
+            "mpv_path": "mpv",
+            "mpv_ipc_pipe": "\\\\.\\pipe\\test_mpv_adapter",
+            "default_volume": 70,
+        }
+        # LxMusicClient.is_connected() 会真发 localhost HTTP 探测 → 测试内拦截
+        with patch("app.music.controller.LxMusicClient"):
+            ctrl = MusicController(cfg, mpv_adapter=fake)
+        try:
+            assert ctrl.mpv is fake, "注入后 ctrl.mpv 必须就是 Fake 实例"
+
+            song_path = tmp_path / "song.flac"
+            song_path.write_bytes(b"fake-mp3-bytes")
+            song = {"id": 1, "title": "晴天", "artist": "周杰伦",
+                    "path": str(song_path), "duration": 180.0}
+
+            t0 = time.time()
+            ctrl.play_song(song)
+            dt = time.time() - t0
+
+            assert any(c[0] == "loadfile" for c in fake.calls), \
+                f"play_song 必须触发 Fake.loadfile: {fake.calls}"
+            assert fake._properties.get("pause") is False, "播放后 pause 状态必须为 False"
+            assert dt < 1.0, f"play_song 不应阻塞主线程: {dt:.2f}s"
+        finally:
+            ctrl.stop()
+            ctrl.db.close()
+
+
 class TestIncrementalScan:
     """增量扫描测试"""
 
