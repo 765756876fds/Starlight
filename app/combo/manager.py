@@ -227,11 +227,13 @@ class ComboManager:
         combo = champ.find_by_trigger(key)
         if combo is None:
             return
-        # 冷却保护：同一连招冷却期内忽略重复触发（默认 1000ms）
+        # 冷却保护：使用 time.monotonic() 防系统时钟跳变（时间源铁律）
+        mono_now = time.monotonic()
+        combo_id = getattr(combo, "id", getattr(combo, "trigger", "default"))
         cooldown_sec = float(getattr(combo, "cooldown_ms", 1000) or 1000) / 1000.0
-        if now - self._last_exec_time.get(combo.trigger, 0.0) < cooldown_sec:
-            return
-        self._last_exec_time[combo.trigger] = now
+        if mono_now - self._last_exec_time.get(combo_id, 0.0) < cooldown_sec:
+            return  # 处于冷却期，直接忽略，绝不重发
+        self._last_exec_time[combo_id] = mono_now
         print(f"[Combo] 触发 {champ.name} [{combo.trigger}] {combo.note}")
         self._spawn_combo_exec(combo)
 
