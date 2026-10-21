@@ -854,7 +854,9 @@ class MusicPanel(QWidget):
         if ret != QMessageBox.StandardButton.Yes:
             return
         try:
-            self._music.clear_queue()
+            # 后台线程执行：clear_queue 在主线程持 controller._lock + mpv.stop()（IPC），
+            # 直接调用会卡住 GUI——丢 _safe_call 出主线程。
+            self._safe_call(self._music.clear_queue)
         except Exception as e:
             print(f"[MusicPanel] 清空队列失败: {e}")
 
@@ -1875,12 +1877,17 @@ class MusicPanel(QWidget):
                          ok_msg=f"正在播放：{track.title}")
 
     def _on_seek(self):
+        """进度条拖拽：seek 整体丢后台线程执行——mpv IPC（get_duration/seek）绝不碰主线程。"""
         if self._music is None:
             return
+        frac = self.slider_pos.value() / 1000.0
+        self._safe_call(self._do_seek, frac)
+
+    def _do_seek(self, frac: float) -> None:
+        """后台线程执行 seek（IPC 出主线程；失败静默，不炸线程）。"""
         try:
             dur = self._music.mpv.get_duration() if hasattr(self._music, "mpv") else 0
             if dur > 0:
-                frac = self.slider_pos.value() / 1000.0
                 self._music.mpv.seek(frac * dur)
         except Exception:
             pass

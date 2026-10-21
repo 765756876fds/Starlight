@@ -298,7 +298,9 @@ class LyricsWindow(QWidget):
         if not self._lines:
             return
         try:
-            pos = self._controller.mpv.get_live_playback_time()
+            # 读内存快照（controller 后台轮询线程更新），禁调 mpv IPC——200ms 高频
+            # 刷新绝不能阻塞 GUI 线程。
+            pos = self._controller.current_playback_time
         except Exception:
             return
         if pos is None:

@@ -130,6 +130,9 @@ class MusicController:
         # 播放请求代际号（request_id 契约）：每次用户发出新的播放意图（本地/在线/切歌）
         # 自增；后台在线解析完成后必须核对代际号，过期即丢弃，防止旧解析覆盖最新播放请求。
         self._play_request_id = 0
+        # 播放时间内存快照（后台轮询/确认线程更新）：GUI 高频刷新（歌词 200ms / 进度条）
+        # 只读此快照，绝不再发 mpv IPC——消除 GUI 线程卡顿源。
+        self._playback_time_cache: float = 0.0
 
         # mpv 可用性（mpv 未安装/路径错/启动失败 → 模块降级运行，不崩主程序）
         self._mpv_available = True
@@ -215,6 +218,13 @@ class MusicController:
                 try:
                     now_idle = bool(self.mpv.get_property("idle-active", timeout=0.5))
                     self._mpv_fail_streak = 0
+                    # 顺带更新播放时间快照（同一轮询线程的 IPC 会话内）
+                    # —— 供歌词/进度条读内存，GUI 线程禁调 IPC。
+                    try:
+                        self._playback_time_cache = float(
+                            self.mpv.get_property("playback-time", timeout=0.5) or 0.0)
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.error(f"[Music] idle poll error: {e!r}")
                     self._mpv_fail_streak += 1
@@ -1155,6 +1165,12 @@ class MusicController:
             idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
             pt = self.mpv.get_property("playback-time", timeout=0.5)
             dur = self.mpv.get_property("duration", timeout=0.5)
+            # 顺带更新播放时间快照（同一次后台确认的 IPC 会话内）
+            if pt is not None:
+                try:
+                    self._playback_time_cache = float(pt)
+                except Exception:
+                    pass
         except Exception:
             idle_now, pt, dur = True, None, None
         # 期间用户已切走/正常播完 → 不干预
@@ -1858,6 +1874,14 @@ class MusicController:
         """更新状态存储"""
         for key, value in kwargs.items():
             self.state_store.set(StateNamespace.MUSIC, key, value)
+
+    @property
+    def current_playback_time(self) -> float:
+        """当前播放位置（秒）——读内存快照，禁调 IPC。
+
+        快照由后台轮询/播放确认线程更新（_poll_idle / _confirm_playback）。
+        GUI 高频刷新（歌词 200ms、进度条）必须走本属性，绝不直接调 mpv。"""
+        return self._playback_time_cache
 
     def is_playing(self) -> bool:
         """是否正在播放"""
