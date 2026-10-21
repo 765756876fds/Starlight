@@ -1,11 +1,11 @@
-"""一键连招二期：编辑/添加对话框（添加英雄、编辑连招、按键选择器）。
+"""一键连招二期：编辑/添加对话框（添加英雄、编辑连招）。
 
-- KeyPickerDialog：序列按键选择器（列表点选）
-- TriggerCaptureDialog：触发键捕获（按键盘按键实时捕获，QWERDF 弹警告）
-- ComboEditDialog：添加/编辑连招（触发键捕获 + 备注 + 按键序列增删改 + 校验）
+- ComboEditDialog：添加/编辑连招（SingleKeyEdit 按键捕获 + 备注 + 按键序列增删改 + 校验）
 - AddChampionDialog：从全英雄列表搜索添加英雄（已配置英雄置灰）
 
-校验失败不保存、对话框保持打开；保存成功由调用方触发 ComboManager.save_config()。
+按键捕获改用官方 QKeySequenceEdit（SingleKeyEdit 子类），废弃全局钩子弹窗
+TriggerCaptureDialog / KeyPickerDialog；校验失败不保存、对话框保持打开；
+保存成功由调用方触发 ComboManager.save_config()。
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout,
@@ -22,176 +22,11 @@ from PySide6.QtWidgets import (
 )
 
 from app.combo.models import Combo, ComboStep, ChampionCombos
-from app.combo.validation import SEQUENCE_KEYS, is_valid_sequence_key, validate_combo
+from app.combo.validation import validate_combo
 from app.ui.widgets.glass_dialog import GlassDialog
-from app.ui.widgets.glass_msg import glass_info, glass_question, glass_warning
+from app.ui.widgets.glass_msg import glass_info, glass_warning
 from app.ui.widgets.icon_utils import lucide_icon
-
-# 按键分组展示（触发键模式只显示 物品 + 其他）
-_KEY_GROUPS = [
-    ("技能", "qwer"),
-    ("召唤", "df"),
-    ("物品", "1234567"),
-    ("其他", "abcs"),
-]
-
-
-class KeyPickerDialog(GlassDialog):
-    """按键选择器（序列按键用，列表点选；触发键改用 TriggerCaptureDialog 捕获）。"""
-
-    def __init__(self, parent=None, title: str = "选择按键"):
-        super().__init__(title, parent)
-        self._selected: Optional[str] = None
-        layout = self.body_layout
-        layout.addWidget(QLabel("点击按键选择"))
-        for label, keys in _KEY_GROUPS:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(f"{label}:"))
-            for k in keys:
-                if k not in SEQUENCE_KEYS:
-                    continue
-                btn = QPushButton(k.upper())
-                # 显式 sizePolicy：最小宽度被尊重，不被容器压缩
-                btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-                btn.setMinimumWidth(52)
-                btn.setFixedHeight(30)
-                btn.clicked.connect(lambda _=False, kk=k: self._pick(kk))
-                row.addWidget(btn)
-            row.addStretch()
-            layout.addLayout(row)
-        # 手动输入：按钮列表只覆盖常用键，其余字母/数字可在此输入（1~5 位）
-        tip = QLabel("或手动输入按键（1~5 位字母/数字）：")
-        layout.addWidget(tip)
-        mrow = QHBoxLayout()
-        self.edt_manual = QLineEdit()
-        self.edt_manual.setPlaceholderText("如 s / g / w")
-        self.edt_manual.setMaxLength(5)
-        self.edt_manual.returnPressed.connect(self._pick_manual)
-        btn_manual = QPushButton("确定")
-        btn_manual.setProperty("class", "primary")
-        btn_manual.clicked.connect(self._pick_manual)
-        mrow.addWidget(self.edt_manual, 1)
-        mrow.addWidget(btn_manual)
-        layout.addLayout(mrow)
-        btn_cancel = QPushButton("取消")
-        btn_cancel.clicked.connect(self.reject)
-        layout.addWidget(btn_cancel)
-
-    def _pick(self, key: str) -> None:
-        self._selected = key
-        self.accept()
-
-    def _pick_manual(self) -> None:
-        k = self.edt_manual.text().strip().lower()
-        if is_valid_sequence_key(k):
-            self._selected = k
-            self.accept()
-        else:
-            glass_warning(self, "按键不合法", "需 1~5 位字母或数字（如 s / g / w）")
-
-    def selected_key(self) -> Optional[str]:
-        return self._selected
-
-
-class TriggerCaptureDialog(GlassDialog):
-    """触发键捕获：按键盘按键实时捕获。
-
-    - 允许：字母 a-z / 主键区数字 0-9（统一转小写）
-    - 不支持：Shift/Ctrl/Alt/Win/F1-F12/Tab/Esc/方向键/小键盘等 → 提示重按
-    - QWERDF（游戏常用键）→ 弹警告，确认才用
-    - 未捕获到键之前 [确定] 置灰
-    """
-
-    _captured_signal = Signal(str)  # 跨线程（keyboard 回调线程 → UI 线程）
-
-    def __init__(self, parent=None):
-        super().__init__("选择触发键", parent)
-        self._captured: Optional[str] = None
-        self._remove_hook = None
-
-        layout = self.body_layout
-        layout.addWidget(QLabel("请按下你想用的触发键"))
-        self.lbl_display = QLabel("—")
-        self.lbl_display.setAlignment(Qt.AlignCenter)
-        self.lbl_display.setStyleSheet(
-            "font-size: 30px; font-weight: bold; padding: 6px;")
-        layout.addWidget(self.lbl_display)
-        self.lbl_hint = QLabel("支持字母与主键盘数字；Shift/Ctrl/F1 等特殊键不支持")
-        self.lbl_hint.setWordWrap(True)
-        self.lbl_hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
-        layout.addWidget(self.lbl_hint)
-
-        btns = QHBoxLayout()
-        self.btn_cancel = QPushButton("取消")
-        self.btn_cancel.clicked.connect(self.reject)
-        self.btn_ok = QPushButton("确定")
-        self.btn_ok.setEnabled(False)
-        self.btn_ok.clicked.connect(self.accept)
-        btns.addStretch()
-        btns.addWidget(self.btn_cancel)
-        btns.addWidget(self.btn_ok)
-        layout.addLayout(btns)
-
-        self._captured_signal.connect(self._on_captured)
-        try:
-            import keyboard
-            self._remove_hook = keyboard.hook(self._on_key)
-        except Exception as e:
-            self.lbl_hint.setText(f"键盘捕获不可用: {e}")
-
-    # ---------- 捕获解析 ----------
-
-    @staticmethod
-    def normalize_key(name: str) -> Optional[str]:
-        """键盘事件键名 → 合法触发键（小写）；None=不支持。
-
-        只认单字符：字母 a-z / 主键盘数字 0-9（小键盘 num 1 等名字更长 → None）。
-        """
-        n = (name or "").lower()
-        if len(n) == 1 and (n.isalpha() or n.isdigit()):
-            return n
-        return None
-
-    def _on_key(self, e) -> None:
-        """keyboard 回调（独立线程）→ 通过 Signal 回 UI 线程。"""
-        if getattr(e, "event_type", None) != "down":
-            return
-        key = self.normalize_key(getattr(e, "name", "") or "")
-        if key is None:
-            self._captured_signal.emit("__unsupported__")
-        else:
-            self._captured_signal.emit(key)
-
-    def _on_captured(self, key: str) -> None:
-        if key == "__unsupported__":
-            self._captured = None
-            self.btn_ok.setEnabled(False)
-            self.lbl_display.setText("—")
-            self.lbl_hint.setText("该键不支持，请重新按（支持字母与主键盘数字）")
-            return
-        if key in ("q", "w", "e", "r", "d", "f"):
-            if not glass_question(self, "确认触发键",
-                                  f"触发键 {key.upper()} 是游戏常用键，可能误触发，确认要用吗？"):
-                self.lbl_hint.setText("已取消，请重新按其他键")
-                return
-        self._captured = key
-        self.lbl_display.setText(key.upper())
-        self.lbl_hint.setText("已捕获，点击确定")
-        self.btn_ok.setEnabled(True)
-
-    def selected_key(self) -> Optional[str]:
-        return self._captured
-
-    def done(self, result: int) -> None:
-        """关闭时精确取消自己的 keyboard hook（不影响其他 hook）。"""
-        try:
-            if self._remove_hook is not None:
-                import keyboard
-                keyboard.unhook(self._remove_hook)
-                self._remove_hook = None
-        except Exception:
-            pass
-        super().done(result)
+from app.ui.widgets.single_key_edit import SingleKeyEdit
 
 
 def _make_step_row(dialog: "ComboEditDialog", index: int,
@@ -213,20 +48,13 @@ def _make_step_row(dialog: "ComboEditDialog", index: int,
     lbl_idx.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     h.addWidget(lbl_idx)
 
-    btn_key = QPushButton(step.key.upper())
-    # 显式 sizePolicy：水平 Minimum（最小宽度被尊重），垂直 Fixed
-    btn_key.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-    btn_key.setMinimumWidth(52)
-    btn_key.setFixedHeight(30)
-
-    def _pick_key():
-        dlg = KeyPickerDialog(dialog, title="选择序列按键")
-        if dlg.exec() == QDialog.Accepted and dlg.selected_key():
-            step.key = dlg.selected_key()
-            btn_key.setText(step.key.upper())
-
-    btn_key.clicked.connect(lambda: _pick_key())
-    h.addWidget(btn_key)
+    key_edit = SingleKeyEdit()
+    key_edit.set_value(step.key)
+    key_edit.setMinimumWidth(80)
+    key_edit.setFixedHeight(30)
+    key_edit.keySequenceChanged.connect(
+        lambda: setattr(step, "key", key_edit.value()))
+    h.addWidget(key_edit)
 
     spin = QSpinBox()
     spin.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
@@ -264,13 +92,14 @@ class ComboEditDialog(GlassDialog):
 
         layout = self.body_layout
 
-        # 触发键
+        # 触发键（SingleKeyEdit：点击后直接按键盘即可捕获回填，无弹窗）
         trig_row = QHBoxLayout()
         trig_row.addWidget(QLabel("触发键："))
-        self.btn_trigger = QPushButton(
-            (combo.trigger.upper() if combo and combo.trigger else "点击选择"))
-        self.btn_trigger.clicked.connect(self._pick_trigger)
-        trig_row.addWidget(self.btn_trigger)
+        self.trigger_edit = SingleKeyEdit()
+        self.trigger_edit.set_value(combo.trigger if combo else "")
+        self.trigger_edit.setMinimumWidth(90)
+        self.trigger_edit.setFixedHeight(30)
+        trig_row.addWidget(self.trigger_edit)
         trig_row.addStretch()
         layout.addLayout(trig_row)
 
@@ -324,7 +153,10 @@ class ComboEditDialog(GlassDialog):
                 w.deleteLater()
         for i, step in enumerate(self._steps, 1):
             self.steps_layout.addWidget(_make_step_row(self, i, step))
-        self.steps_layout.addStretch(1)  # 底部弹性：行少时顶部对齐，行不被垂直拉伸
+        self.steps_layout.addStretch(1)
+        # 新步骤行追加在底部：自动滚动到底，避免"加不进去"的错觉
+        self.scroll_steps.verticalScrollBar().setValue(
+            self.scroll_steps.verticalScrollBar().maximum())  # 底部弹性：行少时顶部对齐，行不被垂直拉伸
 
     def _remove_step(self, step: ComboStep) -> None:
         if step in self._steps:
@@ -332,27 +164,22 @@ class ComboEditDialog(GlassDialog):
         self._rebuild_steps()
 
     def _add_step(self) -> None:
-        dlg = KeyPickerDialog(self, title="选择序列按键")
-        if dlg.exec() != QDialog.Accepted or not dlg.selected_key():
-            return
-        self._steps.append(ComboStep(key=dlg.selected_key(), delay_after_ms=50))
+        """添加一步：直接追加空步骤行（无弹窗），行内 SingleKeyEdit 点击即录入。"""
+        self._steps.append(ComboStep(key="", delay_after_ms=50))
         self._rebuild_steps()
 
-    def _pick_trigger(self) -> None:
-        """触发键：按键捕获（不是列表点选）。"""
-        dlg = TriggerCaptureDialog(self)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_key():
-            self.btn_trigger.setText(dlg.selected_key().upper())
-            self._pending_trigger = dlg.selected_key()
-        else:
-            self._pending_trigger = None
 
     # ---------- 保存 ----------
 
     def _save(self) -> None:
-        trigger = (getattr(self, "_pending_trigger", None)
-                   or (self._combo.trigger if self._combo else ""))
-        trigger = (trigger or "").strip().lower()
+        trigger = self.trigger_edit.value().lower()
+        if not trigger:
+            glass_warning(self, "校验失败", "触发键不能为空")
+            return
+        for i, s in enumerate(self._steps, 1):
+            if not (getattr(s, "key", "") or "").strip():
+                glass_warning(self, "校验失败", f"第 {i} 步按键不能为空")
+                return
         ok, errors = validate_combo(
             self._champ, trigger, self._steps, exclude=self._combo)
         if not ok:

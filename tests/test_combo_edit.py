@@ -154,32 +154,9 @@ def test_manager_add_champion_duplicate_rejected(tmp_path):
     assert len(m.config.champions) == 2
 
 
-# ---------- 触发键捕获解析（TriggerCaptureDialog.normalize_key 纯函数） ----------
-
-def test_capture_normalize_letters_digits():
-    from app.ui.dialogs.combo_dialogs import TriggerCaptureDialog
-    n = TriggerCaptureDialog.normalize_key
-    assert n("a") == "a"
-    assert n("A") == "a"  # 大写统一小写
-    assert n("Z") == "z"
-    assert n("5") == "5"  # 主键盘数字
-    assert n("0") == "0"
-
-
-def test_capture_normalize_rejects_special_keys():
-    from app.ui.dialogs.combo_dialogs import TriggerCaptureDialog
-    n = TriggerCaptureDialog.normalize_key
-    assert n("shift") is None
-    assert n("ctrl") is None
-    assert n("alt") is None
-    assert n("tab") is None
-    assert n("esc") is None
-    assert n("space") is None
-    assert n("f1") is None
-    assert n("up") is None
-    assert n("num 1") is None  # 小键盘数字（主键区才允许）
-    assert n("enter") is None
-    assert n("") is None
+# 触发键捕获已重构为 QKeySequenceEdit（SingleKeyEdit），不再有
+# TriggerCaptureDialog.normalize_key 纯函数；单字符约束由校验层
+# TRIGGER_KEYS 保证（见 test_validate_illegal_trigger_rejected）。
 
 
 # ---------- 校验规则 ----------
