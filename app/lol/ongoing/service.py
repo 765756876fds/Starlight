@@ -41,8 +41,16 @@ def _resolve_live_champion_id(p) -> int:
                 try:
                     from app.lol.data.champion_catalog import ChampionCatalog
                     _CATALOG = ChampionCatalog()
+                    if _DEBUG_ONGOING:
+                        ongoing_logger.debug(
+                            f"DIAG catalog_ready: heroes={len(_CATALOG.all())}"
+                        )
                 except Exception:
                     _CATALOG = False
+                    if _DEBUG_ONGOING:
+                        ongoing_logger.warning(
+                            "DIAG catalog_init_failed: ChampionCatalog 构造异常，英雄解析将全部返回 0"
+                        )
     if not _CATALOG:
         return 0
     raw = (getattr(p, "raw_champion_name", "") or "").strip()
@@ -60,7 +68,9 @@ def _resolve_live_champion_id(p) -> int:
         # 去空格 + 小写兜底（如 "Twisted Fate" → "twistedfate"，目录含 name_en.lower() 键）
         c = _CATALOG.get_by_name(en.replace(" ", "").lower())
     if c is None:
-        logger.warning(f"[Ongoing] 2999 玩家英雄名未命中目录: raw={raw!r} zh={zh!r} en={en!r}")
+        ongoing_logger.warning(
+            f"DIAG catalog_miss: 2999 玩家英雄名未命中目录 raw={raw!r} zh={zh!r} en={en!r}"
+        )
     return c.cid if c else 0
 
 
@@ -354,6 +364,7 @@ class OngoingGameService:
         #   实测：匹配局 10/10 明文 puuid，人机局己方 5/5，bot 不在 session）
         # ChampSelect 阶段 gameflow 未就绪时不构建玩家集合（players 主源=gameflow，
         # 禁止以 2999/champ-select 充当玩家集合来源），等 GameStart 后 gameflow 就绪再构建。
+        _src = "none"  # DIAG：本 tick 最终实际采用的构建源
         session = self._build_gameflow_session(me_puuid)
         # 本修：换局确认后的构建源仲裁——旧局 gameflow 严禁作为构建源，
         # 仅当 gameflow 已切到待切换局号时其构建结果才可用（否则降级到 cs 或等待）
@@ -388,6 +399,7 @@ class OngoingGameService:
             # liveclientdata 无 puuid：身份归属由 gameflow 决定，
             # 实时 KDA/位置/等级按 (team, championId) 可关联字段合并进对应 cell
             self._merge_live_fields(session)
+            _src = "gameflow"
         elif phase == "ChampSelect":
             # 选人阶段提前显示（feature flag：deobfuscate_enabled）：
             # gameflow 未就绪时，cs session 队友为 HIDDEN 混淆（summonerId=0/puuid=""/obfuscatedPuuid 有值），
@@ -400,6 +412,8 @@ class OngoingGameService:
                     cs = self._champ_select_session
                     if cs and me_puuid:
                         session = self._deobfuscate_champ_select(cs, me_puuid)
+                        if session is not None:
+                            _src = "cs_deobfuscated"
                 except Exception:
                     session = None
         elif phase != "ChampSelect":
@@ -413,13 +427,14 @@ class OngoingGameService:
                 )
                 if me_puuid in cs_puuids and len(cs_puuids) >= 5:
                     session = cs  # 同一局的选人缓存
+                    _src = "cs_cache"
                     self._on_event("ongoing.session_source", {"source": "champ_select_cache", "players": len(cs_puuids)})
         if not isinstance(session, dict):
             return
         key = self._session_key(session)
         if _DEBUG_ONGOING:
             ongoing_logger.debug(
-                f"DIAG key: tick={self._diag_tick} phase={phase} "
+                f"DIAG key: tick={self._diag_tick} phase={phase} src={_src} "
                 f"session_gid={(session or {}).get('gameId')!r} "
                 f"key={key!r} cur_key={self._current_session_key!r}"
             )
@@ -434,6 +449,56 @@ class OngoingGameService:
                     self._session.phase = phase
                     self._session.updated_at = time.time()
                     rebuilt = self._to_current_session(session, phase, me_puuid)
+                    # 本修：同局局部英雄 ID 更新——gameflow 最新有效 championId 同步到
+                    # 当前发布 session 对应玩家。仅 0→非0（已有非零值绝不被临时 0 覆盖）；
+                    # 按 puuid 可靠匹配（不按下标/顺序）；锁内写入，UI 后续 get_session()
+                    # 深拷贝必然读到；不触发整 session 重建，不触碰名字/PUUID/summonerId/
+                    # 队伍/选人意图等任何其他字段；重复 tick 幂等（已填则跳过）。
+                    if self._session is not None:
+                        _gf_by_puuid = {p.puuid: p for p in rebuilt.players if p.puuid}
+                        for _p in self._session.players:
+                            _gf = _gf_by_puuid.get(_p.puuid) if _p.puuid else None
+                            if _gf is None:
+                                continue  # gameflow 未含该玩家：跳过，不猜测写入对象
+                            if _p.champion_id == 0 and _gf.champion_id:
+                                _p.champion_id = _gf.champion_id
+                                if _DEBUG_ONGOING:
+                                    ongoing_logger.debug(
+                                        f"DIAG hero_fill: tick={self._diag_tick} "
+                                        f"puuid={_p.puuid[:6] or 'EMPTY'} cur_cid=0 "
+                                        f"gf_cid={_gf.champion_id} after={_p.champion_id} "
+                                        f"wrote=True"
+                                    )
+                        # 匹配失败留痕（每 session key 汇总一次，低噪声）
+                        if _DEBUG_ONGOING:
+                            _miss = [p for p in self._session.players
+                                     if p.puuid and p.puuid not in _gf_by_puuid]
+                            if _miss:
+                                _reported = getattr(self, "_hero_miss_reported", set())
+                                if self._current_session_key not in _reported:
+                                    _reported.add(self._current_session_key)
+                                    self._hero_miss_reported = _reported
+                                    ongoing_logger.debug(
+                                        f"DIAG hero_fill: tick={self._diag_tick} "
+                                        f"miss_n={len(_miss)} "
+                                        f"key={self._current_session_key!r} skipped"
+                                    )
+                    # DIAG（只读，不改任何状态/时序）：服务层当前发布 session 的英雄快照。
+                    # UI 实际读取的就是 self._session（get_session 锁内深拷贝），此处记录
+                    # 真实已发布值而非尚未发布的 rebuilt；指纹变化才输出（低频）。
+                    if _DEBUG_ONGOING:
+                        _diag_snap = tuple(
+                            ((p.puuid[:6] if p.puuid else "EMPTY"),
+                             p.champion_id, p.champion_pick_intent)
+                            for p in self._session.players
+                        )
+                        if getattr(self, "_diag_sess_cid_fp", None) != _diag_snap:
+                            self._diag_sess_cid_fp = _diag_snap
+                            ongoing_logger.debug(
+                                f"DIAG sess_cid: tick={self._diag_tick} "
+                                f"key={self._current_session_key!r} n={len(self._session.players)} "
+                                f"cids={_diag_snap}"
+                            )
                     old_puuid_n = sum(1 for p in self._session.players if p.puuid)
                     new_puuid_n = sum(1 for p in rebuilt.players if p.puuid)
                     # 重建触发条件改为"有 puuid 的玩家数"（2026-10-18 修）：
@@ -707,6 +772,30 @@ class OngoingGameService:
         if not my_team and not their_team:
             return None
         game_id = gf.get("gameId") or gd.get("gameId") or 0
+        # DIAG：记录构建时的原始 championId（非回填后结果）——逐 cell 指纹变化时输出，
+        # 便于与 2999 匹配日志（DIAG live_cell）逐人关联，定位"哪个玩家 gameflow 未给英雄 ID"
+        if _DEBUG_ONGOING:
+            my_champ_nonzero = sum(1 for c in my_team if (c.get("championId") or 0))
+            their_champ_nonzero = sum(1 for c in their_team if (c.get("championId") or 0))
+            sig = tuple(
+                ((c.get("puuid") or "")[:6] or "EMPTY", c.get("championId") or 0,
+                 c.get("riotIdGameName") or "")
+                for c in my_team + their_team
+            )
+            if sig != getattr(self, "_last_gf_cell_sig", None):
+                self._last_gf_cell_sig = sig
+                for idx, c in enumerate(my_team + their_team):
+                    ongoing_logger.debug(
+                        f"DIAG gf_cell: tick={self._diag_tick} idx={idx} "
+                        f"team={'my' if idx < len(my_team) else 'their'} "
+                        f"puuid={(c.get('puuid') or '')[:6] or 'EMPTY'} "
+                        f"champ_cid={c.get('championId') or 0} "
+                        f"name={c.get('riotIdGameName') or ''!r}"
+                    )
+                ongoing_logger.debug(
+                    f"DIAG gf_summary: tick={self._diag_tick} gf_cells_n={len(my_team) + len(their_team)} "
+                    f"my_champ_nonzero={my_champ_nonzero} their_champ_nonzero={their_champ_nonzero}"
+                )
         self._on_event("ongoing.session_source",
                        {"source": "gameflow", "players": len(my_team) + len(their_team)})
         return {"myTeam": my_team, "theirTeam": their_team, "gameId": game_id}
@@ -877,16 +966,28 @@ class OngoingGameService:
                 cell_name = (cell.get("riotIdGameName") or "").strip()
                 # 1. 优先按 cid 匹配
                 p = live_by_cid.get((team_key, cell_cid))
+                match_by = "cid" if p is not None else "none"
                 # 2. 没匹配到则按名字匹配（不依赖先解析出 cid）
                 if p is None and cell_name:
                     p = live_by_name.get((team_key, cell_name))
+                    match_by = "name" if p is not None else match_by
                 if p is None:
+                    # DIAG：静默匹配失败不再盲区——记录 team/cell 身份与回填前 ID
+                    if _DEBUG_ONGOING:
+                        ongoing_logger.debug(
+                            f"DIAG live_cell: tick={self._diag_tick} team={team_key} "
+                            f"puuid={(cell.get('puuid') or '')[:6] or 'EMPTY'} "
+                            f"cell_cid_before={cell_cid} match_by=none resolved_cid=0 "
+                            f"cell_cid_after={cell_cid} wrote=False"
+                        )
                     continue
                 # 匹配到玩家后，尝试解析并回填真实英雄 ID
                 cid = _resolve_live_champion_id(p)
+                wrote = False
                 if cid:
                     # 回填 2999 真实英雄 ID：UI 本局英雄/绝活判定的数据源
                     cell["championId"] = cid
+                    wrote = True
                 cell["live_kills"] = getattr(p, "kills", 0) or 0
                 cell["live_deaths"] = getattr(p, "deaths", 0) or 0
                 cell["live_assists"] = getattr(p, "assists", 0) or 0
@@ -894,6 +995,14 @@ class OngoingGameService:
                 cell["live_level"] = getattr(p, "level", 0) or 0
                 cell["live_merged"] = True
                 merged += 1
+                if _DEBUG_ONGOING:
+                    ongoing_logger.debug(
+                        f"DIAG live_cell: tick={self._diag_tick} team={team_key} "
+                        f"puuid={(cell.get('puuid') or '')[:6] or 'EMPTY'} "
+                        f"cell_cid_before={cell_cid} match_by={match_by} "
+                        f"resolved_cid={cid} cell_cid_after={cell.get('championId') or 0} "
+                        f"wrote={wrote}"
+                    )
         if merged:
             self._on_event("ongoing.live_merged", {"players": merged})
         if _DEBUG_ONGOING:

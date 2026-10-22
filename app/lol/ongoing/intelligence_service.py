@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass
 
 from .champion_mastery import AVAILABLE, ChampionMasteryProvider, ChampionMasteryRecord
+from .debug_tracer import _DEBUG_ONGOING, ongoing_logger
 from .intelligence import (
     ChampionStat,
     PlayerIntelligenceService,
@@ -38,6 +39,9 @@ class PlayerIntelligenceCacheEntry:
     mastery_status: str = ""
     mastery_top3: list[ChampionMasteryRecord] = None
     current_champion_is_mastery_top3: bool | None = None
+    # 绝活判定对应的英雄 ID：区分"未判定(0)"与"已按英雄 X 判定过"，
+    # 玩家本局英雄变化（A→B）时不得复用 A 的判定结果。
+    mastery_judged_champion_id: int = 0
 
     # 最近20场
     recent_status: str = ""  # AVAILABLE / EMPTY / UNAVAILABLE / NO_PUUID
@@ -115,12 +119,27 @@ class OngoingIntelligenceService:
         # 命中缓存
         if puuid in self._cache:
             entry = self._cache[puuid]
-            # 更新当前英雄判断（如果当前英雄变了）
+            # 更新当前英雄判断（如果当前英雄变了）；纯内存计算，无网络请求。
+            # 始终按传入的 current_champion_id 重算并记录判定英雄，保证 A→B 不复用 A 结果。
             if entry.queried_mastery and entry.mastery_status == AVAILABLE and current_champion_id > 0:
+                _j_before = entry.mastery_judged_champion_id
+                _m_before = entry.current_champion_is_mastery_top3
                 entry.current_champion_is_mastery_top3 = any(
                     m.champion_id == current_champion_id
                     for m in (entry.mastery_top3 or [])
                 )
+                entry.mastery_judged_champion_id = current_champion_id
+                if _DEBUG_ONGOING and _j_before != current_champion_id:
+                    # DIAG（只读）：AVAILABLE 缓存命中重算——前后 judged/判定值，证明
+                    # 纯内存重算且未走 SGP 请求路径（该路径见 DIAG intel_sgp_req）。
+                    ongoing_logger.debug(
+                        f"DIAG intel_rejudge: puuid={puuid[:6] or 'EMPTY'} "
+                        f"cid_in={current_champion_id} "
+                        f"judged_before={_j_before} mastery_before={_m_before} "
+                        f"judged_after={entry.mastery_judged_champion_id} "
+                        f"mastery_after={entry.current_champion_is_mastery_top3} "
+                        f"src=cache_hit"
+                    )
             return entry
 
         # 创建新条目
@@ -138,6 +157,7 @@ class OngoingIntelligenceService:
                     m.champion_id == current_champion_id
                     for m in top3
                 )
+                entry.mastery_judged_champion_id = current_champion_id
         except Exception:
             entry.mastery_status = "UNAVAILABLE"
             entry.mastery_top3 = []
@@ -146,6 +166,12 @@ class OngoingIntelligenceService:
         # 2. 查询最近50场（候选 A：窗口与 loader 对齐，显示/判定同源）
         sgp = self._ensure_sgp()
         if sgp:
+            if _DEBUG_ONGOING:
+                # DIAG（只读）：真实 SGP 网络请求发生点——用于证明"缓存命中重算"路径
+                # 不会经过此处（该路径见 DIAG intel_rejudge）。低频：每玩家首查一次。
+                ongoing_logger.debug(
+                    f"DIAG intel_sgp_req: puuid={puuid[:6] or 'EMPTY'} cid={current_champion_id}"
+                )
             try:
                 res = sgp.recent(puuid, start_index=0, count=50)
                 if res.state == "AVAILABLE" and res.records:

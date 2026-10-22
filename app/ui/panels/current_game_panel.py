@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from app.core.event_bus import Event, get_event_bus
 from app.lol.data.champion_catalog import ChampionCatalog
-from app.lol.ongoing.champion_mastery import ChampionMasteryProvider
+from app.lol.ongoing.champion_mastery import AVAILABLE, ChampionMasteryProvider
 from app.lol.ongoing.intelligence import PlayerIntelligenceService
 from app.lol.ongoing.intelligence_service import OngoingIntelligenceService
 from app.lol.ongoing.sgp_provider import SgpMatchHistoryProvider
@@ -324,8 +324,28 @@ class CurrentGamePanel(QWidget):
         with self._loading_lock:
             if puuid in self._loading_puuids:
                 return
-            if self._intelligence.get_cached(puuid) is not None:
-                return
+            cached = self._intelligence.get_cached(puuid)
+            if cached is not None:
+                # 缓存命中。AVAILABLE 战绩 + 当前英雄已确定(>0) + 绝活判定缺失或对应旧英雄
+                # 时，允许通过 get_player_intelligence 缓存命中路径用当前英雄重算绝活判定
+                # （纯内存，不发起网络请求）；否则保持原行为直接返回。
+                _do_refresh = (champion_id > 0
+                               and cached.mastery_status == AVAILABLE
+                               and cached.mastery_judged_champion_id != champion_id)
+                if _DEBUG_ONGOING:
+                    # DIAG（只读）：缓存命中刷新决策——记录触发/跳过原因；仅决策变化时输出（低频）
+                    _dk = (puuid[:6] or "EMPTY", champion_id, _do_refresh)
+                    if getattr(self, "_diag_ensure_fp", None) != _dk:
+                        self._diag_ensure_fp = _dk
+                        ongoing_logger.debug(
+                            f"DIAG intel_ensure: puuid={puuid[:6] or 'EMPTY'} cid={champion_id} "
+                            f"mastery={cached.mastery_status!r} judged={cached.mastery_judged_champion_id} "
+                            f"cur_mastery={cached.current_champion_is_mastery_top3} "
+                            f"refresh={_do_refresh} "
+                            f"skip={'cache_hit_no_refresh' if not _do_refresh else 'n/a'}"
+                        )
+                if not _do_refresh:
+                    return
             self._loading_puuids.add(puuid)
         threading.Thread(
             target=self._fetch_intel, args=(puuid, champion_id), daemon=True
@@ -345,6 +365,18 @@ class CurrentGamePanel(QWidget):
     def _fetch_intel(self, puuid: str, champion_id: int):
         try:
             self._intelligence.get_player_intelligence(puuid, champion_id)
+            _entry = self._intelligence.get_cached(puuid)
+            if _DEBUG_ONGOING:
+                # DIAG（只读）：后台线程完成路径——重算后的 judged/判定值；仅 judged 变化时输出（低频）
+                _j = getattr(_entry, "mastery_judged_champion_id", -1) if _entry is not None else -1
+                _mk = (puuid[:6] or "EMPTY", _j)
+                if getattr(self, "_diag_intel_done_fp", None) != _mk:
+                    self._diag_intel_done_fp = _mk
+                    ongoing_logger.debug(
+                        f"DIAG intel_done: puuid={puuid[:6] or 'EMPTY'} cid={champion_id} "
+                        f"judged={_j} "
+                        f"mastery={getattr(_entry, 'current_champion_is_mastery_top3', 'no_entry') if _entry is not None else 'no_entry'}"
+                    )
         except Exception as e:
             print(f"[UI] 玩家情报查询失败 {puuid}: {e}")
             # 只 print 会丢日志（控制台关掉就没）→ 同时发事件，data/events/ 可查
@@ -392,6 +424,25 @@ class CurrentGamePanel(QWidget):
                 champ += " (预选)"
         elif early_loading:
             champ = "加载中"  # 进游戏初期 2999 真空期兜底（数据就绪后下一帧自动替换）
+
+        if _DEBUG_ONGOING:
+            # DIAG（只读）：UI 英雄最终显示文本——记录实际计算结果（display_cid→目录→champ），
+            # 不与 champion_id 混淆。本函数仅在 refresh 重绘路径被调用，日志出现即证明已重新
+            # 计算；每玩家"首次出现或文本变化"才输出（低频）。不改渲染、不触发刷新。
+            _pkey6 = (getattr(player, "puuid", "") or "")[:6] or "EMPTY"
+            _cur_champ = (display_cid, champ)
+            _seen = getattr(self, "_diag_champ_seen", {})
+            if _seen.get(_pkey6) != _cur_champ:
+                _seen = dict(_seen)
+                _seen[_pkey6] = _cur_champ
+                self._diag_champ_seen = _seen
+                ongoing_logger.debug(
+                    f"DIAG ui_champ: puuid={_pkey6} "
+                    f"cid={getattr(player, 'champion_id', 0) or 0} "
+                    f"intent={getattr(player, 'champion_pick_intent', 0) or 0} "
+                    f"early_loading={early_loading} display_cid={display_cid} "
+                    f"catalog_hit={bool(c and c.name_zh)} final_champ={champ!r}"
+                )
 
         # 等级：优先历史召唤师等级（history），其次 2999 实时等级（realtime）
         level = "?"
@@ -536,9 +587,24 @@ class CurrentGamePanel(QWidget):
             line2_color = title_color or Colors.TEXT_PRIMARY
 
         # 本局是否绝活：LCU Champion Mastery Top3 权威判定（生涯熟练度）
-        # intel_entry 已在 L352-355 提前算好；None/非 AVAILABLE 时字段保持 None（UI 显示“未知”）
+        # intel_entry 已在 L352-355 提前算好；None/非 AVAILABLE 时字段保持 None（UI 显示"未知"）
         if intel_entry is not None:
             is_mastery = intel_entry.current_champion_is_mastery_top3
+            if _DEBUG_ONGOING:
+                # DIAG（只读）：UI 绝活最终文本决策——champion_id/judged/判定值/最终文本；
+                # 仅 (display_cid, judged, is_mastery) 变化时输出（低频）。本函数仅在 refresh
+                # 重绘路径被调用，出现即证明 render_key 已变化触发重绘。
+                _dk2 = (display_cid, getattr(intel_entry, "mastery_judged_champion_id", 0),
+                        is_mastery)
+                if getattr(self, "_diag_mastery_fp", None) != _dk2:
+                    self._diag_mastery_fp = _dk2
+                    _mt = ("✅ 是绝活" if is_mastery is True
+                           else ("❌ 非绝活" if is_mastery is False else "绝活: 未知"))
+                    ongoing_logger.debug(
+                        f"DIAG intel_ui: puuid={puuid[:6] or 'EMPTY'} cid={display_cid} "
+                        f"judged={getattr(intel_entry, 'mastery_judged_champion_id', 0)} "
+                        f"mastery={is_mastery} final_text={_mt!r}"
+                    )
 
         # 连胜/连败
         if snap_data is not None:
@@ -602,8 +668,10 @@ class CurrentGamePanel(QWidget):
                 getattr(p, "live_position", "") or "",
                 getattr(p, "live_level", 0) or 0,
                 getattr(p, "history", None) is not None,
-                (self._intelligence is not None
-                 and self._intelligence.get_cached(getattr(p, "puuid", "") or "") is not None),
+                (self._intelligence.get_cached(getattr(p, "puuid", "") or "").current_champion_is_mastery_top3
+                 if self._intelligence is not None
+                 and self._intelligence.get_cached(getattr(p, "puuid", "") or "") is not None
+                 else None),
             )
             for p in session.players
         ) + (int(game_time // 5),)
@@ -615,6 +683,22 @@ class CurrentGamePanel(QWidget):
                 f"n={len(session.players)} "
                 f"names_ok={sum(1 for p in session.players if p.display_name)}"
             )
+        if _DEBUG_ONGOING:
+            # DIAG（只读）：UI 实际接收到的 session 英雄快照——与服务层 DIAG sess_cid
+            # 逐人对照，定位跨层传递是否丢值；指纹变化才输出（低频）。
+            _diag_ui_snap = tuple(
+                ((getattr(p, "puuid", "") or "")[:6] or "EMPTY",
+                 getattr(p, "champion_id", 0) or 0,
+                 getattr(p, "champion_pick_intent", 0) or 0)
+                for p in session.players
+            )
+            if getattr(self, "_diag_ui_sess_fp", None) != _diag_ui_snap:
+                self._diag_ui_sess_fp = _diag_ui_snap
+                ongoing_logger.debug(
+                    f"DIAG ui_sess_cid: gid={getattr(session, 'game_id', 0)!r} "
+                    f"key_changed={render_key != self._last_render_key} "
+                    f"n={len(session.players)} cids={_diag_ui_snap}"
+                )
         if render_key == self._last_render_key:
             if _DEBUG_ONGOING:
                 ongoing_logger.debug("UI Refresh skipped by fingerprint.")
