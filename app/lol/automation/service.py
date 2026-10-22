@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 
 from ...core.event_bus import Event, EventBus, get_event_bus
@@ -34,6 +35,11 @@ class LoLAutomationService:
         self._state = AutomationState.IDLE
         self._last_phase: str = "None"
         self._tick_hint = ""
+        # Lobby 检测缓存（5s）：_is_unmanaged_flow 每 tick GET lobby 的空转来源
+        self._last_lobby_check = 0.0
+        self._cached_unmanaged = False
+        # ChampSelect poll 日志降噪：仅首次进入选人阶段打一次
+        self._champ_select_logged = False
 
         # 事件桥
         def _request_with_status(method: str, endpoint: str, data):
@@ -219,6 +225,7 @@ class LoLAutomationService:
         # 不依赖 404；404 路径在 poll 内仍保留作为双保险。
         if self._last_phase == "ChampSelect" and phase != "ChampSelect":
             self._champ_select.clear_state()
+            self._champ_select_logged = False  # 离开选人阶段：允许下次进入时重新打一次日志
         self._last_phase = phase
 
         # 训练模式 / 自定义房间：Agent 完全不接管（不排队、不 accept、不选人）。
@@ -263,9 +270,11 @@ class LoLAutomationService:
             if cfg.auto_queue:
                 self._queue.try_start(phase, cfg)
             if phase == "ChampSelect":
-                # 只有实际要操作时才打 poll 日志（ban/pick 全关时静默，防刷屏）
+                # 日志降噪：仅首次进入选人阶段打一次（离开时复位），不再每 tick 刷屏
                 if cfg.auto_ban or cfg.auto_pick:
-                    self._log("champ_select", f"ChampSelect poll (ban={cfg.auto_ban} pick={cfg.auto_pick})")
+                    if not getattr(self, "_champ_select_logged", False):
+                        self._log("champ_select", f"ChampSelect poll active (ban={cfg.auto_ban} pick={cfg.auto_pick})")
+                        self._champ_select_logged = True
                 self._champ_select.poll(cfg)
 
     def get_status_hint(self) -> str:
@@ -276,16 +285,23 @@ class LoLAutomationService:
 
         依据 LCU /lol-lobby/v2/lobby 的 gameConfig：gameMode=PRACTICETOOL 或
         isCustom=True。读取失败时保守返回 False（不误伤正常排位）。
+        结果 5 秒缓存：避免每 tick 无条件 GET lobby 的空转请求。
         """
+        now = time.time()
+        if now - getattr(self, "_last_lobby_check", 0.0) < 5.0:
+            return getattr(self, "_cached_unmanaged", False)
+        result = False
         try:
             status, lobby = self._request_with_status("GET", "/lol-lobby/v2/lobby", None)
             if status == 200 and isinstance(lobby, dict):
                 gc = lobby.get("gameConfig") or {}
                 if gc.get("gameMode") == "PRACTICETOOL" or gc.get("isCustom"):
-                    return True
+                    result = True
         except Exception:
-            pass
-        return False
+            result = False
+        self._last_lobby_check = now
+        self._cached_unmanaged = result
+        return result
 
     @staticmethod
     def _log(feature: str, msg: str) -> None:

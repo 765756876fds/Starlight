@@ -36,6 +36,10 @@ class ReadyCheckController:
 
         in_progress = payload.get("state") == "InProgress"
         unanswered = payload.get("playerResponse") == "None"
+        # 终态短路：我方已接受 → 直接返回，不再发任何后续请求
+        if payload.get("playerResponse") == "Accepted":
+            self._active = False
+            return
         if not in_progress or not unanswered:
             self._active = False
             return

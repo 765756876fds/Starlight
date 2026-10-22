@@ -45,6 +45,7 @@ class QueueController:
         self._search_posted = False
         self._prompted_user = False
         self._verified = False
+        self._verified_in_queue = False  # 终态短路：已确认排队成功后不再发 search-state GET
 
     def is_currently_in_queue(self) -> bool:
         status, payload = self._request("GET", SEARCH_STATE_URL, None)
@@ -56,16 +57,22 @@ class QueueController:
         self._search_posted = False
         self._prompted_user = False
         self._verified = False
+        self._verified_in_queue = False
 
     def _mark_verified(self) -> None:
         if not self._verified:
             self._verified = True
             self._search_posted = True
+            self._verified_in_queue = True  # 终态短路：确认已排队后不再查 search-state
             self._on_event("automation.queue_search_verified", {})
             print("[AUTO_QUEUE] verification passed", flush=True)
 
     def try_start(self, gameflow_phase: str, config=None) -> bool:
         """True=本次发起了 POST search；False=无需动作 / 等待 / 已保护。"""
+        # 0) 终态短路：已确认在队列中 → 直接返回，不再发 search-state GET
+        if self._verified_in_queue:
+            return False
+
         # 1) 状态保护：已在队列中 → 绝不重复 POST
         if self.is_currently_in_queue():
             self._mark_verified()

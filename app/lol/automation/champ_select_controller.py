@@ -30,17 +30,22 @@ class ChampSelectController:
         self._pending: dict[int, PendingAction] = {}
         self._rejected: dict[int, set[int]] = {}
         self._no_candidate_actions: set[int] = set()
+        # 按 action_id 缓存 (pickable, bannable)：同一动作只在首次需要候选时拉一次，
+        # 未轮到我/无候选的 tick 不再连发 pickable/bannable GET
+        self._server_sets: dict[int, tuple] = {}
 
     # ---- 状态清理 ----
     def clear_state(self) -> None:
         self._pending.clear()
         self._rejected.clear()
         self._no_candidate_actions.clear()
+        self._server_sets.clear()
 
     def _clear_action(self, action_id: int) -> None:
         self._pending.pop(action_id, None)
         self._rejected.pop(action_id, None)
         self._no_candidate_actions.discard(action_id)
+        self._server_sets.pop(action_id, None)
 
     # ---- 主 tick ----
     def poll(self, config: AutomationConfig) -> None:
@@ -63,9 +68,7 @@ class ChampSelectController:
         completed_bans = self._completed_bans(session)
         current_picks = self._current_picks(session)
 
-        # 拉服务器硬性集合；失败 → None（不过滤）
-        pickable = self._fetch_set(PICKABLE_URL)
-        bannable = self._fetch_set(BANNABLE_URL)
+        # pickable/bannable 不再无条件每 tick 拉取：延后到"我的进行中动作需要选候选"时按需拉取
 
         all_actions = [a for group in session.get("actions", []) for a in group]
         live_action_ids = {int(a.get("id", -1)) for a in all_actions}
@@ -81,6 +84,15 @@ class ChampSelectController:
             if action is not None and action.get("completed"):
                 self._verify_completed(action, pending)
                 continue
+
+        # 前置短路：没有"我的进行中动作"（未轮到我 / 队友操作中）→ 本轮不再请求 pickable/bannable
+        if not any(
+            int(a.get("actorCellId", -1)) == local_cell
+            and a.get("isInProgress", False)
+            and not a.get("completed")
+            for a in all_actions
+        ):
+            return
 
         # 找当前我的进行中动作
         for action in all_actions:
@@ -111,12 +123,12 @@ class ChampSelectController:
             if atype == "ban" and config.auto_ban:
                 priority = config.ban_priority_for(None)
                 unavailable: set[int] = set(completed_bans)
-                server_set = bannable
+                server_set = self._server_set_for(aid, BANNABLE_URL, 1)
                 event_code = "automation.ban_attempted"
             elif atype == "pick" and config.auto_pick:
                 priority = config.pick_priority_for(None)
                 unavailable = set(completed_bans) | set(current_picks)
-                server_set = pickable
+                server_set = self._server_set_for(aid, PICKABLE_URL, 0)
                 event_code = "automation.pick_attempted"
             else:
                 continue
@@ -252,6 +264,25 @@ class ChampSelectController:
             return {int(x) for x in body}
         except (TypeError, ValueError):
             return None
+
+    def _server_set_for(self, action_id: int, url: str, slot: int) -> set[int] | None:
+        """按 action_id 缓存 (pickable, bannable)：
+
+        - 同一动作只在首次需要选候选时拉一次服务器集合；
+        - 后续 tick 未轮到我/无候选时直接复用缓存，不再发 GET；
+        - 动作完成（_clear_action）或离开选人（clear_state）后缓存失效。
+        slot=0 为 pickable、slot=1 为 bannable。
+        """
+        cached = self._server_sets.get(action_id)
+        if cached is not None and cached[slot] is not None:
+            return cached[slot]
+        val = self._fetch_set(url)
+        if cached is None:
+            cached = (None, None)
+        cached = list(cached)
+        cached[slot] = val
+        self._server_sets[action_id] = tuple(cached)
+        return val
 
     @staticmethod
     def _completed_bans(session: dict) -> set[int]:

@@ -60,7 +60,7 @@ class AutomationConfig:
     auto_pick: bool = False
     accept_delay: float = 0.0
     max_action_attempts: int = 3
-    polling_interval: float = 0.5
+    polling_interval: float = 1.0
     presets: dict[str, AutomationPreset] = field(default_factory=dict)
     auto_queue_mode: str = "bot"
     auto_queue_primary_role: str | None = None
@@ -90,7 +90,7 @@ class AutomationConfig:
             auto_pick=bool(data.get("auto_pick", False)),
             accept_delay=float(data.get("accept_delay", 0.0)),
             max_action_attempts=int(data.get("max_action_attempts", 3)),
-            polling_interval=float(data.get("polling_interval", 0.5)),
+            polling_interval=float(data.get("polling_interval", 1.0)),
             presets=presets,
             auto_queue_mode=str(data.get("auto_queue_mode", "bot")),
             auto_queue_primary_role=data.get("auto_queue_primary_role"),
