@@ -6,6 +6,10 @@ import threading
 import time
 from collections.abc import Callable
 
+from app.core.logger import get_logger
+
+logger = get_logger()
+
 from .deobfuscate import deobfuscate_puuid
 from .diagnostic import ChampSelectDiagnostic
 from .gsm_provider import merge_gsm_players
@@ -20,7 +24,11 @@ _CATALOG_LOCK = threading.Lock()
 
 
 def _resolve_live_champion_id(p) -> int:
-    """从 live 玩家对象解析 championId：优先已有字段，缺失时用名称反查 ChampionCatalog。"""
+    """从 live 玩家对象解析 championId：优先已有字段，缺失时用名称反查 ChampionCatalog。
+
+    容错链：rawChampionName 专用解析 → 英文名 → 中文名 → 去空格/小写兜底；
+    全部未命中时 logger.warning 记录名字，便于后续补充别名库。
+    """
     cid = getattr(p, "champion_id", 0) or 0
     if cid:
         return int(cid)
@@ -38,9 +46,19 @@ def _resolve_live_champion_id(p) -> int:
     raw = (getattr(p, "raw_champion_name", "") or "").strip()
     zh = (getattr(p, "champion_name", "") or "").strip()
     en = raw.split("_")[-1] if raw else ""  # "game_character_displayname_MissFortune" → "MissFortune"
-    c = _CATALOG.get_by_name(en) if en else None
+    c = None
+    if raw:
+        # 专用解析（rawChampionName 前缀剥离）优先，失败再退英文名
+        c = _CATALOG.resolve_raw_champion_name(raw) or _CATALOG.get_by_name(en)
+    if c is None and en:
+        c = _CATALOG.get_by_name(en)
     if c is None and zh:
         c = _CATALOG.get_by_name(zh)
+    if c is None and en:
+        # 去空格 + 小写兜底（如 "Twisted Fate" → "twistedfate"，目录含 name_en.lower() 键）
+        c = _CATALOG.get_by_name(en.replace(" ", "").lower())
+    if c is None:
+        logger.warning(f"[Ongoing] 2999 玩家英雄名未命中目录: raw={raw!r} zh={zh!r} en={en!r}")
     return c.cid if c else 0
 
 
@@ -571,40 +589,48 @@ class OngoingGameService:
             snap = None
         if snap is None:
             return
-        live_by_key = {}
-        for p in (getattr(snap, "ally_team", None) or []):
-            cid = _resolve_live_champion_id(p)
-            if cid:
-                live_by_key[("myTeam", cid)] = p
-        for p in (getattr(snap, "enemy_team", None) or []):
-            cid = _resolve_live_champion_id(p)
-            if cid:
-                live_by_key[("theirTeam", cid)] = p
+        # 宽进建库：收集所有 2999 玩家（不因 cid 解析失败而丢弃任何人）
+        live_by_cid: dict[tuple[str, int], object] = {}
+        live_by_name: dict[tuple[str, str], object] = {}
+        all_live_players: list[tuple[str, object]] = []
+        if getattr(snap, "ally_team", None):
+            all_live_players.extend(("myTeam", p) for p in snap.ally_team)
+        if getattr(snap, "enemy_team", None):
+            all_live_players.extend(("theirTeam", p) for p in snap.enemy_team)
         # 兜底：snapshot 无 ally/enemy 分组时，用 players + ORDER/CHAOS 映射
-        if not live_by_key:
-            players = getattr(snap, "players", None) or []
+        if not all_live_players and getattr(snap, "players", None):
             team_map = {"ORDER": "myTeam", "CHAOS": "theirTeam"}
-            for p in players:
-                team = team_map.get((getattr(p, "team", "") or "").upper())
-                cid = _resolve_live_champion_id(p)
-                if team and cid:
-                    live_by_key[(team, cid)] = p
+            for p in snap.players:
+                t = team_map.get((getattr(p, "team", "") or "").upper())
+                if t:
+                    all_live_players.append((t, p))
+
+        for t, p in all_live_players:
+            cid = _resolve_live_champion_id(p)
+            if cid:
+                live_by_cid[(t, cid)] = p
+            # 宽进策略：不管有没有解析出 cid，只要有名字，就按名字建索引
+            names = set()
+            for attr in ("summoner_name", "riot_game_name"):
+                val = (getattr(p, attr, "") or "").strip()
+                if val:
+                    names.add(val)
+            for n in names:
+                live_by_name[(t, n)] = p
+
         merged = 0
         for team_key in ("myTeam", "theirTeam"):
             for cell in (session.get(team_key) or []):
-                p = live_by_key.get((team_key, cell.get("championId") or 0))
-                if p is None:
-                    # 腾讯服 gameflow championId 恒 0 时无法按 cid 匹配：
-                    # 用 2999 summonerName 与 gameflow riotIdGameName 兜底配对
-                    cell_name = (cell.get("riotIdGameName") or "").strip()
-                    if cell_name:
-                        for (_team_k, _cid_k), _lp in live_by_key.items():
-                            if _team_k == team_key and (
-                                    getattr(_lp, "summoner_name", "") or "").strip() == cell_name:
-                                p = _lp
-                                break
+                cell_cid = cell.get("championId") or 0
+                cell_name = (cell.get("riotIdGameName") or "").strip()
+                # 1. 优先按 cid 匹配
+                p = live_by_cid.get((team_key, cell_cid))
+                # 2. 没匹配到则按名字匹配（不依赖先解析出 cid）
+                if p is None and cell_name:
+                    p = live_by_name.get((team_key, cell_name))
                 if p is None:
                     continue
+                # 匹配到玩家后，尝试解析并回填真实英雄 ID
                 cid = _resolve_live_champion_id(p)
                 if cid:
                     # 回填 2999 真实英雄 ID：UI 本局英雄/绝活判定的数据源
