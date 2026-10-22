@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self.resize(1100, 720)
         self._services = services or {}
         self._force_quit = False  # 用户确认「退出程序」后置位，closeEvent 直接放行
+        self._user_close_requested = False  # 自定义标题栏「✕」被点击后置位（用户主动关闭）
 
         # ---- Glass 主框架：无边框 + 半透明圆角（外壳，不动任何面板逻辑） ----
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         self._shell_layout.setContentsMargins(0, 0, 0, 0)
         self._shell_layout.setSpacing(0)
         self._title_bar = GlassTitleBar("LoL Music Agent")
+        self._title_bar.close_clicked.connect(self._on_title_close)
         self._shell_layout.addWidget(self._title_bar)
 
         # 自动恢复上次窗口大小和位置
@@ -229,6 +231,11 @@ class MainWindow(QMainWindow):
         painter.drawPath(path)
         super().paintEvent(event)
 
+    def _on_title_close(self) -> None:
+        """自定义标题栏「✕」被点击：打用户关闭标记后再 close（closeEvent 据此弹窗）。"""
+        self._user_close_requested = True
+        self.close()
+
     def closeEvent(self, event):
         # 记忆窗口几何与尺寸（隐藏到托盘/关闭前保存，重启后恢复）
         try:
@@ -240,8 +247,9 @@ class MainWindow(QMainWindow):
         if self._force_quit:
             event.accept()
             return
-        # 编程式关闭（close()/脚本/测试路径）：维持原「保存 + 隐藏」语义，不弹窗
-        if not event.spontaneous():
+        # 用户主动关闭（自定义「✕」信号或系统 Alt+F4/OS 关闭）→ 弹窗；
+        # 编程式 close()（脚本/测试路径）：维持原「保存 + 隐藏」语义，不弹窗
+        if not (self._user_close_requested or event.spontaneous()):
             event.ignore()
             self.hide()
             return

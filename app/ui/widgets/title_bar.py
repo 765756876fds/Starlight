@@ -1,5 +1,5 @@
 """Glass 自定义顶栏（无边框主窗口用）：标题 + 最小化 + 关闭 + 拖动。"""
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ..theme.colors import Colors
@@ -13,7 +13,12 @@ class GlassTitleBar(QWidget):
     - 左：应用标题（半透明次要色）
     - 右：最小化（—）/ 关闭（✕）
     - 按住顶栏空白处拖动窗口（mousePress 记录偏移 + mouseMove 移动）
+
+    close_clicked：点「✕」时发射（不再直接 close()，由主窗口决定隐藏/退出弹窗，
+    避免 QCloseEvent.spontaneous()==False 被误判为编程式关闭）。
     """
+
+    close_clicked = Signal()
 
     _HEIGHT = 36
 
@@ -58,9 +63,8 @@ class GlassTitleBar(QWidget):
             w.showMinimized()
 
     def _on_close(self) -> None:
-        w = self._window()
-        if w is not None:
-            w.close()
+        # 只发信号，不直接 close()：主窗口据此区分「用户点 X」与「编程式关闭」
+        self.close_clicked.emit()
 
     # ---- 拖动 ----
     def mousePressEvent(self, event) -> None:
