@@ -30,6 +30,7 @@ from .panels.ongoing_panel import OngoingPanel
 from .panels.status_bar import StatusBar
 from .theme.tokens import Tokens
 from .widgets.title_bar import GlassTitleBar
+from .widgets.glass_msg import _GlassMsgBox
 
 # ---- Windows 无边框窗口边缘缩放（WM_NCHITTEST） ----
 _WM_NCHITTEST = 0x0084
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(_icon_path))
         self.resize(1100, 720)
         self._services = services or {}
+        self._force_quit = False  # 用户确认「退出程序」后置位，closeEvent 直接放行
 
         # ---- Glass 主框架：无边框 + 半透明圆角（外壳，不动任何面板逻辑） ----
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -234,8 +236,33 @@ class MainWindow(QMainWindow):
             self._settings.setValue("size", self.size())
         except Exception as e:
             print(f"[UI] 保存窗口尺寸失败（忽略）: {e}")
+        # 已确认彻底退出 → 放行（main.py app.exec() 返回后 finally: self.stop() 做真实清理）
+        if self._force_quit:
+            event.accept()
+            return
+        # 编程式关闭（close()/脚本/测试路径）：维持原「保存 + 隐藏」语义，不弹窗
+        if not event.spontaneous():
+            event.ignore()
+            self.hide()
+            return
+        # 用户点击右上角 X（或 Alt+F4 / 系统菜单）→ 弹窗让用户选择
         event.ignore()
-        self.hide()
+        dlg = _GlassMsgBox(
+            self,
+            "星芒",
+            "请选择操作：\n- 最小化到托盘：程序继续在后台运行\n"
+            "- 退出程序：彻底停止所有服务和播放",
+            [("最小化到托盘", False), ("退出程序", True), ("取消", False)],
+        )
+        dlg.exec()
+        choice = dlg._result
+        if choice == "退出程序":
+            self._force_quit = True
+            # 与托盘「退出」同链：Qt 事件循环退出 → main.py finally: stop() 清理所有服务
+            QApplication.quit()
+        elif choice == "最小化到托盘":
+            self.hide()
+        # 「取消」：什么都不做（窗口保持原状）
 
     def nativeEvent(self, eventType, message):
         """Windows 无边框窗口边缘缩放：拦截 WM_NCHITTEST，边缘 5px 内返回缩放手柄。
