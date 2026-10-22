@@ -39,6 +39,9 @@ def _make_ctrl(tmp_path):
         c = MusicController(cfg)
     c.mpv = MagicMock()
     c._mpv_available = True
+    # 夹具语义：模拟已启动的运行中控制器——自动跳过/自动下一首是运行态行为，
+    # 与 _do_skip_online/_do_skip_bad 的 _running 守卫一致（6daaa07 引入守卫后旧夹具缺初始化）。
+    c._running = True
     return c
 
 
@@ -64,6 +67,9 @@ def test_queue_online_song_direct_url_first(tmp_path):
         "url": "http://x/direct.mp3", "headers": None}
     c._play_song(_online_song())  # 存的 track_id 是 old-1
     # 直取用存的 track_id，不走 resolver
+    # 直取在后台 worker 线程执行：先等 get_play_url 被调用，再断言（消除单文件竞态）
+    assert _wait_until(lambda: c.online_manager.get_play_url.called,
+                       timeout=2.0), "直取未在后台触发 get_play_url"
     got = c.online_manager.get_play_url.call_args.args[0]
     assert got.track_id == "old-1" and got.source_name == "kw"
     assert c._resolver.resolve.call_count == 0, "直取成功不得触发重搜"
