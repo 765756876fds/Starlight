@@ -42,6 +42,9 @@ from app.ui.theme.tokens import Tokens
 from app.ui.widgets.glass_slider import GlassSlider
 
 from ...lol.data.lol_data_updater import update_all as _update_lol_data
+from ...core.logger import get_logger
+
+logger = get_logger()
 from ..settings_store import (
     ALL_EXTENSIONS,
     load_lyrics_prefs,
@@ -260,6 +263,7 @@ class SettingsPanel(QWidget):
     _test_done = Signal(str, str)       # (插件名, 结果文本)
     _refresh_done = Signal(bool, int)   # (ok, 插件数)
     _data_done = Signal(str)            # 数据更新完成消息（跨线程回主线程）
+    _data_progress = Signal(int, int)   # 数据更新进度（done, total；跨线程回主线程）
     _updates_done = Signal(str, object)  # (状态文本, 检查结果列表)
 
     def __init__(self, music=None, tts=None, combo_manager=None,
@@ -1367,6 +1371,7 @@ class SettingsPanel(QWidget):
 
         root.addWidget(box)
         self._data_done.connect(self._on_data_done)
+        self._data_progress.connect(self._on_data_progress)
 
     def _on_gate(self, on: bool) -> None:
         if self._combo is not None:
@@ -1382,20 +1387,28 @@ class SettingsPanel(QWidget):
     # ---------- 🎮 LoL 数据更新 ----------
 
     def _on_update_data(self) -> None:
-        """点「更新数据」→ 后台线程拉取英雄/技能/装备（~30-60s），完成经 Signal 回主线程。"""
+        """点「更新数据」→ 后台线程并发拉取英雄/技能/装备，进度经 Signal 回主线程。"""
         self.btn_update_data.setEnabled(False)
         self.btn_update_data.setText("更新中…")
 
         def worker():
             try:
-                stats = _update_lol_data(timeout=10.0)
+                stats = _update_lol_data(
+                    timeout=10.0,
+                    progress_cb=lambda d, t: self._data_progress.emit(d, t),
+                )
                 msg = (f"已更新：{stats['champions']} 英雄 / {stats['abilities']} 技能 / "
                        f"{stats['items']} 装备（重启后全部生效）")
             except Exception as e:  # noqa: BLE001
+                logger.error(f"[SettingsPanel] 游戏数据更新失败: {e!r}")
                 msg = f"更新失败：{e}（旧数据保留）"
             self._data_done.emit(msg)  # 后台线程 emit → Qt 自动 QueuedConnection 投递主线程
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_data_progress(self, done: int, total: int) -> None:
+        """主线程槽：下载进度反馈（如「更新中…(23/170)」）。"""
+        self.btn_update_data.setText(f"更新中…({done}/{total})")
 
     def _on_data_done(self, msg: str) -> None:
         """主线程槽：恢复按钮 + 显示结果。"""

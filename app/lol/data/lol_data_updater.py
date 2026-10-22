@@ -13,10 +13,15 @@ import os
 import re
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+from app.core.logger import get_logger
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 OUT = ROOT / "data" / "lol_data"
+
+logger = get_logger()
 
 CD_BASE = ("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/"
            "global/zh_cn/v1/")
@@ -40,10 +45,15 @@ def _save(name: str, data) -> None:
     os.replace(tmp, p)
 
 
-def update_champions_and_abilities(timeout: float = 10.0) -> dict[str, object]:
+def update_champions_and_abilities(timeout: float = 10.0, progress_cb=None) -> dict[str, object]:
     """拉取英雄 + 技能 CD → champions.json / abilities.json / version.json。
 
-    返回 {"ok": True, "champions": N, "abilities": M, "failed": K}；网络/解析失败抛异常。
+    并发下载（ThreadPoolExecutor 10 worker）：逐英雄串行是"更新卡死"的根因——
+    海外 CDN 下 170 英雄 × 3 次重试 × 8s 单请求上限可达数十分钟。并发 + 总时长
+    护栏（120s）保证最坏情形可预期；progress_cb(done, total) 每完成一个英雄回调。
+
+    返回 {"ok": True, "champions": N, "abilities": M, "failed": K}；
+    网络/解析失败抛异常（旧文件保留）；英雄解析为空抛 ValueError。
     """
     OUT.mkdir(parents=True, exist_ok=True)
     summary = _fetch(CD_BASE + "champion-summary.json", timeout)
@@ -62,9 +72,11 @@ def update_champions_and_abilities(timeout: float = 10.0) -> dict[str, object]:
             "roles": c.get("roles") or [],
         })
 
-    abilities = []
-    failed = []
-    for ch in champions:
+    if len(champions) == 0:
+        raise ValueError("解析出的英雄列表为空：CD 数据结构异常或返回为空")
+
+    def _fetch_one(ch: dict):
+        """单个英雄 + 技能下载（最多重试 3 次；内部捕获异常，绝不抛给线程池）。"""
         cid = ch["id"]
         d = None
         last_err = None
@@ -76,21 +88,47 @@ def update_champions_and_abilities(timeout: float = 10.0) -> dict[str, object]:
                 last_err = e
                 time.sleep(0.3 * (attempt + 1))
         if d is None:
-            failed.append((cid, str(last_err)))
-            continue
+            return ch, None, str(last_err)
+        abls = []
         for sp in d.get("spells", []):
             key = (sp.get("spellKey") or "").upper()
             if key not in ("Q", "W", "E", "R"):
                 continue
             coeffs = sp.get("cooldownCoefficients") or [0.0]
-            abilities.append({
+            abls.append({
                 "champion_id": cid,
                 "slot": key,
                 "name": sp.get("name") or "",
                 "cooldown": float(coeffs[0]) if coeffs else 0.0,
                 "cooldown_by_level": [float(x) for x in coeffs],
             })
-        time.sleep(0.05)  # 温和限速，避免被 CDN 限流
+        time.sleep(0.02)  # 并发下的温和限速（10 worker 并行，足够防 CDN 风暴）
+        return ch, abls, None
+
+    abilities = []
+    failed = []
+    done = 0
+    total = len(champions)
+    deadline = time.monotonic() + 120.0  # 总时长护栏：整体超过 120s 即中断
+    executor = ThreadPoolExecutor(max_workers=10)
+    try:
+        futs = {executor.submit(_fetch_one, ch): ch for ch in champions}
+        for fut in as_completed(futs):
+            if time.monotonic() > deadline:
+                raise TimeoutError("下载总时长超限，请检查网络或代理")
+            ch, abls, err = fut.result()
+            done += 1
+            if abls is None:
+                failed.append((ch["id"], err))
+                logger.warning(f"英雄 {ch['id']} 技能数据下载失败: {err}")
+            else:
+                abilities.extend(abls)
+                if not abls:
+                    logger.warning(f"英雄 {ch['id']} 技能数据为空或解析失败")
+            if progress_cb is not None:
+                progress_cb(done, total)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     _save("champions.json", champions)
     _save("abilities.json", abilities)
@@ -127,8 +165,11 @@ def update_items(timeout: float = 10.0) -> dict[str, object]:
     return {"ok": True, "items": len(out)}
 
 
-def update_all(timeout: float = 10.0) -> dict[str, object]:
-    """英雄 + 技能 + 装备一次更新。任一步失败抛异常（旧文件保留）。"""
-    stats = update_champions_and_abilities(timeout)
+def update_all(timeout: float = 10.0, progress_cb=None) -> dict[str, object]:
+    """英雄 + 技能 + 装备一次更新。任一步失败抛异常（旧文件保留）。
+
+    progress_cb(done, total)：英雄/技能下载阶段的进度回调（每完成一个英雄调用）。
+    """
+    stats = update_champions_and_abilities(timeout, progress_cb=progress_cb)
     items = update_items(timeout)
     return {**stats, "items": items["items"]}
