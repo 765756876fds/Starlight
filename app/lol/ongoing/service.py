@@ -1,6 +1,7 @@
 """OngoingGameService：独立轮询 gameflow-phase，不依赖 automation 事件。"""
 from __future__ import annotations
 
+import copy
 import hashlib
 import threading
 import time
@@ -440,7 +441,12 @@ class OngoingGameService:
                 # 【前置继承】新 session 覆盖前，从旧 session 继承已解析的名字/英雄ID/战绩。
                 # 双保险：即使 key 稳定逻辑生效，极端场景（真换局但 puuid 碰巧相同、
                 # gameId 缺失导致 key 波动）下也不丢已回填字段，杜绝"名字→?→名字"闪烁。
-                if self._session is not None:
+                # 【跨局防护】仅当新旧 session 属于同一生命周期时才继承：
+                # 旧 session 尚无 game_id（选人期）或新旧 game_id 一致 → 同局，可继承；
+                # 旧局已有 game_id 且与新局不同 → 跨局，禁止继承，防止两局数据污染。
+                _old_gid = getattr(self._session, "game_id", 0) or 0
+                _new_gid = rebuilt.game_id or 0
+                if self._session is not None and ((not _old_gid) or _old_gid == _new_gid):
                     old_by_puuid = {p.puuid: p for p in self._session.players if p.puuid}
                     for np_ in rebuilt.players:
                         op = old_by_puuid.get(np_.puuid)
@@ -845,9 +851,15 @@ class OngoingGameService:
 
     # ----- UI -----
     def get_session(self) -> CurrentGameSession | None:
-        """当前对局 session（UI 玩家集合唯一来源；2999 不参与玩家存在性）。"""
+        """当前对局 session（UI 玩家集合唯一来源；2999 不参与玩家存在性）。
+
+        返回深拷贝快照：防止 UI 读取期间被后台加载线程就地修改（并发读到中间态，
+        字段先空后满导致界面闪烁）。锁内仅保护指针读取，快照在锁外也安全。
+        """
         with self._lock:
-            return self._session
+            if self._session is None:
+                return None
+            return copy.deepcopy(self._session)
 
     def get_snapshots(self) -> list[PlayerSnapshot]:
         with self._lock:

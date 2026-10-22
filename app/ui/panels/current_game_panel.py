@@ -83,63 +83,89 @@ class PlayerCard(QFrame):
         self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
         layout.addWidget(self.lbl_current)
 
+        # ---- 样式防抖：所有样式只设置一次，之后仅在 qss 真正变化时才 setStyleSheet。
+        # 默认样式在 __init__ 落地并预填缓存，update_data 每帧不再无条件重设（Qt 底层
+        # 每次 setStyleSheet 都会触发样式解析与重绘，是界面闪烁的最后一块拼图）。
+        self._style_cache = {}
+        self._name_base_qss = f"font-weight: bold; color: white; font-size: {_FONT_SZ}px;"
+        self._streak_base_qss = f"font-size: {_FONT_SZ_STREAK}px; font-weight: bold;"
+        self._line2_base_qss = f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;"
+        self._recent_base_qss = f"color: {Colors.TEXT_SECONDARY}; font-size: {_FONT_SZ}px;"
+        self._current_base_qss = f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;"
+        self._style_cache[(id(self.lbl_name), self._name_base_qss)] = self._name_base_qss
+        self._style_cache[(id(self.lbl_streak), self._streak_base_qss)] = self._streak_base_qss
+        self._style_cache[(id(self.lbl_line2), self._line2_base_qss)] = self._line2_base_qss
+        self._style_cache[(id(self.lbl_recent), self._recent_base_qss)] = self._recent_base_qss
+        self._style_cache[(id(self.lbl_current), self._current_base_qss)] = self._current_base_qss
+
+    def _apply_style(self, widget, qss):
+        """仅当样式串与上次不同才 setStyleSheet，杜绝每帧无条件重绘。"""
+        key = (id(widget), qss)
+        if self._style_cache.get(key) != qss:
+            widget.setStyleSheet(qss)
+            self._style_cache[key] = qss
+
     def update_data(self, name, level, line2_text, line2_color, is_mastery, streak_text="",
                     champion_zh="", recent_top="", title_text="", title_color=""):
-        self.lbl_name.setText(f"{name}  Lv.{level}")
-        self.lbl_name.setStyleSheet(f"font-weight: bold; color: white; font-size: {_FONT_SZ}px;")  # 每帧默认（整卡换色后恢复）
+        # 文本：内容没变就不 setText（setText 同样触发重绘，逐帧判断可显著降载）
+        name_text = f"{name}  Lv.{level}"
+        if self.lbl_name.text() != name_text:
+            self.lbl_name.setText(name_text)
+        # 名字颜色：整卡换称号色后恢复白；只有颜色变化才 setStyleSheet
+        self._apply_style(self.lbl_name,
+                          f"font-weight: bold; color: {title_color or 'white'}; font-size: {_FONT_SZ}px;")
+
         if streak_text:
-            if "胜" in streak_text:
-                self.lbl_streak.setStyleSheet(
-                    f"color: {Colors.SUCCESS}; font-size: {_FONT_SZ_STREAK}px; font-weight: bold;")
-            else:
-                self.lbl_streak.setStyleSheet(
-                    f"color: {Colors.DANGER}; font-size: {_FONT_SZ_STREAK}px; font-weight: bold;")
-            self.lbl_streak.setText(streak_text)
+            if self.lbl_streak.text() != streak_text:
+                self.lbl_streak.setText(streak_text)
+            streak_color = title_color or (Colors.SUCCESS if "胜" in streak_text else Colors.DANGER)
+            self._apply_style(self.lbl_streak,
+                              f"color: {streak_color}; font-size: {_FONT_SZ_STREAK}px; font-weight: bold;")
         else:
-            self.lbl_streak.setText("")
+            if self.lbl_streak.text() != "":
+                self.lbl_streak.setText("")
 
         # line2 整行：称号/段位 · 位置 · 近N场 X胜Y负 KDA Z
-        # 过渡态（line2_color=SECONDARY）灰字不加粗；称号行加粗；正常无称号主色不加粗
-        self.lbl_line2.setText(line2_text)
-        if line2_color == Colors.TEXT_SECONDARY:
-            self.lbl_line2.setStyleSheet(
-                f"color: {line2_color}; font-size: {_FONT_SZ}px;")
+        if self.lbl_line2.text() != line2_text:
+            self.lbl_line2.setText(line2_text)
+        if title_color:
+            self._apply_style(self.lbl_line2,
+                              f"font-size: {_FONT_SZ}px; font-weight: bold; color: {title_color};")
+        elif line2_color == Colors.TEXT_SECONDARY:
+            self._apply_style(self.lbl_line2, f"color: {line2_color}; font-size: {_FONT_SZ}px;")
         elif line2_color:
-            self.lbl_line2.setStyleSheet(
-                f"color: {line2_color}; font-size: {_FONT_SZ}px; font-weight: bold;")
+            self._apply_style(self.lbl_line2,
+                              f"color: {line2_color}; font-size: {_FONT_SZ}px; font-weight: bold;")
         else:
-            self.lbl_line2.setStyleSheet(
-                f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
+            self._apply_style(self.lbl_line2, self._line2_base_qss)
 
-        if recent_top:
-            self.lbl_recent.setText(f"最近: {recent_top}")
-        else:
-            self.lbl_recent.setText("最近: -")
-        self.lbl_recent.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {_FONT_SZ}px;")  # 每帧默认
+        recent_text = f"最近: {recent_top}" if recent_top else "最近: -"
+        if self.lbl_recent.text() != recent_text:
+            self.lbl_recent.setText(recent_text)
+        self._apply_style(self.lbl_recent,
+                          f"font-size: {_FONT_SZ}px; color: {title_color or Colors.TEXT_SECONDARY};")
 
         if champion_zh:
             if is_mastery is True:
-                self.lbl_current.setText(f"本局: {champion_zh}  ✅ 是绝活")
-                self.lbl_current.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: {_FONT_SZ}px;")
+                cur_text = f"本局: {champion_zh}  ✅ 是绝活"
+                cur_color = Colors.SUCCESS
             elif is_mastery is False:
-                self.lbl_current.setText(f"本局: {champion_zh}  ❌ 非绝活")
-                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {_FONT_SZ}px;")
+                cur_text = f"本局: {champion_zh}  ❌ 非绝活"
+                cur_color = Colors.TEXT_SECONDARY
             else:
-                self.lbl_current.setText(f"本局: {champion_zh}  绝活: 未知")
-                self.lbl_current.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
+                cur_text = f"本局: {champion_zh}  绝活: 未知"
+                cur_color = Colors.TEXT_PRIMARY
+            if self.lbl_current.text() != cur_text:
+                self.lbl_current.setText(cur_text)
+            self._apply_style(self.lbl_current,
+                              f"font-size: {_FONT_SZ}px; color: {title_color or cur_color};")
         else:
-            self.lbl_current.setText("本局: -")
+            if self.lbl_current.text() != "本局: -":
+                self.lbl_current.setText("本局: -")
 
-        # 整卡换色：命中称号 → 所有文字用称号色（保留各 label 原字号/字重）+ 边框随称号色
-        if title_color:
-            self.lbl_name.setStyleSheet(f"font-weight: bold; color: {title_color}; font-size: {_FONT_SZ}px;")
-            self.lbl_streak.setStyleSheet(f"font-size: {_FONT_SZ_STREAK}px; font-weight: bold; color: {title_color};")
-            self.lbl_line2.setStyleSheet(f"font-size: {_FONT_SZ}px; font-weight: bold; color: {title_color};")
-            self.lbl_recent.setStyleSheet(f"font-size: {_FONT_SZ}px; color: {title_color};")
-            self.lbl_current.setStyleSheet(f"font-size: {_FONT_SZ}px; color: {title_color};")
-        # 边框：称号色 → 随称号色；无称号 → 己方蓝/敌方红
+        # 整卡换色：命中称号 → 边框随称号色；无称号 → 己方蓝/敌方红。样式串不变则跳过
         border_c = title_color or self._border_default
-        self.setStyleSheet(f"""
+        card_qss = f"""
             PlayerCard {{
                 border: 1px solid {border_c};
                 border-radius: 6px;
@@ -147,7 +173,8 @@ class PlayerCard(QFrame):
                 margin: 2px;
                 background: rgba(30, 30, 50, 0.8);
             }}
-        """)
+        """
+        self._apply_style(self, card_qss)
 
 
 class CurrentGamePanel(QWidget):
