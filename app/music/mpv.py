@@ -121,15 +121,45 @@ class MpvController:
 
             self._wait_for_pipe(timeout=pipe_timeout)
         except Exception as e:
+            # 进程创建成功但管道等待/连接失败：进程对象必须保留到清理完成，
+            # 否则孤儿 mpv 泄漏（无句柄可终止）。清理完成后统一复位状态。
             print(f"[mpv] 启动失败: {e!r}")
-            self._process = None
-            self._pipe = None
-            self._running = False
+            self._cleanup_failed_launch()
             return False
         self._running = True
         self._init_properties(prop_timeout=prop_timeout)
         print(f"[mpv] 已启动, PID={self._process.pid}")
         return True
+
+    def _cleanup_failed_launch(self):
+        """启动失败路径清理：终止本实例刚创建但未就绪的进程（若有），并复位状态。
+
+        - 仅操作 self._process 记录的进程，绝不使用全局 taskkill（电影/音乐双实例共存语义）；
+        - terminate() → 有界 wait(3) → 仍存活则 kill()（与 _kill_own_process/stop_process 对齐）；
+        - 各清理步骤自身异常不得阻断其余步骤（逐段 try/except）；
+        - 完成后统一复位 _process/_pipe/_running；Popen 本身失败时 _process 为 None，直接跳过进程清理。
+        """
+        if self._process is not None:
+            try:
+                if self._process.poll() is None:
+                    self._process.terminate()
+                    self._process.wait(timeout=3)
+            except Exception:
+                pass
+            if self._process.poll() is None:
+                try:
+                    self._process.kill()
+                    self._process.wait(timeout=3)
+                except Exception:
+                    pass
+        if self._pipe is not None:
+            try:
+                self._pipe.close()
+            except Exception:
+                pass
+        self._process = None
+        self._pipe = None
+        self._running = False
 
     def _wait_for_pipe(self, timeout: float = 10.0):
         start = time.time()
