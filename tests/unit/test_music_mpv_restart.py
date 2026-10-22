@@ -90,6 +90,7 @@ class TestMpvRestart:
         ctrl, db = _make_ctrl(tmp_path)
         song = {"id": 1, "title": "X", "path": str(tmp_path / "x.flac"),
                 "duration": 10.0}
+        ctrl._running = True  # 重启只在运行中触发；恢复守卫需要
         ctrl._mpv_restart_count = 0
         ctrl._mpv_restart_window_ts = 0.0  # 窗口外 → 计数重置
         ctrl._current_song = song
@@ -106,6 +107,7 @@ class TestMpvRestart:
     def test_restart_online_song_resets_last_idle(self, tmp_path):
         """当前歌是在线 URL → 不硬恢复（源已断），_last_idle=False 让轮询自动切歌。"""
         ctrl, db = _make_ctrl(tmp_path)
+        ctrl._running = True  # 重启只在运行中触发；恢复守卫需要
         ctrl._mpv_restart_count = 0
         ctrl._mpv_restart_window_ts = 0.0
         ctrl._current_song = {"path": "https://cdn.example/x/y.mp3", "title": "Y"}

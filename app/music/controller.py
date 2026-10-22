@@ -374,15 +374,19 @@ class MusicController:
             self._mpv_restart_count += 1
             logger.info(f"[Music] mpv 异常({reason})，尝试自动重启 {self._mpv_restart_count}/3")
             self._mpv_restart_pending = True
+            # 重启时点快照：歌曲 + 播放请求代次。恢复时必须校验代次——
+            # 重启窗口内用户发起新播放（_play_request_id 已变）则旧快照作废。
             restart_song = self._current_song
+            restart_req_id = self._play_request_id
         threading.Thread(
             target=self._restart_mpv_worker,
-            args=(restart_song,),
+            args=(restart_song, restart_req_id),
             daemon=True,
             name="mpv-restart",
         ).start()
 
-    def _restart_mpv_worker(self, restart_song: dict[str, Any] | None):
+    def _restart_mpv_worker(self, restart_song: dict[str, Any] | None,
+                            restart_req_id: int | None = None):
         """后台执行实际重启；状态更新后持锁收尾清 pending。"""
         try:
             try:
@@ -407,22 +411,36 @@ class MusicController:
             except Exception:
                 self._last_idle = True
             # 恢复当前歌曲（仅本地文件；在线 URL 交给 idle 上升沿自动切歌）。
-            # 用重启时点快照，避免重启完成时用户已切歌却恢复旧歌。
-            self._try_resume_after_restart(restart_song)
+            # 用重启时点快照 + 代次校验，避免重启完成时用户已切歌却恢复旧歌。
+            self._try_resume_after_restart(restart_song, restart_req_id)
         finally:
             with self._lock:
                 self._mpv_restart_pending = False
 
-    def _try_resume_after_restart(self, restart_song: dict[str, Any] | None):
+    def _try_resume_after_restart(self, restart_song: dict[str, Any] | None,
+                                  restart_req_id: int | None = None):
         """重启后恢复播放（用重启时点快照）：本地文件重新 loadfile（从头播）；
-        在线 URL 不恢复（源已断），把 _last_idle 置 False 产生上升沿自动切歌。"""
+        在线 URL 不恢复（源已断），把 _last_idle 置 False 产生上升沿自动切歌。
+        restart_req_id：重启时点捕获的播放请求代次——当前代次已变化
+        （重启窗口内用户切歌/发起新播放）→ 旧快照作废，绝不恢复旧歌。
+        校验与恢复播放同处一个临界区（self._lock）：用户新意图若在线性化顺序上
+        先于恢复操作（已获锁递增代次），恢复在获锁后校验必然失败；若恢复先获锁，
+        则恢复完成后用户新意图再获锁播放——两种顺序最终都由用户新意图接管，
+        旧快照不可能覆盖新选择（修复校验通过后、重放前存在插入窗口的竞态）。"""
         if not restart_song:
             return
-        path = restart_song.get("path") or ""
-        if path.startswith(("http://", "https://")):
-            self._last_idle = False
+        # 模块已停止 → 不恢复旧歌（重启 worker 可能在 stop() 后才完成重启）。
+        if not self._running:
             return
-        self._play_song(restart_song)
+        with self._lock:
+            if restart_req_id is not None and restart_req_id != self._play_request_id:
+                logger.info("[Music] 重启窗口内已发起新播放（代次变化），放弃恢复旧歌")
+                return
+            path = restart_song.get("path") or ""
+            if path.startswith(("http://", "https://")):
+                self._last_idle = False
+                return
+            self._play_song(restart_song)
 
     def stop(self):
         """停止音乐模块"""
@@ -491,8 +509,11 @@ class MusicController:
             # 队列空，随机播放
             songs = self.db.get_random_songs(20)
             if songs:
-                self.queue.add_all(songs)
-                self._play_song(self.queue.next())
+                # 与 play_song/next/prev 同契约：_play_song 播放副作用持同一业务锁，
+                # 防止并发 pause 被本路径的起播 unpause 抹掉（起播即响竞态）。
+                with self._lock:
+                    self.queue.add_all(songs)
+                    self._play_song(self.queue.next())
         else:
             # 检查 mpv 是否有文件加载（stop/eof 后没有文件，pause=false 不起作用）
             try:
@@ -506,20 +527,24 @@ class MusicController:
                 # 没有文件，重新加载当前歌曲
                 current = self.queue.get_current()
                 if current:
-                    self._play_song(current)
+                    with self._lock:
+                        self._play_song(current)
                 else:
                     song = self.queue.next()
                     if song:
-                        self._play_song(song)
+                        with self._lock:
+                            self._play_song(song)
             else:
-                self.mpv.play()
-                self._update_state(playing=True)
-                # 继续播放同一首歌 → 通知其他消费方（电影互斥暂停）；换歌路径由 TRACK_CHANGED 覆盖
-                self.event_bus.publish(Event(
-                    event_type=EventType.MUSIC_PLAY,
-                    data={},
-                    source="music",
-                ))
+                # 恢复播放与起播同类副作用（unpause），与 pause 等持锁操作互斥。
+                with self._lock:
+                    self.mpv.play()
+                    self._update_state(playing=True)
+                    # 继续播放同一首歌 → 通知其他消费方（电影互斥暂停）；换歌路径由 TRACK_CHANGED 覆盖
+                    self.event_bus.publish(Event(
+                        event_type=EventType.MUSIC_PLAY,
+                        data={},
+                        source="music",
+                    ))
 
     @_cancel_switch_on_user_action
     def pause(self):
@@ -538,14 +563,19 @@ class MusicController:
                 logger.error(f"[Music] 落雪 pause 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
-        self.mpv.pause()
-        self._paused_snapshot = True
-        # 实时同步状态
-        try:
-            self.mpv._properties["pause"] = True
-        except Exception:
-            pass
-        self._update_state(playing=False)
+        # 暂停/恢复与播放/切歌共用同一业务锁：pause 要么先于切歌生效（作用于旧歌），
+        # 要么阻塞等锁、在切歌（loadfile + 无条件 unpause）完成后才执行（作用于新歌）。
+        # 二者必居其一——切歌进行中提出的暂停意图绝不会被 _play_song 的
+        # set_property("pause", False) 无条件抹掉（起播即响竞态修复）。
+        with self._lock:
+            self.mpv.pause()
+            self._paused_snapshot = True
+            # 实时同步状态
+            try:
+                self.mpv._properties["pause"] = True
+            except Exception:
+                pass
+            self._update_state(playing=False)
 
     @_cancel_switch_on_user_action
     def resume(self):
@@ -555,20 +585,23 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return
-        self.mpv.play()
-        self._paused_snapshot = False
-        # 实时同步状态
-        try:
-            self.mpv._properties["pause"] = False
-        except Exception:
-            pass
-        self._update_state(playing=True)
-        # 继续播放 → 通知其他消费方（电影互斥暂停）
-        self.event_bus.publish(Event(
-            event_type=EventType.MUSIC_PLAY,
-            data={},
-            source="music",
-        ))
+        # 与 pause 同契约：与播放/切歌持同一业务锁，恢复意图与切歌顺序化，
+        # 不会与 _play_song 的 loadfile/unpause 交错（切歌完成后的恢复作用于新歌）。
+        with self._lock:
+            self.mpv.play()
+            self._paused_snapshot = False
+            # 实时同步状态
+            try:
+                self.mpv._properties["pause"] = False
+            except Exception:
+                pass
+            self._update_state(playing=True)
+            # 继续播放 → 通知其他消费方（电影互斥暂停）
+            self.event_bus.publish(Event(
+                event_type=EventType.MUSIC_PLAY,
+                data={},
+                source="music",
+            ))
 
     @_cancel_switch_on_user_action
     def toggle(self):
@@ -587,14 +620,18 @@ class MusicController:
                 logger.error(f"[Music] 落雪 toggle 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
-        self.mpv.toggle_pause()
-        # 同步更新状态
-        try:
-            paused = self.mpv.get_property("pause", timeout=1.0)
-            self._paused_snapshot = bool(paused)
-            self._update_state(playing=(paused is False))
-        except Exception:
-            pass
+        # 与 pause/resume 同契约：切换与播放/切歌持同一业务锁，toggle 的
+        # toggle_pause + 读回与 _play_song 的 loadfile/unpause 互斥——切歌窗口内
+        # 的 toggle 排队等锁后作用于新歌，不会在 loadfile 前被无条件 unpause 吞掉。
+        with self._lock:
+            self.mpv.toggle_pause()
+            # 同步更新状态
+            try:
+                paused = self.mpv.get_property("pause", timeout=1.0)
+                self._paused_snapshot = bool(paused)
+                self._update_state(playing=(paused is False))
+            except Exception:
+                pass
 
     @_cancel_switch_on_user_action
     def next(self, _timeout: float | None = None):
@@ -981,7 +1018,11 @@ class MusicController:
         if self.online_manager is not None:
             # 在线 fallback 不经 _play_song（直连 mpv），必须自行递增代际号，
             # 作废在途的在线解析 worker（防旧网络请求覆盖本 fallback 播放）。
-            self._play_request_id += 1
+            # 递增与快照在锁内完成（与 play_online/_play_song 同契约）：
+            # 避免无锁 read-modify-write 与持锁递增并发时丢代次、旧请求误判有效。
+            with self._lock:
+                self._play_request_id += 1
+                req_id = self._play_request_id
             _t_online_start = time.time()
             try:
                 logger.info(f"[Music] 本地未找到'{query}'，尝试在线搜索...")
@@ -1024,9 +1065,16 @@ class MusicController:
                     if play_result:
                         logger.info("[Music] 获取播放URL成功，开始在线播放...")
                         play_url = play_result.get("url")
-                        # 统一流设置（header 重设 + loadfile + pause + 状态落库，DRY）
-                        online_song = self._apply_stream(
-                            chosen, play_url, play_result.get("headers"))
+                        # 统一流设置（header 重设 + loadfile + pause + 状态落库，DRY）。
+                        # 慢 get_play_url 在锁外；返回后锁内权威校验代次（与
+                        # play_online/_resolve_online_worker 同契约）——期间用户新
+                        # 意图已获锁递增代次 → 校验失败，旧 URL 绝不 loadfile。
+                        with self._lock:
+                            if req_id != self._play_request_id:
+                                logger.info("[Music] 在线 fallback 已过期（期间已切歌），丢弃结果")
+                                return None
+                            online_song = self._apply_stream(
+                                chosen, play_url, play_result.get("headers"))
                         self.event_bus.publish(Event(
                             event_type=EventType.MUSIC_TRACK_CHANGED,
                             data={"song": online_song},
@@ -1216,6 +1264,9 @@ class MusicController:
 
     def _do_skip_online(self, song: dict[str, Any]):
         """跳队列在线歌：队列 current 仍是该 song 才跳（防覆盖用户切歌操作）。"""
+        # 模块已停止 → 自动跳过不得再操作 mpv（与 _auto_next 的 _running 守卫同源）。
+        if not self._running:
+            return
         # origin 上下文：自动跳过标记为 auto（_play_song 内部据此区分意图）
         with self._origin_ctx("auto"):
             try:
@@ -1360,6 +1411,9 @@ class MusicController:
         判定失败（mpv 仍 idle / 拿不到播放时间）→ 自动切下一首跳过坏文件。"""
         import time as _t
         _t.sleep(0.8)
+        # 等待窗口内模块已停止（stop()）→ 不再查询/操作已停止的 mpv，直接退出。
+        if not self._running:
+            return
         try:
             idle_now = bool(self.mpv.get_property("idle-active", timeout=0.5))
             pt = self.mpv.get_property("playback-time", timeout=0.5)
@@ -1383,12 +1437,17 @@ class MusicController:
 
     def _schedule_skip_bad(self, song: dict[str, Any]):
         """延后执行 next() 跳过坏文件（防重入 + 防覆盖用户操作）"""
+        if not self._running:
+            return
         if self._current_song is not song or self._skip_pending:
             return
         self._skip_pending = True
         threading.Timer(0.2, lambda: self._do_skip_bad(song)).start()
 
     def _do_skip_bad(self, song: dict[str, Any]):
+        # 模块已停止 → 自动跳过不得再操作 mpv（与 _auto_next 的 _running 守卫同源）。
+        if not self._running:
+            return
         # origin 上下文：自动跳过标记为 auto（_play_song 内部据此区分意图）
         with self._origin_ctx("auto"):
             self._skip_pending = False
@@ -1701,8 +1760,12 @@ class MusicController:
         self._record_intent("play_online", track, 0)
         # 代次隔离：play_online 是不经 _play_song 的公开入口，同样递增代次
         # 并置切换态——URL 解析（get_play_url）窗口内 mpv 仍报旧歌位置，必须失效。
-        self._play_request_id += 1
-        self._is_switching_track = True
+        # 递增 + 快照 + 切换态在锁内完成（与 _play_song/play_search_result 同契约），
+        # 避免无锁 read-modify-write 丢代次导致旧请求误判有效。
+        with self._lock:
+            self._play_request_id += 1
+            req_id = self._play_request_id
+            self._is_switching_track = True
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return False
@@ -1715,13 +1778,21 @@ class MusicController:
         url = result.get("url")
         logger.info(f"[Music] play online: {track.title} -> {url[:80]}")
         try:
-            # 统一流设置（DRY）：header 重设 + before_load 紧贴 loadfile（保持
-            # "校验→loadfile"原子）+ loadfile + pause + 状态落库。
-            online_song = self._apply_stream(
-                track, url, result.get("headers"), before_load=_before_load)
-            if online_song is None:
-                return False
-            logger.info("[Music] mpv loadfile ok")
+            # 锁内权威校验 + 播放（与 _resolve_online_worker 同契约）：
+            # get_play_url 是慢网络调用（无锁窗口），返回后必须锁内核对代次——
+            # 期间 play_song/next 等持锁入口可能已发起新意图，校验失败绝不 loadfile。
+            # 校验与 loadfile 之间无新请求可插入（本锁与所有播放入口互斥）。
+            with self._lock:
+                if req_id != self._play_request_id:
+                    logger.info("[Music] play_online 已过期（期间已切歌），丢弃结果")
+                    return False
+                # 统一流设置（DRY）：header 重设 + before_load 紧贴 loadfile（保持
+                # "校验→loadfile"原子）+ loadfile + pause + 状态落库。
+                online_song = self._apply_stream(
+                    track, url, result.get("headers"), before_load=_before_load)
+                if online_song is None:
+                    return False
+                logger.info("[Music] mpv loadfile ok")
         except Exception as e:
             logger.info(f"[Music] mpv loadfile fail: {e}")
             return False
