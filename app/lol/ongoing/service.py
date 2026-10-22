@@ -135,7 +135,10 @@ class OngoingGameService:
         self._current_session_key: str | None = None
         self._last_loaded_key: str | None = None
         self._loading_in_progress = False
-        self._is_loading_thread_running = False  # 加载线程锁：运行期间绝不再开新线程（防选人阶段反复重查）
+        # 加载线程代际登记（本修）：记录"最新登记的加载线程所属代际"。
+        # 旧代线程结束只清除自己的登记，绝不清新代；新代线程启动不被旧代
+        # 全局布尔误挡（旧代结果仍受 _load_in_thread 代际校验丢弃）。
+        self._loading_thread_gen: int | None = None
         self._poll_interval = poll_interval
         # 历史战绩缺失自动重试状态（按 game_id 持久；离开对局清空，防腾讯服 gameId 复用串局）
         self._retry_state: dict = {}
@@ -148,8 +151,16 @@ class OngoingGameService:
         # ChampSelect 完整 session 缓存：人机/匹配选人阶段 10 人含 puuid，
         # InProgress 阶段 liveclientdata 无 puuid，必须复用该缓存才能查到队友历史战绩
         self._champ_select_session: dict | None = None
+        # 换局确认后的数据源陈旧标志（本修）：确认换局即置位，仅当新局 session 成功发布后清除
+        self._gf_stale = False
+        # 待切换的新局号（换局确认时由 cs 提供）；仅当新局 session 成功发布后清零
+        self._pending_new_gid = 0
+        # 代际保护（本修）：session 生命周期代数；异步加载/名字回调在锁内校验，
+        # 旧代结果一律丢弃，防止旧局数据污染当前 session
+        self._generation = 0
 
         self._diag = ChampSelectDiagnostic(lcu.request_raw, on_event=self._on_event) if lcu is not None else None
+        self._diag_tick = 0  # 诊断 tick 序号（仅日志用）
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -162,12 +173,18 @@ class OngoingGameService:
     def start(self) -> None:
         if self._thread is not None:
             return
+        if _DEBUG_ONGOING:
+            # DIAG：本次实机采集的开始标记（仅日志；旧日志无此标记，用于区分本轮数据）
+            ongoing_logger.debug(f"DIAG run_start: tick={self._diag_tick} service_started")
         self._stop_event.clear()
         if self._diag: self._diag.start()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
+        if _DEBUG_ONGOING:
+            # DIAG：本次实机采集的结束标记（仅日志）
+            ongoing_logger.debug(f"DIAG run_end: tick={self._diag_tick} service_stopped")
         self._stop_event.set()
         if self._diag: self._diag.stop()
         if self._thread:
@@ -212,6 +229,7 @@ class OngoingGameService:
         return self._poll_interval
 
     def _tick(self) -> None:
+        self._diag_tick += 1  # 诊断 tick 序号（仅日志用）
         if self._lcu is None:
             return
         lcu = self._lcu
@@ -241,6 +259,7 @@ class OngoingGameService:
                     self._snapshots = []
                     self._session = None
                     self._loading_in_progress = False
+                    self._force_reload = False
                     # 跨局隔离：离开对局阶段即重置 last_loaded_key。
                     # 腾讯服实测 gameId 在相邻对局间会复用（两局同为 9009578125），
                     # 若保留旧 last_loaded_key，新局 key==旧 key 会误判"同一局"而跳过
@@ -251,12 +270,26 @@ class OngoingGameService:
                     # （漏发 session_created / retry 计数不重置）。
                     self._announced_session_id = None
                     self._retry_state = {}
+                    # 本修：选人缓存与换局陈旧标志跨局归零；代际 +1（作废旧代异步加载/回调）
+                    self._champ_select_session = None
+                    self._gf_stale = False
+                    self._pending_new_gid = 0
+                    self._generation += 1
             return
 
         # 选人阶段缓存 champ-select session（仅作 gameflow 偶发为空的合理回退，非玩家集合来源）
         cs_session = None
         if phase == "ChampSelect":
             cs_session = self._lcu.get("/lol-champ-select/v1/session")
+            if _DEBUG_ONGOING:
+                # DIAG 第一步：记录 LCU 原始输入（cs gameId 字段存在性/值），不记录转换结果
+                cs_is_dict = isinstance(cs_session, dict)
+                ongoing_logger.debug(
+                    f"DIAG cs_input: tick={self._diag_tick} phase={phase} "
+                    f"cs_is_dict={cs_is_dict} "
+                    f"cs_has_gid={cs_is_dict and 'gameId' in cs_session} "
+                    f"cs_gid_raw={((cs_session or {}).get('gameId')) if cs_is_dict else None!r}"
+                )
             if isinstance(cs_session, dict):
                 # 缓存完整选人 session：10 人含 puuid，供 InProgress 阶段 gameflow 空时补自己
                 self._champ_select_session = cs_session
@@ -282,18 +315,32 @@ class OngoingGameService:
                         and bool(self._session.game_id)
                         and cs_gid != self._session.game_id
                     )
+                    # 本修：确认换局 → 记录待切换局号并置陈旧标志（仅置位一次；
+                    # 清空后 session=None，下 tick 不再进入本分支，每 tick 清空循环被斩断）
+                    if diff_game_confirmed and not self._gf_stale:
+                        self._gf_stale = True
+                        self._pending_new_gid = int(cs_gid)
+                        if _DEBUG_ONGOING:
+                            ongoing_logger.debug(
+                                f"DIAG switch_set: tick={self._diag_tick} "
+                                f"pending_gid={self._pending_new_gid} old_gid={self._session.game_id}"
+                            )
                     same_game = (
                         self._session.phase == "ChampSelect"
                         and not diff_game_confirmed
+                        and not self._gf_stale
                     )
                     if not same_game:
                         self._current_session_key = None
                         self._snapshots = []
                         self._session = None
                         self._loading_in_progress = False
+                        self._force_reload = False
                         self._last_loaded_key = None
                         self._announced_session_id = None
                         self._retry_state = {}
+                        # 本修：session 失效 → 代际 +1（作废旧代异步加载/名字回调）
+                        self._generation += 1
 
         me_puuid = None
         try:
@@ -308,6 +355,32 @@ class OngoingGameService:
         # ChampSelect 阶段 gameflow 未就绪时不构建玩家集合（players 主源=gameflow，
         # 禁止以 2999/champ-select 充当玩家集合来源），等 GameStart 后 gameflow 就绪再构建。
         session = self._build_gameflow_session(me_puuid)
+        # 本修：换局确认后的构建源仲裁——旧局 gameflow 严禁作为构建源，
+        # 仅当 gameflow 已切到待切换局号时其构建结果才可用（否则降级到 cs 或等待）
+        if self._gf_stale and session is not None:
+            _gf_gid = (session or {}).get("gameId") or 0
+            if _gf_gid != self._pending_new_gid:
+                if _DEBUG_ONGOING:
+                    ongoing_logger.debug(
+                        f"DIAG source_arbitrate: tick={self._diag_tick} "
+                        f"reject=stale_gameflow gf_gid={_gf_gid} pending={self._pending_new_gid}"
+                    )
+                session = None
+        # 本修：选人阶段局号锚 = cs——gameflow 残留旧局时其构建结果不得作为选人阶段数据源。
+        # 实测第二把：cs 已切新局号而 gameflow-session 仍返回旧局号+旧局玩家，若任其
+        # 构建发布，将在同局分支外每 tick 重建旧局空名 session（闪烁循环复发）。
+        # cs 无有效 gameId（锚缺失）时保持原回退行为，不误杀同局。
+        if (phase == "ChampSelect" and session is not None
+                and isinstance(cs_session, dict)):
+            _cs_anchor = (cs_session or {}).get("gameId") or 0
+            _gf_gid2 = (session or {}).get("gameId") or 0
+            if _cs_anchor and _gf_gid2 and _gf_gid2 != _cs_anchor:
+                if _DEBUG_ONGOING:
+                    ongoing_logger.debug(
+                        f"DIAG source_arbitrate: tick={self._diag_tick} "
+                        f"reject=cs_anchor_mismatch gf_gid={_gf_gid2} cs_gid={_cs_anchor}"
+                    )
+                session = None
         if session is not None:
             # GSM 补充身份源（仅 GameStart/InProgress/Reconnect 启用；ChampSelect 不请求）：
             # Gameflow 仍是主源，GSM 只按 puuid 追加 Gameflow 完全没有的玩家（不覆盖）。
@@ -344,6 +417,12 @@ class OngoingGameService:
         if not isinstance(session, dict):
             return
         key = self._session_key(session)
+        if _DEBUG_ONGOING:
+            ongoing_logger.debug(
+                f"DIAG key: tick={self._diag_tick} phase={phase} "
+                f"session_gid={(session or {}).get('gameId')!r} "
+                f"key={key!r} cur_key={self._current_session_key!r}"
+            )
         _same_session = False
         _need_load = False
         with self._lock:
@@ -393,6 +472,11 @@ class OngoingGameService:
                                     np_.live_position = op.live_position
                                     np_.live_level = op.live_level
                                     np_.realtime_available = op.realtime_available
+                        if _DEBUG_ONGOING:
+                            self._diag_emit_rebuild(
+                                "same_game", self._session, rebuilt,
+                                self._current_session_key, key, inherit_allowed=True,
+                            )
                         self._session = rebuilt
                         # 人数/身份突变：立即补拉缺失玩家（loader 缓存复用已加载玩家，
                         # 只对新 puuid / 缺名字玩家发请求）。锁内只置标志，线程启动在锁外。
@@ -433,11 +517,31 @@ class OngoingGameService:
             elif self._loading_in_progress:
                 return
             else:
+                # 新 session：game_id 为生命周期锚点；旧 session（含 players）立即失效
+                rebuilt = self._to_current_session(session, phase, me_puuid)
+                # 本修：发布守卫——换局确认后，构建结果必须证明属于待切换局号才允许发布。
+                # 不匹配（构建结果仍属旧局 / 局号无效 / 无法确认归属）→ 拒绝发布，进入等待态。
+                # 守卫在任何状态写入之前执行；拒绝时不设 _current_session_key / _loading，
+                # 下 tick 天然重试（不会因 loading=True 卡死在 L461-462 而永久等待）。
+                if self._gf_stale:
+                    _target_gid = self._pending_new_gid
+                    _built_gid = rebuilt.game_id or 0
+                    if not _target_gid or _built_gid != _target_gid:
+                        if _DEBUG_ONGOING:
+                            ongoing_logger.debug(
+                                f"DIAG publish_reject: tick={self._diag_tick} "
+                                f"pending={_target_gid} built={_built_gid} "
+                                f"reason={'no_target' if not _target_gid else 'gid_mismatch'}"
+                            )
+                        return
+                    if _DEBUG_ONGOING:
+                        ongoing_logger.debug(
+                            f"DIAG publish_ok: tick={self._diag_tick} "
+                            f"pending={_target_gid} built={_built_gid} source=cs_or_gf"
+                        )
                 self._current_session_key = key
                 self._loading_in_progress = True
                 self._snapshots = []
-                # 新 session：game_id 为生命周期锚点；旧 session（含 players）立即失效
-                rebuilt = self._to_current_session(session, phase, me_puuid)
                 # 【前置继承】新 session 覆盖前，从旧 session 继承已解析的名字/英雄ID/战绩。
                 # 双保险：即使 key 稳定逻辑生效，极端场景（真换局但 puuid 碰巧相同、
                 # gameId 缺失导致 key 波动）下也不丢已回填字段，杜绝"名字→?→名字"闪烁。
@@ -458,7 +562,27 @@ class OngoingGameService:
                             if not getattr(np_, "champion_pick_intent", 0) and getattr(op, "champion_pick_intent", 0):
                                 np_.champion_pick_intent = op.champion_pick_intent
                             np_.history = op.history
+                if _DEBUG_ONGOING:
+                    self._diag_emit_rebuild(
+                        "new_session", self._session, rebuilt,
+                        self._current_session_key, key,
+                        inherit_allowed=((not _old_gid) or _old_gid == _new_gid),
+                    )
                 self._session = rebuilt
+                # 本修：新局 session 成功发布 → 清除换局陈旧标志。
+                # 目标局号与最终 rebuilt.game_id 用同一套实际构建结果校验（不匹配时
+                # 上一守卫已拒绝发布，此处仅清理确认无误的发布），标志清除只允许发生在
+                # 「新局 session 成功发布」之后，不随时间/重试次数提前放行。
+                if self._gf_stale and self._pending_new_gid and rebuilt.game_id == self._pending_new_gid:
+                    if _DEBUG_ONGOING:
+                        ongoing_logger.debug(
+                            f"DIAG switch_cleared: tick={self._diag_tick} "
+                            f"published_gid={rebuilt.game_id}"
+                        )
+                    self._gf_stale = False
+                    self._pending_new_gid = 0
+                # 本修：新 session 代际建立（旧代异步加载/名字回调自此失效）
+                self._generation += 1
                 # 新对局 retry 计数从 0 开始（_retry_state 按 game_id 持久，新 game_id 自动归零；
                 # 复用 gameId 的新局已在离开对局分支清空 _retry_state）
                 if key != self._last_loaded_key:
@@ -478,32 +602,77 @@ class OngoingGameService:
                         "my_team": len(self._session.my_team),
                         "their_team": len(self._session.their_team),
                     })
-        # 锁外启动线程（_load_in_thread 的 finally 会重取锁，锁内启动有死锁窗口）
-        # 线程锁：上一个加载线程还在跑就绝不再开（防选人阶段每秒重复创建导致 UI 被信号轰炸）
+        # 线程代际登记（本修）：仅当"无线程在跑"或"在跑的线程属于旧代"时允许启动新线程。
+        # 每代至多一个加载线程；旧代线程不阻塞新代启动（其结果仍被代际校验丢弃），
+        # 新代登记后，旧线程 finally 只清除仍属于它自己的登记，绝不清新代。
+        # 锁覆盖：登记（检查 + 读 self._generation + 写 _loading_thread_gen）整体在锁内，
+        # 与换局清理/发布（锁内 generation += 1）互斥——不存在"锁外读到旧 gen、登记
+        # 覆盖新代登记"的交错窗口；Thread.start 放锁外（锁内启动会与 _load_in_thread
+        # 的 finally 重取锁形成死锁窗口），start 失败时锁内回滚登记，不留永久残留。
+        _spawn_gen = None
         if _need_load:
-            if not getattr(self, "_is_loading_thread_running", False):
-                self._is_loading_thread_running = True
+            with self._lock:
+                if getattr(self, "_loading_thread_gen", None) != self._generation:
+                    # 闭包捕获登记时的代际（_spawn_gen）：线程内不再重读 self._generation
+                    _spawn_gen = self._generation
+                    self._loading_thread_gen = _spawn_gen
+            if _spawn_gen is not None:
 
                 def _run_and_reset():
+                    gen = _spawn_gen
                     try:
-                        self._load_in_thread(session)
+                        self._load_in_thread(session, gen=gen)
                     finally:
-                        self._is_loading_thread_running = False
+                        # 只清除仍归属于本代际的登记；若已由新代接管则不动
+                        if self._loading_thread_gen == gen:
+                            self._loading_thread_gen = None
 
-                threading.Thread(target=_run_and_reset, daemon=True, name="lcu-load").start()
+                try:
+                    threading.Thread(target=_run_and_reset, daemon=True, name="lcu-load").start()
+                except Exception:
+                    # 启动失败：回滚登记；若代际未变（同代），一并复位 loading/force——
+                    # 否则当前代无线程运行却残留 _loading_in_progress=True，后续 tick
+                    # 被"elif self._loading_in_progress: return"永久卡死（永不重试加载）。
+                    with self._lock:
+                        if self._loading_thread_gen == _spawn_gen:
+                            self._loading_thread_gen = None
+                            if self._generation == _spawn_gen:
+                                self._loading_in_progress = False
+                                self._force_reload = False
+                    if _DEBUG_ONGOING:
+                        ongoing_logger.debug(f"DIAG thread_start_failed: gen={_spawn_gen}")
             return
         if _same_session:
             return
-        if not getattr(self, "_is_loading_thread_running", False):
-            self._is_loading_thread_running = True
+        with self._lock:
+            if getattr(self, "_loading_thread_gen", None) != self._generation:
+                _spawn_gen = self._generation
+                self._loading_thread_gen = _spawn_gen
+        if _spawn_gen is not None:
 
             def _run_and_reset():
+                gen = _spawn_gen
                 try:
-                    self._load_in_thread(session)
+                    self._load_in_thread(session, gen=gen)
                 finally:
-                    self._is_loading_thread_running = False
+                    # 只清除仍归属于本代际的登记；若已由新代接管则不动
+                    if self._loading_thread_gen == gen:
+                        self._loading_thread_gen = None
 
-            threading.Thread(target=_run_and_reset, daemon=True, name="lcu-load").start()
+            try:
+                threading.Thread(target=_run_and_reset, daemon=True, name="lcu-load").start()
+            except Exception:
+                # 启动失败：回滚登记；若代际未变（同代），一并复位 loading/force——
+                # 否则当前代无线程运行却残留 _loading_in_progress=True，后续 tick
+                # 被"elif self._loading_in_progress: return"永久卡死（永不重试加载）。
+                with self._lock:
+                    if self._loading_thread_gen == _spawn_gen:
+                        self._loading_thread_gen = None
+                        if self._generation == _spawn_gen:
+                            self._loading_in_progress = False
+                            self._force_reload = False
+                if _DEBUG_ONGOING:
+                    ongoing_logger.debug(f"DIAG thread_start_failed: gen={_spawn_gen}")
 
     def _build_gameflow_session(self, me_puuid: str | None):
         """身份主源：gameflow session.gameData.teamOne/teamTwo → myTeam/theirTeam。
@@ -798,14 +967,25 @@ class OngoingGameService:
         h = hashlib.md5(",".join(puuids).encode()).hexdigest()[:12]
         return f"hash:{h}"
 
-    def _load_in_thread(self, session: dict) -> None:
+    def _load_in_thread(self, session: dict, gen: int | None = None) -> None:
         if _DEBUG_ONGOING:
             ongoing_logger.debug(
                 f"Start Load Thread: players_count={len((session.get('myTeam') or [])) + len((session.get('theirTeam') or []))}"
             )
+        # 本修：捕获启动时代际；写入前在锁内校验，不一致即整体丢弃
+        # （校验与写入处于同一同步保护范围，换局与写入不可能穿插导致污染）
+        gen = gen if gen is not None else self._generation
         try:
-            snaps = self._loader.load_for_champ_select(session, force=self._force_reload)
+            snaps = self._loader.load_for_champ_select(session, force=self._force_reload, generation=gen)
             with self._lock:
+                if gen != self._generation or self._session is None:
+                    # 旧代 / 已失效：丢弃本批结果（history、名字都不得写入当前 session）
+                    if _DEBUG_ONGOING:
+                        ongoing_logger.debug(
+                            f"DIAG gen_discard: tick={self._diag_tick} src=load_in_thread "
+                            f"gen={gen} cur_gen={self._generation}"
+                        )
+                    return
                 self._snapshots = snaps
                 # 把 loader 产出的历史快照挂到当前 session 对应玩家的 history 区
                 # （CurrentGamePlayer.history = loader -> acct -> SGP/LCU 单链产物）
@@ -820,6 +1000,12 @@ class OngoingGameService:
                             # UI 保持纯渲染（display_name 始终在 identity 区，history 只作后备来源）
                             if not p.display_name and getattr(s, "display_name", ""):
                                 p.display_name = s.display_name
+                                if _DEBUG_ONGOING:
+                                    ongoing_logger.debug(
+                                        f"DIAG name_fill: tick={self._diag_tick} src=load_in_thread "
+                                        f"puuid={p.puuid[:6]} key={self._current_session_key!r} "
+                                        f"was_empty=True wrote=True"
+                                    )
                     self._session.updated_at = time.time()
                     states = {}
                     for s in snaps:
@@ -835,19 +1021,76 @@ class OngoingGameService:
             self._on_event("ongoing.error", {"err": str(e)})
         finally:
             with self._lock:
-                self._loading_in_progress = False
-                self._force_reload = False
+                # 本修：仅当仍属本代际时才复位 loading/force——旧代线程结束时
+                # 不得清除新代已置位的运行状态（换局清空/离开对局分支已兜底复位，
+                # 不存在"旧线程什么都不做导致标志永久残留"的路径）
+                if gen == self._generation:
+                    self._loading_in_progress = False
+                    self._force_reload = False
 
-    def _on_player_name_resolved(self, puuid, display_name):
+    def _on_player_name_resolved(self, puuid, display_name, generation=None):
         # 名字秒出回调：loader 子线程查到名字后立即更新 session（先出名字，战绩后台加载）
         if not (puuid and display_name):
             return
         with self._lock:
+            # 本修：代际校验——旧代回调（换局后仍在飞）一律丢弃，绝不写当前 session
+            if generation is not None and generation != self._generation:
+                if _DEBUG_ONGOING:
+                    ongoing_logger.debug(
+                        f"DIAG gen_discard: tick={self._diag_tick} src=on_name_resolved "
+                        f"gen={generation} cur_gen={self._generation} puuid={puuid[:6]}"
+                    )
+                return
             if self._session is not None:
                 for p in self._session.players:
                     if p.puuid == puuid and not p.display_name:
                         p.display_name = display_name
+                        if _DEBUG_ONGOING:
+                            ongoing_logger.debug(
+                                f"DIAG name_fill: tick={self._diag_tick} src=on_name_resolved "
+                                f"puuid={puuid[:6]} key={self._current_session_key!r} "
+                                f"was_empty=True wrote=True"
+                            )
                         break
+
+    def _diag_emit_rebuild(self, kind: str, old: CurrentGameSession | None,
+                           rebuilt: CurrentGameSession, old_key, new_key,
+                           inherit_allowed: bool) -> None:
+        """DIAG 第二步：rebuilt 覆盖 self._session 前，记录新旧 session 逐玩家差异。
+
+        只输出脱敏信息（puuid 前 6 位摘要），不输出原始身份。
+        稳定槽位：现有数据结构无跨接口稳定标识（cellId 在 cs/gameflow 间不保证一致），
+        如实记录 stable_slot=UNAVAILABLE，不把列表下标当稳定身份。
+        """
+        try:
+            old_players = old.players if old is not None else []
+            old_by = {p.puuid: p for p in old_players if p.puuid}
+            old_names = sum(1 for p in old_players if p.display_name)
+            new_names = sum(1 for p in rebuilt.players if p.display_name)
+            old_p_set = set(old_by.keys())
+            new_p_set = {p.puuid for p in rebuilt.players if p.puuid}
+            inter = len(old_p_set & new_p_set)
+            union = len(old_p_set | new_p_set)
+            jac = (inter / union) if union else 1.0
+            inherit_hit = sum(1 for np_ in rebuilt.players if np_.puuid in old_by)
+            same_puuid_name_miss = sum(
+                1 for np_ in rebuilt.players
+                if np_.puuid in old_by and old_by[np_.puuid].display_name and not np_.display_name
+            )
+            ongoing_logger.debug(
+                f"DIAG rebuild: tick={self._diag_tick} kind={kind} "
+                f"old_gid={(old.game_id if old is not None else None)!r} "
+                f"new_gid={rebuilt.game_id!r} "
+                f"old_key={old_key!r} new_key={new_key!r} "
+                f"n_old={len(old_players)} n_new={len(rebuilt.players)} "
+                f"names_old={old_names} names_new={new_names} "
+                f"puuid_union={union} puuid_inter={inter} jaccard={jac:.3f} "
+                f"inherit_hit={inherit_hit} inherit_allowed={inherit_allowed} "
+                f"same_puuid_name_miss={same_puuid_name_miss} "
+                f"stable_slot=UNAVAILABLE"
+            )
+        except Exception:
+            pass
 
     # ----- UI -----
     def get_session(self) -> CurrentGameSession | None:

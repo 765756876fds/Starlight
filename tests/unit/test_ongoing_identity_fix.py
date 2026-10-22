@@ -230,6 +230,9 @@ class TestIdentityUpgrade:
         try:
             assert _wait(lambda: svc.get_session() is not None
                          and sum(1 for p in svc.get_session().players if p.puuid) == 5), "session 未建立"
+            # 等待首次加载完成（_loading_in_progress 归位）后再取基线——基线若在加载
+            # 线程未完成时记录，sleep 窗口内线程跑完剩余调用会假失败（消除固定时间假设）
+            assert _wait(lambda: not svc._loading_in_progress), "首次加载未完成"
             n_calls = acct.calls
             time.sleep(0.4)
             assert acct.calls == n_calls, "无升级却触发重复拉取"

@@ -117,7 +117,8 @@ class OngoingGameLoader:
     # ERROR/其他: 请求失败 -> 不能复用；force 重试时必须绕过缓存重新请求
     _REUSABLE_STATES = ("AVAILABLE", "NO_DATA")
 
-    def load_for_champ_select(self, session: dict, force: bool = False) -> list[PlayerSnapshot]:
+    def load_for_champ_select(self, session: dict, force: bool = False,
+                              generation: int | None = None) -> list[PlayerSnapshot]:
         players = self._extract_players(session)
         if not players:
             return []
@@ -182,14 +183,14 @@ class OngoingGameLoader:
                     if _gn and getattr(self, "on_name_resolved", None):
                         _tl = (_info or {}).get("tagLine") or ""
                         try:
-                            self.on_name_resolved(_pu, f"{_gn}#{_tl}" if _tl else _gn)
+                            self.on_name_resolved(_pu, f"{_gn}#{_tl}" if _tl else _gn, generation)
                         except Exception:
                             pass
             except Exception as _e:
                 self._sgp_info_cache = {}
                 self._errors.append("sgp batch failed: %s" % _e)
         futures = {
-            self._executor.submit(self._load_one, p): p for p in players
+            self._executor.submit(self._load_one, p, generation): p for p in players
             if p["puuid"] in pending_puuid
         }
         for fut in as_completed(futures):
@@ -235,7 +236,7 @@ class OngoingGameLoader:
                 })
         return out
 
-    def _load_one(self, base: dict) -> PlayerSnapshot | None:
+    def _load_one(self, base: dict, generation: int | None = None) -> PlayerSnapshot | None:
         puuid = base["puuid"]
         summoner_id = base.get("summoner_id") or 0
         summoner_failed = False
@@ -332,7 +333,7 @@ class OngoingGameLoader:
                 ongoing_logger.debug(f"Name Resolved: {puuid[:6]}... -> {_disp}")
             if getattr(self, "on_name_resolved", None):
                 try:
-                    self.on_name_resolved(puuid, _disp)
+                    self.on_name_resolved(puuid, _disp, generation)
                 except Exception:
                     pass
         

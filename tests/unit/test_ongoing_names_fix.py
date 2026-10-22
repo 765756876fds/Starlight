@@ -159,7 +159,8 @@ def test_retry_triggered_on_missing_names(monkeypatch):
         missing_names_count=lambda: 2,
     )
     spawned = []
-    monkeypatch.setattr(svc, "_load_in_thread", lambda snapshot: spawned.append(snapshot))
+    # gen 为 _load_in_thread 新增的代际参数（mock 仅作启动探针，断言不变）
+    monkeypatch.setattr(svc, "_load_in_thread", lambda snapshot, gen=None: spawned.append(snapshot))
     svc._tick()
     assert len(spawned) == 1                 # 名字缺失 → retry 触发
 

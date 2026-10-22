@@ -367,6 +367,12 @@ class CurrentGamePanel(QWidget):
         is_self = bool(getattr(player, "is_self", False))
 
         name = player.display_name or "?"
+        if _DEBUG_ONGOING:
+            # DIAG：UI 最终显示文本来源（只读，不改渲染）
+            ongoing_logger.debug(
+                f"DIAG ui_card: puuid={(getattr(player, 'puuid', '') or '')[:6] or 'EMPTY'} "
+                f"disp_empty={not bool(player.display_name)} final_is_q={name == '?'}"
+            )
         if is_self:
             name = f"你: {name}"
 
@@ -601,6 +607,14 @@ class CurrentGamePanel(QWidget):
             )
             for p in session.players
         ) + (int(game_time // 5),)
+        if _DEBUG_ONGOING:
+            # DIAG：UI 每帧渲染判定（只读，不改渲染）；game_id 作为服务层/UI 层关联键
+            ongoing_logger.debug(
+                f"DIAG ui_refresh: key_changed={render_key != self._last_render_key} "
+                f"gid={getattr(session, 'game_id', 0)!r} "
+                f"n={len(session.players)} "
+                f"names_ok={sum(1 for p in session.players if p.display_name)}"
+            )
         if render_key == self._last_render_key:
             if _DEBUG_ONGOING:
                 ongoing_logger.debug("UI Refresh skipped by fingerprint.")
