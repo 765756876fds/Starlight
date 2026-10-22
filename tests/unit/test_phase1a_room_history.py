@@ -15,9 +15,11 @@ from app.lol.ongoing.account_history import AccountMatchHistoryService
 
 
 def mk_rec(win, champ="A", k=3, d=2, a=5, pos="MID", creation=None):
+    # queue_id=420（单双排）：与 loader 白名单口径对齐（_VALID_QUEUE_IDS 含 400/420/430/440/460/490），
+    # 默认 0 会被过滤导致 data_state=NO_DATA（测试曾因夹具未设 queue_id 而误判 NO_DATA）。
     return MatchRecord(game_id=creation or int(time.time()*1000), champion_name=champ,
                        win=win, kills=k, deaths=d, assists=a, team_position=pos,
-                       game_creation=creation or int(time.time()*1000))
+                       game_creation=creation or int(time.time()*1000), queue_id=420)
 
 
 class FakeAcct:

@@ -130,8 +130,14 @@ def test_new_game_id_creates_new_session():
         s2 = _wait_session(svc, 456)
         assert s2 is not None
         assert s2.game_id == 456
-        assert s2 is not s1  # 旧 session 对象立即失效，不进入新 session
-        assert svc.get_session() is s2
+        # 快照语义：get_session() 每次返回深拷贝，不能断言跨调用对象身份一致（
+        # 内部 session 未更换时两次调用也可能得到不同对象）；
+        # 旧 session 失效由"重新获取的快照指向新 game_id 且玩家/队伍数据完整"表达。
+        snap = svc.get_session()
+        assert snap is not None
+        assert snap.game_id == 456
+        assert len(snap.players) == 10
+        assert len(snap.my_team) == 5 and len(snap.their_team) == 5
     finally:
         svc.stop()
 
