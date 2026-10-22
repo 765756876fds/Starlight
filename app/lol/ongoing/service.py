@@ -180,8 +180,10 @@ class OngoingGameService:
                 self._on_event("ongoing.error", {"err": str(e)})
 
     def _next_interval(self) -> float:
-        """进局初期动态加速：InProgress/GameStart 且仍有玩家 championId 未解析（2999 未齐）
-        时 0.2s 轮询，尽快把英雄/名字渲染出来；其余情况用默认 poll_interval。"""
+        """进局初期动态加速：InProgress/GameStart 且仍有玩家 championId 未解析时 0.2s 轮询，
+        尽快把英雄/名字渲染出来；其余情况用默认 poll_interval。
+        防抖：仅当 2999 实时快照尚未就绪（数据未到达）时才加速——若快照已有数据但
+        仍缺 cid（名称未命中目录/人机局等），高频轮询无收益，保持默认间隔。"""
         if getattr(self, "_last_phase", "") in ("InProgress", "GameStart"):
             with self._lock:
                 players = getattr(self._session, "players", []) if self._session is not None else []
@@ -189,7 +191,21 @@ class OngoingGameService:
                 getattr(p, "champion_id", 0) == 0 for p in players
             )
             if has_missing_champ:
-                return 0.2
+                # 2999 快照未就绪才加速；快照已到达（有 ally/enemy/players 数据）则回默认
+                snap = None
+                try:
+                    snap = self._snapshot_provider() if self._snapshot_provider else None
+                except Exception:
+                    snap = None
+                if snap is None:
+                    return 0.2
+                n_players = (
+                    len(getattr(snap, "players", None) or [])
+                    + len(getattr(snap, "ally_team", None) or [])
+                    + len(getattr(snap, "enemy_team", None) or [])
+                )
+                if n_players == 0:
+                    return 0.2
         return self._poll_interval
 
     def _tick(self) -> None:
@@ -359,6 +375,12 @@ class OngoingGameService:
                                 # 继承旧 display_name：防止进游戏重建瞬间名字被刷成 "?"
                                 if not np_.display_name and op.display_name:
                                     np_.display_name = op.display_name
+                                # 继承已解析出来的英雄 ID：防止重建后 champion_id 归零（变问号）触发闪烁
+                                if not getattr(np_, "champion_id", 0) and getattr(op, "champion_id", 0):
+                                    np_.champion_id = op.champion_id
+                                # 继承预选英雄
+                                if not getattr(np_, "champion_pick_intent", 0) and getattr(op, "champion_pick_intent", 0):
+                                    np_.champion_pick_intent = op.champion_pick_intent
                                 if not np_.realtime_available:
                                     np_.live_kills = op.live_kills
                                     np_.live_deaths = op.live_deaths
