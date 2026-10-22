@@ -18,6 +18,8 @@ mpv 崩溃恢复（S8）：窗口 _tick 轮询检测。
 """
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
+
+import threading
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -31,6 +33,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.widgets.video_icons import icon as _icon
+
+from .clickable_slider import ClickableSlider
 
 # 倍速档位（对齐 B站/爱奇艺标准 9 档；与 movie_panel 同源值）
 _SPEED_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
@@ -150,6 +154,7 @@ class ControlOverlay(QWidget):
         self._paused = False
         self._muted = False
         self._dragging = False
+        self._switching = False  # 切集/加载守卫：置位期间不渲染旧集进度（_tick 拦截）
         self._vol_state = "high"     # S6：音量图标三态（high/low/muted）
         self._play_state = "play"    # S6：播放/暂停图标态
         # S3 鼠标浮现/隐藏：overlay 是独立顶层窗口——鼠标在 overlay 上时播放窗口
@@ -167,8 +172,8 @@ class ControlOverlay(QWidget):
         row1.setContentsMargins(0, 0, 0, 0)
         row1.setSpacing(0)
 
-        # 进度条（拖动预览，松手才 seek）
-        self.slider_pos = QSlider(Qt.Horizontal)
+        # 进度条（点击/拖动预览，松手才 seek；ClickableSlider 支持点击精确跳转）
+        self.slider_pos = ClickableSlider(Qt.Horizontal)
         self.slider_pos.setRange(0, 1000)
         self.slider_pos.sliderPressed.connect(self._on_slider_pressed)
         self.slider_pos.sliderReleased.connect(self._on_slider_released)
@@ -346,6 +351,12 @@ class ControlOverlay(QWidget):
 
     def _on_slider_released(self):
         self._dragging = False
+        # seek 整体丢后台线程：get_duration + seek 两次 mpv IPC 绝不阻塞主线程
+        # （点击跳转同样经 sliderReleased 信号到达，复用同一后台通道）
+        threading.Thread(target=self._do_seek, daemon=True, name="overlay-seek").start()
+
+    def _do_seek(self):
+        """后台线程执行 seek（IPC 出主线程；失败静默，不炸线程）。"""
         try:
             dur = self._movie.get_duration()
             if dur > 0:
@@ -598,6 +609,8 @@ class VideoPlayerWindow(QWidget):
             name = (item.get("vod_name") or "")[:20]
             self.setWindowTitle(f"{name} - {self._title_base}")
             self._playing = True
+            # 切集/加载守卫：新集起播前（pos 回到 0）不渲染旧集进度，防倒退
+            self._switching = True
             self._current_item = item           # S4：切集复用
             # S4：剧集列表（split_play_url 拆解；单集 → 侧栏隐藏）
             try:
@@ -774,6 +787,13 @@ class VideoPlayerWindow(QWidget):
             dur = self._movie.get_duration()
             it = self._movie.current_item() or {}
             name = (it.get("vod_name") or "")[:20]
+            # 切集/加载守卫：切集后新集 loadfile 起播前（pos 回到 0 之前），
+            # mpv 可能仍在报旧集 position——禁止写入进度条，防倒退。
+            # 起播确认（is_playing 且 pos>0）后放开守卫。
+            if self._switching:
+                if not (self._movie.is_playing() and pos > 0):
+                    return
+                self._switching = False
             if dur > 0:
                 self.setWindowTitle(f"{name}  {_fmt(pos)}/{_fmt(dur)} - {self._title_base}")
             else:

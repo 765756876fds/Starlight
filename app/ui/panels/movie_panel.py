@@ -47,53 +47,11 @@ from ...movie import douban_rank
 from ...movie.rank_providers import TgmengProvider, default_provider
 from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..dialogs.parse_link_dialog import ParseLinkDialog
+from ..widgets.clickable_slider import ClickableSlider
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import _GlassMsgBox, glass_info
 
 logger = get_logger()
-
-
-class ClickableSlider(QSlider):
-    """支持"点击任意位置直接跳转"的 QSlider：点击 groove 精确 setValue 并在
-    mouseRelease 时手动发 sliderReleased（触发面板 _on_seek 后台 seek）；
-    命中 handle 时交还基类拖拽逻辑（release 由基类 emit，防重复触发）。"""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._clicked_to_seek = False
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and not self._hit_handle(event.position().x()):
-            w = self.width()
-            if w > 0:
-                x = event.position().x()
-                frac = max(0.0, min(1.0, x / w))
-                val = self.minimum() + int(frac * (self.maximum() - self.minimum()))
-                self.setValue(val)
-                self.update()
-                # 不调 super：基类对 groove 的 PageStep 步进会覆盖精确值
-                self._clicked_to_seek = True
-                event.accept()
-                return
-        self._clicked_to_seek = False
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._clicked_to_seek:
-            self._clicked_to_seek = False
-            self.sliderReleased.emit()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def _hit_handle(self, x: float) -> bool:
-        rng = self.maximum() - self.minimum()
-        if rng <= 0:
-            return True
-        ratio = (self.value() - self.minimum()) / rng
-        pad = 6.0
-        hx = pad + (self.width() - pad * 2) * ratio
-        return abs(x - hx) <= 10.0
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
 _POSTER_DIR = PROJECT_ROOT / "data" / "movie" / "posters"
