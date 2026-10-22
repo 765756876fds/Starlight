@@ -16,6 +16,7 @@ from .gsm_provider import merge_gsm_players
 from .loader import OngoingGameLoader
 from .models import PlayerSnapshot
 from .session import CurrentGamePlayer, CurrentGameSession
+from .debug_tracer import _DEBUG_ONGOING, ongoing_logger
 
 # liveclientdata 玩家对象没有 championId 字段（只有 championName / rawChampionName），
 # 需要用名称反查 cid 才能与 gameflow 身份 cell 的 championId 对齐匹配。
@@ -228,6 +229,8 @@ class OngoingGameService:
         # GameStart/Reconnect 也纳入：gameflow teamOne/teamTwo 在加载界面即就绪（实测明文 puuid），
         # 进入对局即可显示全部玩家，无需等待 liveclientdata
         self._last_phase = phase  # 供 _run 动态加速轮询（InProgress/GameStart 且英雄未齐时 0.2s）
+        if _DEBUG_ONGOING and phase in ("InProgress", "ChampSelect", "GameStart"):
+            ongoing_logger.debug(f"Tick: phase={phase}")
         if phase not in ("ChampSelect", "GameStart", "InProgress", "Reconnect"):
             with self._lock:
                 if (self._current_session_key is not None or self._snapshots
@@ -623,6 +626,8 @@ class OngoingGameService:
             snap = self._snapshot_provider() if self._snapshot_provider else None
         except Exception:
             snap = None
+        if _DEBUG_ONGOING:
+            ongoing_logger.debug(f"Merge Live: snap is None? {snap is None}")
         if snap is None:
             return
         # 宽进建库：收集所有 2999 玩家（不因 cid 解析失败而丢弃任何人）
@@ -680,6 +685,8 @@ class OngoingGameService:
                 merged += 1
         if merged:
             self._on_event("ongoing.live_merged", {"players": merged})
+        if _DEBUG_ONGOING:
+            ongoing_logger.debug(f"Merge Live: matched {merged} players")
 
     def _build_session_from_snapshot(self):
         """[已移除] 从 live client snapshot 构建 session。
@@ -744,6 +751,10 @@ class OngoingGameService:
         return f"hash:{h}"
 
     def _load_in_thread(self, session: dict) -> None:
+        if _DEBUG_ONGOING:
+            ongoing_logger.debug(
+                f"Start Load Thread: players_count={len((session.get('myTeam') or [])) + len((session.get('theirTeam') or []))}"
+            )
         try:
             snaps = self._loader.load_for_champ_select(session, force=self._force_reload)
             with self._lock:

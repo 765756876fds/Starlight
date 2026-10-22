@@ -11,6 +11,7 @@ from .cache import SnapshotCache
 from .match_model import _VALID_QUEUE_IDS, NO_DATA, MatchHistoryResult, MatchRecord
 from .models import PlayerSnapshot
 from .summoner_privacy import SummonerPrivacyService
+from .debug_tracer import _DEBUG_ONGOING, ongoing_logger
 
 
 class RateLimiter:
@@ -162,9 +163,13 @@ class OngoingGameLoader:
         self._sgp_info_cache = {}
         if puuids_to_check:
             try:
+                if _DEBUG_ONGOING:
+                    ongoing_logger.debug(f"SGP Name Req start: puuids={len(puuids_to_check)}")
                 if not getattr(self, "_privacy_service", None):
                     self._privacy_service = SummonerPrivacyService(self._get)
                 self._sgp_info_cache = self._privacy_service.batch_summoner_info(puuids_to_check)
+                if _DEBUG_ONGOING:
+                    ongoing_logger.debug(f"SGP Name Req done: got {len(self._sgp_info_cache)} results")
                 # 批量拿到名字后立刻全员回调（不等 _load_one 慢慢查战绩）：
                 # 10 人名字同帧落地 → UI 一次性渲染，消除"名字逐个蹦出"的闪烁
                 for _pu, _info in self._sgp_info_cache.items():
@@ -318,6 +323,8 @@ class OngoingGameLoader:
         # 名字先出：查到名字立即回调（service 回填 session，UI 秒显示），不等 SGP 战绩
         if gn:
             _disp = f"{gn}#{tl}" if tl else gn
+            if _DEBUG_ONGOING:
+                ongoing_logger.debug(f"Name Resolved: {puuid[:6]}... -> {_disp}")
             if getattr(self, "on_name_resolved", None):
                 try:
                     self.on_name_resolved(puuid, _disp)
@@ -356,6 +363,8 @@ class OngoingGameLoader:
             live_assists=base.get("live_assists", 0) or 0,
             live_position=base.get("live_position") or None,
         )
+        if _DEBUG_ONGOING:
+            ongoing_logger.debug(f"LoadOne done: puuid={puuid[:6]}..., name={gn}, champ={champ_id}, state={state}")
         self._cache.put(snap)
         self._on_event("room.player", {
             "puuid": puuid, "name": snap.display_name,
