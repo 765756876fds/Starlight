@@ -436,7 +436,23 @@ class OngoingGameService:
                 self._loading_in_progress = True
                 self._snapshots = []
                 # 新 session：game_id 为生命周期锚点；旧 session（含 players）立即失效
-                self._session = self._to_current_session(session, phase, me_puuid)
+                rebuilt = self._to_current_session(session, phase, me_puuid)
+                # 【前置继承】新 session 覆盖前，从旧 session 继承已解析的名字/英雄ID/战绩。
+                # 双保险：即使 key 稳定逻辑生效，极端场景（真换局但 puuid 碰巧相同、
+                # gameId 缺失导致 key 波动）下也不丢已回填字段，杜绝"名字→?→名字"闪烁。
+                if self._session is not None:
+                    old_by_puuid = {p.puuid: p for p in self._session.players if p.puuid}
+                    for np_ in rebuilt.players:
+                        op = old_by_puuid.get(np_.puuid)
+                        if op is not None:
+                            if not np_.display_name and op.display_name:
+                                np_.display_name = op.display_name
+                            if not getattr(np_, "champion_id", 0) and getattr(op, "champion_id", 0):
+                                np_.champion_id = op.champion_id
+                            if not getattr(np_, "champion_pick_intent", 0) and getattr(op, "champion_pick_intent", 0):
+                                np_.champion_pick_intent = op.champion_pick_intent
+                            np_.history = op.history
+                self._session = rebuilt
                 # 新对局 retry 计数从 0 开始（_retry_state 按 game_id 持久，新 game_id 自动归零；
                 # 复用 gameId 的新局已在离开对局分支清空 _retry_state）
                 if key != self._last_loaded_key:
@@ -761,7 +777,13 @@ class OngoingGameService:
         game_id = session.get("gameId")
         if game_id:
             return f"gid:{game_id}"
-        # fallback: puuid 集合 hash
+        # 选人阶段：反解 puuid 是渐进的（逐 tick 增多），不能用来算 hash——
+        # 否则每 tick 生成新 key 触发"新 session"分支无条件覆盖，把刚回填的
+        # SGP 名字清空（名字 "有值→?" 闪烁根因）。同一时刻不可能打两局选人，
+        # 直接返回固定值，直到进游戏拿到真实 gameId 转为 gid key。
+        if session.get("myTeam") and not game_id:
+            return "champ_select_phase"
+        # 兜底原来的逻辑
         puuids = sorted(
             (c.get("puuid") or "")
             for c in (session.get("myTeam") or []) + (session.get("theirTeam") or [])
