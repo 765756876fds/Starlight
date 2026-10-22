@@ -18,6 +18,7 @@ from app.lol.ongoing.intelligence import PlayerIntelligenceService
 from app.lol.ongoing.intelligence_service import OngoingIntelligenceService
 from app.lol.ongoing.sgp_provider import SgpMatchHistoryProvider
 from app.lol.ongoing.sgp_server import SgpServerResolver
+from app.lol.ongoing.debug_tracer import _DEBUG_ONGOING, ongoing_logger
 from app.lol.title import compute_title
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
@@ -569,8 +570,12 @@ class CurrentGamePanel(QWidget):
             for p in session.players
         ) + (int(game_time // 5),)
         if render_key == self._last_render_key:
+            if _DEBUG_ONGOING:
+                ongoing_logger.debug("UI Refresh skipped by fingerprint.")
             return
 
+        if _DEBUG_ONGOING:
+            ongoing_logger.debug("UI Refresh redraw triggered!")
         n = len(session.players)
         self.lbl_title.setText(f"当前对局  时间 {_fmt_game_time(game_time)}  玩家 {n}")
 
