@@ -1,5 +1,6 @@
 """当前对局面板：双排卡片布局，左己方右敌方。"""
 import threading
+import time
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
@@ -329,10 +330,11 @@ class CurrentGamePanel(QWidget):
             with self._loading_lock:
                 self._loading_puuids.discard(puuid)
 
-    def _fill_player_card(self, card, player):
+    def _fill_player_card(self, card, player, early_loading: bool = False):
         """纯渲染：从 CurrentGamePlayer 三区读取（identity=gameflow / realtime=2999 / history=loader）。
 
         不再做任何身份匹配、缓存反查、历史/绝活查询或兜底。
+        early_loading：进游戏初期（InProgress/GameStart 前 15s）且 2999 未回填英雄 ID 时的兜底提示。
         """
         snap_data = player.history  # PlayerSnapshot（loader 单链产物）或 None（尚未加载完成）
         is_self = bool(getattr(player, "is_self", False))
@@ -342,7 +344,8 @@ class CurrentGamePanel(QWidget):
             name = f"你: {name}"
 
         # 本局英雄：identity.champion_id（gameflow 权威）→ 目录转中文；
-        # 选人阶段未锁定（champion_id==0）时回退 champion_pick_intent 预选英雄，标记"(预选)"
+        # 选人阶段未锁定（champion_id==0）时回退 champion_pick_intent 预选英雄，标记"(预选)"；
+        # 进游戏初期 2999 真空期无任何 ID 时显示"加载中"，不干巴巴显示 ?
         champ = "?"
         display_cid = getattr(player, "champion_id", 0)
         is_intent = False
@@ -354,6 +357,8 @@ class CurrentGamePanel(QWidget):
             champ = c.name_zh if c and c.name_zh else (c.en_name if c else f"#{display_cid}")
             if is_intent:
                 champ += " (预选)"
+        elif early_loading:
+            champ = "加载中"  # 进游戏初期 2999 真空期兜底（数据就绪后下一帧自动替换）
 
         # 等级：优先历史召唤师等级（history），其次 2999 实时等级（realtime）
         level = "?"
@@ -576,6 +581,12 @@ class CurrentGamePanel(QWidget):
 
         if _DEBUG_ONGOING:
             ongoing_logger.debug("UI Refresh redraw triggered!")
+        # 进游戏初期（InProgress/GameStart 前 15s）2999 真空期兜底标志：
+        # 英雄 ID 未回填时显示"加载中"（预选英雄优先兜底），数据就绪后下一帧自动替换
+        early_loading = (
+            getattr(session, "phase", "") in ("InProgress", "GameStart")
+            and (time.time() - getattr(session, "started_at", time.time())) < 15
+        )
         n = len(session.players)
         self.lbl_title.setText(f"当前对局  时间 {_fmt_game_time(game_time)}  玩家 {n}")
 
@@ -586,14 +597,14 @@ class CurrentGamePanel(QWidget):
             for i, p in enumerate(session.my_team):
                 card = self._get_or_create_card("ally", i)
                 card.show()
-                self._fill_player_card(card, p)
+                self._fill_player_card(card, p, early_loading)
             for i in range(len(session.my_team), len(self.ally_cards)):
                 self.ally_cards[i].hide()
 
             for i, p in enumerate(session.their_team):
                 card = self._get_or_create_card("enemy", i)
                 card.show()
-                self._fill_player_card(card, p)
+                self._fill_player_card(card, p, early_loading)
             for i in range(len(session.their_team), len(self.enemy_cards)):
                 self.enemy_cards[i].hide()
         finally:

@@ -134,6 +134,7 @@ class OngoingGameService:
         self._current_session_key: str | None = None
         self._last_loaded_key: str | None = None
         self._loading_in_progress = False
+        self._is_loading_thread_running = False  # 加载线程锁：运行期间绝不再开新线程（防选人阶段反复重查）
         self._poll_interval = poll_interval
         # 历史战绩缺失自动重试状态（按 game_id 持久；离开对局清空，防腾讯服 gameId 复用串局）
         self._retry_state: dict = {}
@@ -199,14 +200,14 @@ class OngoingGameService:
                 except Exception:
                     snap = None
                 if snap is None:
-                    return 0.2
+                    return 0.5  # 2999 真空期（进游戏初期接口未就绪）：0.5s 轮询等数据，不放弃
                 n_players = (
                     len(getattr(snap, "players", None) or [])
                     + len(getattr(snap, "ally_team", None) or [])
                     + len(getattr(snap, "enemy_team", None) or [])
                 )
                 if n_players == 0:
-                    return 0.2
+                    return 0.5
         return self._poll_interval
 
     def _tick(self) -> None:
@@ -456,12 +457,31 @@ class OngoingGameService:
                         "their_team": len(self._session.their_team),
                     })
         # 锁外启动线程（_load_in_thread 的 finally 会重取锁，锁内启动有死锁窗口）
+        # 线程锁：上一个加载线程还在跑就绝不再开（防选人阶段每秒重复创建导致 UI 被信号轰炸）
         if _need_load:
-            threading.Thread(target=self._load_in_thread, args=(session,), daemon=True).start()
+            if not getattr(self, "_is_loading_thread_running", False):
+                self._is_loading_thread_running = True
+
+                def _run_and_reset():
+                    try:
+                        self._load_in_thread(session)
+                    finally:
+                        self._is_loading_thread_running = False
+
+                threading.Thread(target=_run_and_reset, daemon=True, name="lcu-load").start()
             return
         if _same_session:
             return
-        threading.Thread(target=self._load_in_thread, args=(session,), daemon=True).start()
+        if not getattr(self, "_is_loading_thread_running", False):
+            self._is_loading_thread_running = True
+
+            def _run_and_reset():
+                try:
+                    self._load_in_thread(session)
+                finally:
+                    self._is_loading_thread_running = False
+
+            threading.Thread(target=_run_and_reset, daemon=True, name="lcu-load").start()
 
     def _build_gameflow_session(self, me_puuid: str | None):
         """身份主源：gameflow session.gameData.teamOne/teamTwo → myTeam/theirTeam。

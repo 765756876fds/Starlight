@@ -159,7 +159,12 @@ class OngoingGameLoader:
                 pending_puuid.append(p["puuid"])
 
         # 新增：SGP 批量查询玩家名字（腾讯服 LCU 拿不到名字时的稳定兜底通道）
-        puuids_to_check = [p.get("puuid") for p in players if p.get("puuid") in pending_puuid]
+        # 严格过滤：已有 display_name 的玩家（gameflow/cs cell 自带名字）不再重复查 SGP
+        puuids_to_check = [
+            p.get("puuid") for p in players
+            if p.get("puuid") in pending_puuid
+            and not (p.get("display_name") or "").strip()
+        ]
         self._sgp_info_cache = {}
         if puuids_to_check:
             try:
