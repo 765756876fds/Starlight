@@ -226,6 +226,7 @@ class CurrentGamePanel(QWidget):
         self.ally_cards = []
         self.enemy_cards = []
 
+        self._last_render_key = None  # 差分渲染：上一帧渲染指纹（身份/实时/情报状态）
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
@@ -533,9 +534,32 @@ class CurrentGamePanel(QWidget):
                 pass
 
         if session is None or not session.has_players:
+            self._last_render_key = None
             self.lbl_title.setText("未在对局中 / 选人中")
             for card in self.ally_cards + self.enemy_cards:
                 card.hide()
+            return
+
+        # 差分渲染：身份/实时/情报状态与上一帧完全一致时跳过全量重绘（防闪烁）。
+        # 覆盖：名字、英雄 ID、KDA/位置/等级、history 就绪、intel（绝活/称号）就绪；
+        # 标题时间按 5s 粒度纳入，避免加载初期标题时间冻结。
+        render_key = tuple(
+            (
+                getattr(p, "puuid", "") or "",
+                getattr(p, "display_name", "") or "",
+                getattr(p, "champion_id", 0) or 0,
+                getattr(p, "live_kills", 0) or 0,
+                getattr(p, "live_deaths", 0) or 0,
+                getattr(p, "live_assists", 0) or 0,
+                getattr(p, "live_position", "") or "",
+                getattr(p, "live_level", 0) or 0,
+                getattr(p, "history", None) is not None,
+                (self._intelligence is not None
+                 and self._intelligence.get_cached(getattr(p, "puuid", "") or "") is not None),
+            )
+            for p in session.players
+        ) + (int(game_time // 5),)
+        if render_key == self._last_render_key:
             return
 
         n = len(session.players)
@@ -554,4 +578,6 @@ class CurrentGamePanel(QWidget):
             self._fill_player_card(card, p)
         for i in range(len(session.their_team), len(self.enemy_cards)):
             self.enemy_cards[i].hide()
+
+        self._last_render_key = render_key
 

@@ -173,11 +173,24 @@ class OngoingGameService:
 
     # ----- poll loop -----
     def _run(self) -> None:
-        while not self._stop_event.wait(self._poll_interval):
+        while not self._stop_event.wait(self._next_interval()):
             try:
                 self._tick()
             except Exception as e:
                 self._on_event("ongoing.error", {"err": str(e)})
+
+    def _next_interval(self) -> float:
+        """进局初期动态加速：InProgress/GameStart 且仍有玩家 championId 未解析（2999 未齐）
+        时 0.2s 轮询，尽快把英雄/名字渲染出来；其余情况用默认 poll_interval。"""
+        if getattr(self, "_last_phase", "") in ("InProgress", "GameStart"):
+            with self._lock:
+                players = getattr(self._session, "players", []) if self._session is not None else []
+            has_missing_champ = any(
+                getattr(p, "champion_id", 0) == 0 for p in players
+            )
+            if has_missing_champ:
+                return 0.2
+        return self._poll_interval
 
     def _tick(self) -> None:
         if self._lcu is None:
@@ -198,6 +211,7 @@ class OngoingGameService:
         # 选人/加载/对局中加载玩家数据；其他阶段清空
         # GameStart/Reconnect 也纳入：gameflow teamOne/teamTwo 在加载界面即就绪（实测明文 puuid），
         # 进入对局即可显示全部玩家，无需等待 liveclientdata
+        self._last_phase = phase  # 供 _run 动态加速轮询（InProgress/GameStart 且英雄未齐时 0.2s）
         if phase not in ("ChampSelect", "GameStart", "InProgress", "Reconnect"):
             with self._lock:
                 if (self._current_session_key is not None or self._snapshots

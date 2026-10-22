@@ -165,6 +165,16 @@ class OngoingGameLoader:
                 if not getattr(self, "_privacy_service", None):
                     self._privacy_service = SummonerPrivacyService(self._get)
                 self._sgp_info_cache = self._privacy_service.batch_summoner_info(puuids_to_check)
+                # 批量拿到名字后立刻全员回调（不等 _load_one 慢慢查战绩）：
+                # 10 人名字同帧落地 → UI 一次性渲染，消除"名字逐个蹦出"的闪烁
+                for _pu, _info in self._sgp_info_cache.items():
+                    _gn = (_info or {}).get("name")
+                    if _gn and getattr(self, "on_name_resolved", None):
+                        _tl = (_info or {}).get("tagLine") or ""
+                        try:
+                            self.on_name_resolved(_pu, f"{_gn}#{_tl}" if _tl else _gn)
+                        except Exception:
+                            pass
             except Exception as _e:
                 self._sgp_info_cache = {}
                 self._errors.append("sgp batch failed: %s" % _e)
