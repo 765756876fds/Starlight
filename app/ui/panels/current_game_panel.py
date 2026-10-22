@@ -574,19 +574,26 @@ class CurrentGamePanel(QWidget):
         n = len(session.players)
         self.lbl_title.setText(f"当前对局  时间 {_fmt_game_time(game_time)}  玩家 {n}")
 
-        for i, p in enumerate(session.my_team):
-            card = self._get_or_create_card("ally", i)
-            card.show()
-            self._fill_player_card(card, p)
-        for i in range(len(session.my_team), len(self.ally_cards)):
-            self.ally_cards[i].hide()
+        # 冻结更新：整帧渲染期间禁止中间态重绘（Qt 防闪烁标准做法），
+        # 全部卡片 setText/QSS 完成后一次性 update，保证一帧呈现最终状态
+        self.setUpdatesEnabled(False)
+        try:
+            for i, p in enumerate(session.my_team):
+                card = self._get_or_create_card("ally", i)
+                card.show()
+                self._fill_player_card(card, p)
+            for i in range(len(session.my_team), len(self.ally_cards)):
+                self.ally_cards[i].hide()
 
-        for i, p in enumerate(session.their_team):
-            card = self._get_or_create_card("enemy", i)
-            card.show()
-            self._fill_player_card(card, p)
-        for i in range(len(session.their_team), len(self.enemy_cards)):
-            self.enemy_cards[i].hide()
+            for i, p in enumerate(session.their_team):
+                card = self._get_or_create_card("enemy", i)
+                card.show()
+                self._fill_player_card(card, p)
+            for i in range(len(session.their_team), len(self.enemy_cards)):
+                self.enemy_cards[i].hide()
+        finally:
+            self.setUpdatesEnabled(True)
+            self.update()
 
         self._last_render_key = render_key
 
