@@ -685,6 +685,7 @@ class OngoingGameService:
             team=team,
             assigned_position=(cell.get("assignedPosition") or "") or None,
             champion_id=cell.get("championId") or 0,
+            champion_pick_intent=cell.get("championPickIntent") or 0,
             is_self=(puuid == me_puuid),
             live_kills=cell.get("live_kills") or 0,
             live_deaths=cell.get("live_deaths") or 0,

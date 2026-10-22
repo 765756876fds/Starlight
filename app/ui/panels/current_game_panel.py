@@ -340,11 +340,19 @@ class CurrentGamePanel(QWidget):
         if is_self:
             name = f"你: {name}"
 
-        # 本局英雄：identity.champion_id（gameflow 权威）→ 目录转中文
+        # 本局英雄：identity.champion_id（gameflow 权威）→ 目录转中文；
+        # 选人阶段未锁定（champion_id==0）时回退 champion_pick_intent 预选英雄，标记"(预选)"
         champ = "?"
-        if getattr(player, "champion_id", 0):
-            c = self._catalog.get_by_id(player.champion_id) if self._catalog else None
-            champ = c.name_zh if c and c.name_zh else (c.en_name if c else f"#{player.champion_id}")
+        display_cid = getattr(player, "champion_id", 0)
+        is_intent = False
+        if display_cid == 0 and getattr(player, "champion_pick_intent", 0):
+            display_cid = player.champion_pick_intent
+            is_intent = True
+        if display_cid:
+            c = self._catalog.get_by_id(display_cid) if self._catalog else None
+            champ = c.name_zh if c and c.name_zh else (c.en_name if c else f"#{display_cid}")
+            if is_intent:
+                champ += " (预选)"
 
         # 等级：优先历史召唤师等级（history），其次 2999 实时等级（realtime）
         level = "?"
@@ -548,6 +556,7 @@ class CurrentGamePanel(QWidget):
                 getattr(p, "puuid", "") or "",
                 getattr(p, "display_name", "") or "",
                 getattr(p, "champion_id", 0) or 0,
+                getattr(p, "champion_pick_intent", 0) or 0,
                 getattr(p, "live_kills", 0) or 0,
                 getattr(p, "live_deaths", 0) or 0,
                 getattr(p, "live_assists", 0) or 0,

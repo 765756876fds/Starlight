@@ -34,6 +34,7 @@ class CurrentGamePlayer:
     team: str = "myTeam"  # myTeam / theirTeam
     assigned_position: str | None = None
     champion_id: int = 0
+    champion_pick_intent: int = 0  # 选人阶段预选英雄（cs cell championPickIntent；锁定后 champion_id 生效）
     is_self: bool = False
 
     # ----- realtime (LiveClientData 2999) -----
