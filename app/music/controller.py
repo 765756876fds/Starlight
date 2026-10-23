@@ -2147,22 +2147,36 @@ class MusicController:
         now_idle 与 _last_idle 同为 True，不构成上升沿，不会误触发 _auto_next；
         _next_locked 锁内另有 origin=auto + _last_idle 双重守卫兜底竞争窗口。
 
-        失败语义：mpv.stop() 抛异常（如 IPC 未连接）时记录错误日志并保留
-        _current_song/_last_idle/playing 现状——不静默伪装停止成功；轮询按
-        mpv 真实状态自行收敛。可检测失败仅限"调用抛异常"；超时返回 None、
-        mpv error 响应在 Adapter 层静默忽略，本方法无法确认，如实标注。
+        三态处理（与 mpv.stop() 返回值对应）：
+        明确成功（True，协议层 error=="success"）→ 清 _current_song、置
+        _last_idle=True、playing=False；
+        明确失败（False，MPV 错误响应）或调用抛异常 → 记录错误日志，保留
+        停止前的 _current_song/_last_idle/playing，不宣称停止成功；
+        结果未确认（None，IPC 超时 / 管道失效 / 无响应，命令可能已执行）→ 记录
+        错误日志，保留停止前状态；
+        不自动重试——超时后命令可能已经执行，盲目重试只会增加不确定性。
+        成功确认仅为 MPV 协议层确认，不代表扬声器已物理静音。
         """
         with self._lock:
             self._invalidate_highlight()
             try:
-                self.mpv.stop()  # mpv 回 idle，卸载当前文件
+                result = self.mpv.stop()  # True=成功 / False=错误响应 / None=未确认
             except Exception as e:
                 logger.error(
                     f"[Music] stop_current: mpv.stop() 失败，停止状态未确认: {e!r}")
                 return
-            self._current_song = None
-            self._last_idle = True
-            self._update_state(playing=False, current_song=None)
+            if result is True:
+                self._current_song = None
+                self._last_idle = True
+                self._update_state(playing=False, current_song=None)
+            elif result is False:
+                logger.error(
+                    "[Music] stop_current: mpv.stop() 返回错误响应，停止未执行，保留停止前状态")
+                return
+            else:  # None：IPC 超时/管道失效/无响应 → 结果未确认
+                logger.error(
+                    "[Music] stop_current: mpv.stop() 结果未确认（IPC 超时/管道失效/无响应，命令可能已执行），保留停止前状态")
+                return
 
     def set_play_mode(self, mode: str):
         """设置播放模式（顺序/随机/单曲/列表循环）+ 写回 settings.yaml music.play_mode。

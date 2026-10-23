@@ -277,8 +277,23 @@ class MpvController:
     def toggle_pause(self):
         self._send_command("cycle", ["pause"])
 
-    def stop(self):
-        self._send_command("stop")
+    def stop(self) -> bool | None:
+        """停止当前播放（mpv 回 idle）。
+
+        返回值语义（协议层确认，不代表扬声器已物理静音）：
+          True  协议层确认成功（响应 error == "success"）
+          False 协议层明确失败（收到错误响应）
+          None  结果未确认（IPC 超时 / 无响应 / 管道失效；命令可能已执行或未执行）
+        抛异常：IPC 未连接或写入失败（ConnectionError / OSError）。
+        """
+        resp = self._send_command("stop")
+        if resp is None:
+            # 超时 / 管道失效：无法确认命令是否被接受
+            return None
+        if isinstance(resp, dict) and resp.get("error") == "success":
+            return True
+        # 收到响应但 error != "success" → MPV 明确报告失败
+        return False
 
     def seek(self, seconds: float, mode: str = "relative"):
         self._send_command("seek", [seconds, mode])

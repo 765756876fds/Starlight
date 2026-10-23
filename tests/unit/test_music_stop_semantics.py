@@ -30,15 +30,18 @@ from app.voice.intent import RuleBasedIntent
 # ===== Fake MPV（可控 idle 状态与调用记录） =====
 
 class FakeMpv:
-    """不发真声音的 mpv 替身（协议满足 MpvAdapter）。
+    """不发真声音的 mpv 替身（协议满足 MpvController）。
 
     idle_active 可配置：get_property("idle-active") 返回设定值，
     用于构造"轮询观察到 idle"的时序。
+    stop_result 可配置 mpv.stop() 返回值：True=协议成功 / False=错误响应
+    / None=超时未确认（第六阶段三态语义）。
     """
 
-    def __init__(self, idle_active=False):
+    def __init__(self, idle_active=False, stop_result=True):
         self.calls = []
         self._idle_active = idle_active
+        self._stop_result = stop_result
         self._properties = {}
         self.volume = 70
 
@@ -51,6 +54,7 @@ class FakeMpv:
 
     def stop(self):
         self.calls.append(("stop",))
+        return self._stop_result
 
     def stop_process(self):
         self.calls.append(("stop_process",))
