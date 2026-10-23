@@ -1216,6 +1216,7 @@ class MusicController:
         src_name = (getattr(track, "source_name", "") or "").lower()
         need_kw_header = ("kw" in src_name or "酷我" in src_name
                           or "kuwo" in (url or "").lower())
+        req_epoch = self._play_request_id  # 锁内快照：调用方已在锁内校验代次
         try:
             # mpv 的 http-header-fields 是持久属性：每次播放前无条件重设，
             # 避免某源 Referer 跨源残留（覆盖式 set_property）。
@@ -1239,7 +1240,38 @@ class MusicController:
         # 影子模式：记录在线 loadfile 发起时刻与文件类型（classify 的 elapsed/kind 依据）
         self._shadow_loadfile_ts = time.perf_counter()
         self._shadow_file_kind = "online"
-        self.mpv.loadfile(url)
+        try:
+            resp = self.mpv.loadfile(url)
+        except Exception as e:
+            # loadfile 抛异常（IPC 未连接/写入失败/MPV 拒绝）：不得让切换态
+            # 永久卡 True（UI 进度冻结），也不得伪造播放成功。
+            logger.error(f"[Music] 在线 loadfile 失败: {url[:80]!r}: {e!r}")
+            # 复位守卫：仅当本请求仍是最新播放意图才结束切换态——过期请求
+            # （异常窗口内代次已被更新请求递增）不得覆盖新请求的状态。
+            if self._play_request_id == req_epoch:
+                self._is_switching_track = False
+                self._last_idle = False
+            # 复用调用方既有异常处理（play_online/在线 fallback/队列 worker
+            # 均有 except 兜底），不在本层伪造成功或改动队列/历史/当前曲目。
+            raise
+        if resp is None:
+            # 结果未确认（IPC 超时/无响应）：不得写入成功播放状态，按既有
+            # 失败语义收口切换态（同样带代次守卫），并 raise 交由调用方既有
+            # except 走失败/跳过路径——绝不把未确认当作成功。
+            logger.error(f"[Music] 在线 loadfile 结果未确认: {url[:80]!r}")
+            if self._play_request_id == req_epoch:
+                self._is_switching_track = False
+                self._last_idle = False
+            raise RuntimeError("在线 loadfile 结果未确认（IPC 超时/无响应）")
+        if not isinstance(resp, dict) or resp.get("error") != "success":
+            # 协议层明确失败响应：命令未被接受，同样按失败收口并交由调用方
+            # 既有 except 处理（不伪造播放成功）。
+            err = resp.get("error") if isinstance(resp, dict) else resp
+            logger.error(f"[Music] 在线 loadfile 失败: error={err}: {url[:80]!r}")
+            if self._play_request_id == req_epoch:
+                self._is_switching_track = False
+                self._last_idle = False
+            raise RuntimeError(f"在线 loadfile 失败: error={err}")
         # 在线歌已真正 loadfile：代次生效（_poll_idle 恢复写缓存）+ 结束切换态。
         # 调用方（_resolve_online_worker/play_online）已在锁内/入口校验过 req_id
         # 等于当前代次，此处 loadfile 的一定是最新播放意图。
@@ -1275,6 +1307,8 @@ class MusicController:
         # 模块已停止 → 自动跳过不得再操作 mpv（与 _auto_next 的 _running 守卫同源）。
         if not self._running:
             return
+        # 跳曲前代次（本失败请求）；必须在 try 外捕获：守卫 return 也走 finally。
+        req_before = self._play_request_id
         # origin 上下文：自动跳过标记为 auto（_play_song 内部据此区分意图）
         with self._origin_ctx("auto"):
             try:
@@ -1288,6 +1322,16 @@ class MusicController:
                 self.next(_timeout=0.5)
             except Exception as e:
                 logger.info(f"[Music] 跳过队列在线歌 next() 异常: {e!r}")
+            finally:
+                # 空队列收口：跳曲未启动新播放请求（next 队列尾返回 None / 锁忙
+                # 放弃 / next 早期异常）且代次仍属于本失败请求（无新意图接管）→
+                # 收口遗留切换态（_next_locked 空队列分支不递增代次、不复位）。
+                # 若 next 已推进并触发 _play_song（代次递增）或期间已有新请求
+                # （用户切歌必递增代次），由对应请求生命周期收口，此处不得复位
+                # ——防止旧跳曲覆盖新请求的切换态。
+                with self._lock:
+                    if self._play_request_id == req_before:
+                        self._is_switching_track = False
 
     def _play_song(self, song: dict[str, Any]):
         """实际播放歌曲（唯一咽喉：play_song/next/prev/_auto_next/在线队列全部汇入）"""
@@ -1360,7 +1404,36 @@ class MusicController:
         self._shadow_loadfile_ts = time.perf_counter()
         self._shadow_file_kind = "online" if str(filepath).startswith("http") else "local"
 
-        self.mpv.loadfile(filepath)
+        try:
+            resp = self.mpv.loadfile(filepath)
+        except Exception as e:
+            # loadfile 抛异常（IPC 未连接/写入失败/MPV 拒绝）：不得让切换态
+            # 永久卡 True（UI 进度冻结），也不得伪造播放成功。
+            logger.error(f"[Music] 本地 loadfile 失败: {filepath!r}: {e!r}")
+            # 复位守卫：仅当本请求仍是最新播放意图才结束切换态——过期请求
+            # （异常窗口内代次已被更新请求递增）不得覆盖新请求的状态。
+            if self._play_request_id == current_epoch:
+                self._is_switching_track = False
+                self._last_idle = False
+            # 不更新 _current_song/队列/播放历史；由轮询上升沿或用户操作推进
+            # （与缺失文件分支同契约：坏文件交给 auto_next/用户处理）。
+            return
+        if resp is None:
+            # 结果未确认（IPC 超时/无响应）：不得写入成功播放状态。与异常同款
+            # 复位守卫收口切换态，交由轮询上升沿/用户操作推进（绝不伪造成功）。
+            logger.error(f"[Music] 本地 loadfile 结果未确认: {filepath!r}")
+            if self._play_request_id == current_epoch:
+                self._is_switching_track = False
+                self._last_idle = False
+            return
+        if not isinstance(resp, dict) or resp.get("error") != "success":
+            # 协议层明确失败响应（命令未被接受）：同样按失败收口，不伪造成功。
+            err = resp.get("error") if isinstance(resp, dict) else resp
+            logger.error(f"[Music] 本地 loadfile 失败: error={err}: {filepath!r}")
+            if self._play_request_id == current_epoch:
+                self._is_switching_track = False
+                self._last_idle = False
+            return
         # 本地歌已真正 loadfile 起播：代次生效（_poll_idle 恢复写缓存）+ 结束切换态
         self._last_loadfile_epoch = self._play_request_id
         self._is_switching_track = False
@@ -1762,6 +1835,18 @@ class MusicController:
                 self.queue.add_all(rest)
         return self.play_online(tracks[index])
 
+    def _end_switch_state_if_current(self, req_id: int) -> None:
+        """请求失败收口：仅当本请求仍是最新播放意图时结束切换态。
+
+        play_online 置 _is_switching_track=True 后、正式 loadfile 前的失败
+        return 路径（mpv 不可用 / online_manager 缺失 / 无 URL）统一调用。
+        锁内代次校验：失败窗口内若已有新播放意图（代次递增）接管，旧请求
+        不得清除新请求的切换态；代次未变则结束本请求遗留的切换态。
+        """
+        with self._lock:
+            if self._play_request_id == req_id:
+                self._is_switching_track = False
+
     def play_online(self, track, _before_load=None) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
@@ -1776,12 +1861,15 @@ class MusicController:
             self._is_switching_track = True
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
+            self._end_switch_state_if_current(req_id)
             return False
         if self.online_manager is None:
+            self._end_switch_state_if_current(req_id)
             return False
         result = self.online_manager.get_play_url(track)
         if not result:
             logger.info(f"[Music] online 无 URL: {track.title}")
+            self._end_switch_state_if_current(req_id)
             return False
         url = result.get("url")
         logger.info(f"[Music] play online: {track.title} -> {url[:80]}")

@@ -14,8 +14,9 @@
 - 降级：无歌词 → "暂无歌词"占位；同步/加载异常不影响播放；配置读取失败 → 默认值
 """
 import bisect
+import threading
 
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -39,6 +40,14 @@ _PLACEHOLDER = "♪ 暂无歌词"
 class LyricsWindow(QWidget):
     """桌面歌词浮窗：持 controller 引用（播放时间/换歌事件/在线歌词）。"""
 
+    # ---- 线程安全歌词加载信号（事件可能来自轮询/Timer 线程） ----
+    # 槽必须是本 QWidget 的方法（QObject receiver）：从其他线程 emit → 自动
+    # QueuedConnection（投递到窗口线程事件循环，Qt 控件操作绝不跨线程直执行）；
+    # 从窗口线程 emit → DirectConnection（同步执行）。禁止把槽换成纯函数/闭包
+    # ——PySide6 对非 QObject receiver 退化为 Direct，跨线程会直执行 Qt 操作。
+    _track_requested = Signal(object)               # (snapshot) → 主线程登记请求+加载
+    _lyric_fetched = Signal(object, object, object)  # (seq, snapshot, lines) → 主线程应用
+
     def __init__(self, controller, parent=None):
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self._controller = controller
@@ -52,6 +61,11 @@ class LyricsWindow(QWidget):
         self._started = False
         # 当前歌标识（轮询比对用：play_online 不发换歌事件，靠 200ms tick 检测）
         self._last_song_key = ""
+        # 歌词请求代次（在线取词过期校验：旧请求迟到结果不得覆盖新歌）与关闭守卫
+        self._lyric_seq = 0
+        self._closed = False
+        self._track_requested.connect(self._on_lyric_requested)
+        self._lyric_fetched.connect(self._on_lyric_fetched)
 
         # 批 3b 自定义配置（settings.yaml music.lyrics；损坏 → 默认值兜底）
         self._prefs = dict(load_lyrics_prefs())
@@ -162,9 +176,15 @@ class LyricsWindow(QWidget):
 
     # ---- 生命周期 ----
     def start(self) -> None:
-        """订阅换歌 + 加载当前歌 + 启动同步（幂等）。"""
+        """订阅换歌 + 加载当前歌 + 启动同步（幂等）。
+
+        关闭（closeEvent 置 _closed=True）后同一实例重开也走本入口：
+        复位关闭守卫，恢复本地/在线歌词加载；关闭期间（重开前）迟到
+        结果仍被 _closed 丢弃，保护不被破坏。
+        """
         if self._started:
             return
+        self._closed = False
         self._started = True
         try:
             self._controller.event_bus.subscribe(
@@ -186,6 +206,9 @@ class LyricsWindow(QWidget):
             pass
 
     def closeEvent(self, event) -> None:
+        # 关闭守卫：后台取词线程完成时据此丢弃迟到结果（不 emit 到已销毁的 QObject）。
+        # 置位在 stop() 之外——stop 可单独调用（窗口仍存活），仅关闭才禁后续加载。
+        self._closed = True
         self.stop()
         super().closeEvent(event)
 
@@ -198,7 +221,7 @@ class LyricsWindow(QWidget):
         if song is None:
             self.set_lyrics([], "")
             return
-        self._load_lyric(song)
+        self._request_lyric(song)
 
     @staticmethod
     def _song_key(song) -> str:
@@ -209,48 +232,143 @@ class LyricsWindow(QWidget):
             return "|".join(str(song.get(k) or "") for k in ("path", "source_name", "track_id"))
         return "|".join(str(getattr(song, k, "") or "") for k in ("path", "source_name", "track_id"))
 
-    def _load_lyric(self, song) -> None:
-        """本地歌（本地文件路径）：同名 .lrc；在线歌（dict source=online / http path）：manager.get_lyric。失败 → 占位。"""
-        # 更新歌标识（事件/轮询两条路都同步，防轮询对同一首歌重复触发）
-        self._last_song_key = self._song_key(song)
-        # 入口先清空旧歌词——防串词（切歌时旧 lines 残留，加载失败/未完成会继续显示上一首）
+    @staticmethod
+    def _song_snapshot(song) -> dict | None:
+        """稳定快照：只取加载所需字段，不持有 event/controller 原对象。
+        后台取词期间原对象可能被后续请求复用，快照保证迟到结果仍反映本请求。"""
+        if song is None:
+            return None
+        key = LyricsWindow._song_key(song)
+        if not key:
+            return None
+        if isinstance(song, dict):
+            extra = song.get("extra") or {}
+            snapshot = {
+                "key": key,
+                "title": str(song.get("title") or ""),
+                "artist": str(song.get("artist") or ""),
+                "path": str(song.get("path") or ""),
+                "source_name": str(song.get("source_name") or ""),
+                "track_id": str(song.get("track_id") or ""),
+            }
+        else:
+            extra = getattr(song, "extra", None) or {}
+            snapshot = {
+                "key": key,
+                "title": str(getattr(song, "title", "") or ""),
+                "artist": str(getattr(song, "artist", "") or ""),
+                "path": str(getattr(song, "path", "") or ""),
+                "source_name": str(getattr(song, "source_name", "") or ""),
+                "track_id": str(getattr(song, "track_id", "") or ""),
+            }
+        # extra 浅拷贝（dict 层级；取词服务可能依赖其中的源私有字段）
+        snapshot["extra"] = dict(extra)
+        return snapshot
+
+    def _request_lyric(self, song) -> None:
+        """任意线程入口：生成稳定快照并投递到窗口线程。
+
+        事件路径（轮询/Timer 线程，可能在音乐业务锁内）只做 O(1) 的
+        snapshot + emit——网络/文件读取绝不在本调用内执行，不阻塞发布方；
+        Qt 控件操作经信号在窗口线程执行。窗口线程自身调用（_load_current /
+        _sync 轮询）→ Direct 同步，与旧行为一致。
+        """
+        snapshot = self._song_snapshot(song)
+        if snapshot is None:
+            return
+        self._track_requested.emit(snapshot)
+
+    @Slot(object)
+    def _on_lyric_requested(self, snapshot: dict) -> None:
+        """窗口线程：登记最新请求代次 + 清空旧歌词（防串词）。
+        本地歌：主线程直接读 .lrc（文件读 ms 级）；在线歌：后台线程取词。"""
+        if self._closed:
+            return
+        self._lyric_seq += 1
+        seq = self._lyric_seq
+        self._last_song_key = snapshot["key"]
+        # 入口先清空旧歌词——切歌时旧 lines 残留会继续显示上一首（保留原语义）
         self.set_lyrics([], "")
-        title = getattr(song, "title", None) or (song.get("title") if isinstance(song, dict) else None)
-        path = song.get("path") if isinstance(song, dict) else None
+        title = snapshot["title"]
+        path = snapshot["path"]
         # 本地分支：path 必须是本地文件路径（在线歌 dict 也带 path=http URL，误判会丢歌词）
-        if path and not str(path).startswith(("http://", "https://")):
+        if path and not path.startswith(("http://", "https://")):
+            self._apply_lyric(snapshot, self._load_local_lyric(path))
+            return
+        # 在线歌：网络获取放后台线程（绝不阻塞窗口线程/音乐发布方），
+        # 结果带请求代次回窗口线程，由 _on_lyric_fetched 做过期校验。
+        threading.Thread(
+            target=self._fetch_lyric_worker,
+            args=(snapshot, seq),
+            daemon=True,
+            name="lyrics-fetch",
+        ).start()
+
+    def _load_local_lyric(self, path: str) -> list[tuple[float, str]]:
+        """本地同名 .lrc 读取（仅窗口线程调用；失败 → 空列表 → 占位）。"""
+        try:
             lrc_path = find_local_lrc(path)
             if lrc_path:
                 lines = load_lyrics_from_file(lrc_path)
                 if lines:
-                    self.set_lyrics(lines, title or "")
-                    return
-            self.set_lyrics([], title or "")
+                    return lines
+        except Exception:
+            pass
+        return []
+
+    def _fetch_lyric_worker(self, snapshot: dict, seq: int) -> None:
+        """后台线程：在线歌词获取（网络）+ 解析。不触碰任何 Qt 对象。
+        网络异常 → 空歌词（占位），本请求线程结束，不影响后续请求。"""
+        try:
+            raw = self._fetch_online_lyric(snapshot)
+            lines = parse_lrc(raw) if raw else []
+        except Exception:
+            lines = []
+        # 窗口已关闭 → 丢弃迟到结果，绝不 emit 到已销毁的 QObject
+        if self._closed:
             return
-        # 在线歌：OnlineTrack 对象直传；controller 发布的 dict 转 OnlineTrack（补 extra._raw）
+        self._lyric_fetched.emit(seq, snapshot, lines)
+
+    def _fetch_online_lyric(self, snapshot: dict):
+        """在线歌词获取（后台线程调用；全异常兜底返回 None）。"""
         try:
             mgr = getattr(self._controller, "online_manager", None)
             if mgr is None:
-                self.set_lyrics([], title or "")
-                return
-            track = song
-            if isinstance(song, dict):
-                from ...music.online.models import OnlineTrack
-                track = OnlineTrack(
-                    source_name=song.get("source_name") or "",
-                    track_id=song.get("track_id") or "",
-                    title=song.get("title") or "",
-                    artist=song.get("artist") or "",
-                    album=song.get("album") or "",
-                    duration_seconds=song.get("duration") or 0,
-                    cover_url=song.get("cover_url"),
-                    extra=song.get("extra") or {},
-                )
-            raw = mgr.get_lyric(track)
-            lines = parse_lrc(raw) if raw else []
-            self.set_lyrics(lines, title or "")
+                return None
+            from ...music.online.models import OnlineTrack
+            track = OnlineTrack(
+                source_name=snapshot["source_name"],
+                track_id=snapshot["track_id"],
+                title=snapshot["title"],
+                artist=snapshot["artist"],
+                album="",
+                duration_seconds=0,
+                cover_url=None,
+                extra=snapshot["extra"],
+            )
+            return mgr.get_lyric(track)
         except Exception:
-            self.set_lyrics([], title or "")
+            return None
+
+    @Slot(object, object, object)
+    def _on_lyric_fetched(self, seq: int, snapshot: dict, lines: list) -> None:
+        """窗口线程：应用在线取词结果。过期校验——期间已有新请求（代次递增）
+        → 丢弃旧结果，绝不覆盖新歌歌词。"""
+        if self._closed:
+            return
+        if seq != self._lyric_seq:
+            return  # 旧请求迟到结果：不覆盖新歌歌词
+        self._apply_lyric(snapshot, lines)
+
+    def _apply_lyric(self, snapshot: dict, lines: list) -> None:
+        """窗口线程：写入歌词并重绘（无歌词 → 占位标题，保留原语义）。"""
+        if self._closed:
+            return
+        title = snapshot["title"]
+        if lines:
+            self.set_lyrics(lines, title)
+        else:
+            self.set_lyrics([], title)
 
     def set_lyrics(self, lines: list[tuple[float, str]], title: str = "") -> None:
         self._lines = list(lines)
@@ -261,10 +379,12 @@ class LyricsWindow(QWidget):
 
     def _on_track_changed(self, event) -> None:
         try:
+            if self._closed:
+                return
             song = (event.data or {}).get("song")
             if song is None:
                 return
-            self._load_lyric(song)
+            self._request_lyric(song)
         except Exception:
             pass  # 换歌加载失败不崩
 
@@ -293,7 +413,7 @@ class LyricsWindow(QWidget):
             # 无歌且 key 本就为空 → 走时间同步（_lines 可能已有内容）
         key = self._song_key(song)
         if key != self._last_song_key:
-            self._load_lyric(song)
+            self._request_lyric(song)
             return
         if not self._lines:
             return

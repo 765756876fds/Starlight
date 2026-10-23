@@ -61,6 +61,7 @@ class GatedFakeMpv:
         if self.loadfile_gate is not None:
             self.loadfile_gate.wait(5.0)
         self.calls.append(("loadfile", filepath))
+        return {"error": "success"}
 
     def play(self):
         if self.play_entered is not None:

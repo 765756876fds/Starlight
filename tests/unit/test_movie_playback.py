@@ -19,6 +19,9 @@ from app.core.command_bus import CommandBus
 from app.core.event_bus import Event, EventBus, EventType
 from app.core.state_store import StateNamespace
 
+# FakeMpv.loadfile 默认成功响应的哨兵（与"显式传 None=未确认"区分）
+_DEFAULT_OK = {"error": "success"}
+
 
 class FakeMpv:
     """不发真声音的电影 mpv 替身（协议满足 MpvController 的受测子集）。
@@ -26,14 +29,20 @@ class FakeMpv:
     idle_active 可配：get_idle_active() 返回设定值，用于构造"播完 idle 上升沿"时序。
     stop_result 可配 mpv.stop() 返回值：True=协议成功 / False=错误响应 / None=超时未确认。
     running 可配 is_running()：False 表示进程未运行（stop 的未运行分支）。
+    loadfile_result 可配 mpv.loadfile() 返回值（默认 success 响应，与真实接口"返回
+    _send_command 结果"的契约一致）：{"error": "success"}=被接受 / None=未确认 /
+    {"error": "..."}=协议层失败。loadfile_exc 非 None 时 loadfile 直接抛该异常。
     """
 
-    def __init__(self, idle_active=False, stop_result=True, running=True):
+    def __init__(self, idle_active=False, stop_result=True, running=True,
+                 loadfile_result=_DEFAULT_OK, loadfile_exc=None):
         self.calls = []
         self._idle_active = idle_active
         self._stop_result = stop_result
         self._running = running
         self._properties = {}
+        self._loadfile_result = loadfile_result
+        self._loadfile_exc = loadfile_exc
 
     def is_running(self):
         return self._running
@@ -49,8 +58,15 @@ class FakeMpv:
     def stop_process(self):
         self.calls.append(("stop_process",))
 
+    def start(self, taskkill=False, wid=None, pipe_timeout=None, prop_timeout=None):
+        self.calls.append(("start", taskkill, wid))
+        return True
+
     def loadfile(self, url, mode="replace"):
         self.calls.append(("loadfile", url, mode))
+        if self._loadfile_exc is not None:
+            raise self._loadfile_exc
+        return self._loadfile_result
 
     def set_property(self, name, value):
         self.calls.append(("set_property", name, value))
@@ -61,6 +77,9 @@ class FakeMpv:
 
     def play(self):
         self.calls.append(("play",))
+
+    def seek(self, seconds, mode="relative"):
+        self.calls.append(("seek", seconds, mode))
 
 
 class FakeMusic:
@@ -348,3 +367,195 @@ def test_constructor_subscribes_only_isolated_bus(tmp_path, env):
     after = list(real_bus._subscribers.get(EventType.MUSIC_TRACK_CHANGED, []))
     assert after == before
     assert mc._subscribed is True
+
+
+# ===== D. play() loadfile 失败不伪造播放成功 =====
+
+def test_play_loadfile_error_response_does_not_pretend_success(tmp_path, env):
+    """协议层明确失败响应（error != success）→ 不写入失败影片、不写 playing=True。"""
+    fake = FakeMpv(running=True, loadfile_result={"error": "file not found"})
+    music = FakeMusic()
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path), music=music)
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        ok = mc.play(ITEM_MULTI)
+
+    assert ok is False
+    assert mc._current is None
+    assert mc._current_index is None
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    assert ("loadfile", "http://example.com/1", "replace") in fake.calls
+    assert ("pause",) in music.calls      # 互斥先行行为保留：音乐已暂停（既有语义）
+    mock_logger.error.assert_called_once()
+    assert "失败" in mock_logger.error.call_args[0][0]
+
+
+def test_play_loadfile_unconfirmed_does_not_pretend_success(tmp_path, env):
+    """命令超时/无响应（resp=None，结果未确认）→ 不伪造播放成功。"""
+    fake = FakeMpv(running=True, loadfile_result=None)
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        ok = mc.play(ITEM_MULTI)
+
+    assert ok is False
+    assert mc._current is None
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    mock_logger.error.assert_called_once()
+    assert "未确认" in mock_logger.error.call_args[0][0]
+
+
+def test_play_loadfile_exception_does_not_pretend_success(tmp_path, env):
+    """连接/命令调用抛异常 → 电影状态不被伪造为成功。"""
+    fake = FakeMpv(running=True,
+                   loadfile_exc=ConnectionError("mpv IPC 未连接"))
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        ok = mc.play(ITEM_MULTI)
+
+    assert ok is False
+    assert mc._current is None
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    mock_logger.error.assert_called_once()
+    assert "异常" in mock_logger.error.call_args[0][0]
+
+
+def test_play_loadfile_success_writes_playing_state(tmp_path, env):
+    """成功响应（命令被接受）→ 按原有语义更新 _current 与 playing=True。"""
+    fake = FakeMpv(running=True, loadfile_result={"error": "success"})
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+
+    ok = mc.play(ITEM_SINGLE)
+
+    assert ok is True
+    assert mc._current is ITEM_SINGLE
+    assert mc._current_index == 0
+    assert mc._last_idle is False
+    assert store.data[(StateNamespace.MOVIE, "playing")] is True
+    assert store.data[(StateNamespace.MOVIE, "paused")] is False
+    assert ("set_property", "pause", False) in fake.calls
+
+
+# ===== E. 自动连播 _advance_episode 的 loadfile 失败不推进索引 =====
+
+def _prime_idle_rising(mc, item, index=0):
+    """播完上升沿基线：_current 已设、_last_idle=False、mpv idle=True。"""
+    _prime_playing(mc, item, index=index, last_idle=False)
+
+
+def test_advance_loadfile_error_keeps_current_index(tmp_path, env):
+    """连播 loadfile 协议层失败 → 不把失败集推进为当前集、不写播放状态。"""
+    fake = FakeMpv(running=True, idle_active=True,
+                   loadfile_result={"error": "no such file"})
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+    _prime_idle_rising(mc, ITEM_MULTI, index=0)
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        mc.tick()
+
+    assert mc._current is ITEM_MULTI
+    assert mc._current_index == 0                 # 未推进到失败集
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    assert len([c for c in fake.calls if c[0] == "loadfile"]) == 1
+    mock_logger.error.assert_called_once()
+    assert "失败" in mock_logger.error.call_args[0][0]
+
+
+def test_advance_loadfile_unconfirmed_keeps_current_index(tmp_path, env):
+    """连播 loadfile 结果未确认（None）→ 不推进索引、不伪造成功。"""
+    fake = FakeMpv(running=True, idle_active=True, loadfile_result=None)
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+    _prime_idle_rising(mc, ITEM_MULTI, index=0)
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        mc.tick()
+
+    assert mc._current_index == 0
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    mock_logger.error.assert_called_once()
+    assert "未确认" in mock_logger.error.call_args[0][0]
+
+
+def test_advance_loadfile_exception_keeps_current_index(tmp_path, env):
+    """连播 loadfile 抛异常 → 不冒泡、不推进索引、不伪造成功。"""
+    fake = FakeMpv(running=True, idle_active=True,
+                   loadfile_exc=ConnectionError("mpv IPC 未连接"))
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+    _prime_idle_rising(mc, ITEM_MULTI, index=0)
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        mc.tick()   # 不得向 UI 轮询冒泡
+
+    assert mc._current_index == 0
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    mock_logger.error.assert_called_once()
+    assert "异常" in mock_logger.error.call_args[0][0]
+
+
+# ===== F. 崩溃恢复 _restart_worker 的 loadfile 失败不伪造恢复成功 =====
+
+def _run_restart_worker(mc, item, idx, url, pos=None):
+    """同步直调 _restart_worker（确定性；daemon 线程路径由 restart_current 兜底覆盖）。"""
+    mc._restart_worker(item, idx, url, pos, wid=None)
+
+
+def test_restart_worker_loadfile_error_does_not_pretend_restored(tmp_path, env):
+    """恢复 loadfile 协议层失败 → 不写 playing=True、不重置连播基线。"""
+    fake = FakeMpv(loadfile_result={"error": "no such file"})
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+    _prime_idle_rising(mc, ITEM_MULTI, index=0)
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        _run_restart_worker(mc, ITEM_MULTI, 0, "http://example.com/1")
+
+    assert mc._last_idle is False                 # 未重置为"已恢复播放"基线
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    assert mc._recover_pending is False           # 不遗留恢复中状态
+    mock_logger.error.assert_called_once()
+    assert "失败" in mock_logger.error.call_args[0][0]
+
+
+def test_restart_worker_loadfile_unconfirmed_does_not_pretend_restored(tmp_path, env):
+    """恢复 loadfile 结果未确认（None）→ 不伪造恢复成功。"""
+    fake = FakeMpv(loadfile_result=None)
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+    _prime_idle_rising(mc, ITEM_MULTI, index=0)
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        _run_restart_worker(mc, ITEM_MULTI, 0, "http://example.com/1")
+
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    assert mc._recover_pending is False
+    mock_logger.error.assert_called_once()
+    assert "未确认" in mock_logger.error.call_args[0][0]
+
+
+def test_restart_worker_loadfile_exception_does_not_leave_pending(tmp_path, env):
+    """恢复 loadfile 抛异常 → 不写成功状态，且不遗留恢复中状态。"""
+    fake = FakeMpv(loadfile_exc=ConnectionError("mpv IPC 未连接"))
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+    _prime_idle_rising(mc, ITEM_MULTI, index=0)
+
+    with patch("app.movie.movie_controller.logger") as mock_logger:
+        _run_restart_worker(mc, ITEM_MULTI, 0, "http://example.com/1")
+
+    assert (StateNamespace.MOVIE, "playing") not in store.data
+    assert mc._recover_pending is False
+    mock_logger.error.assert_called_once()
+    assert "异常" in mock_logger.error.call_args[0][0]
+
+
+def test_restart_worker_loadfile_success_restores(tmp_path, env):
+    """恢复 loadfile 成功（命令被接受）→ 恢复播放状态与连播基线。"""
+    fake = FakeMpv(loadfile_result={"error": "success"})
+    mc, store, _ = make_controller(env, fake, _make_config(tmp_path))
+    _prime_idle_rising(mc, ITEM_MULTI, index=0)
+
+    _run_restart_worker(mc, ITEM_MULTI, 0, "http://example.com/1", pos=12.5)
+
+    assert mc._last_idle is False
+    assert store.data[(StateNamespace.MOVIE, "playing")] is True
+    assert store.data[(StateNamespace.MOVIE, "paused")] is False
+    assert ("seek", 12.5, "absolute") in fake.calls
+    assert mc._recover_pending is False

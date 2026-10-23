@@ -267,6 +267,10 @@ class MpvController:
         resp = self._send_command("loadfile", [filepath, mode], timeout=5.0)
         err = (resp or {}).get("error")
         print(f"[mpv] resp: error={err}")
+        # 返回原始响应（与 stop() 三态判定同契约）：调用方需区分
+        #   resp.error == "success"（命令被接受）/ resp is None（超时未确认）/
+        #   协议层 error 响应（明确失败）。既有调用方忽略返回值，行为不变。
+        return resp
 
     def play(self):
         self.set_property("pause", False)

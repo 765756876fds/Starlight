@@ -64,6 +64,7 @@ class FakeMpv:
 
     def loadfile(self, filepath, mode="replace"):
         self.calls.append(("loadfile", filepath))
+        return {"error": "success"}
 
     def play(self):
         self.calls.append(("play",))

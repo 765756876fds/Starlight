@@ -384,7 +384,24 @@ class MovieController:
             if not self.mpv.start(taskkill=False, wid=wid):
                 print("[Movie] mpv 启动失败")
                 return False
-        self.mpv.loadfile(url)
+        # loadfile 三态确认（与 mpv.stop() 同契约；命令被接受≠媒体已解码/出声）：
+        #   resp.error == "success" → 命令被接受，按原逻辑更新播放上下文
+        #   resp is None（超时/无响应）→ 结果未确认 → 不伪造播放成功
+        #   resp.error != "success" → 协议层明确失败 → 不伪造播放成功
+        #   抛异常（IPC 未连接/写入失败）→ 不伪造播放成功。
+        # 失败时音乐已按互斥先行暂停（既有行为，如实保留，不加回滚）。
+        try:
+            resp = self.mpv.loadfile(url)
+        except Exception as e:
+            logger.error(f"[Movie] loadfile 异常: {e!r}")
+            return False
+        if resp is None:
+            logger.error("[Movie] loadfile 结果未确认（IPC 超时/无响应）")
+            return False
+        if not isinstance(resp, dict) or resp.get("error") != "success":
+            err = resp.get("error") if isinstance(resp, dict) else resp
+            logger.error(f"[Movie] loadfile 失败: error={err}")
+            return False
         # 确保新视频开始播放（不继承之前的暂停状态）
         self.mpv.set_property("pause", False)
         try:
@@ -421,7 +438,7 @@ class MovieController:
         self._last_idle = now_idle
 
     def _advance_episode(self):
-        """切到下一集；无下一集 → 末集停（不循环）。返回 True=已切，False=已停。"""
+        """切到下一集；无下一集 → 末集停（不循环）。返回 True=已切，False=已停/加载失败（不推进索引）。"""
         item = self._current
         if item is None:
             return False
@@ -436,7 +453,21 @@ class MovieController:
             return False
         name, url = eps[nxt]
         print(f"[Movie] 自动连播下一集: {name}")
-        self.mpv.loadfile(url)
+        # loadfile 三态确认（与 play()/mpv.stop() 同契约）：命令被接受才推进
+        # _current_index；error / None（未确认）/ 异常 → 不把失败集标记为当前集，
+        # 不写任何播放状态（tick 随后钉住 _last_idle，失败集不会被无限重试）。
+        try:
+            resp = self.mpv.loadfile(url)
+        except Exception as e:
+            logger.error(f"[Movie] 自动连播 loadfile 异常: {e!r}")
+            return False
+        if resp is None:
+            logger.error("[Movie] 自动连播 loadfile 结果未确认（IPC 超时/无响应）")
+            return False
+        if not isinstance(resp, dict) or resp.get("error") != "success":
+            err = resp.get("error") if isinstance(resp, dict) else resp
+            logger.error(f"[Movie] 自动连播 loadfile 失败: error={err}")
+            return False
         self._current_index = nxt
         return True
 
@@ -571,11 +602,22 @@ class MovieController:
                     pass
             return
         try:
-            self.mpv.loadfile(url)
+            resp = self.mpv.loadfile(url)
+        except Exception as e:
+            logger.error(f"[Movie] 崩溃恢复 loadfile 异常: {e!r}")
+            return
+        if resp is None:
+            logger.error("[Movie] 崩溃恢复 loadfile 结果未确认（IPC 超时/无响应）")
+            return
+        if not isinstance(resp, dict) or resp.get("error") != "success":
+            err = resp.get("error") if isinstance(resp, dict) else resp
+            logger.error(f"[Movie] 崩溃恢复 loadfile 失败: error={err}")
+            return
+        try:
             if pos and pos > 0:
                 self.mpv.seek(pos, "absolute")
         except Exception as e:
-            logger.error(f"[Movie] 崩溃恢复 loadfile 异常: {e!r}")
+            logger.error(f"[Movie] 崩溃恢复 seek 异常: {e!r}")
             return
         self._last_idle = False      # 恢复播放：重置连播基线（防误判 idle 上升沿）
         self._write_state(playing=True, paused=False)
