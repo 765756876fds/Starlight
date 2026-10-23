@@ -4,7 +4,7 @@
 - "清空队列/清空播放列表/清除队列/清空列表/清空歌单" → MUSIC_CLEAR_QUEUE
 - "取消所有计时" → cooldown.cancel_all（现有 COOLDOWN，不被新规则吞）
 - "清空计时" → system.unknown（COOLDOWN 只认"取消"前缀；新词表不含"计时"）
-- "停止播放" → system.unknown（否定词短路不受影响）
+- "停止播放" → system.stop_tts（独立打断路由最高优先级最先匹配；"播放停止"仍走否定词短路 → unknown）
 """
 import pytest
 
@@ -46,5 +46,6 @@ def test_clear_timer_not_swallowed():
     assert _parse("清空计时").intent_type == "system.unknown"
 
 
-def test_stop_play_still_unknown():
-    assert _parse("停止播放").intent_type == "system.unknown"
+def test_stop_play_routes_to_stop_tts():
+    # "停止播放"由最高优先级独立打断路由处理（TTS 打断词表），不再落到搜索否定词短路
+    assert _parse("停止播放").intent_type == "system.stop_tts"
