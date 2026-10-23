@@ -479,6 +479,7 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_RESCAN, lambda c: self.rescan())
         self.command_bus.register(CommandType.MUSIC_CLEANUP, lambda c: self.cleanup_missing())
         self.command_bus.register(CommandType.MUSIC_CLEAR_QUEUE, lambda c: self.clear_queue())
+        self.command_bus.register(CommandType.MUSIC_STOP, lambda c: self.stop_current())
 
     # ===== 播放控制 =====
 
@@ -679,6 +680,13 @@ class MusicController:
 
     def _next_locked(self):
         """next() 的锁内逻辑（持锁调用）。"""
+        # 自动切歌守卫：origin=auto 且 _last_idle=True → 停止操作（stop_current/模块 stop）
+        # 已先置位完成，先前捕获的 idle 上升沿作废，不得启动下一首。
+        # 判定位于 next() 的业务锁内，与 stop_current 的持锁置位互斥，
+        # 形成可靠同步边界（threading.Lock 不可重入，守卫放锁内而非再取锁）。
+        if self._current_origin() == "auto" and getattr(self, "_last_idle", True):
+            logger.info("[Music] auto_next 拦截：停止已生效，不作废旧上升沿")
+            return
         self._invalidate_highlight()
         song = self.queue.next()
         if song:
@@ -2125,6 +2133,34 @@ class MusicController:
                 pass
             # 关键：与 mpv 实际状态（idle）对齐，防止下一轮轮询把"停止后 idle"
             # 误判为"播完上升沿"→ 自动切歌 → 队列空 → 全库重载续播
+            self._last_idle = True
+            self._update_state(playing=False, current_song=None)
+
+    def stop_current(self):
+        """停止当前歌曲播放（保留队列，不推进队列指针）。
+
+        与 clear_queue() 的差别：不清空队列、不改动 queue.current_index——
+        用户主动"播放/继续"时 play() 的 idle 重载路径重播当前曲目，
+        用户主动"下一首"时才推进。
+        防自动续播：与 clear_queue 同款 _last_idle=True 防护，但必须先置位
+        再 mpv.stop()——mpv 进入 idle 的时刻必然晚于基线置位，轮询读到的
+        now_idle 与 _last_idle 同为 True，不构成上升沿，不会误触发 _auto_next；
+        _next_locked 锁内另有 origin=auto + _last_idle 双重守卫兜底竞争窗口。
+
+        失败语义：mpv.stop() 抛异常（如 IPC 未连接）时记录错误日志并保留
+        _current_song/_last_idle/playing 现状——不静默伪装停止成功；轮询按
+        mpv 真实状态自行收敛。可检测失败仅限"调用抛异常"；超时返回 None、
+        mpv error 响应在 Adapter 层静默忽略，本方法无法确认，如实标注。
+        """
+        with self._lock:
+            self._invalidate_highlight()
+            try:
+                self.mpv.stop()  # mpv 回 idle，卸载当前文件
+            except Exception as e:
+                logger.error(
+                    f"[Music] stop_current: mpv.stop() 失败，停止状态未确认: {e!r}")
+                return
+            self._current_song = None
             self._last_idle = True
             self._update_state(playing=False, current_song=None)
 

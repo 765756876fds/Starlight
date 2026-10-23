@@ -240,6 +240,10 @@ class TestIdlePollAutoNext:
         ctrl.queue.add({"id": 2, "title": "Y", "path": s2, "duration": 10.0})
         ctrl.queue.play_at(0)
         ctrl._running = True
+        # 播放中基线：_auto_next 新增守卫依赖 _last_idle，自然播完场景必须为
+        # False（与 start() 轮询初始化语义一致），否则会误判为"停止已生效"
+        # 而拦截自动切歌。
+        ctrl._last_idle = False
 
         ctrl._auto_next()
         # 陈旧缓存 is_idle()=False 不应阻止切歌（守卫已改为实时 get_property）
