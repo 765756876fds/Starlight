@@ -153,6 +153,7 @@ class TestMovieControllerVoice(unittest.TestCase):
         fake_mpv = MagicMock()
         fake_mpv.is_running.return_value = False
         fake_mpv.start.return_value = True
+        fake_mpv.stop.return_value = True  # 三态契约：协议成功才清停止状态
         with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
             ctrl = MovieController(config={})
         ctrl._fake_mpv = fake_mpv

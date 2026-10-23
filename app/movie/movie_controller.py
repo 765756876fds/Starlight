@@ -441,19 +441,50 @@ class MovieController:
         return True
 
     def stop(self):
-        """停电影（幂等；_stopping 守卫防互斥循环）。"""
+        """停电影（幂等；_stopping 守卫防互斥循环）。
+
+        三态语义（与 mpv.stop() 返回值对应，参照音乐链 stop_current）：
+        - 明确成功（True）→ 清播放上下文 + 写停止状态；
+        - 明确失败（False）/ 结果未确认（None）/ 抛异常 → 保留播放上下文与
+          原有 StateStore 播放状态，仅钉死 _last_idle=True 防旧 idle 基线引发
+          自动连播，记录错误日志——绝不伪装停止成功；
+        - MPV 本就未运行 → 无进程可停，按既有语义幂等清理播放上下文。
+        """
         if self._stopping:
             return
         self._stopping = True
         try:
             if self.mpv.is_running():
-                self.mpv.stop()
+                try:
+                    result = self.mpv.stop()  # True=成功 / False=错误响应 / None=未确认
+                except Exception as e:
+                    logger.error(f"[Movie] stop: mpv.stop() 失败，停止状态未确认: {e!r}")
+                    self._last_idle = True
+                    return
+                if result is True:
+                    self._current = None
+                    self._current_index = None
+                    self._last_idle = True
+                    self._write_state(playing=False, paused=False)
+                else:
+                    # False：MPV 明确报告失败；None：IPC 超时/管道失效/无响应
+                    # （命令可能已执行或未执行）。不能确认停止成功 → 保留播放
+                    # 上下文与状态，轮询按 mpv 真实状态自行收敛；_last_idle=True
+                    # 防止旧基线把停止误判为自然播完而自动连播。
+                    self._last_idle = True
+                    if result is False:
+                        logger.error("[Movie] stop: mpv.stop() 返回错误响应，停止未执行，保留播放上下文")
+                    else:
+                        logger.error("[Movie] stop: mpv.stop() 结果未确认（IPC 超时/管道失效/无响应），保留播放上下文")
+                    return
+            else:
+                # MPV 本就未运行：无进程可停，幂等清理播放上下文（既有语义，保持不变）
+                self._current = None
+                self._current_index = None
+                self._last_idle = True
+                self._write_state(playing=False, paused=False)
         finally:
             self._stopping = False
-        self._current = None
-        self._current_index = None
-        self._last_idle = True
-        self._write_state(playing=False, paused=False)
 
     # ---- 崩溃自愈（S8：mpv 崩 → 重启 + wid 重传 + loadfile 续播；对齐音乐链 _try_restart_mpv） ----
 
