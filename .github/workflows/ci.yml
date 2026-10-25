@@ -53,6 +53,20 @@ jobs:
           python -c "import tests.unit.test_path_migration_r1; print('test_path_migration_r1 OK')"
 
       - name: Run unit tests
-        run: |
-          python -m unittest tests.unit.test_asr_bootstrap_r2 tests.unit.test_path_migration_r1 -v
+        id: unittest
         shell: pwsh
+        run: |
+          python -m unittest tests.unit.test_asr_bootstrap_r2 tests.unit.test_path_migration_r1 -v 2>&1 | Tee-Object -FilePath unittest-output.txt
+          $testExitCode = $LASTEXITCODE
+          Write-Host "Unittest exit code: $testExitCode"
+          if ($testExitCode -ne 0) {
+            exit $testExitCode
+          }
+
+      - name: Upload unittest failure log
+        if: ${{ failure() && steps.unittest.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unittest-failure-log
+          path: unittest-output.txt
+          if-no-files-found: warn
