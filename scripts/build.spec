@@ -47,6 +47,7 @@ hiddenimports = [
     'websocket',
     'requests',
     'edge_tts',
+    'certifi',      # P0-A: overlay_assets.py 显式用 certifi.where() 做 SSL CA bundle
 ] + pyside_hidden
 
 datas = [
@@ -75,7 +76,14 @@ binaries = [
     # 目录整体收集：mpv/node 下的 .exe 与全部 dll（防新增 dll 遗漏）
     (P('third_party/mpv'), 'third_party/mpv'),
     (P('third_party/node'), 'third_party/node'),
+    # R2: ASR 双后端——vulkan GPU + cpu AVX2，各自的 llama-server.exe + ggml-*.dll 全套
+    (P('third_party/llama/vulkan'), 'third_party/llama/vulkan'),
+    (P('third_party/llama/cpu'), 'third_party/llama/cpu'),
 ] + pyside_binaries
+
+# R3: 模型种子由 setup_full.iss 单独安装到 {app}\models\（不进 PyInstaller datas，
+# 避免 1.2GB 模型被打进 _internal 后又被 setup 重复装一次）。
+# build.ps1 应在 PyInstaller 前检查 models/*.gguf 存在。
 
 a = Analysis(
     [P('main.py')],

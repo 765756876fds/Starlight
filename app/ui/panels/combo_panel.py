@@ -32,9 +32,9 @@ from PySide6.QtWidgets import (
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 from app.ui.widgets.icon_utils import lucide_icon
+from app.core.path_resolve import lol_data_dir
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-CHAMPIONS_JSON = os.path.join(PROJECT_ROOT, "data", "lol_data", "champions.json")
+CHAMPIONS_JSON = str(lol_data_dir() / "champions.json")
 
 # 固定置顶的两个英雄（施工指令：盲僧第 1、锤石第 2）
 PINNED_IDS = [64, 412]

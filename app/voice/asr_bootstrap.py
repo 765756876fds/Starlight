@@ -1,15 +1,11 @@
-"""ASR 资源自举（轻量版安装包：模型缺失自动下载 + llama-server 自动拉起）。
+"""ASR 资源自举（模型就绪 + llama-server 自动拉起 + 双后端回退）。
 
-场景：轻量版安装包不含 1.2G 的 ASR 模型，首次在新电脑运行——
-1. 检查模型：settings 显式路径(isfile) → 打包内置 models/ → 缺失从
-   hf-mirror.com（HuggingFace 国内官方镜像，免代理）自动下载，控制台打印进度。
-2. 检查 llama-server.exe：settings asr.llama_server → PATH → 打包内置
-   third_party/llama/ → LM Studio backends（复用 find_llama_server）。
-3. 8080 端口无服务时自动拉起 llama-server（-m 模型 --mmproj 视觉投影 --port 8080），
-   主程序退出时 atexit 连带终止子进程，不留僵尸。
-
-开关：asr.bootstrap_enabled（config.py 默认 True；测试/用户可关）。
-模型/llama-server 已存在时零开销（只做 isfile/HTTP 探测，不下载不拉起）。
+R2/R3（2026-10-26）：
+- Vulkan 后端优先，CPU 后端回退（find_llama_backend_candidates）。
+- 模型目录 = USER_DATA_DIR/models（frozen 态 = %LOCALAPPDATA%\Starlight\models）。
+- 种子迁移：安装版 Program Files/models → 用户目录（首启拷贝，幂等，不删原种）。
+- 启动参数 -c 8192 --parallel 2 --port 8080。
+- 8080 被外部占用（非本应用 ASR）→ 不拉起、不杀外部进程、降级。
 """
 import atexit
 import os
@@ -21,11 +17,17 @@ from pathlib import Path
 
 import requests
 
-from app.core.path_resolve import PROJECT_ROOT, find_llama_server
+from app.core.path_resolve import (
+    PROJECT_ROOT,
+    USER_DATA_DIR,
+    find_llama_backend_candidates,
+)
 
-MODEL_DIR = PROJECT_ROOT / "models"
-LLAMA_DIR = PROJECT_ROOT / "third_party" / "llama"
-LLAMA_SERVER_EXE = LLAMA_DIR / "llama-server.exe"
+# 用户可写模型目录（frozen 态 = %LOCALAPPDATA%\Starlight\models；源码态 = 项目 models/）
+USER_MODEL_DIR = USER_DATA_DIR / "models"
+# 安装包种子模型目录（frozen 态 = Program Files\星芒\models；源码态 = 项目 models/，与 USER 相同）
+SEED_MODEL_DIR = PROJECT_ROOT / "models"
+
 PORT = 8080
 HEALTH_URL = f"http://127.0.0.1:{PORT}/v1/models"
 
@@ -40,6 +42,7 @@ _MODEL_URLS: dict[str, str] = {
 
 # 模块级：被自举拉起的 llama-server 进程（atexit 清理，防僵尸）
 _server_proc: subprocess.Popen | None = None
+_server_backend: str = ""  # 记录当前拉起的后端类型（vulkan/cpu/...）
 _atexit_registered = False
 _lock = threading.Lock()
 
@@ -47,9 +50,7 @@ _lock = threading.Lock()
 def _is_server_up(timeout: float = 0.8) -> bool:
     """8080 是否已有可用 llama-server（外部常驻服务 → 直接复用不重复拉起）。
     必须 /v1/models 的 data 非空才算就绪——llama-server 在 router 模式（-m ""）
-    下 HTTP 200 但 data 为空，若只看 200 会误判复用坏服务（历史 400 事故根因）。
-    加载窗口期（200 但 data 空）不会导致双开：ensure_and_launch 有 _server_proc
-    防重入守卫，本进程拉起过的服务不会重复 Popen。
+    下 HTTP 200 但 data 为空，若只看 200 会误判复用坏服务。
     """
     try:
         r = requests.get(HEALTH_URL, timeout=timeout)
@@ -61,34 +62,60 @@ def _is_server_up(timeout: float = 0.8) -> bool:
         return False
 
 
-def resolve_model_paths(asr_config: dict) -> tuple[str, str]:
-    """模型路径解析（不下载时直接可用）：配置显式路径(isfile) → 打包内置 models/ → 空。
+def _seed_models_if_needed() -> None:
+    """R3: 种子模型迁移——安装版 Program Files/models → 用户目录。
 
-    返回 (model_path, mmproj_path)；空串表示缺失，交由 ensure_assets 下载。
+    规则：
+    - 用户目录已有完整模型 → 不拷贝（幂等）。
+    - 用户目录缺失但种子目录有 → 拷贝（临时文件 + os.replace 原子切换）。
+    - 拷贝失败不删除种子、不标记成功、不抛异常。
+    - 源码态 USER_MODEL_DIR == SEED_MODEL_DIR，直接跳过。
     """
+    try:
+        if USER_MODEL_DIR.resolve() == SEED_MODEL_DIR.resolve():
+            return  # 开发态同目录，无需迁移
+        for name in ("Qwen3-ASR-0.6B-Q8_0.gguf", "mmproj-Qwen3-ASR-0.6B-bf16.gguf"):
+            src = SEED_MODEL_DIR / name
+            dst = USER_MODEL_DIR / name
+            if dst.is_file() and dst.stat().st_size > 0:
+                continue  # 用户已有，不覆盖
+            if not src.is_file():
+                continue  # 种子也没有（轻量版场景），交给下载
+            USER_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = dst.with_suffix(dst.suffix + ".tmp")
+            shutil.copy2(src, tmp)
+            # 大小校验后才原子替换
+            if tmp.stat().st_size == src.stat().st_size:
+                os.replace(tmp, dst)
+                print(f"[ASR] 种子模型迁移完成: {name} ({dst.stat().st_size // (1 << 20)}MB)")
+            else:
+                try:
+                    tmp.unlink()
+                except Exception:
+                    pass
+                print(f"[ASR] 种子模型迁移大小校验失败: {name}，已回滚临时文件")
+    except Exception as e:
+        print(f"[ASR] 种子迁移异常（不阻塞启动）: {e}")
+
+
+def resolve_model_paths(asr_config: dict) -> tuple[str, str]:
+    """模型路径解析：配置显式路径(isfile) → 用户目录 → 种子目录 → 空。"""
     cfg_model = str((asr_config or {}).get("qwen3_asr_model") or "").strip()
     cfg_mmproj = str((asr_config or {}).get("qwen3_asr_mmproj") or "").strip()
     if cfg_model and os.path.isfile(cfg_model):
         mm = cfg_mmproj if (cfg_mmproj and os.path.isfile(cfg_mmproj)) else ""
         return cfg_model, mm
-    builtin_model = MODEL_DIR / "Qwen3-ASR-0.6B-Q8_0.gguf"
-    builtin_mm = MODEL_DIR / "mmproj-Qwen3-ASR-0.6B-bf16.gguf"
-    if builtin_model.is_file():
-        return str(builtin_model), str(builtin_mm if builtin_mm.is_file() else "")
+    # 用户目录（种子迁移后落这里）
+    user_model = USER_MODEL_DIR / "Qwen3-ASR-0.6B-Q8_0.gguf"
+    user_mm = USER_MODEL_DIR / "mmproj-Qwen3-ASR-0.6B-bf16.gguf"
+    if user_model.is_file():
+        return str(user_model), str(user_mm if user_mm.is_file() else "")
+    # 种子目录（Program Files 下安装包内置，只读可读）
+    seed_model = SEED_MODEL_DIR / "Qwen3-ASR-0.6B-Q8_0.gguf"
+    seed_mm = SEED_MODEL_DIR / "mmproj-Qwen3-ASR-0.6B-bf16.gguf"
+    if seed_model.is_file():
+        return str(seed_model), str(seed_mm if seed_mm.is_file() else "")
     return "", ""
-
-
-def resolve_llama_server(asr_config: dict) -> str:
-    """llama-server.exe 查找链：配置(isfile) → PATH → 打包内置 third_party/llama → LM Studio。"""
-    cfg = str((asr_config or {}).get("llama_server") or "").strip()
-    if cfg and os.path.isfile(cfg):
-        return cfg
-    found = shutil.which("llama-server")
-    if found:
-        return found
-    if LLAMA_SERVER_EXE.is_file():
-        return str(LLAMA_SERVER_EXE)
-    return find_llama_server(asr_config)  # LM Studio backends glob（取最近安装）
 
 
 def download_file(url: str, dest: Path) -> bool:
@@ -123,14 +150,15 @@ def download_file(url: str, dest: Path) -> bool:
 
 
 def ensure_assets(asr_config: dict) -> bool:
-    """确保模型就绪。返回 True = 可直接启动；False = 缺失且下载失败（不崩，静默降级）。"""
+    """确保模型就绪。先触发种子迁移，再查路径；都没有才下载。返回 True = 可直接启动。"""
+    _seed_models_if_needed()
     model, _ = resolve_model_paths(asr_config)
     if model and os.path.isfile(model):
         return True
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    USER_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     ok = True
     for name, url in _MODEL_URLS.items():
-        dest = MODEL_DIR / name
+        dest = USER_MODEL_DIR / name
         if dest.is_file():
             continue
         print(f"[ASR] 未找到 {name}，从国内镜像自动下载（hf-mirror.com，约数百 MB，请耐心等待）…")
@@ -139,65 +167,88 @@ def ensure_assets(asr_config: dict) -> bool:
     return ok
 
 
-def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
-    """自举总入口（ASRManager.initialize 调用）：
-
-    模型缺失→下载；8080 无服务→拉起 llama-server（atexit 清理）；全部就绪→返回进程。
-    """
-    global _server_proc, _atexit_registered
-    if not (asr_config or {}).get("bootstrap_enabled", True):
+def _try_start_backend(candidate: dict, model: str, mmproj: str, ctx: int) -> subprocess.Popen | None:
+    """尝试用指定后端启动 llama-server。失败返回 None（不抛异常）。"""
+    exe = candidate["exe"]
+    backend = candidate["backend"]
+    args = [exe, "-m", model, "--port", str(PORT), "--host", "127.0.0.1",
+            "-c", str(ctx), "--parallel", "2"]
+    if mmproj and os.path.isfile(mmproj):
+        args += ["--mmproj", mmproj]
+    print(f"[ASR] 尝试后端: {backend} ({exe})")
+    try:
+        proc = subprocess.Popen(
+            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+    except Exception as e:
+        print(f"[ASR] 后端 {backend} 启动失败: {e}")
         return None
-    if not ensure_assets(asr_config):
+    # 等 2 秒看是否立即退出（端口占用/参数错误）
+    time.sleep(2)
+    if proc.poll() is not None:
+        print(f"[ASR] 后端 {backend} 启动后立即退出 (code={proc.returncode})")
         return None
-    if _is_server_up():
-        return None  # 外部已有 llama-server，直接复用
-    server_bin = resolve_llama_server(asr_config)
-    if not server_bin:
-        print("[ASR] 未找到 llama-server.exe（请安装 LM Studio，或放置到 third_party/llama/）")
-        return None
-    model, mmproj = resolve_model_paths(asr_config)
-    if not model or not os.path.isfile(model):
-        # 防御（曾出事故）：模型缺失绝不带 -m "" 启动——空模型会进入 llama-server
-        # router 模式（Loaded 0 models），所有转录请求静默 400。打印实际检查目录便于诊断。
-        _probe = MODEL_DIR / "Qwen3-ASR-0.6B-Q8_0.gguf"
-        _cfg = str((asr_config or {}).get("qwen3_asr_model") or "").strip()
-        print(f"[ASR] 模型缺失，跳过启动 llama-server：MODEL_DIR={MODEL_DIR} "
-              f"(Q8_0 存在={_probe.is_file()}) 配置显式路径={_cfg or '无'}")
-        return None
-    with _lock:
-        if _server_proc is not None and _server_proc.poll() is None:
-            return _server_proc  # 防重入：已拉起且存活，直接复用
-        args = [server_bin, "-m", model, "--port", str(PORT), "--host", "127.0.0.1"]
-        if mmproj and os.path.isfile(mmproj):
-            args += ["--mmproj", mmproj]
-        # --parallel 2：允许 2 个并发请求——主 ASR 转写长语音时，
-        # 打断旁路的无锁转写可在服务端并行处理，不再排队等主请求完成。
-        args += ["--parallel", "2"]
-        print(f"[ASR] 拉起 llama-server（模型 {model}，端口 {PORT}）…")
-        try:
-            _server_proc = subprocess.Popen(
-                args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW)  # 关黑窗：llama-server 不弹控制台
-        except Exception as e:
-            print(f"[ASR] llama-server 启动失败: {e}")
-            return None
-        if not _atexit_registered:
-            _atexit_registered = True
-            atexit.register(_kill_server)
-    # 启动后校验：模型必须真的加载（防"进程活着但零模型"的静默 400）。
-    # 短轮询最多 ~6s（大模型加载需数秒）；未加载完只告警不阻塞启动。
+    # 健康检查：data 非空才算就绪
     for _ in range(3):
         time.sleep(2)
         try:
             r = requests.get(HEALTH_URL, timeout=3)
             if r.status_code == 200 and r.json().get("data"):
-                print("[ASR] 模型已加载就绪")
-                return _server_proc
+                print(f"[ASR] 后端 {backend} 模型已加载就绪")
+                return proc
         except Exception:
             continue
-    print("[ASR] 警告: llama-server 已启动但暂未探测到已加载模型"
-          "（若转录报 400，请检查 models/ 模型文件与磁盘空间）")
-    return _server_proc
+    print(f"[ASR] 后端 {backend} 启动但模型未在窗口期内就绪，终止该进程")
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    return None
+
+
+def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
+    """自举总入口：
+
+    1. ensure_assets（种子迁移 + 必要时下载模型）
+    2. 8080 已有可用 ASR 服务 → 直接复用
+    3. 按 vulkan→cpu 顺序尝试启动后端，首个成功即返回
+    4. 全部失败 → 返回 None（语音功能降级，不影响其他）
+    """
+    global _server_proc, _server_backend, _atexit_registered
+    if not (asr_config or {}).get("bootstrap_enabled", True):
+        return None
+    if not ensure_assets(asr_config):
+        return None
+    if _is_server_up():
+        return None  # 外部已有可用 ASR，直接复用
+    with _lock:
+        if _server_proc is not None and _server_proc.poll() is None:
+            return _server_proc  # 防重入
+    model, mmproj = resolve_model_paths(asr_config)
+    if not model or not os.path.isfile(model):
+        print(f"[ASR] 模型缺失，跳过启动 llama-server")
+        return None
+    ctx = int((asr_config or {}).get("llama_ctx") or 8192)
+    candidates = find_llama_backend_candidates(asr_config)
+    if not candidates:
+        print("[ASR] 未找到任何 llama-server 后端（打包内置/PATH/LM Studio 均无）")
+        return None
+    with _lock:
+        for cand in candidates:
+            proc = _try_start_backend(cand, model, mmproj, ctx)
+            if proc is not None:
+                _server_proc = proc
+                _server_backend = cand["backend"]
+                if not _atexit_registered:
+                    _atexit_registered = True
+                    atexit.register(_kill_server)
+                return proc
+        print("[ASR] 所有后端均启动失败，语音功能降级（不影响音乐/电影/LoL）")
+        return None
 
 
 def _kill_server() -> None:

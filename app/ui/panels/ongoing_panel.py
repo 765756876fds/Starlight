@@ -20,12 +20,12 @@ from PySide6.QtWidgets import (
 
 from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
+from app.core.path_resolve import lol_data_dir
 
 
 def _zh_map() -> dict:
     try:
-        p = os.path.join(os.path.dirname(__file__), "..", "..", "..",
-                         "data", "lol_data", "champions.json")
+        p = str(lol_data_dir() / "champions.json")
         d = json.load(open(p, encoding="utf-8"))
         return {c.get("alias"): c.get("name") for c in d}
     except Exception:
@@ -36,8 +36,7 @@ _ZH = _zh_map()
 
 _SPELL_ZH = {}
 try:
-    _sp = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "..",
-                 "data", "lol_data", "summoner_spells.json"), encoding="utf-8"))
+    _sp = json.load(open(str(lol_data_dir() / "summoner_spells.json"), encoding="utf-8"))
     _SPELL_ZH = {s["sid"]: s["name_zh"] for s in _sp.get("spells", [])}
 except Exception:
     pass
@@ -46,8 +45,7 @@ _RUNE_TREE = {8000: "精密", 8100: "主宰", 8200: "巫术", 8300: "坚决", 84
 
 _ITEM_ZH = {}
 try:
-    _it = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "..",
-                  "data", "lol_data", "items.json"), encoding="utf-8"))
+    _it = json.load(open(str(lol_data_dir() / "items.json"), encoding="utf-8"))
     _ITEM_ZH = {int(k): v for k, v in _it.get("items", {}).items()}
 except Exception:
     pass

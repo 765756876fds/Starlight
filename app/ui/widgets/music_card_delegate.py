@@ -132,7 +132,13 @@ class _LocalCoverTask(QRunnable):
                             break
             except Exception:
                 img = QImage()
-        self._bridge.local_done.emit(self._key, img)
+        try:
+            self._bridge.local_done.emit(self._key, img)
+        except RuntimeError:
+            # 应用退出阶段：_CoverLoader/_bridge 已被 GC 销毁，
+            # 但全局线程池里的后台任务还在跑，emit 会抛 RuntimeError。
+            # 静默忽略——此时主线程已在退出，不需要再更新 UI。
+            pass
 
 
 class _CoverLoader(QObject):

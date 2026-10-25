@@ -13,11 +13,13 @@ from .models import ChampionCombos, parse_champion
 
 try:
     from app.core.path_resolve import (
-        PROJECT_ROOT,  # 打包态: exe 目录（combos.yaml 可写）
+        PROJECT_ROOT,  # 兼容保留
+        USER_DATA_DIR,  # R1: combos.yaml 用户可写配置走 LOCALAPPDATA
     )
 except ImportError:
     PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-COMBO_YAML_PATH = os.path.join(str(PROJECT_ROOT), "config", "combos.yaml")
+    USER_DATA_DIR = PROJECT_ROOT
+COMBO_YAML_PATH = os.path.join(str(USER_DATA_DIR), "config", "combos.yaml")
 
 # UI 保存写文件 与 配置读取/重载 的互斥锁（防并发读写）
 _IO_LOCK = threading.Lock()

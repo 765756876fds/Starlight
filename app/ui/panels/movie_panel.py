@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.logger import get_logger
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 from ...movie import douban_rank
 from ...movie.rank_providers import TgmengProvider, default_provider
@@ -54,7 +54,8 @@ from ..widgets.glass_msg import _GlassMsgBox, glass_info
 logger = get_logger()
 
 # ---- 海报缓存（复用 overlay_assets 模式：磁盘缓存 + 模块级内存 dict） ----
-_POSTER_DIR = PROJECT_ROOT / "data" / "movie" / "posters"
+# R1: 海报缓存是用户可写数据，走 USER_DATA_DIR（Program Files 只读）
+_POSTER_DIR = USER_DATA_DIR / "data" / "movie" / "posters"
 _POSTER_DIR.mkdir(parents=True, exist_ok=True)
 _POSTER_SIZE = (140, 210)  # 竖版 2:3（对齐爱奇艺 PC 海报墙）
 _posters_cache: dict = {}

@@ -24,7 +24,7 @@ from enum import Enum
 from typing import Any
 
 from app.core.config import resolve_mpv_path
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 from ..core.event_bus import Event, EventType, get_event_bus
 
@@ -66,7 +66,7 @@ class TTSController:
         self.voice = config.get("edge_voice", "zh-CN-XiaoxiaoNeural")
         self.rate = config.get("rate", "+0%")
         self.volume_pct = config.get("volume", "+0%")
-        self.output_dir = config.get("output_dir", "./data/tts")
+        self.output_dir = config.get("output_dir") or str(USER_DATA_DIR / "data" / "tts")
         self.enabled = config.get("enabled", True)
         # mpv 查找链（打包零配置运行）：settings 显式 → 打包内置 bundled → PATH（下游兜底）
         self.mpv_path = resolve_mpv_path(config.get("mpv_path"))
@@ -313,7 +313,7 @@ class TTSController:
         cfg_key = config.get("qwen_api_key", "")
         if cfg_key:
             return cfg_key
-        key_file = os.path.join(str(PROJECT_ROOT), "tools", ".qwen_key")
+        key_file = os.path.join(str(USER_DATA_DIR), "tools", ".qwen_key")
         if os.path.exists(key_file):
             try:
                 with open(key_file, encoding="utf-8") as f:

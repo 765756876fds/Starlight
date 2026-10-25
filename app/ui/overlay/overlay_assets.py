@@ -15,14 +15,14 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPixmap
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 # Data Dragon 版本
 _DDRAGON_VERSION = "16.18.1"
 _DDRAGON_BASE = f"https://ddragon.leagueoflegends.com/cdn/{_DDRAGON_VERSION}/img"
 
-# 缓存目录
-_CACHE_DIR = PROJECT_ROOT / "data" / "assets"
+# 缓存目录（R1: 用户可写资源缓存走 USER_DATA_DIR，Program Files 只读）
+_CACHE_DIR = USER_DATA_DIR / "data" / "assets"
 _CHAMPIONS_DIR = _CACHE_DIR / "champions" / _DDRAGON_VERSION
 _SUMMONER_SPELLS_DIR = _CACHE_DIR / "summoner_spells" / _DDRAGON_VERSION
 
@@ -32,15 +32,24 @@ _SUMMONER_SPELLS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _download_file(url: str, cache_path: Path) -> bool:
-    """下载文件到缓存路径。"""
+    """下载文件到缓存路径。P0-A: 显式使用 certifi CA bundle，不依赖系统默认路径。"""
     if cache_path.exists():
         return True
-    
+
     try:
+        import ssl
         import urllib.request
+        import certifi
         print(f"[Overlay Asset] 下载: {url}")
-        urllib.request.urlretrieve(url, cache_path)
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        req = urllib.request.Request(url, headers={"User-Agent": "Starlight/2.0"})
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+            with open(cache_path, "wb") as f:
+                f.write(resp.read())
         return cache_path.exists()
+    except ssl.SSLError as e:
+        print(f"[Overlay Asset] SSL 证书链错误（请检查网络/代理是否拦截 HTTPS）: {e}")
+        return False
     except Exception as e:
         print(f"[Overlay Asset] 下载失败: {e}")
         return False

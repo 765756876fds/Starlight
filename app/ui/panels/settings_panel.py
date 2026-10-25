@@ -1321,9 +1321,9 @@ class SettingsPanel(QWidget):
             return
         import os as _os
 
-        from app.core.path_resolve import PROJECT_ROOT
-        # 统一外部读写路径：frozen 下 = exe 同级 tools/.qwen_key（绝不再写 _internal）
-        key_path = _os.path.join(str(PROJECT_ROOT), "tools", ".qwen_key")
+        from app.core.path_resolve import USER_DATA_DIR
+        # R1: 用户 API Key 写在用户目录（Program Files 只读）
+        key_path = _os.path.join(str(USER_DATA_DIR), "tools", ".qwen_key")
         try:
             _os.makedirs(_os.path.dirname(key_path), exist_ok=True)
             with open(key_path, "w", encoding="utf-8") as _f:

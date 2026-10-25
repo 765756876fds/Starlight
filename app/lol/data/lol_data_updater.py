@@ -17,9 +17,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app.core.logger import get_logger
+from app.core.path_resolve import USER_DATA_DIR, PROJECT_ROOT, lol_data_dir
+import sys as _sys
 
-ROOT = Path(__file__).resolve().parent.parent.parent.parent
-OUT = ROOT / "data" / "lol_data"
+# 写入目录：frozen 态总是写到用户目录（用户更新后的数据）
+# 读取方通过 lol_data_dir() 优先读用户目录，不存在回退到程序资源目录
+if getattr(_sys, "frozen", False):
+    OUT = USER_DATA_DIR / "data" / "lol_data"
+else:
+    OUT = PROJECT_ROOT / "data" / "lol_data"
 
 logger = get_logger()
 

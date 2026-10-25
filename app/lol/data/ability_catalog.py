@@ -29,9 +29,9 @@ _BUILTIN: list[Ability] = [
     Ability(99, "R", "Final Spark", 60.0, (60.0, 50.0, 40.0, 40.0, 40.0, 30.0)),
 ]
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import lol_data_dir
 
-DEFAULT_DATA = PROJECT_ROOT / "data" / "lol_data" / "abilities.json"
+DEFAULT_DATA = lol_data_dir() / "abilities.json"
 
 
 class AbilityCatalog:

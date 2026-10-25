@@ -8,8 +8,9 @@ from __future__ import annotations
 import json
 import os
 
-_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..",
-                     "data", "lol_data", "item_haste.json")
+from app.core.path_resolve import lol_data_dir
+
+_PATH = str(lol_data_dir() / "item_haste.json")
 
 _CACHE: dict[int, int] = {}
 _VERSION = ""

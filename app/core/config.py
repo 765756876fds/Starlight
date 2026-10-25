@@ -9,7 +9,13 @@ from typing import Any, Optional
 
 import yaml
 
-from app.core.path_resolve import PROJECT_ROOT, bundled_tool, resolve_under_root
+from app.core.path_resolve import (
+    PROJECT_ROOT,
+    USER_DATA_DIR,
+    bundled_tool,
+    migrate_legacy_user_data,
+    resolve_under_root,
+)
 
 # 相对路径键 → 绝对化（解析后写入 self._data，避免下游各自猜）
 _RELATIVE_KEYS = (
@@ -22,14 +28,16 @@ _RELATIVE_KEYS = (
 
 
 def _default_config() -> dict[str, Any]:
-    """内置默认配置（全新机器无配置文件时的兜底，路径全部基于 PROJECT_ROOT 绝对化）。"""
-    data_dir = str(PROJECT_ROOT / "data")
-    logs_dir = str(PROJECT_ROOT / "logs")
+    """内置默认配置（全新机器无配置文件时的兜底，路径全部基于 USER_DATA_DIR 绝对化）。
+    R1: frozen 态用户数据走 %LOCALAPPDATA%\Starlight；源码态 USER_DATA_DIR == PROJECT_ROOT。
+    """
+    data_dir = str(USER_DATA_DIR / "data")
+    logs_dir = str(USER_DATA_DIR / "logs")
     # 打包内 mpv 优先（dist/third_party/mpv/mpv.exe）；源码态回退 "mpv"（PATH 查找）
     default_mpv = bundled_tool("mpv") or "mpv"
     return {
         "app": {
-            "name": "LoL Music Agent",
+            "name": "Starlight",
             "version": "0.1.0",
             "log_level": "INFO",
             "data_dir": data_dir,
@@ -38,7 +46,7 @@ def _default_config() -> dict[str, Any]:
         "music": {
             "scan_dirs": [],
             "extensions": [".mp3", ".flac", ".wav", ".m4a", ".ogg", ".ape"],
-            "database": str(PROJECT_ROOT / "data" / "music.db"),
+            "database": str(USER_DATA_DIR / "data" / "music.db"),
             "download_dir": "",
             "mpv_path": default_mpv,
             "mpv_ipc_pipe": r"\\.\pipe\lol_music_mpv",
@@ -50,7 +58,7 @@ def _default_config() -> dict[str, Any]:
         "mpv_path": default_mpv,
         "player": {
             "enabled": True,
-            "database": str(PROJECT_ROOT / "data" / "player.db"),
+            "database": str(USER_DATA_DIR / "data" / "player.db"),
             "cache_hours": 24,
             "lobby_preload": True,
         },
@@ -60,7 +68,7 @@ def _default_config() -> dict[str, Any]:
             "edge_voice": "zh-CN-XiaoxiaoNeural",
             "rate": "+0%",
             "volume": "+0%",
-            "output_dir": str(PROJECT_ROOT / "data" / "tts"),
+            "output_dir": str(USER_DATA_DIR / "data" / "tts"),
             "qwen_api_key": "",
             "qwen_base_url": "https://dashscope.aliyuncs.com/api/v1",
             "qwen_model": "qwen-audio-3.1-tts-flash",
@@ -70,6 +78,8 @@ def _default_config() -> dict[str, Any]:
         "asr": {
             "engine": "qwen3_server",
             "bootstrap_enabled": True,  # 轻量版：模型缺失时自动下载（hf-mirror）+ 拉起 llama-server
+            "llama_backend": "auto",  # R2: auto/vulkan/cpu
+            "llama_ctx": 8192,  # R2: 默认上下文窗口
             "qwen3_server": {
                 "base_url": "http://127.0.0.1:8080/v1",
                 "model": "default",
@@ -170,10 +180,13 @@ class Config:
         cls._data = {}
 
     def _load(self, config_path: str | None = None):
-        """加载配置文件；不存在 → 使用内置默认配置并自动写盘（不抛异常）。"""
+        """加载配置文件；不存在 → 使用内置默认配置并自动写盘（不抛异常）。
+        R1: 默认 settings.yaml 路径 = USER_DATA_DIR/config/settings.yaml（frozen 态在 LOCALAPPDATA）。
+        R1 补充: 加载前先尝试迁移旧 Program Files 下的用户数据。
+        """
+        migrate_legacy_user_data()  # 迁移旧配置/数据库到用户目录（幂等，不覆盖）
         if config_path is None:
-            # 默认路径: 项目根目录/config/settings.yaml
-            config_path = str(PROJECT_ROOT / "config" / "settings.yaml")
+            config_path = str(USER_DATA_DIR / "config" / "settings.yaml")
 
         config_path = Path(config_path)
         if not config_path.exists():
@@ -209,9 +222,23 @@ class Config:
         # 相对路径键 → 基于 PROJECT_ROOT 绝对化（不依赖 CWD）
         self._data = _absolutize(dict(self._data))
 
+        # P0-B: mpv_path 失效自动回退——用户配置指向不存在的旧路径时，回退到打包内置 mpv
+        bundled_mpv = bundled_tool("mpv")
+        for mpv_key in ("music.mpv_path", "mpv_path"):
+            cur = self.get(mpv_key, "")
+            if cur and not os.path.isfile(str(cur)):
+                if bundled_mpv:
+                    print(f"[Config] mpv_path 失效（{cur} 不存在），回退到内置 {bundled_mpv}")
+                    # 写回 _data
+                    parts = mpv_key.split(".")
+                    node = self._data
+                    for p in parts[:-1]:
+                        node = node[p]
+                    node[parts[-1]] = bundled_mpv
+
         # 确保数据/日志目录存在
-        data_dir = self.get("app.data_dir", str(PROJECT_ROOT / "data"))
-        log_dir = self.get("app.log_dir", str(PROJECT_ROOT / "logs"))
+        data_dir = self.get("app.data_dir", str(USER_DATA_DIR / "data"))
+        log_dir = self.get("app.log_dir", str(USER_DATA_DIR / "logs"))
         for d in (data_dir, log_dir):
             try:
                 os.makedirs(d, exist_ok=True)

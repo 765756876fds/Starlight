@@ -20,9 +20,9 @@ _BUILTIN: list[Champion] = [
     Champion(99, "Lux", "拉克丝", ("光辉", "光女")),
 ]
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import lol_data_dir
 
-DEFAULT_DATA = PROJECT_ROOT / "data" / "lol_data" / "champions.json"
+DEFAULT_DATA = lol_data_dir() / "champions.json"
 
 # 俗称 / 常见 ASR 误听 → 官方中文名（key 必须是 champions.json 里的 name）
 _NAME_ALIASES: dict[str, tuple] = {

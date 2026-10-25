@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import lol_data_dir
 
-_SPELLS_PATH = PROJECT_ROOT / "data" / "lol_data" / "summoner_spells.json"
+_SPELLS_PATH = lol_data_dir() / "summoner_spells.json"
 
 
 @dataclass(frozen=True)

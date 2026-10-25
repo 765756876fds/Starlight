@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_DATA_PATH = Path(__file__).parent.parent.parent.parent / "data" / "lol_data" / "item_stats.json"
+from app.core.path_resolve import lol_data_dir
+
+_DATA_PATH = lol_data_dir() / "item_stats.json"
 
 _cache: dict | None = None
 _version: str = "unknown"

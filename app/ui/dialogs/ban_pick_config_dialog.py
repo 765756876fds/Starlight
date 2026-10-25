@@ -92,15 +92,11 @@ class BanPickConfigDialog(GlassDialog):
     def _load_champions(self):
         """加载英雄数据，过滤掉皮肤变体"""
         try:
-            # 尝试多个可能的路径
-            paths = [
-                "data/lol_data/champions.json",
-                os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "lol_data", "champions.json"),
-            ]
-            for p in paths:
-                if os.path.exists(p):
-                    with open(p, "r", encoding="utf-8") as f:
-                        all_champs = json.load(f)
+            from app.core.path_resolve import lol_data_dir
+            p = str(lol_data_dir() / "champions.json")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    all_champs = json.load(f)
                     # 过滤：只保留正式英雄（ID < 1000，60xxx都是皮肤变体）
                     return [c for c in all_champs if c['id'] < 1000]
         except Exception as e:

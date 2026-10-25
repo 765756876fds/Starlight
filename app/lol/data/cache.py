@@ -6,9 +6,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import USER_DATA_DIR
 
-DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "lol_data"
+DEFAULT_CACHE_DIR = USER_DATA_DIR / "data" / "lol_data"
 
 
 def load_json(cache_dir: Path, name: str) -> dict[str, Any] | None:

@@ -412,6 +412,7 @@ class CurrentGamePanel(QWidget):
         # 选人阶段未锁定（champion_id==0）时回退 champion_pick_intent 预选英雄，标记"(预选)"；
         # 进游戏初期 2999 真空期无任何 ID 时显示"加载中"，不干巴巴显示 ?
         champ = "?"
+        c = None  # P0-C: 防止 display_cid==0 且非 early_loading 时 L444 引用未定义变量
         display_cid = getattr(player, "champion_id", 0)
         is_intent = False
         if display_cid == 0 and getattr(player, "champion_pick_intent", 0):

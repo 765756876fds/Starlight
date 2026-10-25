@@ -10,9 +10,9 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import lol_data_dir
 
-DEFAULT_PATH = PROJECT_ROOT / "data" / "lol_data" / "objectives.json"
+DEFAULT_PATH = lol_data_dir() / "objectives.json"
 
 
 @dataclass(frozen=True)
