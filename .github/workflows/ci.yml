@@ -23,6 +23,35 @@ jobs:
           pip install requests PyYAML
         shell: pwsh
 
+      - name: Diagnose imports
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Write-Host "=== Python version ==="
+          python --version
+          python -c "import sys; print('sys.path:'); [print(' ', p) for p in sys.path]"
+
+          Write-Host "`n=== Check yaml ==="
+          python -c "import yaml; print('yaml OK:', yaml.__file__, getattr(yaml,'__version__','?'))"
+
+          Write-Host "`n=== Check requests ==="
+          python -c "import requests; print('requests OK:', requests.__file__, requests.__version__)"
+
+          Write-Host "`n=== Check tests ==="
+          python -c "import tests; print('tests OK:', tests.__file__); print('tests path:', list(tests.__path__))"
+
+          Write-Host "`n=== Check app.core.config ==="
+          python -c "from app.core import config; print('app.core.config OK:', config.__file__)"
+
+          Write-Host "`n=== Check app.voice.asr_bootstrap ==="
+          python -c "from app.voice import asr_bootstrap; print('app.voice.asr_bootstrap OK:', asr_bootstrap.__file__)"
+
+          Write-Host "`n=== Check test_asr_bootstrap_r2 ==="
+          python -c "import tests.unit.test_asr_bootstrap_r2; print('test_asr_bootstrap_r2 OK')"
+
+          Write-Host "`n=== Check test_path_migration_r1 ==="
+          python -c "import tests.unit.test_path_migration_r1; print('test_path_migration_r1 OK')"
+
       - name: Run unit tests
         run: |
           python -m unittest tests.unit.test_asr_bootstrap_r2 tests.unit.test_path_migration_r1 -v
