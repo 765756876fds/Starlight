@@ -1,13 +1,15 @@
 ; 星芒（Starlight）离线全量版安装包（Inno Setup 6）
-; 源 = build.ps1 产物 dist\Starlight + 本地 ASR 模型（打包进 {app}\models，断网可用）
+; 源 = build.ps1 产物（项目根 dist\Starlight）+ 本地 ASR 模型（打包进 {app}\models，断网可用）
 ; 模型目录可在命令行覆盖：ISCC.exe /DModelsDir="D:\path\to\model" setup_full.iss
+; 注意：Inno Setup 把脚本内相对路径（SourceDir/Source/SetupIconFile）解释为
+; 相对脚本所在目录（scripts/），故统一用 "..\" 回退到项目根。
 #define MyAppName "星芒"
 #define MyAppVersion "0.1.0"
 #define MyAppExeName "Starlight.exe"
-#define SourceDir "dist\Starlight"
+#define SourceDir "..\dist\Starlight"
 #ifndef ModelsDir
-; 模型目录：项目根 models/（相对 iss 文件所在目录），换机可打包
-#define ModelsDir "models"
+; 模型目录：项目根 models/（相对 iss 所在目录 scripts/，用 ..\ 回退），换机可打包
+#define ModelsDir "..\models"
 #endif
 
 [Setup]
@@ -23,7 +25,7 @@ PrivilegesRequired=admin
 ; 全量版：含 ASR 模型（Q8_0 ~767MB + mmproj-bf16 ~361MB），断网可用，无需下载
 OutputDir=.
 OutputBaseFilename=Starlight_Setup_Full
-SetupIconFile=assets\icon\app.ico
+SetupIconFile=..\assets\icon\app.ico
 Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern

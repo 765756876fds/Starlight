@@ -7,7 +7,7 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 
 @dataclass
@@ -41,8 +41,13 @@ class MusicSource:
 class MusicSourceManager:
     """音乐源管理器"""
 
-    def __init__(self, config_dir: str = "config"):
-        if not os.path.isabs(config_dir):
+    def __init__(self, config_dir: str = ""):
+        # R4（2026-10-27）：默认落到 USER_DATA_DIR/config —— 源码态 == PROJECT_ROOT/config
+        # （行为不变）；打包态（frozen）写到 %LOCALAPPDATA%\Starlight\config（Program Files
+        # 只读，自定义音源启用/导入写不进 exe 目录），与 settings.yaml 读取路径一致。
+        if not config_dir:
+            config_dir = str(USER_DATA_DIR / "config")
+        elif not os.path.isabs(config_dir):
             config_dir = str(PROJECT_ROOT / config_dir)
         self.config_dir = config_dir
         self.sources_file = os.path.join(config_dir, "music_sources.json")

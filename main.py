@@ -15,16 +15,19 @@ import threading
 import time
 from typing import Any, Dict
 
-# 纭繚椤圭洰鏍圭洰褰曞湪璺緞涓?
-# frozen build: PROJECT_ROOT = exe dir (all external read/write lands beside exe,
-# never _internal - settings.yaml / tools/.qwen_key / data/music_sources etc.)
+# 确保项目根目录在路径中
+# frozen build: PROJECT_ROOT = exe dir（只读程序资源）；用户可写数据全部走
+# USER_DATA_DIR（= %LOCALAPPDATA%\Starlight，见 app/core/path_resolve.py R1），
+# 日志/事件/插件导入绝不写 Program Files。
 if getattr(sys, "frozen", False):
     try:
-        from app.core.path_resolve import PROJECT_ROOT
+        from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
     except Exception:
         PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+        USER_DATA_DIR = PROJECT_ROOT
 else:
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+    USER_DATA_DIR = PROJECT_ROOT
 sys.path.insert(0, PROJECT_ROOT)
 
 # 无黑窗兜底（PyInstaller console=False / pythonw 下 sys.stdout/stderr 可能为 None，
@@ -38,7 +41,7 @@ if sys.stderr is None:
 origin_stderr = sys.__stderr__
 try:
     from app.core.log_redirect import install_log_redirect
-    install_log_redirect(log_dir=os.path.join(PROJECT_ROOT, "logs"))
+    install_log_redirect(log_dir=os.path.join(USER_DATA_DIR, "logs"))
 except Exception as e:
     # pythonw.exe（无控制台）下 sys.__stderr__ 可能为 None，需判空
     try:
@@ -51,15 +54,17 @@ except Exception as e:
 import logging
 import logging.handlers
 
-# 标准库 logging root 配置：scanner 等 getLogger(__name__) 继承，落盘 logs/app.log
+# 标准库 logging root 配置：scanner 等 getLogger(__name__) 继承，落盘 logs/app.log。
+# R4: 日志写 USER_DATA_DIR/logs（frozen 态 = %LOCALAPPDATA%\Starlight\logs，可写；
+# 旧实现写 PROJECT_ROOT/logs = Program Files 只读目录，安装版启动即写失败）
 try:
-    os.makedirs(os.path.join(PROJECT_ROOT, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(USER_DATA_DIR, "logs"), exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         handlers=[
             logging.handlers.TimedRotatingFileHandler(
-                os.path.join(PROJECT_ROOT, "logs", "app.log"),
+                os.path.join(USER_DATA_DIR, "logs", "app.log"),
                 when="midnight",
                 encoding="utf-8",
                 backupCount=30,        # 只保留最近 30 天的 app.log 滚动备份
@@ -83,7 +88,7 @@ logger = get_logger()
 from app.music.controller import MusicController
 from app.lol.runtime import LoLRuntime
 from app.voice.runtime import VoiceRuntime
-from app.core.path_resolve import find_llama_server
+from app.core.path_resolve import find_llama_server, music_sources_dir, seed_bundled_music_sources
 from app.speech.tts import TTSController
 from app.speech.speech_judge import SpeechJudge
 from app.speech.speech_queue import SpeechQueue
@@ -100,11 +105,11 @@ class Application:
     """doc"""
 
     def __init__(self, config_path: str = None):
-        # 鍔犺浇閰嶇疆
+        # 加载配置
         self.config = get_config(config_path)
         self.config_data = self.config.data
 
-        # 鍒濆鍖栨牳蹇冩湇鍔?
+        # 初始化核心服务
         self.event_bus = get_event_bus()
         self.command_bus = get_command_bus()
         self.state_store = get_state_store()
@@ -114,7 +119,7 @@ class Application:
             level=self.config.get("app.log_level", "INFO"),
         )
 
-        # 瀛愮郴缁?
+        # 子系统
         self.music: MusicController = None
         self.lol: LoLRuntime = None
         self.voice: VoiceRuntime = None
@@ -125,7 +130,7 @@ class Application:
         self.automation = None
         self._main_window = None  # LoadingPanel 状态灯接线（_set_module_status 用）
 
-        # 鐘舵€?
+        # 状态
         self._running = False
         self._shutdown_event = threading.Event()
 
@@ -236,21 +241,21 @@ class Application:
             logger.info("[Startup] already initialized, skip")
             return
         Application._initialized = True
-        """鍒濆鍖栨墍鏈夊瓙绯荤粺"""
+        """初始化所有子系统"""
         logger.info("=" * 60)
-        logger.info("  LoL 脳 鏈湴闊充箰 脳 璇煶 Agent")
+        logger.info("  LoL × 本地音乐 × 语音 Agent")
         logger.info("=" * 60)
 
-        # 0. Event Log锛堟渶鍏堝惎鍔紝璁板綍鎵€鏈変簨浠讹級
-        logger.info("\n[0/5] 鍒濆鍖?Event Log...")
+        # 0. Event Log（最先启动，记录所有事件）
+        logger.info("\n[0/5] 初始化 Event Log...")
         self.event_log = EventLog(
-            log_dir=self.config.get("events.log_dir", os.path.join(PROJECT_ROOT, "data", "events"))
+            log_dir=self.config.get("events.log_dir", os.path.join(USER_DATA_DIR, "data", "events"))
         )
 
-        # 1. 闊充箰妯″潡
-        logger.info("\n[1/5] 鍒濆鍖栭煶涔愭ā鍧?..")
+        # 1. 音乐模块
+        logger.info("\n[1/5] 初始化音乐模块...")
         self.music = MusicController(self.config.get_section("music"))
-        # 娉ㄥ唽 online music source
+        # 注册 online music source
         try:
             from app.music.online.manager import OnlineSourceManager
             from app.music.online.sources.demo_source import DemoSource
@@ -266,20 +271,28 @@ class Application:
             if _om_cfg.get("archive_source", False):
                 self.online_music_manager.register(ArchiveSource())
                 logger.info("[Music] archive 音源已启用（online_music.archive_source=true）")
-            custom_dir = os.path.join(PROJECT_ROOT, "data", "music_sources")
+            # R4: 插件目录走 music_sources_dir()（frozen 态 = USER_DATA_DIR/data/music_sources，
+            # 可写；安装版 Program Files 只读，导入写不进 exe 目录）。
+            # 首启把随包内置插件种到用户目录（幂等，不覆盖用户导入的插件）。
+            custom_dir = str(music_sources_dir())
+            try:
+                seed_bundled_music_sources()
+            except Exception as _e:
+                logger.info(f"[Music] 内置插件种子失败: {_e}")
             try:
                 self.online_music_manager.load_custom_sources(custom_dir)
             except Exception as e:
-                logger.info(f"[Music] 鑷畾涔夋簮鍔犺浇澶辫触: {e}")
+                logger.info(f"[Music] 自定义源加载失败: {e}")
             try:
                 from app.music.online.sources.js_source import JSMusicSource
-                _mf = os.path.join(PROJECT_ROOT, "data", "music_sources", "musicfree")
-                _lx = os.path.join(PROJECT_ROOT, "data", "music_sources", "lx")
+                _ms_root = music_sources_dir()
+                _mf = str(_ms_root / "musicfree")
+                _lx = str(_ms_root / "lx")
                 self._js_source = JSMusicSource(_mf, _lx, user_variables=(self.config_data.get("online_music", {}).get("js_bridge", {}) or {}).get("user_variables") or {})
                 self.online_music_manager.register(self._js_source)
                 self._set_module_status("js", "ok" if self._js_source.available else "fail")
             except Exception as e:
-                logger.info(f"[Music] JS bridge 鍒濆鍖栧け璐? {e}")
+                logger.info(f"[Music] JS bridge 初始化失败: {e}")
                 self._set_module_status("js", "fail")
             self.music.set_online_manager(self.online_music_manager)
             # 同步「音源管理」UI 导入的自定义音源（config/music_sources.json）
@@ -287,22 +300,22 @@ class Application:
                 self.music.sync_custom_sources()
             except Exception as e:
                 logger.error(f"[Music] 自定义音源同步失败: {e}")
-            logger.info(f"[Music] online source 宸叉敞鍐? {self.online_music_manager.list_sources()}")
+            logger.info(f"[Music] online source 已注册 {self.online_music_manager.list_sources()}")
         except Exception as e:
-            logger.info(f"[Music] online source 鍒濆鍖栧け璐? {e}")
+            logger.info(f"[Music] online source 初始化失败: {e}")
 
-        # 2. LoL 妯″潡
-        logger.info("[2/5] 鍒濆鍖?LoL 妯″潡...")
+        # 2. LoL 模块
+        logger.info("[2/5] 初始化 LoL 模块...")
         self.lol = LoLRuntime(self.config_data)
 
-        # 3. 璇煶杈撳嚭
-        logger.info("[3/5] 鍒濆鍖栬闊宠緭鍑?(TTS)...")
+        # 3. 语音输出
+        logger.info("[3/5] 初始化语音输出(TTS)...")
         tts_config = self.config.get_section("tts")
         tts_config["mpv_path"] = self.config.get("music.mpv_path")
         self.tts = TTSController(tts_config)
 
         # 4. Speech Queue + Judge
-        logger.info("[4/5] 鍒濆鍖栬闊虫挱鎶ラ槦鍒?(SpeechQueue + SpeechJudge)...")
+        logger.info("[4/5] 初始化语音播放队列(SpeechQueue + SpeechJudge)...")
         self.speech_queue = SpeechQueue(self.tts)
         self.speech_judge = SpeechJudge(
             self.config.get_section("speech_judge"),
@@ -321,29 +334,29 @@ class Application:
             logger.error(f"[Equipment] notifier 初始化失败: {_e}")
             self.equip_notifier = None
 
-        # 5. 璇煶杈撳叆
-        logger.info("[5/5] 鍒濆鍖栬闊宠緭鍏?(ASR + Intent)...")
+        # 5. 语音输入
+        logger.info("[5/5] 初始化语音输入(ASR + Intent)...")
         self._set_module_status("asr", "loading")
         self._ensure_asr_running()
         self.voice = VoiceRuntime(self.config_data, tts_provider=lambda: self.tts)
         self._set_module_status("asr", "ok")
         self._set_module_status("intent", "ok")
 
-        # 娉ㄥ唽 GameAlarm 鍛戒护澶勭悊锛堥€氳繃浜嬩欢锛?
+        # 注册 GameAlarm 指令处理（通过事件）
         self._register_alarm_events()
 
-        # 娉ㄥ唽 Player Query 鍛戒护
+        # 注册 Player Query 指令
         self._register_player_query()
 
-        # 娉ㄥ唽 LoL 鑷姩鍖栵紙auto accept / auto banpick锛?
+        # 注册 LoL 自动化（auto accept / auto banpick）
         self._register_automation()
 
-        # 娉ㄥ唽鎵嬪姩鎶€鑳借鏃跺櫒锛坈ooldown锛?
+        # 注册手动技能计时器（cooldown）
         self._register_cooldown()
 
-        # 娉ㄥ唽 OngoingGameService锛圕hampSelect 鍔犺浇 10 鐜╁锛?
+        # 注册 OngoingGameService（ChampSelect 加载 10 玩家）
 
-        logger.info("\n鍒濆鍖栧畬鎴愶紒")
+        logger.info("\n初始化完成！")
 
     def start(self):
         """doc"""
@@ -351,16 +364,16 @@ class Application:
             return
 
         self._running = True
-        logger.info("\n姝ｅ湪鍚姩绯荤粺...")
+        logger.info("\n现在启动系统...")
 
-        # 鍚姩 Event Log锛堟渶鍏堝惎鍔級
+        # 启动 Event Log（最先启动）
         self.event_log.start()
         self._set_module_status("eventlog", "ok")
 
-        # 鍚姩璋冨害鍣?
+        # 启动调度器
         self.scheduler.start()
 
-        # 鍚姩闊充箰妯″潡
+        # 启动音乐模块
         try:
             _music_ok = self.music.start()
         except Exception as e:
@@ -368,10 +381,10 @@ class Application:
             _music_ok = False
         self._set_module_status("music", "ok" if _music_ok else "fail")
 
-        # 鎵弿闊充箰搴擄紙鍚庡彴锛?
+        # 扫描音乐库（后台）
         threading.Thread(target=self._scan_music_library, daemon=True).start()
 
-        # 鍚姩 LoL 妯″潡
+        # 启动 LoL 模块
         self.lol.start()
         self._set_module_status("lol", "ok")
 
@@ -388,21 +401,21 @@ class Application:
 
         # 注册一键连招 ComboManager（依赖 ongoing_service 识别当前英雄）
         self._register_combo()
-        # 鍚姩 TTS
+        # 启动 TTS
         self.tts.start()
         self._set_module_status("tts", "ok")
 
-        # 鍚姩 Speech Queue
+        # 启动 Speech Queue
         self.speech_queue.start()
         self._set_module_status("speech", "ok")
 
-        # 鍚姩 Speech Judge
+        # 启动 Speech Judge
         self.speech_judge.start()
 
-        # 鍚姩璇煶杈撳叆
+        # 启动语音输入
         self.voice.start()
 
-        # 鍙戝竷鍚姩浜嬩欢
+        # 发布启动事件
         self.event_bus.publish(Event(
             event_type=EventType.SYSTEM_STARTUP,
             data={"timestamp": time.time()},
@@ -418,10 +431,10 @@ class Application:
         if not self._running:
             return
 
-        logger.info("\n姝ｅ湪鍋滄绯荤粺...")
+        logger.info("\n现在停止系统...")
         self._running = False
 
-        # 鍙戝竷鍋滄浜嬩欢
+        # 发布停止事件
         self.event_bus.publish(Event(
             event_type=EventType.SYSTEM_SHUTDOWN,
             data={},
@@ -450,7 +463,7 @@ class Application:
         self.scheduler.stop()
         self.state_store.set(StateNamespace.SYSTEM, "running", False)
 
-        # 鏈€鍚庡仠姝?Event Log锛堢‘淇濇墍鏈夊仠姝簨浠堕兘琚褰曪級
+        # 最后停止 Event Log（确保所有停止事件都被记录）
         if self.event_log:
             self.event_log.stop()
 
@@ -468,10 +481,10 @@ class Application:
         try:
             logger.info("...")
             result = self.music.rescan()
-            logger.info(f"[Music] 鎵弿瀹屾垚: 鍏?{result.get('scanned', 0)} 涓枃浠? "
-                  f"鏂板 {result.get('added', 0)}, 鏇存柊 {result.get('updated', 0)}")
+            logger.info(f"[Music] 扫描完成: 共 {result.get('total', 0)} 首, "
+                  f"新增 {result.get('added', 0)}, 更新 {result.get('updated', 0)}")
         except Exception as e:
-            logger.info(f"[Music] 鎵弿澶辫触: {e}")
+            logger.info(f"[Music] 扫描失败: {e}")
 
     def _register_alarm_events(self):
         """注册 GameAlarm 事件处理"""
@@ -616,7 +629,7 @@ class Application:
             self.command_bus.register(CommandType.PLAYER_QUERY, handler)
             logger.info("...")
         except Exception as e:
-            logger.info(f"[PlayerQuery] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[PlayerQuery] 注册失败: {e}")
 
     def _register_automation(self):
         """doc"""
@@ -642,9 +655,9 @@ class Application:
                 self._set_module_status("automation", "ok")
             else:
                 self._set_module_status("automation", "disabled")
-            logger.info(f"[Automation] 宸叉敞鍐?enabled={cfg.enabled}")
+            logger.info(f"[Automation] 已注册 enabled={cfg.enabled}")
         except Exception as e:
-            logger.info(f"[Automation] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[Automation] 注册失败: {e}")
 
     def _register_combo(self):
         """注册一键连招 ComboManager（一期：配置加载+键盘监听+执行引擎+只读UI）。
@@ -819,7 +832,7 @@ class Application:
             except Exception as _e:
                 logger.error(f"[Equipment] notifier 注册失败: {_e}")
         except Exception as e:
-            logger.info(f"[Cooldown] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[Cooldown] 注册失败: {e}")
 
     def _register_ongoing(self):
         try:
@@ -861,7 +874,7 @@ class Application:
                 deobfuscate_enabled=self.config.get("ongoing.deobfuscate_enabled", True),
             )
         except Exception as e:
-            logger.info(f"[Ongoing] 娉ㄥ唽澶辫触: {e}")
+            logger.info(f"[Ongoing] 注册失败: {e}")
             self.logger.error(f"[Ongoing] 注册失败: {e}")
 
     def run(self):
@@ -870,9 +883,9 @@ class Application:
         self.start()
 
         def signal_handler(sig, frame):
-            logger.info("\n鏀跺埌鍋滄淇″彿...")
+            logger.info("\n收到停止信号...")
             self._shutdown_event.set()
-            # UI 妯″紡涓嬶細璁?Qt 浜嬩欢寰幆閫€鍑猴紙headless 妯″紡 QApplication.instance() 涓?None锛?
+            # UI 模式下：让 Qt 事件循环退出（headless 模式 QApplication 没有 exec_）
             try:
                 from PySide6.QtWidgets import QApplication
                 app = QApplication.instance()
@@ -884,7 +897,7 @@ class Application:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        # headless 妯″紡锛氬師闃诲寰幆
+        # headless 模式：原阻塞循环
         if "--headless" in sys.argv:
             try:
                 while not self._shutdown_event.is_set():
@@ -895,13 +908,13 @@ class Application:
                 self.stop()
             return
 
-        # UI 妯″紡锛氫富绾跨▼璺?Qt锛圦Application 蹇呴』鍦ㄤ富绾跨▼鍒涘缓锛?
+        # UI 模式：主线程跑 Qt（QApplication 必须在主线程创建）
         try:
             from PySide6.QtWidgets import QApplication
             from app.ui.main_window import MainWindow
             from app.ui.tray import TrayIcon
         except Exception as e:
-            logger.info(f"[UI] PySide6 鏈畨瑁咃紝浣跨敤 headless: {e}")
+            logger.info(f"[UI] PySide6 未安装，使用 headless: {e}")
             try:
                 while not self._shutdown_event.is_set():
                     time.sleep(0.5)

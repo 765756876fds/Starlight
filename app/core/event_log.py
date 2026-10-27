@@ -63,12 +63,15 @@ class EventLog:
     订阅 EventBus 所有事件，追加写入按日期分的 JSONL 文件。
     """
 
-    def __init__(self, log_dir: str = str(PROJECT_ROOT / "data" / "events")):
+    def __init__(self, log_dir: str = str(PROJECT_ROOT / "data" / "events"),
+                 max_file_size_mb: float = 10.0, max_rotations: int = 5):
         self.log_dir = log_dir
         self._lock = threading.Lock()
         self._current_date: str | None = None
         self._current_file = None
         self._running = False
+        self._max_file_size = int(max_file_size_mb * 1024 * 1024)
+        self._max_rotations = max_rotations
 
         # 确保目录存在
         os.makedirs(self.log_dir, exist_ok=True)
@@ -217,6 +220,48 @@ class EventLog:
             # 写入一行
             self._current_file.write(line + "\n")
             self._current_file.flush()
+
+            # 检查是否需要轮转（单文件大小超限）
+            self._check_rotation_locked()
+
+    def _check_rotation_locked(self):
+        """检查当前文件是否需要轮转（调用者必须持有 _lock）"""
+        if not self._current_file or not self._current_date:
+            return
+        try:
+            size = os.path.getsize(self._current_file.name)
+            if size < self._max_file_size:
+                return
+            # 需要轮转：关闭当前文件，重命名为 .1，旧的 .N → .N+1，删除最旧
+            current_date = self._current_date  # 先保存，_close_file() 会清空
+            self._close_file()
+            base = f"{current_date}.jsonl"
+            # 从最旧开始删，保留 max_rotations 个
+            for i in range(self._max_rotations, 0, -1):
+                old = os.path.join(self.log_dir, f"{base}.{i}")
+                new = os.path.join(self.log_dir, f"{base}.{i+1}")
+                if os.path.exists(old):
+                    try:
+                        if i >= self._max_rotations:
+                            os.remove(old)  # 最旧的直接删
+                        else:
+                            os.rename(old, new)
+                    except OSError:
+                        pass
+            # 当前主文件 → .1
+            current = os.path.join(self.log_dir, base)
+            first_rot = os.path.join(self.log_dir, f"{base}.1")
+            if os.path.exists(current):
+                try:
+                    os.rename(current, first_rot)
+                except OSError:
+                    pass
+            # 重新打开新文件
+            filepath = os.path.join(self.log_dir, base)
+            self._current_file = open(filepath, "a", encoding="utf-8")
+            self._current_date = current_date  # 恢复日期标记
+        except Exception as e:
+            print(f"[EventLog] 轮转检查失败: {e}")
 
     def _close_file(self):
         """关闭当前文件"""

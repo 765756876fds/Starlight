@@ -1,9 +1,13 @@
 """设置页与音乐目录的持久化存储（纯文件读写，无 Qt 依赖，带锁）。
 
-- config/music_dirs.json：音乐扫描目录（路径/启用/格式过滤/排除子目录）
-- config/ui_prefs.json：前台门 / 装备提醒 / 界面刷新间隔
+- <USER_DATA_DIR>/config/music_dirs.json：音乐扫描目录（路径/启用/格式过滤/排除子目录）
+- <USER_DATA_DIR>/config/ui_prefs.json：前台门 / 装备提醒 / 界面刷新间隔
+- <USER_DATA_DIR>/config/settings.yaml：全量设置（TTS 设置页更新 tts 节等）
 
-settings.yaml 只由 TTS 设置页更新 tts 节（音色/语速/音量）。
+R4（2026-10-27）：路径从 PROJECT_ROOT/config 改为 USER_DATA_DIR/config。
+源码态 USER_DATA_DIR == PROJECT_ROOT（行为不变）；打包态（frozen）落到
+%LOCALAPPDATA%\\Starlight\\config（Program Files 只读，UI 保存写不进 exe 目录），
+与 config.py 的读取路径一致——修复"设置保存成功但重启不生效/写失败"。
 """
 import json
 import os
@@ -12,7 +16,7 @@ import threading
 _LOCK = threading.RLock()  # 可重入：save_ui_prefs 内部调 load_ui_prefs（同锁），Lock 会死锁
 try:
     from app.core.path_resolve import (
-        PROJECT_ROOT as _ROOT,  # 打包态: exe 目录（配置可写）
+        USER_DATA_DIR as _ROOT,  # 打包态: %LOCALAPPDATA%\Starlight（用户可写）
     )
 except ImportError:
     _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -116,12 +120,19 @@ def reset_music_dirs() -> bool:
 # ---------- settings.yaml（TTS 节更新，带锁） ----------
 
 def save_settings_yaml(update: dict) -> bool:
-    """更新 settings.yaml 顶层指定节（如 {"tts": {...}}），保留其他内容。"""
+    """更新 settings.yaml 顶层指定节（如 {"tts": {...}}），保留其他内容。
+
+    R4：文件不存在时按空配置处理并创建（首启前 settings.yaml 被删/缺失等
+    场景不静默失败——写回时一并落盘，下次读取即生效）。
+    """
     with _LOCK:
         try:
             import yaml
-            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
+            try:
+                with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+            except FileNotFoundError:
+                data = {}
             for section, values in update.items():
                 if not isinstance(values, dict):
                     continue

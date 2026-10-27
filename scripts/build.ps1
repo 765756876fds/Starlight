@@ -79,8 +79,10 @@ if (-not (Test-Path (Join-Path $dist 'data\lol_data'))) {
 if (-not (Test-Path (Join-Path $dist 'data\music_sources'))) {
     Move-Item (Join-Path $internal 'data\music_sources') (Join-Path $dist 'data\music_sources') -Force
 }
-# 外部可写配置：settings.example.yaml 空白模板 → exe 同级 config/
-# （真实 settings.yaml 含用户 Key，绝不进包；首次启动由 config.py 自动生成默认配置）
+# 外部可写配置：settings.example.yaml 空白模板 → exe 同级 config/（仅供人工参考）
+# （真实 settings.yaml 含用户 Key，绝不进包；打包态首次启动由 config.py 在
+#   USER_DATA_DIR/config（%LOCALAPPDATA%\Starlight\config）自动生成默认配置，
+#   旧版 exe 目录配置/数据库由 migrate_legacy_user_data() 幂等迁移）
 if (-not (Test-Path (Join-Path $dist 'config'))) {
     New-Item -ItemType Directory -Force (Join-Path $dist 'config') | Out-Null
 }

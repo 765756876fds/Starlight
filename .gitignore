@@ -170,6 +170,9 @@ _trash/
 # 运行时界面偏好（每台电脑不同，不跟踪）
 config/ui_prefs.json
 
+# 用户音乐扫描目录（真实路径含个人电脑信息，不跟踪）
+config/music_dirs.json
+
 # 排查产物文档（留档参考，不进版本控制）
 docs/debug/
 

@@ -1,9 +1,9 @@
-# LoL Music Agent 配置模板（安全参考版）
+# Starlight 配置模板（安全参考版）
 # 复制本文件为 config/settings.yaml 后按需填写；真实 settings.yaml 已被 .gitignore 忽略，不会提交。
 # 任何 API Key / Token / Cookie 请勿写入本文件。
 
 app:
-  name: LoL Music Agent
+  name: Starlight
   version: 0.1.0
   log_level: INFO
   data_dir: ./data
@@ -36,6 +36,9 @@ music:
   play_mode: repeat_all
 asr:
   engine: qwen3_server
+  bootstrap_enabled: true  # 模型缺失时自动从 hf-mirror 下载并拉起 llama-server
+  llama_backend: auto      # auto / vulkan / cpu
+  llama_ctx: 8192
   qwen3_server:
     base_url: http://127.0.0.1:8080/v1
     model: default
@@ -97,7 +100,7 @@ resource:
   asr_max_threads: 4
 ui:
   enabled: true
-  title: LoL Music Agent
+  title: Starlight
   width: 1200
   height: 800
   theme: dark

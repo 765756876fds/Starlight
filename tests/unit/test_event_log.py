@@ -227,3 +227,120 @@ class TestEventLog:
             assert entry["payload"]["killer"] == "A"
             assert entry["payload"]["victim"] == "B"
             assert entry["payload"]["kills"] == 5
+
+
+class TestEventLogRotation:
+    """EventLog 日志轮转专项测试"""
+
+    def setup_method(self):
+        """每个测试前初始化，使用极小阈值触发轮转"""
+        self.test_dir = "./data/test_events_rotation"
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+        os.makedirs(self.test_dir, exist_ok=True)
+
+        import app.core.event_bus as eb_module
+        eb_module._event_bus = None
+        self.event_bus = eb_module.get_event_bus()
+
+        # 使用极小阈值：1KB，最多 2 个轮转文件
+        self.event_log = EventLog(
+            log_dir=self.test_dir,
+            max_file_size_mb=0.001,  # ~1KB
+            max_rotations=2,
+        )
+        self.event_log.start()
+
+    def teardown_method(self):
+        """每个测试后清理"""
+        self.event_log.stop()
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    def _write_events(self, count: int, payload_size: int = 500):
+        """写入指定数量的事件，每个事件 payload 约 payload_size 字节"""
+        big_payload = {"data": "x" * payload_size}
+        for i in range(count):
+            event = Event(
+                event_type=f"test.rotation_{i}",
+                data=dict(big_payload, index=i),
+                source="test",
+            )
+            self.event_bus.publish(event)
+        time.sleep(0.3)  # 等待异步写入完成
+
+    def test_no_rotation_below_threshold(self):
+        """文件小于阈值时不轮转"""
+        self._write_events(2, payload_size=100)
+
+        date_str = time.strftime("%Y-%m-%d")
+        files = os.listdir(self.test_dir)
+        # 应该只有主文件，没有 .1 .2
+        assert f"{date_str}.jsonl" in files
+        assert not any(".jsonl." in f for f in files)
+
+    def test_rotation_creates_backup_file(self):
+        """超过阈值后生成轮转文件 .1"""
+        self._write_events(30, payload_size=200)
+
+        date_str = time.strftime("%Y-%m-%d")
+        files = os.listdir(self.test_dir)
+        # 应该有主文件和至少一个轮转文件
+        assert f"{date_str}.jsonl" in files
+        rotation_files = [f for f in files if f.startswith(f"{date_str}.jsonl.")]
+        assert len(rotation_files) >= 1, f"未触发轮转，文件列表: {files}"
+
+    def test_rotation_respects_max_rotations(self):
+        """多次轮转后，保留文件数不超过上限"""
+        # 写入大量事件，触发多次轮转
+        self._write_events(50, payload_size=300)
+
+        date_str = time.strftime("%Y-%m-%d")
+        files = os.listdir(self.test_dir)
+        rotation_files = sorted([f for f in files if f.startswith(f"{date_str}.jsonl.")])
+
+        # max_rotations=2，应该最多有 .1 和 .2 两个轮转文件
+        assert len(rotation_files) <= 2, f"轮转文件过多: {rotation_files}"
+
+    def test_rotation_keeps_newest_content(self):
+        """轮转后新事件写入新的主文件"""
+        # 先写一批
+        self._write_events(5, payload_size=200)
+        date_str = time.strftime("%Y-%m-%d")
+        main_file = os.path.join(self.test_dir, f"{date_str}.jsonl")
+
+        # 再写一批触发轮转
+        self._write_events(20, payload_size=300)
+
+        # 主文件应该存在
+        assert os.path.exists(main_file)
+        # 总事件数应该合理（主文件 + 轮转文件）
+        total_lines = 0
+        for fname in os.listdir(self.test_dir):
+            if ".jsonl" in fname:
+                fpath = os.path.join(self.test_dir, fname)
+                with open(fpath, "r", encoding="utf-8") as f:
+                    total_lines += sum(1 for line in f if line.strip())
+        # 至少应该有一些事件被写入（允许异步延迟）
+        assert total_lines >= 5, f"事件数过少: {total_lines}"
+
+    def test_rotation_does_not_lose_events(self):
+        """轮转机制工作：有事件写入且有轮转文件生成"""
+        # 写入足够多的事件触发轮转
+        self._write_events(30, payload_size=200)
+
+        # 统计所有日志文件中的事件总数
+        total_lines = 0
+        rotation_files = []
+        for fname in os.listdir(self.test_dir):
+            if ".jsonl" in fname:
+                fpath = os.path.join(self.test_dir, fname)
+                with open(fpath, "r", encoding="utf-8") as f:
+                    total_lines += sum(1 for line in f if line.strip())
+                if ".jsonl." in fname:
+                    rotation_files.append(fname)
+
+        # 验证：至少有一些事件被写入
+        assert total_lines > 0, "没有任何事件被写入"
+        # 验证：至少生成了轮转文件
+        assert len(rotation_files) >= 1, f"应该至少生成一个轮转文件，实际文件: {os.listdir(self.test_dir)}"

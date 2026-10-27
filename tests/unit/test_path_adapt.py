@@ -54,15 +54,19 @@ def test_find_llama_glob_latest(tmp_path):
     import time
     t = time.time()
     os.utime(str(e2), (t + 10, t + 10))        # e2 更新 → 应选中
-    with mock.patch("app.core.path_resolve.shutil.which", return_value=None), \
+    # R2: 打包内置 third_party/llama/{vulkan,cpu} 先于 LM Studio glob ——
+    # 把 PROJECT_ROOT 隔离到空目录，让测试只走 glob 分支（否则命中本机 third_party/llama/cpu）
+    with mock.patch("app.core.path_resolve.PROJECT_ROOT", tmp_path), \
+         mock.patch("app.core.path_resolve.shutil.which", return_value=None), \
          mock.patch("app.core.path_resolve.glob.glob",
                     return_value=[str(e1), str(e2)]):
         got = find_llama_server({})
     assert got == str(e2)
 
 
-def test_find_llama_none_stays_degraded():
-    with mock.patch("app.core.path_resolve.shutil.which", return_value=None), \
+def test_find_llama_none_stays_degraded(tmp_path):
+    with mock.patch("app.core.path_resolve.PROJECT_ROOT", tmp_path), \
+         mock.patch("app.core.path_resolve.shutil.which", return_value=None), \
          mock.patch("app.core.path_resolve.glob.glob", return_value=[]):
         assert find_llama_server({}) == ""
 
