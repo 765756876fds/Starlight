@@ -1007,15 +1007,65 @@ class MusicController:
             source="music",
         ))
 
+    # 泛化播放词：用户只说"播放歌曲/放首歌/播音乐"等，没有指定歌名。
+    # 这些词不应被当作歌名去在线搜索，而应从本地库随机挑一首。
+    _VAGUE_PLAY_WORDS = {
+        "歌曲", "歌", "音乐", "首歌", "首音乐", "曲子",
+        "来首", "放首", "播首", "听首", "来一首", "放一首", "播一首", "听一首",
+        "随便", "随便放", "随便播", "随便听听", "随便来",
+        "播放", "放", "播", "听", "继续", "继续播放",
+    }
+
+    def _is_vague_play_query(self, query: str) -> bool:
+        """判断 query 是否是泛化播放指令（未指定具体歌名）。"""
+        if not query:
+            return True
+        q = query.strip().strip("《》<>「」\"'“”‘’ ")
+        if not q:
+            return True
+        if q in self._VAGUE_PLAY_WORDS:
+            return True
+        # 已知"动词前缀 + 泛化词"组合，如"来首歌/放首歌/播一首音乐/点首歌"。
+        # 不做 endswith 模糊匹配，避免把"新歌/老歌/情歌"等真歌名误判为泛化。
+        prefixes = ("来", "放", "播", "听", "点", "给我")
+        for p in prefixes:
+            for w in ("歌曲", "歌", "音乐", "首歌", "首音乐"):
+                if q == p + w or q == p + "一" + w:
+                    return True
+        return False
+
+    def _play_vague_local(self):
+        """泛化播放指令：从本地库随机挑一首播放；本地空则明确提示，不走在线兜底。"""
+        try:
+            all_songs = self.db.get_all_songs(limit=1000)
+        except Exception as e:
+            logger.error(f"[Music] 读取本地歌曲库失败: {e}")
+            return None
+        if not all_songs:
+            logger.info("[Music] 本地歌曲库为空，无法泛化播放；请先扫描音乐目录或明确指定歌名")
+            return None
+        import random as _rnd
+        song = _rnd.choice(all_songs)
+        logger.info(f"[Music] 泛化播放指令 → 本地随机: {song.get('title','?')} - {song.get('artist','')}")
+        self.play_song(song)
+        return song
+
     @_cancel_switch_on_user_action
     def play_search_result(self, query: str, index: int = 0):
-        """搜索并播放第 N 个结果，本地找不到自动走在线fallback"""
+        """搜索并播放第 N 个结果，本地找不到自动走在线fallback。
+
+        若 query 是泛化播放词（"歌曲/音乐/来首歌"等），不把它当歌名搜索，
+        直接从本地库随机挑一首；本地空则提示，绝不在线乱搜。
+        """
         # 打点：意图入口（搜索路径不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_search_result", self._current_song, 0,
                             extra={"query": str(query)[:20], "index": int(index)})
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return None
+        # 泛化播放指令：不走本地搜索/在线兜底，直接本地随机
+        if self._is_vague_play_query(query):
+            return self._play_vague_local()
         # 代际号由 _play_song（唯一咽喉）统一递增；本地命中路径经 play_song 覆盖。
         results = self.search.search(query, limit=10)
         if results and 0 <= index < len(results):
