@@ -110,6 +110,8 @@ class TestJumpToHighlightHardening:
         with patch("app.music.controller.MpvController"):
             ctrl = MusicController(cfg)
         ctrl.mpv = MagicMock()
+        # mpv.py loadfile 契约：成功返回 {"error": "success"}（控制器据此收口播放成功）
+        ctrl.mpv.loadfile.return_value = {"error": "success"}
         ctrl.mpv.get_duration.return_value = duration
         ctrl._current_song = {"id": sid, "title": "T", "duration": duration}
         return ctrl, db
@@ -171,6 +173,8 @@ class TestIdlePollAutoNext:
         with patch("app.music.controller.MpvController"):
             ctrl = MusicController(cfg)
         ctrl.mpv = MagicMock()
+        # mpv.py loadfile 契约：成功返回 {"error": "success"}（控制器据此收口播放成功）
+        ctrl.mpv.loadfile.return_value = {"error": "success"}
         # idle 序列：前两轮 False（未播完），之后 True（播完触发 auto_next）。
         # 按属性名分发的 fake：idle-active 消费序列；playback-time/duration 返回固定值——
         # 新增的快照读取（_poll_idle 每轮多一次 playback-time）不会耗尽 side_effect 列表。
@@ -402,6 +406,8 @@ class TestIdlePollAutoNext:
         with patch("app.music.controller.MpvController"):
             ctrl = MusicController(cfg)
         ctrl.mpv = MagicMock()
+        # mpv.py loadfile 契约：成功返回 {"error": "success"}（坏文件由 idle-active=True 模拟）
+        ctrl.mpv.loadfile.return_value = {"error": "success"}
         # 坏文件：loadfile 后 idle-active 仍 True（解码失败）
         ctrl.mpv.get_property.return_value = True
         ctrl.mpv.is_paused.return_value = False

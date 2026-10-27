@@ -20,6 +20,8 @@ def _make_ctrl(**kw):
     with patch("app.movie.movie_controller.MpvController") as M:
         ctrl = MovieController(source_url="http://source.test/api", music=kw.pop("music", None))
         ctrl.mpv = M.return_value
+        # mpv.py loadfile 契约：成功返回 {"error": "success"}（电影控制器据此确认播放）
+        ctrl.mpv.loadfile.return_value = {"error": "success"}
         return ctrl, M.return_value
 
 

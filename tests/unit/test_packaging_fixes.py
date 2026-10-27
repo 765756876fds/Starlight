@@ -77,7 +77,7 @@ class TestConfigFallback:
     def test_missing_config_returns_defaults_and_writes_file(self, tmp_path):
         missing = tmp_path / "nested" / "settings.yaml"
         cfg = Config(str(missing))
-        assert cfg.get("app.name") == "LoL Music Agent"
+        assert cfg.get("app.name") == "Starlight"  # 应用名（旧名 LoL Music Agent 已更名）
         assert cfg.get("music.database")  # 默认绝对路径
         assert missing.exists()  # 自动写盘
 

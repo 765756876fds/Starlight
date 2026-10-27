@@ -1,4 +1,4 @@
-"""asr_bootstrap 空模型防护 + asr.py 400 提示 定向测试。"""
+"""asr_bootstrap 空模型防护 + asr.py 400 提示 定向测试（R2/R3 API 版）。"""
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -24,7 +24,8 @@ class TestBootstrapGuard:
         from app.voice import asr_bootstrap as ab
 
         monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: ("", ""))
-        monkeypatch.setattr(ab, "resolve_llama_server", lambda cfg: "server.exe")
+        monkeypatch.setattr(ab, "find_llama_backend_candidates",
+                            lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda: False)
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab, "subprocess", None)  # 若误走到 Popen 会 AttributeError
@@ -52,7 +53,8 @@ class TestBootstrapGuard:
         fake_response = SimpleNamespace(status_code=200,
                                         json=lambda: {"data": [{"id": "m"}]})
         monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: (model, mmproj))
-        monkeypatch.setattr(ab, "resolve_llama_server", lambda cfg: "server.exe")
+        monkeypatch.setattr(ab, "find_llama_backend_candidates",
+                            lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda: False)
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab.os.path, "isfile", lambda p: True)
@@ -66,11 +68,12 @@ class TestBootstrapGuard:
         assert captured["args"][2] == model  # 真实路径，绝不传空
         assert "--parallel" in captured["args"]
 
-    def test_model_missing_logs_model_dir(self, monkeypatch, capsys):
+    def test_model_missing_logs_hint(self, monkeypatch, capsys):
         from app.voice import asr_bootstrap as ab
 
         monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: ("", ""))
-        monkeypatch.setattr(ab, "resolve_llama_server", lambda cfg: "server.exe")
+        monkeypatch.setattr(ab, "find_llama_backend_candidates",
+                            lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda: False)
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab, "subprocess", None)
@@ -78,7 +81,6 @@ class TestBootstrapGuard:
         ab.ensure_and_launch({"bootstrap_enabled": True})
         out = capsys.readouterr().out
         assert "模型缺失" in out
-        assert "MODEL_DIR" in out
 
 
 class TestAsr400Hint:

@@ -29,6 +29,7 @@ def _make_ctrl(tmp_path):
     with patch("app.music.controller.MpvController"):
         ctrl = MusicController(cfg)
     ctrl.mpv = MagicMock()
+    ctrl.mpv.loadfile.return_value = {"error": "success"}  # loadfile 协议契约
     ctrl.lx_connected = False
     ctrl.db = db
     return ctrl

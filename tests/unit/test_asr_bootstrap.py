@@ -1,4 +1,9 @@
-"""ASR 自举（轻量版）测试：模型路径解析 / hf-mirror 下载 / llama-server 拉起 / 退出清理。"""
+"""ASR 自举（R2/R3）测试：模型路径解析 / hf-mirror 下载 / llama-server 双后端拉起 / 退出清理。
+
+对齐 asr_bootstrap R2/R3 API（USER_MODEL_DIR / SEED_MODEL_DIR / resolve_model_paths /
+find_llama_backend_candidates / _try_start_backend）——旧测试引用的 MODEL_DIR /
+resolve_llama_server 已被 R2/R3 重写移除，属历史遗留，本文件随 API 一并更新。
+"""
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -21,55 +26,52 @@ def _touch(p):
 # ---------- resolve_model_paths ----------
 
 class TestResolveModelPaths:
+    def _isolate_dirs(self, tmp_path, monkeypatch):
+        """把用户/种子模型目录隔离到临时目录（避免命中本机真实模型）。"""
+        monkeypatch.setattr(ab, "USER_MODEL_DIR", tmp_path / "user")
+        monkeypatch.setattr(ab, "SEED_MODEL_DIR", tmp_path / "seed")
+
     def test_config_path_wins(self, tmp_path, monkeypatch):
         model = _touch(tmp_path / "m.gguf")
         mm = _touch(tmp_path / "mmproj.gguf")
-        monkeypatch.setattr(ab, "MODEL_DIR", tmp_path)
+        self._isolate_dirs(tmp_path, monkeypatch)
         got, got_mm = ab.resolve_model_paths(
             {"qwen3_asr_model": model, "qwen3_asr_mmproj": mm})
         assert got == model and got_mm == mm
 
-    def test_builtin_models_dir(self, tmp_path, monkeypatch):
-        _touch(tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf")
-        _touch(tmp_path / "mmproj-Qwen3-ASR-0.6B-bf16.gguf")
-        monkeypatch.setattr(ab, "MODEL_DIR", tmp_path)
+    def test_user_dir(self, tmp_path, monkeypatch):
+        """用户目录（种子迁移后落这里）有完整模型 → 命中。"""
+        user = tmp_path / "user"
+        user.mkdir()
+        _touch(user / "Qwen3-ASR-0.6B-Q8_0.gguf")
+        _touch(user / "mmproj-Qwen3-ASR-0.6B-bf16.gguf")
+        self._isolate_dirs(tmp_path, monkeypatch)
         model, mm = ab.resolve_model_paths({})
-        assert model == str(tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf")
-        assert mm == str(tmp_path / "mmproj-Qwen3-ASR-0.6B-bf16.gguf")
+        assert model == str(user / "Qwen3-ASR-0.6B-Q8_0.gguf")
+        assert mm == str(user / "mmproj-Qwen3-ASR-0.6B-bf16.gguf")
+
+    def test_seed_dir_fallback(self, tmp_path, monkeypatch):
+        """用户目录无模型 → 回退种子目录（安装包内置，只读可读）。"""
+        seed = tmp_path / "seed"
+        seed.mkdir()
+        _touch(seed / "Qwen3-ASR-0.6B-Q8_0.gguf")
+        _touch(seed / "mmproj-Qwen3-ASR-0.6B-bf16.gguf")
+        self._isolate_dirs(tmp_path, monkeypatch)
+        model, mm = ab.resolve_model_paths({})
+        assert model == str(seed / "Qwen3-ASR-0.6B-Q8_0.gguf")
+        assert mm == str(seed / "mmproj-Qwen3-ASR-0.6B-bf16.gguf")
 
     def test_missing_returns_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ab, "MODEL_DIR", tmp_path)
+        self._isolate_dirs(tmp_path, monkeypatch)
         assert ab.resolve_model_paths({}) == ("", "")
 
-    def test_config_broken_path_falls_to_builtin(self, tmp_path, monkeypatch):
-        _touch(tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf")
-        monkeypatch.setattr(ab, "MODEL_DIR", tmp_path)
+    def test_config_broken_path_falls_to_user_dir(self, tmp_path, monkeypatch):
+        user = tmp_path / "user"
+        user.mkdir()
+        _touch(user / "Qwen3-ASR-0.6B-Q8_0.gguf")
+        self._isolate_dirs(tmp_path, monkeypatch)
         model, _ = ab.resolve_model_paths({"qwen3_asr_model": "D:/nope/x.gguf"})
-        assert model == str(tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf")
-
-
-# ---------- resolve_llama_server ----------
-
-class TestResolveLlamaServer:
-    def test_config_first(self, tmp_path, monkeypatch):
-        exe = _touch(tmp_path / "llama-server.exe")
-        monkeypatch.setattr(ab, "LLAMA_SERVER_EXE", tmp_path / "nope.exe")
-        monkeypatch.setattr(ab.shutil, "which", lambda *a, **k: None)
-        monkeypatch.setattr(ab, "find_llama_server", lambda *a, **k: "")
-        assert ab.resolve_llama_server({"llama_server": exe}) == exe
-
-    def test_which(self, monkeypatch):
-        monkeypatch.setattr(ab, "LLAMA_SERVER_EXE", os.path.abspath("nope.exe"))
-        monkeypatch.setattr(ab.shutil, "which", lambda *a, **k: "C:/tools/llama-server.exe")
-        monkeypatch.setattr(ab, "find_llama_server", lambda *a, **k: "")
-        assert ab.resolve_llama_server({}) == "C:/tools/llama-server.exe"
-
-    def test_bundled_dir(self, tmp_path, monkeypatch):
-        exe = _touch(tmp_path / "llama-server.exe")
-        monkeypatch.setattr(ab, "LLAMA_SERVER_EXE", tmp_path / "llama-server.exe")
-        monkeypatch.setattr(ab.shutil, "which", lambda *a, **k: None)
-        monkeypatch.setattr(ab, "find_llama_server", lambda *a, **k: "")
-        assert ab.resolve_llama_server({}) == exe
+        assert model == str(user / "Qwen3-ASR-0.6B-Q8_0.gguf")
 
 
 # ---------- 下载 ----------
@@ -116,17 +118,24 @@ class TestDownload:
 
 class TestEnsureAssets:
     def test_present_skips_download(self, tmp_path, monkeypatch):
-        _touch(tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf")
-        monkeypatch.setattr(ab, "MODEL_DIR", tmp_path)
-        monkeypatch.setattr(ab.requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应下载")))
+        user = tmp_path / "user"
+        user.mkdir()
+        _touch(user / "Qwen3-ASR-0.6B-Q8_0.gguf")
+        _touch(user / "mmproj-Qwen3-ASR-0.6B-bf16.gguf")
+        monkeypatch.setattr(ab, "USER_MODEL_DIR", user)
+        monkeypatch.setattr(ab, "SEED_MODEL_DIR", tmp_path / "seed")
+        monkeypatch.setattr(ab.requests, "get",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应下载")))
         assert ab.ensure_assets({}) is True
 
     def test_missing_downloads_all(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ab, "MODEL_DIR", tmp_path)
+        user = tmp_path / "user"
+        monkeypatch.setattr(ab, "USER_MODEL_DIR", user)
+        monkeypatch.setattr(ab, "SEED_MODEL_DIR", tmp_path / "seed")
         monkeypatch.setattr(ab, "download_file", lambda url, dest: _touch(dest) or True)
         assert ab.ensure_assets({}) is True
-        assert (tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf").exists()
-        assert (tmp_path / "mmproj-Qwen3-ASR-0.6B-bf16.gguf").exists()
+        assert (user / "Qwen3-ASR-0.6B-Q8_0.gguf").exists()
+        assert (user / "mmproj-Qwen3-ASR-0.6B-bf16.gguf").exists()
 
 
 class TestEnsureAndLaunch:
@@ -136,48 +145,120 @@ class TestEnsureAndLaunch:
     def test_reuse_external_server(self, monkeypatch):
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab, "_is_server_up", lambda *a, **k: True)
-        monkeypatch.setattr(ab, "resolve_llama_server", lambda cfg: "C:/x/llama-server.exe")
-        monkeypatch.setattr(ab, "subprocess", type("S", (), {"Popen": lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应拉起"))}))
+        monkeypatch.setattr(ab, "find_llama_backend_candidates",
+                            lambda cfg: [{"backend": "cpu", "exe": "C:/x/llama-server.exe"}])
+        monkeypatch.setattr(ab, "subprocess",
+                            type("S", (), {"Popen": lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应拉起"))}))
         assert ab.ensure_and_launch({}) is None
 
-    def test_launches_server(self, tmp_path, monkeypatch):
+    def test_launches_first_candidate(self, tmp_path, monkeypatch):
+        """按候选优先级取第一个后端；成功即返回且写入 _server_proc。"""
         model = _touch(tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf")
         mm = _touch(tmp_path / "mmproj.gguf")
         server = _touch(tmp_path / "llama-server.exe")
-        monkeypatch.setattr(ab, "MODEL_DIR", tmp_path)
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab, "_is_server_up", lambda *a, **k: False)
-        monkeypatch.setattr(ab, "resolve_llama_server", lambda cfg: server)
         monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: (model, mm))
-        calls = {}
+        monkeypatch.setattr(ab, "find_llama_backend_candidates",
+                            lambda cfg: [{"backend": "cpu", "exe": server},
+                                         {"backend": "vulkan", "exe": "D:/nope/vulkan.exe"}])
+        started = []
+
         class FakeProc:
-            def poll(self): return None
-        monkeypatch.setattr(ab.subprocess, "Popen",
-                            lambda args, **k: calls.setdefault("args", args) or FakeProc())
+            def poll(self):
+                return None
+
+        monkeypatch.setattr(ab, "_try_start_backend",
+                            lambda cand, m, mmproj, ctx: started.append(cand) or FakeProc())
         proc = ab.ensure_and_launch({})
         assert proc is not None
-        assert "llama-server.exe" in calls["args"][0]
-        assert "--mmproj" in calls["args"] and mm in calls["args"]
-        assert "--port" in calls["args"] and "8080" in calls["args"]
-        # --parallel 2：允许 2 个并发请求（主 ASR 与打断旁路并行转写）
-        assert "--parallel" in calls["args"] and "2" in calls["args"]
+        assert started and started[0]["backend"] == "cpu"  # 按优先级取第一个候选
+        assert ab._server_proc is proc
         ab._server_proc = None  # 清理，防 atexit 误杀测试进程
 
-    def test_no_server_bin_returns_none(self, monkeypatch):
+    def test_backend_args_and_healthcheck(self, tmp_path, monkeypatch):
+        """_try_start_backend：参数含 -m/--mmproj/--port/-c/--parallel；健康检查 data 非空才就绪。"""
+        model = _touch(tmp_path / "m.gguf")
+        mm = _touch(tmp_path / "mmproj.gguf")
+        server = _touch(tmp_path / "llama-server.exe")
+        calls = {}
+
+        class FakeProc:
+            def poll(self):
+                return None
+
+            def terminate(self):
+                calls["terminated"] = True
+
+            def wait(self, timeout=None):
+                calls["waited"] = True
+
+        def _fake_popen(args, **k):
+            calls["args"] = args
+            return FakeProc()
+
+        monkeypatch.setattr(ab.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(ab.time, "sleep", lambda *a, **k: None)
+
+        class R:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"id": "m"}]}
+
+        monkeypatch.setattr(ab.requests, "get", lambda *a, **k: R())
+        proc = ab._try_start_backend({"backend": "cpu", "exe": server}, model, mm, 8192)
+        assert proc is not None
+        args = calls["args"]
+        assert args[0] == server
+        assert "-m" in args and model in args
+        assert "--mmproj" in args and mm in args
+        assert "--port" in args and "8080" in args
+        assert "-c" in args and "8192" in args
+        # --parallel 2：允许 2 个并发请求（主 ASR 与打断旁路并行转写）
+        assert "--parallel" in args and "2" in args
+
+    def test_backend_immediate_exit_returns_none(self, tmp_path, monkeypatch):
+        """启动后立即退出（端口占用/参数错误）→ 放弃该后端（不抛）。"""
+        server = _touch(tmp_path / "llama-server.exe")
+
+        class DeadProc:
+            def poll(self):
+                return 1
+
+            returncode = 1
+
+        monkeypatch.setattr(ab.subprocess, "Popen", lambda args, **k: DeadProc())
+        monkeypatch.setattr(ab.time, "sleep", lambda *a, **k: None)
+        assert ab._try_start_backend({"backend": "cpu", "exe": server}, "m.gguf", "", 8192) is None
+
+    def test_no_candidates_returns_none(self, monkeypatch):
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab, "_is_server_up", lambda *a, **k: False)
-        monkeypatch.setattr(ab, "resolve_llama_server", lambda cfg: "")
+        monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: ("C:/m.gguf", ""))
+        monkeypatch.setattr(ab, "find_llama_backend_candidates", lambda cfg: [])
         assert ab.ensure_and_launch({}) is None
 
     def test_kill_server(self, monkeypatch):
         killed = {}
+
         class FakeProc:
-            def poll(self): return None
-            def terminate(self): killed["t"] = True
-            def wait(self, timeout=None): killed["w"] = True
+            def poll(self):
+                return None
+
+            def terminate(self):
+                killed["t"] = True
+
+            def wait(self, timeout=None):
+                killed["w"] = True
+
         class FakeLock:
-            def __enter__(self): return None
-            def __exit__(self, *a): return False
+            def __enter__(self):
+                return None
+
+            def __exit__(self, *a):
+                return False
+
         ab._server_proc = FakeProc()
         monkeypatch.setattr(ab, "_lock", FakeLock())
         ab._kill_server()
@@ -192,11 +273,20 @@ class TestASRManagerIntegration:
         called = {}
         monkeypatch.setattr(ab, "ensure_and_launch",
                             lambda cfg: called.setdefault("cfg", cfg) or None)
+
         class FakeEngine:
-            def __init__(self, *a, **k): self._ok = False
-            def load(self, retry_seconds=0.0): self._ok = True
-            def is_available(self): return self._ok
-            def unload(self): self._ok = False
+            def __init__(self, *a, **k):
+                self._ok = False
+
+            def load(self, retry_seconds=0.0):
+                self._ok = True
+
+            def is_available(self):
+                return self._ok
+
+            def unload(self):
+                self._ok = False
+
         monkeypatch.setattr("app.voice.asr.Qwen3ServerASR", FakeEngine)
         mgr = ASRManager({"engine": "qwen3_server",
                           "bootstrap_enabled": True,

@@ -63,6 +63,8 @@ def _make_controller(tmp_path, songs_with_highlight=None):
     ctrl._running = True
     # 默认返回 0，避免 poller 线程拿到 MagicMock
     ctrl.mpv.get_live_playback_time.return_value = 0.0
+    # mpv.py loadfile 契约：成功返回 {"error": "success"}（控制器据此收口播放成功）
+    ctrl.mpv.loadfile.return_value = {"error": "success"}
     return ctrl, db, song_ids
 
 

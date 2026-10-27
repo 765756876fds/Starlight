@@ -38,6 +38,7 @@ def _make_ctrl(tmp_path):
         lx_cls.return_value.is_connected.return_value = False
         c = MusicController(cfg)
     c.mpv = MagicMock()
+    c.mpv.loadfile.return_value = {"error": "success"}  # loadfile 协议契约
     c._mpv_available = True
     # 夹具语义：模拟已启动的运行中控制器——自动跳过/自动下一首是运行态行为，
     # 与 _do_skip_online/_do_skip_bad 的 _running 守卫一致（6daaa07 引入守卫后旧夹具缺初始化）。

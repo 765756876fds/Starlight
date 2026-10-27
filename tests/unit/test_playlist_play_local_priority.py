@@ -27,6 +27,7 @@ def _make_ctrl(tmp_path):
         lx_cls.return_value.is_connected.return_value = False
         c = MusicController(cfg)
     c.mpv = MagicMock()
+    c.mpv.loadfile.return_value = {"error": "success"}  # loadfile 协议契约
     c._mpv_available = True
     return c
 

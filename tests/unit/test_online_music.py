@@ -349,7 +349,7 @@ def test_search_play_online_uses_direct_source_lookup(tmp_path):
         ctrl = MusicController(cfg)
     try:
         ctrl.mpv = MagicMock()
-        ctrl.mpv.loadfile = MagicMock()
+        ctrl.mpv.loadfile.return_value = {"error": "success"}  # loadfile 协议契约
 
         # 本地无结果 → 走在线 fallback
         ctrl.search = MagicMock()
