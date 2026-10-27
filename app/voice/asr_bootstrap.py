@@ -11,6 +11,7 @@ import atexit
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -23,9 +24,17 @@ from app.core.path_resolve import (
     find_llama_backend_candidates,
 )
 
-# 用户可写模型目录（frozen 态 = %LOCALAPPDATA%\Starlight\models；源码态 = 项目 models/）
-USER_MODEL_DIR = USER_DATA_DIR / "models"
-# 安装包种子模型目录（frozen 态 = Program Files\星芒\models；源码态 = 项目 models/，与 USER 相同）
+# 用户可写模型目录：固定用 %LOCALAPPDATA%\Starlight\models（纯 ASCII 路径）。
+# 原因：llama-server 在 Windows 下打开含中文/非 ASCII 的模型路径会失败
+# （stderr: failed to open GGUF file，路径乱码）。源码态项目目录可能含中文
+# （如 C:\娱乐助手\Starlight），不能作为模型加载路径。
+def _resolve_user_model_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return Path(base) / "Starlight" / "models"
+
+
+USER_MODEL_DIR = _resolve_user_model_dir()
+# 安装包种子模型目录（frozen 态 = Program Files\星芒\models；源码态 = 项目 models/）
 SEED_MODEL_DIR = PROJECT_ROOT / "models"
 
 PORT = 8080
@@ -167,38 +176,59 @@ def ensure_assets(asr_config: dict) -> bool:
     return ok
 
 
-def _try_start_backend(candidate: dict, model: str, mmproj: str, ctx: int) -> subprocess.Popen | None:
-    """尝试用指定后端启动 llama-server。失败返回 None（不抛异常）。"""
+def _try_start_backend(candidate: dict, model: str, mmproj: str, ctx: int,
+                       ngl: int = 0) -> tuple[subprocess.Popen | None, str]:
+    """尝试用指定后端启动 llama-server。
+
+    返回 (proc, stderr_tail)：成功时 stderr_tail 为空；失败时为最后若干行启动日志，
+    供上层打印真实错误（不再把 stderr 丢 DEVNULL 吞掉，避免用户只看到 code=1）。
+    """
     exe = candidate["exe"]
     backend = candidate["backend"]
     args = [exe, "-m", model, "--port", str(PORT), "--host", "127.0.0.1",
             "-c", str(ctx), "--parallel", "2"]
+    if ngl and ngl > 0:
+        args += ["-ngl", str(ngl)]
     if mmproj and os.path.isfile(mmproj):
         args += ["--mmproj", mmproj]
-    print(f"[ASR] 尝试后端: {backend} ({exe})")
+    ngl_note = f", -ngl={ngl} (GPU offload)" if ngl and ngl > 0 else ", CPU only"
+    print(f"[ASR] 尝试后端: {backend} ({exe}){ngl_note}")
+    # stderr 落临时文件，失败时读尾部（不再 DEVNULL 吞错误）
+    err_path = os.path.join(tempfile.gettempdir(), "starlight_llama_stderr.log")
+    err_fp = open(err_path, "wb")
     try:
         proc = subprocess.Popen(
-            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            args, stdout=subprocess.DEVNULL, stderr=err_fp,
             creationflags=subprocess.CREATE_NO_WINDOW)
     except Exception as e:
+        err_fp.close()
         print(f"[ASR] 后端 {backend} 启动失败: {e}")
-        return None
-    # 等 2 秒看是否立即退出（端口占用/参数错误）
+        return None, str(e)
+    # 等 2 秒看是否立即退出（端口占用/参数错误/模型加载失败）
     time.sleep(2)
     if proc.poll() is not None:
-        print(f"[ASR] 后端 {backend} 启动后立即退出 (code={proc.returncode})")
-        return None
+        err_fp.close()
+        tail = _read_stderr_tail(err_path, n=30)
+        print(f"[ASR] 后端 {backend} 启动后立即退出 (code={proc.returncode})，最后日志:")
+        for line in tail.splitlines():
+            print(f"      | {line}")
+        return None, tail
     # 健康检查：data 非空才算就绪
-    for _ in range(3):
+    for _ in range(6):
         time.sleep(2)
         try:
             r = requests.get(HEALTH_URL, timeout=3)
             if r.status_code == 200 and r.json().get("data"):
                 print(f"[ASR] 后端 {backend} 模型已加载就绪")
-                return proc
+                err_fp.close()
+                return proc, ""
         except Exception:
             continue
-    print(f"[ASR] 后端 {backend} 启动但模型未在窗口期内就绪，终止该进程")
+    err_fp.close()
+    tail = _read_stderr_tail(err_path, n=30)
+    print(f"[ASR] 后端 {backend} 启动但模型未在窗口期内就绪，终止该进程。最后日志:")
+    for line in tail.splitlines():
+        print(f"      | {line}")
     try:
         proc.terminate()
         proc.wait(timeout=3)
@@ -207,7 +237,18 @@ def _try_start_backend(candidate: dict, model: str, mmproj: str, ctx: int) -> su
             proc.kill()
         except Exception:
             pass
-    return None
+    return None, tail
+
+
+def _read_stderr_tail(path: str, n: int = 30) -> str:
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        text = data.decode("utf-8", errors="replace")
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        return "\n".join(lines[-n:])
+    except Exception:
+        return ""
 
 
 def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
@@ -233,13 +274,27 @@ def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
         print(f"[ASR] 模型缺失，跳过启动 llama-server")
         return None
     ctx = int((asr_config or {}).get("llama_ctx") or 8192)
+    ngl = int((asr_config or {}).get("llama_gpu_layers") or 0)
     candidates = find_llama_backend_candidates(asr_config)
     if not candidates:
         print("[ASR] 未找到任何 llama-server 后端（打包内置/PATH/LM Studio 均无）")
         return None
+    print(f"[ASR] 检测到 {len(candidates)} 个后端候选: "
+          + ", ".join(f"{c['backend']}({c['exe']})" for c in candidates))
+    want = str((asr_config or {}).get("llama_backend") or "auto").lower()
+    print(f"[ASR] llama_backend 偏好={want}，GPU offload layers={ngl}"
+          + ("（将传 -ngl）" if ngl > 0 else "（CPU 推理）"))
+    # 主用模型路径；若主路径含非 ASCII 字符（llama.cpp 在 Windows 下打开非 ASCII 路径会失败），
+    # 自动准备一个 ASCII 用户目录副本作为回退路径。
+    fallback_model, fallback_mm = _ascii_fallback_paths(model, mmproj)
     with _lock:
+        tried = set()
         for cand in candidates:
-            proc = _try_start_backend(cand, model, mmproj, ctx)
+            key = (cand["exe"], model)
+            if key in tried:
+                continue
+            tried.add(key)
+            proc, tail = _try_start_backend(cand, model, mmproj, ctx, ngl=ngl)
             if proc is not None:
                 _server_proc = proc
                 _server_backend = cand["backend"]
@@ -247,8 +302,44 @@ def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
                     _atexit_registered = True
                     atexit.register(_kill_server)
                 return proc
+            # 主路径失败 + 有 ASCII 回退副本 → 用回退路径再试一次本后端
+            if fallback_model and fallback_model != model:
+                print(f"[ASR] 主模型路径启动失败（可能是非 ASCII 路径），"
+                      f"尝试 ASCII 副本: {fallback_model}")
+                key2 = (cand["exe"], fallback_model)
+                if key2 not in tried:
+                    tried.add(key2)
+                    proc, tail = _try_start_backend(cand, fallback_model,
+                                                    fallback_mm, ctx, ngl=ngl)
+                    if proc is not None:
+                        _server_proc = proc
+                        _server_backend = cand["backend"]
+                        if not _atexit_registered:
+                            _atexit_registered = True
+                            atexit.register(_kill_server)
+                        return proc
         print("[ASR] 所有后端均启动失败，语音功能降级（不影响音乐/电影/LoL）")
         return None
+
+
+def _ascii_fallback_paths(model: str, mmproj: str) -> tuple[str, str]:
+    """若主模型路径含非 ASCII 字符，返回用户目录下的 ASCII 副本路径（若存在）。
+
+    llama.cpp on Windows 在非 UTF-8 系统区域设置下打开含中文/日文的模型路径会失败
+    （stderr: failed to open GGUF file '...' 路径乱码）。用户目录 %LOCALAPPDATA%\Starlight\models
+    是纯 ASCII 路径，作为回退。
+    """
+    try:
+        model_is_ascii = model.isascii() if model else True
+        if model_is_ascii:
+            return "", ""
+        cand_model = USER_MODEL_DIR / "Qwen3-ASR-0.6B-Q8_0.gguf"
+        cand_mm = USER_MODEL_DIR / "mmproj-Qwen3-ASR-0.6B-bf16.gguf"
+        if cand_model.is_file():
+            return str(cand_model), str(cand_mm if cand_mm.is_file() else "")
+    except Exception:
+        pass
+    return "", ""
 
 
 def _kill_server() -> None:

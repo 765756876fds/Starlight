@@ -169,7 +169,7 @@ class TestEnsureAndLaunch:
                 return None
 
         monkeypatch.setattr(ab, "_try_start_backend",
-                            lambda cand, m, mmproj, ctx: started.append(cand) or FakeProc())
+                            lambda cand, m, mmproj, ctx, **kw: (started.append(cand) or FakeProc(), ""))
         proc = ab.ensure_and_launch({})
         assert proc is not None
         assert started and started[0]["backend"] == "cpu"  # 按优先级取第一个候选
@@ -207,7 +207,7 @@ class TestEnsureAndLaunch:
                 return {"data": [{"id": "m"}]}
 
         monkeypatch.setattr(ab.requests, "get", lambda *a, **k: R())
-        proc = ab._try_start_backend({"backend": "cpu", "exe": server}, model, mm, 8192)
+        proc, _ = ab._try_start_backend({"backend": "cpu", "exe": server}, model, mm, 8192)
         assert proc is not None
         args = calls["args"]
         assert args[0] == server
@@ -230,7 +230,8 @@ class TestEnsureAndLaunch:
 
         monkeypatch.setattr(ab.subprocess, "Popen", lambda args, **k: DeadProc())
         monkeypatch.setattr(ab.time, "sleep", lambda *a, **k: None)
-        assert ab._try_start_backend({"backend": "cpu", "exe": server}, "m.gguf", "", 8192) is None
+        proc, tail = ab._try_start_backend({"backend": "cpu", "exe": server}, "m.gguf", "", 8192)
+        assert proc is None
 
     def test_no_candidates_returns_none(self, monkeypatch):
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)

@@ -158,20 +158,33 @@ class Qwen3ServerASR(ASREngine):
 
         默认 0 = 单次探测（转写路径用，不阻塞调用线程）；
         首次加载（ASRManager.initialize / main 拉起）用 retry_seconds>0 等到模型真正就绪。
+        日志降噪：只在状态变化（首次失败、恢复成功）时打印，避免每 2 秒刷屏完整异常。
         """
         deadline = time.monotonic() + retry_seconds
+        announced_waiting = False
         while True:
             try:
                 import requests
                 resp = requests.get(f"{self.base_url}/models", timeout=0.5)
                 if resp.status_code == 200:
                     self._loaded = True
-                    print(f"[ASR] llama-server 已连接: {self.base_url}")
+                    if announced_waiting:
+                        print(f"[ASR] llama-server 已恢复连接: {self.base_url}")
+                    else:
+                        print(f"[ASR] llama-server 已连接: {self.base_url}")
                     return
-                print(f"[ASR] llama-server 连接失败: HTTP {resp.status_code}")
-            except Exception as e:
-                print(f"[ASR] llama-server 连接失败: {e}")
+                # HTTP 非 200，计为一次失败
+                if not announced_waiting:
+                    print(f"[ASR] llama-server 连接中… HTTP {resp.status_code}（后续轮询静默）")
+                    announced_waiting = True
+            except Exception:
+                if not announced_waiting:
+                    print(f"[ASR] llama-server 连接中…（{self.base_url} 暂不可达，后续轮询静默）")
+                    announced_waiting = True
             if retry_seconds <= 0 or time.monotonic() >= deadline:
+                if announced_waiting and not self._loaded:
+                    print("[ASR] llama-server 在等待窗口内未就绪，ASR 暂不可用"
+                          "（不影响音乐/电影/LoL）")
                 self._loaded = False
                 return
             time.sleep(2)
