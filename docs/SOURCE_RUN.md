@@ -23,7 +23,7 @@
 | Python 依赖 | `.venv/` | `python -m venv .venv` 后 `.venv\Scripts\pip install -r requirements.txt` |
 | **mpv** 播放引擎 | `third_party/mpv/mpv.exe` | 从 mpv 官方构建下载；或在 `config/settings.yaml` 的 `music.mpv_path` 填写已有 mpv 路径 |
 | **Node.js**（在线音乐 JS 桥接） | `third_party/node/node.exe` | 从 nodejs.org 获取；缺失时在线音乐插件会提示，不自动下载 |
-| **llama-server + ASR 模型**（语音识别，可选） | `third_party/llama/` + `models/` | 模型缺失时程序提示并从 hf-mirror 自动下载（`asr.bootstrap_enabled` 默认开）；若本机已装 LM Studio 则自动复用其 llama-server |
+| **llama-server + ASR 模型**（语音识别，可选） | `third_party/llama/vulkan/`（GPU 加速，优先）、`third_party/llama/cpu/`（CPU 回退）+ `%LOCALAPPDATA%\Starlight\models\` | 后端按 vulkan→cpu 顺序探测；AMD/NVIDIA 等支持 Vulkan 的显卡推荐从 llama.cpp 官方 nightly 下载 `llama-bXXXX-bin-win-vulkan-x64.zip` 解压到 `third_party/llama/vulkan/`。模型缺失时程序提示并从 hf-mirror 自动下载（`asr.bootstrap_enabled` 默认开）；已有中文路径模型会自动回退到 ASCII 用户目录副本。`asr.llama_gpu_layers` 默认 99（全层 offload）。若本机已装 LM Studio 则自动复用其 llama-server |
 | **在线音乐插件**（MusicFree/LX 的 .js） | `data/music_sources/musicfree/`、`data/music_sources/lx/` | 旧项目目录复制，或在应用的“音源管理”里导入 .js 文件（导入后自动刷新，无需重启） |
 | **Qwen TTS 密钥**（可选） | 设置界面填写 | 界面保存到本地配置，不提交 |
 
