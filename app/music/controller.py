@@ -2124,11 +2124,35 @@ class MusicController:
         return self.queue.get_play_mode()
 
     def _start_highlight_segment(self, song: dict[str, Any]):
-        """为当前歌曲启动 highlight 播放段"""
+        """为当前歌曲启动 highlight 播放段。
+
+        有预计算 highlight → seek 到 start_time 并启动 end 轮询自动 next；
+        无 highlight → 与单次"播放高潮"一致，seek 到时长 60% 位置兜底，
+        不启动 end 轮询（不知道 end_time，让用户听完剩余部分即可）。
+        """
         song_id = song.get("id")
         highlight = self.db.get_highlight(song_id)
         if not highlight:
-            # 无 highlight → 整首正常播放，不 fallback
+            # 无预计算高潮时间：seek 到 60% 位置作为兜底（与 jump_to_highlight 一致）。
+            # 旧逻辑静默 return → 模式开着但整首从头播，用户误以为开关失效。
+            try:
+                dur = float(self.mpv.get_duration() or 0.0)
+            except Exception:
+                dur = 0.0
+            if dur > 0:
+                target = dur * 0.6
+                gen = self._highlight_gen
+                def _fallback_seek(gen_check, t):
+                    import time
+                    time.sleep(0.6)
+                    if gen_check != self._highlight_gen:
+                        return
+                    try:
+                        self.mpv.seek(t, "absolute")
+                        logger.info(f"[Music] 高潮模式(无预计算): seek 到 60% = {t:.1f}s")
+                    except Exception as e:
+                        logger.info(f"[Music] highlight fallback seek failed: {e}")
+                threading.Thread(target=_fallback_seek, args=(gen, target), daemon=True).start()
             return
 
         start = highlight["start_time"]
