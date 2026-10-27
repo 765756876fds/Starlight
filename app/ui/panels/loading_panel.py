@@ -29,6 +29,10 @@ class LoadingPanel(QWidget):
     status_changed = Signal(str, str)  # (key, status)
     # 启动兜底：任何单点状态（backend 异常/切换失败）卡死 15s 后强制进入主界面
     boot_timeout = Signal()
+    # 启动失败：backend 线程 emit，UI 线程显示错误摘要（不切页）
+    boot_failed = Signal(str)
+    # 启动成功：backend 线程 emit，UI 线程切到功能页
+    boot_succeeded = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,6 +69,11 @@ class LoadingPanel(QWidget):
 
     def _on_log(self, text):
         self._log.appendPlainText(text)
+
+    def show_failure(self, summary: str):
+        """启动失败：在日志区顶部插入红色错误摘要，不切页。"""
+        self._log.appendPlainText("")
+        self._log.appendPlainText(f"[启动失败] {summary}")
 
     def set_module_status(self, key: str, status: str):
         if key not in self._labels:

@@ -142,10 +142,14 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_boot_timeout(self):
-        """启动兜底：LoadingPanel 15s 未完成 → 强制进入主界面（仅仍停留在 loading 时）。"""
+        """15s 兜底：不再强制切页。
+
+        旧行为：15s 到就 switch_to_tabs，会把"ASR 还在加载"伪装成启动完成。
+        新行为：只记日志，继续停留在 LoadingPanel，等 backend 真正成功/失败。
+        若 backend 已成功但切页信号丢失，由 Application 侧的 timer 兜底切页。
+        """
         if self._stack.currentWidget() is self._loading:
-            print("[UI] boot timeout -> force switch_to_tabs")
-            self.switch_to_tabs()
+            print("[UI] boot timeout: still loading, staying on LoadingPanel")
 
     def switch_to_tabs(self, tabs=None):
         print("[UI] switch_to_tabs")

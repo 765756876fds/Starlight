@@ -133,12 +133,37 @@ class Application:
         # 状态
         self._running = False
         self._shutdown_event = threading.Event()
+        # 模块状态缓存：窗口创建前 _set_module_status 调用先落这里，
+        # LoadingPanel 构造后回放。字典读写必须持锁。
+        self._module_status: dict[str, str] = {}
+        self._module_status_lock = threading.Lock()
 
     _initialized = False
     def _set_module_status(self, key: str, status: str):
-        """更新 LoadingPanel 状态灯（跨线程安全：Signal queued；window 未就绪则跳过）"""
+        """更新模块状态灯。
+
+        1) 无论窗口是否存在，先落 _module_status 缓存（持锁）。
+        2) 窗口存在时，再 emit 到 UI（不持锁，避免死锁/回调）。
+        窗口未就绪时状态不丢，LoadingPanel 构造后由 replay_module_status() 回放。
+        """
+        with self._module_status_lock:
+            self._module_status[key] = status
+        try:
+            w = getattr(self, "_main_window", None)
+            if w is not None and hasattr(w, "_loading"):
+                w._loading.status_changed.emit(key, status)
+        except RuntimeError:
+            # QWidget 已销毁：忽略
+            pass
+
+    def replay_module_status(self):
+        """LoadingPanel 构造后，回放缓存的全部模块状态。必须在 UI 线程调用。"""
+        with self._module_status_lock:
+            snapshot = dict(self._module_status)
         w = getattr(self, "_main_window", None)
-        if w is not None and hasattr(w, "_loading"):
+        if w is None or not hasattr(w, "_loading"):
+            return
+        for key, status in snapshot.items():
             w._loading.status_changed.emit(key, status)
 
     def _ensure_asr_running(self):
@@ -939,28 +964,22 @@ class Application:
 
     def run(self) -> int:
         """返回进程退出码：0 正常，1 启动失败。"""
-        try:
+        def _do_startup():
             self.initialize()
             self.start()
-        except Exception as e:
-            # P0 启动保护：initialize/start 在 QApplication 创建前同步执行，
-            # 任何未捕获异常都会导致程序直接闪退，用户看不到原因。
-            # 这里捕获完整 traceback，尽力清理已创建的子系统，再给出可见提示。
+
+        def _on_startup_failure(exc):
             try:
-                self._handle_startup_failure(e)
+                self._handle_startup_failure(exc)
             except Exception:
-                # 兜底：即使错误处理本身也崩了，也要让进程以非零码退出，
-                # 不能把启动异常变成正常退出 0。
                 try:
                     logger.error("[Startup] 错误处理过程本身也失败", exc_info=True)
                 except Exception:
                     pass
-            return 1
 
         def signal_handler(sig, frame):
             logger.info("\n收到停止信号...")
             self._shutdown_event.set()
-            # UI 模式下：让 Qt 事件循环退出（headless 模式 QApplication 没有 exec_）
             try:
                 from PySide6.QtWidgets import QApplication
                 app = QApplication.instance()
@@ -972,8 +991,13 @@ class Application:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        # headless 模式：原阻塞循环
+        # headless 模式：无 GUI，同步初始化
         if "--headless" in sys.argv:
+            try:
+                _do_startup()
+            except Exception as e:
+                _on_startup_failure(e)
+                return 1
             try:
                 while not self._shutdown_event.is_set():
                     time.sleep(0.5)
@@ -990,6 +1014,11 @@ class Application:
             from app.ui.tray import TrayIcon
         except Exception as e:
             logger.info(f"[UI] PySide6 未安装，使用 headless: {e}")
+            try:
+                _do_startup()
+            except Exception as e2:
+                _on_startup_failure(e2)
+                return 1
             try:
                 while not self._shutdown_event.is_set():
                     time.sleep(0.5)
@@ -1016,30 +1045,36 @@ class Application:
         window.raise_()
         window.activateWindow()
         logger.info(f"[Run] MainWindow shown at {window.geometry()}")
+        # 回放窗口创建前缓存的模块状态
+        self.replay_module_status()
 
         state = {"done": False, "error": None, "switched": False}
 
         def backend():
             try:
                 logger.info("[Run] background: initialize")
-                self.initialize()
-                logger.info("[Run] background: start")
-                self.start()
+                _do_startup()
                 logger.info("[Run] background: done")
                 state["done"] = True
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                state["error"] = str(e)
+                state["error"] = f"{type(e).__name__}: {e}"
 
         import threading
-        threading.Thread(target=backend, daemon=True).start()
+        threading.Thread(target=backend, daemon=True, name="StartupBackend").start()
 
         from PySide6.QtCore import QTimer
 
         def check():
-            if state["error"]:
+            if state["error"] and not state["switched"]:
+                state["switched"] = True
                 logger.error(f"[Run] backend error: {state['error']}")
+                try:
+                    window._loading.show_failure(state["error"])
+                except Exception:
+                    pass
+                # 不切页，停留在 LoadingPanel 显示错误
                 return
             if state["done"] and not state["switched"]:
                 state["switched"] = True
@@ -1047,7 +1082,6 @@ class Application:
                 try:
                     self._switch_to_tabs(window)
                     logger.info("[Run] switched")
-                    # H.4.4: 启动 Overlay（在主线程中）
                     self._start_overlay()
                     timer.stop()
                 except Exception:

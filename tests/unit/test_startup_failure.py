@@ -262,6 +262,32 @@ def test_run_headless_returns_0(monkeypatch):
     assert rc == 0
 
 
+def test_set_module_status_caches_before_window():
+    """窗口未创建时 _set_module_status 仍写入缓存，不丢状态。"""
+    from main import Application
+    app = Application.__new__(Application)
+    app._module_status = {}
+    app._module_status_lock = __import__("threading").Lock()
+    app._main_window = None
+    app._set_module_status("music", "ok")
+    assert app._module_status.get("music") == "ok"
+
+
+def test_replay_module_status_emits_cached():
+    """LoadingPanel 构造后 replay 把缓存状态发给 UI。"""
+    from main import Application
+    app = Application.__new__(Application)
+    app._module_status = {"music": "ok", "lol": "fail"}
+    app._module_status_lock = __import__("threading").Lock()
+    fake_loading = MagicMock()
+    app._main_window = MagicMock()
+    app._main_window._loading = fake_loading
+    app.replay_module_status()
+    emitted = [c.args for c in fake_loading.status_changed.emit.call_args_list]
+    assert ("music", "ok") in emitted
+    assert ("lol", "fail") in emitted
+
+
 def test_handle_startup_failure_stop_raises_does_not_override(capsys):
     """清理过程再抛异常：原始启动异常仍在输出里，不二次崩溃。"""
     app = _make_app()
