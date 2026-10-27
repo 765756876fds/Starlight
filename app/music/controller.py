@@ -1656,6 +1656,34 @@ class MusicController:
             return {}
         return self.online_manager.search_all(keyword)
 
+    def reload_online_plugins(self) -> tuple[bool, int]:
+        """重载 JS 插件桥接（重新扫描插件目录）并清空其搜索缓存。
+
+        返回 (ok, 插件数)。任何一步失败 → ok=False 且保留失败信息，不假装成功。
+        清缓存是关键：桥接重载后若不失效 js_bridge 的搜索缓存，旧结果会继续
+        掩盖新插件（缓存 TTL 内搜索不到新导入的插件）。
+        """
+        if self.online_manager is None:
+            return False, 0
+        js = self.online_manager.get_source("js_bridge")
+        if js is None:
+            return False, 0
+        ok = False
+        try:
+            ok = bool(js.reload())
+        except Exception as e:
+            logger.info(f"[Music] 插件刷新异常: {e!r}")
+        n = 0
+        try:
+            n = len(js.list_plugins() or [])
+        except Exception:
+            pass
+        try:
+            self.online_manager.invalidate("js_bridge")
+        except Exception as e:
+            logger.info(f"[Music] 插件缓存清理失败: {e!r}")
+        return ok, n
+
     def get_online_sources(self) -> list:
         if self.online_manager is None:
             return []

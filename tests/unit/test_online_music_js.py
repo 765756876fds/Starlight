@@ -1,5 +1,6 @@
 """JSMusicSource 单测（不真起 node）。"""
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.unit
 
@@ -9,6 +10,8 @@ import time
 
 from app.music.online.sources.js_source import JSMusicSource, compare_versions
 from app.music.online.models import OnlineTrack
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class FakeProc:
@@ -144,7 +147,7 @@ def test_lx_mock_provides_rawscript():
          "const lx=createLxMock();"
          "console.log(typeof lx.rawScript, typeof lx.utils.buffer, typeof lx.request, typeof lx.on);"],
         capture_output=True, text=True,
-        cwd=r"C:\Users\1\Doubao\chats\2026-09-14\new-chat\lol-music-agent",
+        cwd=str(PROJECT_ROOT),
     )
     assert r.returncode == 0, r.stderr
     out = r.stdout.strip().split()

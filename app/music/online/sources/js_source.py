@@ -161,7 +161,8 @@ class JSMusicSource(MusicSource):
 
     def _read_loop(self) -> None:
         assert self._proc and self._proc.stdout
-        for line in self._proc.stdout:
+        proc = self._proc
+        for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
@@ -180,9 +181,15 @@ class JSMusicSource(MusicSource):
             if box:
                 box["result"] = msg
                 box["event"].set()
-        # for 循环正常退出 = node 进程退出 / stdout EOF → 触发自动恢复
-        print("[JSBridge] bridge 进程退出，尝试自动恢复")
-        self._maybe_auto_reload("node-exit")
+        # for 循环正常退出 = node 进程退出 / stdout EOF。
+        # 仅当退出的是「当前」进程时才触发自动恢复：手动 reload() 会先终止旧
+        # 进程再启动新进程，旧进程的 _read_loop 在 EOF 处若不校验 self._proc
+        # 身份，会误触发 reload()，与手动 reload 并发竞态 → 刚启动的新进程被
+        # 反复杀掉（表现为「刷新后立即搜索搜不到、重启后才恢复」，已复现确认）。
+        # 旧进程 EOF 时 self._proc 已指向新进程（或为 None），身份不匹配 → 跳过。
+        if self._proc is proc:
+            print("[JSBridge] bridge 进程退出，尝试自动恢复")
+            self._maybe_auto_reload("node-exit")
 
     def _call(self, method: str, params: dict, timeout: float = 15.0):
         if self._proc is None:
@@ -454,19 +461,25 @@ class JSMusicSource(MusicSource):
             box["result"] = None
             box["event"].set()
 
-        if self._proc:
+        # 先摘引用再终止：被替换的旧进程在 EOF 时不再被当作「当前进程」，
+        # _read_loop 的守卫（self._proc is proc）会跳过自动恢复 —— 否则旧进程
+        # 在 terminate 后立即 EOF，而此时 self._proc 仍指向它（置空发生在 2s
+        # wait 之后），会误触发 reload() 与本次 reload 并发竞态 → 新进程被反复
+        # 杀掉（「刷新后搜索失效、重启才恢复」的根因，已实测复现）。
+        proc = self._proc
+        self._proc = None
+        if proc:
             try:
-                self._proc.terminate()
+                proc.terminate()
             except Exception:
                 pass
             try:
-                self._proc.wait(timeout=2.0)
+                proc.wait(timeout=2.0)
             except Exception:
                 try:
-                    self._proc.kill()
+                    proc.kill()
                 except Exception:
                     pass
-            self._proc = None
 
         self._sources = []
         self._plugins = []

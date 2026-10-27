@@ -75,6 +75,7 @@ class MainTabs(QWidget):
                 equip_toggle=equip_toggle, overlay_toggle=overlay_toggle,
                 overlay_enabled=overlay_enabled,
                 on_refresh_changed=self._apply_refresh_interval,
+                on_online_sources_changed=self._notify_online_sources_changed,
             ), "设置", "settings")
         layout.addWidget(tabs)
 
@@ -95,3 +96,13 @@ class MainTabs(QWidget):
                     t.setInterval(ms)
                 except Exception:
                     pass
+
+    def _notify_online_sources_changed(self) -> None:
+        """插件/音源变更后同步音乐面板的在线音源下拉（幂等，面板不存在则跳过）。"""
+        p = self._panels.get("music")
+        if p is None:
+            return
+        try:
+            p.refresh_online_sources()
+        except Exception as e:
+            print(f"[MainTabs] 同步音源列表失败: {e}")

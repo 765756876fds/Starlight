@@ -1,7 +1,6 @@
 // Mock globalThis.lx for LX Music source plugins.
 function createLxMock() {
   const handlers = new Map(); // eventName -> [handlers]
-  const axios = require('axios');
 
   const lx = {
     on(eventName, handler) {
@@ -23,6 +22,7 @@ function createLxMock() {
       })));
     },
     request(url, options = {}, callback) {
+      const axios = require('axios');
       return (async () => {
         try {
           const resp = await axios({

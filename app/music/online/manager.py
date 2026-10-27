@@ -84,6 +84,15 @@ class OnlineSourceManager:
         """按注册名取源（UI 等外部组件用，避免摸私有 dict）。"""
         return self._sources.get(name)
 
+    def invalidate(self, name: str) -> None:
+        """清除某源的搜索缓存（桥接/插件重载后调用，避免旧结果掩盖新注册表）。
+
+        只删缓存不注销源；生命周期锁内与 search_all 的版本校验+写入互斥，
+        不会让新缓存写入与清除交错。
+        """
+        with self._life_lock:
+            self._cache.delete(name)
+
     def search_all(self, keyword: str, limit_per_source: int = 10
                    ) -> dict[str, list[OnlineTrack]]:
         out: dict[str, list[OnlineTrack]] = {}

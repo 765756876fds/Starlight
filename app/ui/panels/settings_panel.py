@@ -271,6 +271,7 @@ class SettingsPanel(QWidget):
                  on_refresh_changed: Callable[[int], None] | None = None,
                  overlay_toggle: Callable[[bool], None] | None = None,
                  overlay_enabled: bool = True,
+                 on_online_sources_changed: Callable[[], None] | None = None,
                  parent=None):
         super().__init__(parent)
         self._music = music
@@ -280,6 +281,8 @@ class SettingsPanel(QWidget):
         self._on_refresh_changed = on_refresh_changed
         self._overlay_toggle = overlay_toggle
         self._overlay_enabled = bool(overlay_enabled)
+        # 插件/音源变更后通知外部（音乐面板刷新搜索音源下拉）
+        self._on_online_sources_changed = on_online_sources_changed
         self._scan_thread = None
         self._js_source = None
         self._reloading = False
@@ -816,7 +819,7 @@ class SettingsPanel(QWidget):
             btn.setEnabled(True)
 
     def _on_refresh_plugins(self) -> None:
-        if self._js_source is None or self._reloading:
+        if self._music is None or self._js_source is None or self._reloading:
             return
         self._reloading = True
         self.btn_refresh_plugins.setEnabled(False)
@@ -824,15 +827,12 @@ class SettingsPanel(QWidget):
         self.lbl_plugin_status.setText("刷新会短暂中断搜索…")
 
         def worker():
-            ok = False
+            # 走控制器统一入口：重载桥接 + 清空 js_bridge 搜索缓存（旧缓存会
+            # 掩盖新插件）+ 返回真实 (ok, 插件数)
             try:
-                ok = self._js_source.reload()
+                ok, n = self._music.reload_online_plugins()
             except Exception:
-                ok = False
-            try:
-                n = len(self._js_source.list_plugins() or [])
-            except Exception:
-                n = 0
+                ok, n = False, 0
             self._refresh_done.emit(ok, n)   # Signal 回主线程
 
         threading.Thread(target=worker, daemon=True).start()
@@ -846,12 +846,24 @@ class SettingsPanel(QWidget):
             self.lbl_plugin_status.setText(tail)
             self._delete_result_tail = ""
             self._render_plugins()
+            self._notify_online_sources_changed()
             return
         if ok:
             self.lbl_plugin_status.setText(f"已重载 {n} 个插件")
         else:
             self.lbl_plugin_status.setText(f"刷新超时，已加载 {n} 个")
         self._render_plugins()
+        # 无论成功与否都通知搜索界面重新同步音源下拉（成功时列表已更新，
+        # 失败时也重扫一次保证一致；下拉保留选中项，失效回退「全部」）
+        self._notify_online_sources_changed()
+
+    def _notify_online_sources_changed(self) -> None:
+        """通知外部（音乐面板）刷新在线音源下拉；失败不影响 UI 操作。"""
+        if self._on_online_sources_changed:
+            try:
+                self._on_online_sources_changed()
+            except Exception as e:
+                print(f"[Settings] 音源变更通知失败: {e}")
 
     # ---------- 🔍 插件检查更新 ----------
 
@@ -962,8 +974,14 @@ class SettingsPanel(QWidget):
         if self._music is None:
             return
         from app.ui.dialogs.source_manage_dialog import SourceManageDialog
-        dlg = SourceManageDialog(self, on_sources_changed=self._music.sync_custom_sources)
+        dlg = SourceManageDialog(
+            self,
+            on_sources_changed=self._music.sync_custom_sources,
+            reload_plugins=self._music.reload_online_plugins,
+        )
         dlg.exec()
+        # 对话框内可能增删自定义音源 / 导入插件：关闭后同步搜索界面音源下拉
+        self._notify_online_sources_changed()
 
     def _render_dirs(self) -> None:
         while self._dirs_layout.count():

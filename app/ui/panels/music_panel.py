@@ -916,6 +916,32 @@ class MusicPanel(QWidget):
             print(f"[MusicPanel] 音量写回配置失败: {e!r}")
 
     # ---- 在线 ----
+    def refresh_online_sources(self) -> None:
+        """刷新在线音源下拉（插件/自定义源变化后由外部调用）。
+
+        重建「全部」+ 当前注册源列表；保留用户当前选中项，若已失效则回退「全部」。
+        不触发 currentIndexChanged 副作用（blockSignals），不影响正在进行的播放。
+        """
+        if self._music is None:
+            return
+        try:
+            cur = self.cb_source.currentData()
+            names = self._music.get_online_sources() or []
+            self.cb_source.blockSignals(True)
+            try:
+                self.cb_source.clear()
+                self.cb_source.addItem("全部", userData=None)
+                for name in names:
+                    self.cb_source.addItem(name, userData=name)
+                if cur is not None:
+                    idx = self.cb_source.findData(cur)
+                    if idx >= 0:
+                        self.cb_source.setCurrentIndex(idx)
+            finally:
+                self.cb_source.blockSignals(False)
+        except Exception as e:
+            print(f"[MusicPanel] 刷新音源列表失败: {e}")
+
     def _do_search(self):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
@@ -924,6 +950,9 @@ class MusicPanel(QWidget):
         # 覆盖运行中线程引用同样会触发 QThread: Destroyed while running）。
         if self._thread is not None and self._thread.isRunning():
             return
+        # 搜索前同步一次音源列表（插件导入/刷新后无需重启即生效；
+        # 保留选中项，失效自动回退「全部」，不影响正在播放的音乐）
+        self.refresh_online_sources()
         self.lbl_status.setText("搜索中...")
         self._thread = QThread()
         self._worker = _SearchWorker(self._music, kw)
