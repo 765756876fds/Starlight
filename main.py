@@ -434,38 +434,47 @@ class Application:
         logger.info("\n现在停止系统...")
         self._running = False
 
-        # 发布停止事件
-        self.event_bus.publish(Event(
+        # 每一步独立 try/except：某个模块清理失败不能中断后续清理链。
+        # 顺序保持原有顺序不变；scheduler.stop() 和 event_log.stop() 必须有机会执行。
+        def _safe(label, fn):
+            try:
+                fn()
+            except Exception:
+                logger.error(f"[Shutdown] {label} 清理失败", exc_info=True)
+
+        # 发布停止事件（失败不影响后续清理）
+        _safe("event_bus.publish(SYSTEM_SHUTDOWN)", lambda: self.event_bus.publish(Event(
             event_type=EventType.SYSTEM_SHUTDOWN,
             data={},
             source="system"
-        ))
+        )))
 
-        # 鎸夐『搴忓仠姝?
+        # 按顺序停止各模块
         if self.voice:
-            self.voice.stop()
+            _safe("voice.stop", self.voice.stop)
         if self.speech_judge:
-            self.speech_judge.stop()
+            _safe("speech_judge.stop", self.speech_judge.stop)
         if self.speech_queue:
-            self.speech_queue.shutdown()
+            _safe("speech_queue.shutdown", self.speech_queue.shutdown)
         if self.tts:
-            self.tts.stop()
+            _safe("tts.stop", self.tts.stop)
         if self.lol:
             if self.automation:
-                self.automation.stop()
-            self.lol.stop()
+                _safe("automation.stop", self.automation.stop)
+            _safe("lol.stop", self.lol.stop)
         if self.music:
-            self.music.stop()
+            _safe("music.stop", self.music.stop)
 
         if getattr(self, "combo_manager", None):
-            self.combo_manager.stop()
+            _safe("combo_manager.stop", self.combo_manager.stop)
 
-        self.scheduler.stop()
-        self.state_store.set(StateNamespace.SYSTEM, "running", False)
+        _safe("scheduler.stop", self.scheduler.stop)
+        _safe("state_store.set(running=False)",
+              lambda: self.state_store.set(StateNamespace.SYSTEM, "running", False))
 
         # 最后停止 Event Log（确保所有停止事件都被记录）
         if self.event_log:
-            self.event_log.stop()
+            _safe("event_log.stop", self.event_log.stop)
 
         logger.info("...")
 
@@ -877,10 +886,76 @@ class Application:
             logger.info(f"[Ongoing] 注册失败: {e}")
             self.logger.error(f"[Ongoing] 注册失败: {e}")
 
-    def run(self):
-        """doc"""
-        self.initialize()
-        self.start()
+    def _handle_startup_failure(self, exc: BaseException) -> None:
+        """initialize()/start() 在 QApplication 创建前同步执行失败时的兜底。
+
+        - 完整 traceback 写日志（不弹到用户界面）。
+        - 尽力回收已创建的子系统（stop() 只在 _running=True 时才跑，
+          而 initialize 中途失败时 _running 还是 False，这里强制置位后再调）。
+        - 清理本身再抛异常不能覆盖原始启动异常。
+        - 非 headless 模式弹 QMessageBox；headless 或 GUI 也起不来就退到 stderr。
+        """
+        import traceback as _tb
+        err_text = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+        try:
+            logger.error(f"[Startup] initialize/start 失败:\n{err_text}")
+        except Exception:
+            # 日志系统本身可能没初始化好
+            print("[Startup] initialize/start 失败:", file=sys.stderr)
+            print(err_text, file=sys.stderr)
+
+        # 尽力清理。stop() 入口检查 _running，初始化中途失败时为 False，
+        # 这里临时置位让它走完整 teardown；清理解包在 try 里，不覆盖原异常。
+        try:
+            self._running = True
+            self.stop()
+        except Exception:
+            try:
+                logger.error("[Startup] 失败清理过程再次抛异常:", exc_info=True)
+            except Exception:
+                pass
+
+        # 用户可见提示。headless 不弹窗；GUI 起不来就退到 stderr。
+        is_headless = "--headless" in sys.argv
+        if not is_headless:
+            try:
+                from PySide6.QtWidgets import QApplication, QMessageBox
+                app = QApplication.instance() or QApplication(sys.argv)
+                summary = f"{type(exc).__name__}: {exc}"
+                log_dir = self.config.get("app.log_dir", "./logs")
+                QMessageBox.critical(
+                    None,
+                    "Starlight 启动失败",
+                    f"{summary}\n\n详细错误已写入日志。\n日志目录: {log_dir}\n\n可关闭此窗口退出。",
+                )
+            except Exception:
+                try:
+                    logger.error("[Startup] QMessageBox 创建失败，降级到 stderr", exc_info=True)
+                except Exception:
+                    pass
+                print(f"[Startup] 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        else:
+            print(f"[Startup] headless 模式失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+    def run(self) -> int:
+        """返回进程退出码：0 正常，1 启动失败。"""
+        try:
+            self.initialize()
+            self.start()
+        except Exception as e:
+            # P0 启动保护：initialize/start 在 QApplication 创建前同步执行，
+            # 任何未捕获异常都会导致程序直接闪退，用户看不到原因。
+            # 这里捕获完整 traceback，尽力清理已创建的子系统，再给出可见提示。
+            try:
+                self._handle_startup_failure(e)
+            except Exception:
+                # 兜底：即使错误处理本身也崩了，也要让进程以非零码退出，
+                # 不能把启动异常变成正常退出 0。
+                try:
+                    logger.error("[Startup] 错误处理过程本身也失败", exc_info=True)
+                except Exception:
+                    pass
+            return 1
 
         def signal_handler(sig, frame):
             logger.info("\n收到停止信号...")
@@ -906,7 +981,7 @@ class Application:
                 pass
             finally:
                 self.stop()
-            return
+            return 0
 
         # UI 模式：主线程跑 Qt（QApplication 必须在主线程创建）
         try:
@@ -920,7 +995,7 @@ class Application:
                     time.sleep(0.5)
             finally:
                 self.stop()
-            return
+            return 0
 
         app = QApplication.instance() or QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
@@ -985,10 +1060,12 @@ class Application:
         self._startup_timer = timer
 
         logger.info("[Run] entering app.exec()")
+        rc = 0
         try:
-            app.exec()
+            rc = app.exec()
         finally:
             self.stop()
+        return rc
 
     def _start_overlay(self):
         try:
@@ -1116,7 +1193,7 @@ class Application:
 def main():
     """doc"""
     app = Application()
-    app.run()
+    sys.exit(app.run())
 
 
 if __name__ == "__main__":
