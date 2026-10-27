@@ -6,41 +6,84 @@ on:
   pull_request:
     branches: [a0-cleanup, main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: Syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile all Python sources
+        run: python -m compileall -q app main.py tests scripts tools
+
+  unit-linux:
+    name: Unit tests (Linux / pure logic + offscreen Qt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install system libraries (Qt / audio)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libsndfile1 portaudio19-dev
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements.txt
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/unit -o addopts="" -q 2>&1 | tee pytest-output.txt
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-linux-failure-log
+          path: pytest-output.txt
+          if-no-files-found: warn
+
+  unit-windows:
+    name: Unit tests (Windows / PySide6 + paths, full suite)
     runs-on: windows-latest
+    timeout-minutes: 20
     env:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+          cache: pip
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install requests PyYAML
-        shell: pwsh
-
+          pip install pytest
+          pip install -r requirements.txt
       - name: Run unit tests
-        id: unittest
         shell: pwsh
         run: |
-          python -m unittest tests.unit.test_asr_bootstrap_r2 tests.unit.test_path_migration_r1 -v 2>&1 | Tee-Object -FilePath unittest-output.txt
-          $testExitCode = $LASTEXITCODE
-          Write-Host "Unittest exit code: $testExitCode"
-          if ($testExitCode -ne 0) {
-            exit $testExitCode
-          }
-
-      - name: Upload unittest failure log
-        if: ${{ failure() && steps.unittest.outcome == 'failure' }}
+          python -m pytest tests/unit -o addopts="" -q 2>&1 | Tee-Object -FilePath pytest-output.txt
+          exit $LASTEXITCODE
+      - name: Upload failure log
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: unittest-failure-log
-          path: unittest-output.txt
+          name: unit-windows-failure-log
+          path: pytest-output.txt
           if-no-files-found: warn
