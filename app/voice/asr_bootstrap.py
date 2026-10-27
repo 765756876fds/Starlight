@@ -2,7 +2,7 @@
 
 R2/R3（2026-10-26）：
 - Vulkan 后端优先，CPU 后端回退（find_llama_backend_candidates）。
-- 模型目录 = USER_DATA_DIR/models（frozen 态 = %LOCALAPPDATA%\Starlight\models）。
+- 模型目录 = LOCALAPPDATA\\Starlight\\models（纯 ASCII，避免中文路径打不开 GGUF）。
 - 种子迁移：安装版 Program Files/models → 用户目录（首启拷贝，幂等，不删原种）。
 - 启动参数 -c 8192 --parallel 2 --port 8080。
 - 8080 被外部占用（非本应用 ASR）→ 不拉起、不杀外部进程、降级。
@@ -196,10 +196,11 @@ def _try_start_backend(candidate: dict, model: str, mmproj: str, ctx: int,
     # stderr 落临时文件，失败时读尾部（不再 DEVNULL 吞错误）
     err_path = os.path.join(tempfile.gettempdir(), "starlight_llama_stderr.log")
     err_fp = open(err_path, "wb")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         proc = subprocess.Popen(
             args, stdout=subprocess.DEVNULL, stderr=err_fp,
-            creationflags=subprocess.CREATE_NO_WINDOW)
+            creationflags=creationflags)
     except Exception as e:
         err_fp.close()
         print(f"[ASR] 后端 {backend} 启动失败: {e}")
@@ -326,7 +327,7 @@ def _ascii_fallback_paths(model: str, mmproj: str) -> tuple[str, str]:
     """若主模型路径含非 ASCII 字符，返回用户目录下的 ASCII 副本路径（若存在）。
 
     llama.cpp on Windows 在非 UTF-8 系统区域设置下打开含中文/日文的模型路径会失败
-    （stderr: failed to open GGUF file '...' 路径乱码）。用户目录 %LOCALAPPDATA%\Starlight\models
+    （stderr: failed to open GGUF file，路径乱码）。用户目录 LOCALAPPDATA\\Starlight\\models
     是纯 ASCII 路径，作为回退。
     """
     try:
