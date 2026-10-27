@@ -416,14 +416,50 @@ class MusicDatabase:
         return cursor.fetchone()["cnt"]
 
     def get_highlight(self, song_id: int) -> dict[str, Any] | None:
-        """获取歌曲高潮位置"""
+        """获取歌曲高潮位置。
+
+        优先级：source='manual' 永远优先于所有自动来源，不受 confidence 影响。
+        同优先级内按 confidence DESC。
+        """
         with self._lock:
             cursor = self._conn.execute(
-                "SELECT * FROM music_highlight WHERE song_id = ? ORDER BY confidence DESC LIMIT 1",
+                "SELECT * FROM music_highlight WHERE song_id = ? "
+                "ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END, confidence DESC LIMIT 1",
                 (song_id,)
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    def has_manual_highlight(self, song_id: int) -> bool:
+        """该歌曲是否存在 source='manual' 记录（迁移 worker 用）。"""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT 1 FROM music_highlight WHERE song_id=? AND source='manual' LIMIT 1",
+                (song_id,))
+            return cursor.fetchone() is not None
+
+    def replace_highlight_atomically(self, song_id: int, start_time: float,
+                                     end_time: float, confidence: float,
+                                     source: str) -> None:
+        """原子替换：删除该歌曲所有非 manual 记录，再插入新记录。
+
+        用于把旧 pychorus 记录迁移为 V4。新记录插入失败时整事务回滚，
+        旧 pychorus 记录保留。manual 记录永不删除。
+
+        幂等：同一歌曲重复调用不会产生重复行（先 DELETE 非 manual 再 INSERT）。
+        使用 connection 上下文管理器而非裸 BEGIN：避免 Python sqlite3
+        isolation_level="" 隐式事务与显式 BEGIN 冲突导致的事务交错。
+        """
+        with self._lock:
+            with self._conn:  # commit on success, rollback on exception
+                self._conn.execute(
+                    "DELETE FROM music_highlight WHERE song_id=? AND source != 'manual'",
+                    (song_id,))
+                self._conn.execute(
+                    "INSERT INTO music_highlight (song_id, start_time, end_time, confidence, source, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (song_id, float(start_time), float(end_time),
+                     float(confidence), source, time.time()))
 
     def save_highlight(self, song_id: int, start_time: float,
                         end_time: float | None = None,
@@ -443,6 +479,14 @@ class MusicDatabase:
         with self._lock:
             self._conn.execute(
                 "DELETE FROM music_highlight WHERE song_id = ?", (song_id,))
+            self._conn.commit()
+
+    def clear_manual_highlight(self, song_id: int):
+        """只删除指定歌曲的 source='manual' 记录（重新手动标记前调用）。"""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM music_highlight WHERE song_id = ? AND source = 'manual'",
+                (song_id,))
             self._conn.commit()
 
     def checkpoint(self):

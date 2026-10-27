@@ -160,7 +160,7 @@ class TestLibrosaLazy:
         import app.music.highlight_detector as hd
         assert "librosa" not in hd.__dict__
 
-    def test_detect_highlight_works_with_lazy_import(self, monkeypatch):
+    def test_detect_highlight_works_with_lazy_import(self, monkeypatch, tmp_path):
         """假 librosa（注入 sys.modules）→ detect_highlight 正常走完整算法。"""
         import numpy as np
         import app.music.highlight_detector as hd
@@ -177,21 +177,28 @@ class TestLibrosaLazy:
         hop = 512
         fake.frames_to_time.side_effect = lambda n, **kw: np.arange(len(n)) * hop / sr
         monkeypatch.setitem(sys.modules, "librosa", fake)
+        # pychorus 未安装 → 自动回退 V4
+        monkeypatch.setitem(sys.modules, "pychorus", None)
 
-        result = hd.detect_highlight("dummy.mp3")
+        p = tmp_path / "dummy.mp3"
+        p.write_bytes(b"\x00" * 10)
+        result = hd.detect_highlight(str(p))
         assert result is not None
         start, end, score = result
         assert 0 <= start < end <= dur
         assert score > 0
 
-    def test_failure_path_returns_none(self, monkeypatch):
+    def test_failure_path_returns_none(self, monkeypatch, tmp_path):
         import app.music.highlight_detector as hd
 
         fake = MagicMock()
         fake.load.side_effect = OSError("decoder failed")
         fake.get_duration.side_effect = OSError("decoder failed")
         monkeypatch.setitem(sys.modules, "librosa", fake)
-        assert hd.detect_highlight("bad.mp3") is None
+        monkeypatch.setitem(sys.modules, "pychorus", None)
+        p = tmp_path / "bad.mp3"
+        p.write_bytes(b"\x00" * 10)
+        assert hd.detect_highlight(str(p)) is None
 
 
 class TestPersonalPathCleanup:

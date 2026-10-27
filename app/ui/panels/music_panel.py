@@ -293,9 +293,15 @@ class MusicPanel(QWidget):
         self.btn_clear_queue = QPushButton("清空队列")
         self.btn_clear_queue.setObjectName("btn_clear_queue")
         self.btn_clear_queue.setIcon(lucide_icon("trash", 14, Tokens.TEXT_SECONDARY))
+        self.btn_mark_highlight = QPushButton("标记高潮")
+        self.btn_mark_highlight.setObjectName("btn_mark_highlight")
+        self.btn_mark_highlight.setToolTip("把当前播放位置保存为这首歌的人工高潮起点")
+        self.btn_mark_highlight.setIcon(lucide_icon("map-pin", 14, Tokens.TEXT_SECONDARY))
+        self.btn_mark_highlight.clicked.connect(self._on_mark_highlight)
         row_sub.addWidget(self.btn_highlight)
         row_sub.addWidget(self.btn_mode)
         row_sub.addWidget(self.btn_clear_queue)
+        row_sub.addWidget(self.btn_mark_highlight)
         row_sub.addStretch()
         # 音量：MusicFree 悬浮极简风——平时仅喇叭图标，悬停/点击弹出垂直玻璃面板
         from ..widgets.glass_slider import GlassSlider, VolumeButton
@@ -754,6 +760,21 @@ class MusicPanel(QWidget):
                     self._music.set_highlight_mode(on)
             except Exception as e:
                 print(f"[Music] highlight toggle: {e}")
+
+    def _on_mark_highlight(self):
+        """把当前播放位置保存为人工高潮起点。"""
+        if self._music is None:
+            return
+        try:
+            ok = self._music.mark_highlight_start()
+        except Exception as e:
+            ok = False
+            self.lbl_status.setText(f"标记失败: {e}")
+            return
+        if ok:
+            self.lbl_status.setText("已标记当前位置为高潮起点")
+        else:
+            self.lbl_status.setText("标记失败：没有正在播放的歌曲或位置无效")
 
     # ---- 播放控制 ----
     def _safe_call(self, fn, *args) -> None:

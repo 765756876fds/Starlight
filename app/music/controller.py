@@ -236,6 +236,11 @@ class MusicController:
             self.state_store.set(StateNamespace.MUSIC, "volume", self.default_volume)
             self.state_store.set(StateNamespace.MUSIC, "playing", False)
             self.state_store.set(StateNamespace.MUSIC, "current_song", None)
+            # mpv 不可用也要后台算 highlight（不依赖 mpv）
+            try:
+                self.scanner.start_highlight_background()
+            except Exception as e:
+                logger.warning(f"[Music] 启动后台 highlight worker 失败: {e!r}")
             return False
         self._mpv_available = True
         self.mpv.set_volume(self.default_volume)
@@ -346,6 +351,13 @@ class MusicController:
         self.state_store.set(StateNamespace.MUSIC, "current_song", None)
 
         logger.info("[Music] 模块已启动")
+        # 启动时不做全量 rescan，只后台挑 pending 歌曲自动算 highlight。
+        # manual / 已有 pychorus 记录会在 scanner._highlight_worker 内跳过。
+        # 失败不影响主程序：worker 内部已 try/except。
+        try:
+            self.scanner.start_highlight_background()
+        except Exception as e:
+            logger.warning(f"[Music] 启动后台 highlight worker 失败: {e!r}")
         return True
 
     def _subscribe_speech_events(self):
@@ -2108,15 +2120,22 @@ class MusicController:
         return self._highlight_mode
 
     def mark_highlight_start(self) -> bool:
-        """用户手动标记当前播放位置为高潮起点（+35 秒段）"""
+        """用户手动标记当前播放位置为高潮起点（+35 秒段）。
+
+        同一首歌重复标记时，先清除旧的 manual 记录，避免多行 manual 导致
+        get_highlight 的 ORDER BY confidence DESC 结果不确定。
+        """
         song = self.get_current_song()
         if not song:
             return False
+        song_id = song["id"]
         pos = self.mpv.get_live_playback_time()
         if not pos or pos < 5:
             return False
         end = min(pos + 35.0, self.mpv.get_duration() or pos + 35.0)
-        self.db.save_highlight(song["id"], pos, end, confidence=1.0, source="manual")
+        # 只删 manual 记录，不动其他来源（pychorus/v4 等自动结果由 scanner 维护）
+        self.db.clear_manual_highlight(song_id)
+        self.db.save_highlight(song_id, pos, end, confidence=1.0, source="manual")
         logger.info(f"[Music] manual highlight {song.get('title')}: {pos:.1f}-{end:.1f}s")
         return True
 

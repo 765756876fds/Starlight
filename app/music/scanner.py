@@ -24,7 +24,11 @@ except ImportError:
     MUTAGEN_AVAILABLE = False
 
 from .database import MusicDatabase
-from .highlight_detector import detect_highlight, get_source_tag
+from .highlight_detector import (
+    detect_highlight,
+    get_source_tag,
+    pop_last_source,
+)
 
 
 class MusicScanner:
@@ -50,6 +54,9 @@ class MusicScanner:
         self._error_count = 0
         self._unplayable_count = 0
         self._highlight_running = False  # 防止重复启动worker
+        # 保护 _highlight_running 的锁：start_highlight_background 的"检查→置位→起线程"
+        # 必须原子化，否则两个调用方可能同时读到 False 并各起一个 worker。
+        self._highlight_start_lock = threading.Lock()
 
     def scan(self, full_rescan: bool = False) -> dict[str, int]:
         """
@@ -67,7 +74,11 @@ class MusicScanner:
         self._skipped_count = 0
         self._error_count = 0
         self._unplayable_count = 0
-        self._highlight_running = False  # 防止重复启动worker
+        # 注意：不要在这里重置 _highlight_running。
+        # 启动顺序：controller.start() 先调 start_highlight_background()，随后 main.py
+        # 调 rescan() → scan() → start_highlight_background()。若此处把 running 置 False，
+        # 第二个调用会再启一个并发 worker，两个 worker 写同一首歌产生重复行。
+        # worker 自己在 finally 里复位 _highlight_running。
 
         all_files = self._collect_files()
 
@@ -350,64 +361,97 @@ class MusicScanner:
         return parts[0]
 
     def start_highlight_background(self):
-        """扫描完成后启动后台线程计算所有未处理歌曲的highlight"""
-        if self._highlight_running:
-            logger.debug("Highlight worker已在运行，跳过重复启动")
-            return
-        self._highlight_running = True
-        thread = threading.Thread(
-            target=self._highlight_worker,
-            name="HighlightWorker",
-            daemon=True,
-        )
-        thread.start()
-        logger.info("后台Highlight计算线程已启动")
+        """扫描完成后启动后台线程计算所有未处理歌曲的 highlight。
 
-    def _highlight_worker(self):
-        """后台逐首计算highlight，单线程低优先级"""
+        用 _highlight_start_lock 把"检查 running → 置位 → 起线程"做成临界区，
+        防止两个调用方并发穿透。worker 在 finally 里复位 running，且只在
+        running 仍指向自己这一轮时才复位（防止上一个 worker 已退出后被
+        新 worker 误清）。
+        """
+        with self._highlight_start_lock:
+            if self._highlight_running:
+                logger.debug("Highlight worker 已在运行，跳过重复启动")
+                return
+            self._highlight_running = True
+            self._highlight_gen = getattr(self, "_highlight_gen", 0) + 1
+            my_gen = self._highlight_gen
+            thread = threading.Thread(
+                target=self._highlight_worker,
+                args=(my_gen,),
+                name="HighlightWorker",
+                daemon=True,
+            )
+            thread.start()
+            logger.info("后台Highlight计算线程已启动 (gen=%d)", my_gen)
+
+    def _highlight_worker(self, my_gen: int = 0):
+        """后台逐首计算highlight，单线程低优先级。
+
+        迁移语义（2026-10 V4 恢复后）：
+        - manual 记录永远跳过，不删不写。
+        - 已有当前算法（V4）记录的歌曲跳过。
+        - 其余歌曲（无 highlight、或旧 pychorus 记录）走 V4 计算；
+          V4 成功后用 replace_highlight_atomically 替换旧非 manual 记录；
+          V4 失败则保留旧 pychorus 记录，不删。
+        """
         try:
-            # 找所有没有highlight的歌曲
+            current_tag = get_source_tag()  # 'local_v4_early_rise'
             all_songs = self.db.get_all_songs(limit=10000)
             pending = []
             for song in all_songs:
-                existing = self.db.get_highlight(song["id"])
-                # 已有同版本算法的就跳过
-                if existing and existing.get("source") == get_source_tag():
+                sid = song["id"]
+                # manual 存在即跳过（不依赖 get_highlight 的 top-1）
+                if self.db.has_manual_highlight(sid):
+                    continue
+                existing = self.db.get_highlight(sid)
+                # 已有当前算法记录的就跳过
+                if existing and existing.get("source") == current_tag:
                     continue
                 pending.append(song)
-            
+
             if not pending:
                 logger.info("Highlight: 所有歌曲都已计算，跳过")
                 return
-            
-            logger.info(f"Highlight: 开始后台计算 {len(pending)} 首歌曲")
+
+            logger.info(f"Highlight: 开始后台计算 {len(pending)} 首歌曲（算法={current_tag}）")
             success = 0
             failed = 0
-            
+
             for song in pending:
                 try:
+                    # 双重检查：pending 列表是 worker 启动时拍的快照。如果期间
+                    # 另一个 worker/手动标记已经写了结果，就不要重复写。
+                    if self.db.has_manual_highlight(song["id"]):
+                        continue
+                    now_existing = self.db.get_highlight(song["id"])
+                    if now_existing and now_existing.get("source") == current_tag:
+                        continue
+
                     result = detect_highlight(song["path"])
                     if result:
                         start, end, score = result
-                        # 先删旧记录再存新（防止新旧版本/来源混存）；走 db 公开方法保证写并发安全
-                        self.db.delete_highlights(song["id"])
-                        self.db.save_highlight(
+                        # 原子替换：失败抛异常 → 走 except，旧记录保留
+                        self.db.replace_highlight_atomically(
                             song_id=song["id"],
                             start_time=start,
                             end_time=end,
                             confidence=score,
-                            source=get_source_tag(),
+                            source=pop_last_source(),
                         )
                         success += 1
                     else:
+                        # V4 没出结果：保留旧 pychorus 记录，不删
                         failed += 1
                 except Exception as e:
                     logger.warning(f"Highlight计算失败 {song.get('title', '')}: {e}")
                     failed += 1
-            
+
             logger.info(f"Highlight后台计算完成: 成功{success}, 失败{failed}, 跳过{len(all_songs)-len(pending)}")
         except Exception as e:
             logger.error(f"Highlight后台线程异常: {e}")
         finally:
-            self._highlight_running = False
+            # 只在 gen 仍是自己时才复位，防止上一个 worker 退出后被新 worker 误清
+            with self._highlight_start_lock:
+                if getattr(self, "_highlight_gen", None) == my_gen:
+                    self._highlight_running = False
 
