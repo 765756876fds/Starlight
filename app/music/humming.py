@@ -43,8 +43,12 @@ def _pyaudio_record(out_path: str, seconds: int = RECORD_SECONDS,
     """用 PyAudio（项目既有依赖）录 `seconds` 秒单声道 16bit PCM → wav 文件。"""
     try:
         import pyaudio
-    except ImportError:
-        raise HummingError("pyaudio 未安装，麦克风不可用")
+    except ImportError as e:
+        import sys as _sys
+        raise HummingError(
+            f"pyaudio 导入失败: {e}；当前 Python={_sys.executable}；"
+            f"请用 .venv\\Scripts\\python.exe 启动并 pip install -r requirements.txt"
+        )
     pa = pyaudio.PyAudio()
     try:
         stream = pa.open(

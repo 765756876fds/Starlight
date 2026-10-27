@@ -244,8 +244,12 @@ class VoiceRuntime:
         """麦克风采集循环"""
         try:
             import pyaudio
-        except ImportError:
-            print("[Voice] pyaudio 未安装，麦克风不可用")
+        except ImportError as e:
+            import sys as _sys
+            print(f"[Voice] pyaudio 导入失败: {e}")
+            print(f"[Voice] 当前 Python: {_sys.executable}")
+            print(f"[Voice] 请确认用项目 .venv 启动（.venv\\Scripts\\python.exe main.py），"
+                  f"并执行: .venv\\Scripts\\pip install -r requirements.txt")
             return
 
         audio = pyaudio.PyAudio()
