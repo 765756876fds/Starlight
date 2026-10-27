@@ -29,6 +29,12 @@ class TestAsrBootendFallbacks(unittest.TestCase):
         ab._server_backend = ""
         ab._atexit_registered = False
 
+    def tearDown(self):
+        """每个测试后重置全局状态，防止泄漏到后续测试。"""
+        ab._server_proc = None
+        ab._server_backend = ""
+        ab._atexit_registered = False
+
     def _make_proc(self, exit_code=None):
         """mock 一个 subprocess.Popen 对象。"""
         p = MagicMock()
