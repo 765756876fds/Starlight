@@ -133,6 +133,7 @@ class MusicPanel(QWidget):
     _status_signal = Signal(str)          # 跨线程状态栏消息桥（换源错误等事件，禁直接 setText）
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
     _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
+    _speed_result = Signal(bool, float, int, str)  # 倍速后台结果：ok, rate, idx, err_msg
 
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
@@ -145,6 +146,7 @@ class MusicPanel(QWidget):
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
         self._play_result.connect(self._on_play_result)
+        self._speed_result.connect(self._after_speed)
         self._playing_card_key = None   # 当前播放卡片 key（由 _refresh 同步到各 Delegate）
         # 榜单 tab 状态
         self._rank_groups = {}          # 插件名 -> [分组{title, lists}]
@@ -815,23 +817,23 @@ class MusicPanel(QWidget):
         def _do():
             try:
                 ok = self._music.set_speed(rate)
-                err = None
+                err = "" if ok else "倍速设置失败"
             except Exception as e:
                 ok = False
-                err = e
-            QTimer.singleShot(0, lambda: self._after_speed(ok, rate, idx, err))
+                err = f"倍速失败: {e}"
+            # 跨线程回主线程（QTimer.singleShot 从后台线程调用不绑定主线程事件循环）
+            self._speed_result.emit(ok, rate, idx, err)
 
         threading.Thread(target=_do, daemon=True,
                          name="ui-music-speed").start()
 
-    def _after_speed(self, ok: bool, rate: float, idx: int, err):
-        """主线程回调：根据 Controller 实际结果更新按钮文字。"""
+    def _after_speed(self, ok: bool, rate: float, idx: int, err: str):
+        """主线程槽：根据后台实际结果更新按钮文字。"""
         if ok:
             self._speed_idx = idx
             self.btn_speed.setText(f"倍速 {self._speed_label(rate)}")
         else:
-            self.lbl_status.setText(
-                f"倍速失败: {err}" if err else "倍速设置失败")
+            self.lbl_status.setText(err)
 
     # ---- 播放控制 ----
     def _safe_call(self, fn, *args) -> None:
