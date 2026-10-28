@@ -282,15 +282,7 @@ class MusicController:
                     else:
                         try:
                             pt = self.mpv.get_property("playback-time", timeout=0.5)
-                            # 代次隔离：仅当前代次已真正 loadfile 起播，才允许实时位置
-                            # 写入缓存。在线解析窗口内（新代次已发起但未 loadfile，mpv
-                            # 仍在播旧歌）跳过写入——缓存保持 _play_song 重置的 0.0，
-                            # 旧歌 playback-time 无法污染新歌进度显示。
-                            if pt is not None and \
-                                    self._play_request_id == self._last_loadfile_epoch:
-                                # 只有非 None 才更新；IPC 抖动返回 None 时保留旧快照
-                                self._playback_time_cache = (
-                                    float(pt), _time.perf_counter(), self._paused_snapshot)
+                            self._on_poll_playback_time(pt)
                         except Exception:
                             pass
                     # 影子模式采样（trace 启用时）：把 mpv 遥测喂给影子状态机，
@@ -365,6 +357,18 @@ class MusicController:
         在 start() 里订阅：与模块生命周期一致；测试不 start 则不产生全局订阅残留。"""
         self.event_bus.subscribe(EventType.SPEECH_STARTED, self._on_speech_started)
         self.event_bus.subscribe(EventType.SPEECH_FINISHED, self._on_speech_finished)
+
+    def _on_poll_playback_time(self, pt):
+        """轮询拿到 playback-time 后的状态机：None → IPC 静默计数；有效值 → 清零并写缓存。"""
+        if pt is None:
+            self._mpv_fail_streak += 1
+            if self._mpv_fail_streak >= 3:
+                self._mpv_fail_streak = 0
+                self._try_restart_mpv("ipc-silent")
+        elif self._play_request_id == self._last_loadfile_epoch:
+            self._mpv_fail_streak = 0
+            self._playback_time_cache = (
+                float(pt), time.perf_counter(), self._paused_snapshot)
 
     def _try_restart_mpv(self, reason: str):
         """mpv 崩溃/管道断自愈：后台线程 stop → start(taskkill=False) → 恢复当前歌。
@@ -700,7 +704,8 @@ class MusicController:
             logger.info("[Music] auto_next 拦截：停止已生效，不作废旧上升沿")
             return
         self._invalidate_highlight()
-        song = self.queue.next()
+        is_auto = (self._current_origin() == "auto")
+        song = self.queue.next(auto=is_auto)
         if song:
             self._play_song(song)
         else:

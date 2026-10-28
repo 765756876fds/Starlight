@@ -1232,17 +1232,15 @@ class MoviePanel(QWidget):
             self.lbl_status.setText(f"解析启动失败: {e}")
 
     def _play_parsed_url(self, url: str, title: str = "解析流"):
-        """直接调现有电影 mpv 实例播放（不经过 movie_controller 的 SGP/资源站逻辑）。"""
+        """走 MovieController.play_external_url：pause 音乐 + 状态写入 + 错误回滚一致。"""
         try:
-            mpv = self._movie.mpv
-            alive = bool(getattr(mpv, "_process", None) and mpv._process.poll() is None)
-            if not alive:
-                if not mpv.start(taskkill=False, pipe_timeout=5.0, prop_timeout=0.5):
-                    raise RuntimeError("mpv 启动失败（未找到 mpv 可执行文件）")
-            mpv.loadfile(url)
-            mpv.play()
-            self.lbl_status.setText(f"正在播放：{title}")
-            self.lbl_status.setToolTip(url)
+            ok = self._movie.play_external_url(url, title)
+            if ok:
+                self.lbl_status.setText(f"正在播放：{title}")
+                self.lbl_status.setToolTip(url)
+            else:
+                self.lbl_status.setText("播放失败")
+                glass_info(self, "播放失败", "mpv 启动或 loadfile 失败")
         except Exception as e:
             self.lbl_status.setText("播放失败")
             glass_info(self, "播放失败", f"{type(e).__name__}: {e}")
@@ -1672,9 +1670,34 @@ class _SubtitleDialog(GlassDialog):
 
         self._items = []
         self._thread = None
+        self._worker = None
+        self._closed = False
         self.btn_go.clicked.connect(self._do_search)
         self.edit_kw.returnPressed.connect(self._do_search)
         self.list_subs.itemDoubleClicked.connect(self._on_pick)
+
+    def closeEvent(self, e):
+        """关窗时等待仍运行的线程（有界 3s）；超时则托管给父 panel，避免崩溃。"""
+        t = getattr(self, "_thread", None)
+        w = getattr(self, "_worker", None)
+        if t is not None and t.isRunning():
+            t.wait(3000)
+        self._closed = True
+        if t is not None and t.isRunning():
+            # 3s 后仍在跑：解绑 UI 回调，把线程托管给长寿的 parent panel
+            try:
+                if w is not None:
+                    w.done.disconnect(self._on_load_done)
+            except Exception:
+                pass
+            parent = self.parent()
+            if parent is not None:
+                if not hasattr(parent, "_orphan_threads"):
+                    parent._orphan_threads = []
+                parent._orphan_threads.append((t, w))
+                t.finished.connect(lambda: parent._orphan_threads.remove((t, w))
+                                   if (t, w) in parent._orphan_threads else None)
+        super().closeEvent(e)
 
     def _do_search(self):
         # 防重入：字幕搜索线程仍在运行则忽略本次
@@ -1718,6 +1741,10 @@ class _SubtitleDialog(GlassDialog):
         sub_id = item.data(Qt.UserRole)
         if sub_id is None:
             return
+        # 双击连点守卫：上一个字幕加载线程未结束时忽略，避免覆盖 self._thread
+        # 导致旧 QThread Python 对象被 GC 回收后 Qt 原生崩溃。
+        if getattr(self, "_thread", None) is not None and self._thread.isRunning():
+            return
         self.lbl_state.setText("下载中...")
         self._thread = QThread()
         self._worker = _SubtitleLoadWorker(self._movie, sub_id)
@@ -1728,6 +1755,8 @@ class _SubtitleDialog(GlassDialog):
         self._thread.start()
 
     def _on_load_done(self, ok: bool, msg: str):
+        if getattr(self, "_closed", False):
+            return
         if ok:
             self.lbl_state.setText(f"字幕已加载: {msg}")
         else:

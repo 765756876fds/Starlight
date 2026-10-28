@@ -137,13 +137,8 @@ class AutomationPanel(QWidget):
                     pass
             print(f"[UI] auto_queue config saved: {vals}")
             try:
-                import yaml
-                path = "config/settings.yaml"
-                with open(path, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                data.setdefault("automation", {}).update(vals)
-                with open(path, "w", encoding="utf-8") as f:
-                    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+                from app.ui.settings_store import save_settings_yaml
+                save_settings_yaml({"automation": vals})
             except Exception as e:
                 print(f"[UI] save yaml failed: {e}")
 
@@ -160,14 +155,8 @@ class AutomationPanel(QWidget):
         val = dlg.value()
         try:
             cfg.accept_delay = val
-            # 同时保存到yaml配置（沿用现有模式）
-            import yaml
-            path = "config/settings.yaml"
-            with open(path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-            data.setdefault("automation", {})["accept_delay"] = val
-            with open(path, "w", encoding="utf-8") as f:
-                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+            from app.ui.settings_store import save_settings_yaml
+            save_settings_yaml({"automation": {"accept_delay": val}})
             print(f"[UI] accept_delay saved: {val}")
         except Exception as e:
             print(f"[UI] save accept_delay failed: {e}")
@@ -187,14 +176,8 @@ class AutomationPanel(QWidget):
         if dlg.exec():
             try:
                 setattr(cfg, field, dlg.values())
-                # 同时保存到yaml配置
-                import yaml
-                path = "config/settings.yaml"
-                with open(path, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                data.setdefault("automation", {})[field] = dlg.values()
-                with open(path, "w", encoding="utf-8") as f:
-                    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+                from app.ui.settings_store import save_settings_yaml
+                save_settings_yaml({"automation": {field: dlg.values()}})
                 print(f"[UI] {field} saved: {dlg.values()}")
             except Exception as e:
                 print(f"[UI] save {field} failed: {e}")

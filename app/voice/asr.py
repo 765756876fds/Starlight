@@ -264,8 +264,16 @@ class ASRManager:
         self._active_engine: ASREngine | None = None
         self._lock = threading.Lock()
 
-    def initialize(self):
-        """初始化所有引擎"""
+    def initialize(self, bootstrap_result: str = "unknown"):
+        """初始化所有引擎。
+
+        bootstrap_result:
+          "ok"      — main.py 已确认 /v1/models data 非空；跳过 ensure_and_launch，
+                      引擎单次探测（retry_seconds=0）即可。
+          "fail"    — main.py 已确认 ASR 不可用；跳过 ensure_and_launch，
+                      引擎单次探测，不做 30s 无意义等待。
+          "unknown" — 旧调用路径：保持原有行为（再跑一次 ensure_and_launch + 30s 等待）。
+        """
         engine_type = self.config.get("engine", "qwen3_server")
 
         # 主引擎：Qwen3-ASR llama-server（HTTP API）
@@ -274,11 +282,15 @@ class ASRManager:
             # 轻量版自举（2026-10-18）：模型缺失→hf-mirror 国内镜像自动下载；
             # 8080 无服务→自动拉起 llama-server（退出时 atexit 连带清理，不留僵尸）。
             # 故障隔离：任何异常只打印，不阻断 ASR 使用外部服务。
-            try:
-                from app.voice.asr_bootstrap import ensure_and_launch
-                ensure_and_launch(self.config)
-            except Exception as e:
-                print(f"[ASR] 自举异常（ASR 仍可用外部 llama-server）: {e}")
+            # 阶段 2：若 main.py 已经做过 bootstrap（ok/fail），跳过重复拉起。
+            if bootstrap_result == "unknown":
+                try:
+                    from app.voice.asr_bootstrap import ensure_and_launch
+                    ensure_and_launch(self.config)
+                except Exception as e:
+                    print(f"[ASR] 自举异常（ASR 仍可用外部 llama-server）: {e}")
+            else:
+                print(f"[ASR] 跳过重复 bootstrap（main.py 已确认结果={bootstrap_result}）")
             qwen_server = Qwen3ServerASR(
                 base_url=server_config.get("base_url", "http://127.0.0.1:8080/v1"),
                 model=server_config.get("model", "default"),
@@ -299,8 +311,10 @@ class ASRManager:
             except ImportError:
                 print("[ASR] llama-cpp-python 未安装，跳过 Qwen3-ASR")
 
-        # 加载第一个可用引擎（首次加载：允许长等待模型就绪）
-        self._load_next_engine(initial=True)
+        # 加载第一个可用引擎。
+        # bootstrap_result != "unknown" 时服务状态已由 main.py 确认，用单次探测（0s）；
+        # 否则保留首次长等待（30s）。
+        self._load_next_engine(initial=(bootstrap_result == "unknown"))
 
     def _load_next_engine(self, initial: bool = False) -> bool:
         """加载下一个可用引擎。
@@ -355,7 +369,11 @@ class ASRManager:
         return self._active_engine is not None and self._active_engine.is_available()
 
     def unload_all(self):
-        """卸载所有引擎"""
+        """卸载所有引擎并清空列表（stop() 后下次 start() → initialize() 不重复注册）。"""
         for engine in self.engines:
-            engine.unload()
+            try:
+                engine.unload()
+            except Exception as e:
+                print(f"[ASR] 引擎卸载异常（继续清理其他）: {e}")
+        self.engines.clear()
         self._active_engine = None

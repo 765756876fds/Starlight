@@ -418,9 +418,11 @@ class MusicScanner:
             failed = 0
 
             for song in pending:
+                # 代次检查：新 worker 已启动则旧 worker 立即退出，不再启动新检测
+                if getattr(self, "_highlight_gen", None) != my_gen:
+                    logger.info(f"Highlight worker gen={my_gen} 已过期，退出")
+                    return
                 try:
-                    # 双重检查：pending 列表是 worker 启动时拍的快照。如果期间
-                    # 另一个 worker/手动标记已经写了结果，就不要重复写。
                     if self.db.has_manual_highlight(song["id"]):
                         continue
                     now_existing = self.db.get_highlight(song["id"])
@@ -430,14 +432,20 @@ class MusicScanner:
                     result = detect_highlight(song["path"])
                     if result:
                         start, end, score = result
-                        # 原子替换：失败抛异常 → 走 except，旧记录保留
-                        self.db.replace_highlight_atomically(
-                            song_id=song["id"],
-                            start_time=start,
-                            end_time=end,
-                            confidence=score,
-                            source=pop_last_source(),
-                        )
+                        # 代次检查与写入必须在同一临界区：
+                        # 新 worker 在 _highlight_start_lock 内递增 gen，
+                        # 这里持同一把锁检查 gen，杜绝"检查通过→新 gen→旧写入"竞态。
+                        with self._highlight_start_lock:
+                            if getattr(self, "_highlight_gen", None) != my_gen:
+                                logger.info(f"Highlight worker gen={my_gen} 提交前已过期，丢弃结果")
+                                return
+                            self.db.replace_highlight_atomically(
+                                song_id=song["id"],
+                                start_time=start,
+                                end_time=end,
+                                confidence=score,
+                                source=pop_last_source(),
+                            )
                         success += 1
                     else:
                         # V4 没出结果：保留旧 pychorus 记录，不删

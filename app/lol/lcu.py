@@ -48,6 +48,7 @@ class LCUConnection:
         self._ws: Any | None = None
 
         self._connected = False
+        self._fail_streak = 0  # 连续请求异常计数；达阈值才 _disconnect()
         self._running = False
         self._reconnect_thread: threading.Thread | None = None
         self._event_listeners: list[callable] = []
@@ -400,11 +401,14 @@ class LCUConnection:
                 except json.JSONDecodeError:
                     body = resp.text
             status = resp.status_code
+            self._fail_streak = 0
             return status, body
         except Exception as e:
             print(f"[LCU] 请求失败 {method} {endpoint}: {e}")
-            # 标记断开，让 _reconnect_loop() 重新 discovery 新端口
-            self._disconnect()
+            self._fail_streak += 1
+            if self._fail_streak >= 2 and self._connected:
+                self._fail_streak = 0
+                self._disconnect()
             return 0, None
         finally:
             self._request_lock.release()

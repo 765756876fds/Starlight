@@ -33,7 +33,7 @@ DEFAULT_SOURCE_URL = "https://360zyzz.com/api.php/provide/vod/from/360m3u8/at/js
 DEFAULT_IPC_PIPE = r"\\.\pipe\lol_movie_mpv"
 # Assrt 字幕 API（直连被重置，必须走代理——已实测）
 ASSRT_BASE = "https://api.assrt.net/v1/sub"
-PROXY = "http://127.0.0.1:7897"
+PROXY = "http://127.0.0.1:7897"  # 兼容默认；可被 movie.assrt_proxy 配置覆盖（空串=直连）
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 # 字幕假条目（网盘分享链接说明）：内容含这些 → 跳过
@@ -155,6 +155,8 @@ class MovieController:
         self._auto_next = bool(self._config.get("movie.auto_next", True))
         # idle 上升沿检测：mpv --idle=yes 启动即 idle，初始 True 防首播误触发
         self._last_idle = True
+        self._external_url_mode = False  # play() 正常剧集模式；play_external_url 置 True
+        self._external_url_seen_active = False  # 外部 URL：是否已观察到 mpv 离开 idle
         self._sub_searched = set()
         # 崩溃自愈状态（对齐音乐链 _try_restart_mpv：防重入 + 3 次/5 分钟上限）
         self._recover_lock = threading.Lock()
@@ -162,6 +164,10 @@ class MovieController:
         self._recover_count = 0         # 当前窗口内已恢复次数
         self._recover_window_ts = 0.0   # 窗口起点
         self._recover_gave_up = False   # 超限放弃（停止自愈）
+        # IPC 静默检测（进程活但不响应）：宽限期 10s + 连续 10 次 None 才恢复
+        self._ipc_fail_streak = 0
+        self._mpv_start_ts = time.time()
+        self._ipc_recover_triggered = False
         self._subscribe()
         self._register_commands()
 
@@ -411,6 +417,47 @@ class MovieController:
         self._current = item
         self._current_index = idx
         self._last_idle = False  # 新播放开始，等播完再触发连播
+        self._external_url_mode = False  # 切回正常剧集模式
+        self._external_url_seen_active = False
+        self._write_state(playing=True, paused=False)
+        return True
+
+    def play_external_url(self, url: str, title: str = "外部流") -> bool:
+        """播放任意 URL（解析出来的外链，无 vod_id/剧集结构）。
+
+        与 play() 同语义：先 pause 音乐互斥，启动 mpv，loadfile。
+        不写 _current/_current_index（不是资源站条目，无连播/切集）。
+        失败返回 False；成功返回 True。
+        """
+        if not url:
+            return False
+        music = self._music
+        if music is not None:
+            try:
+                music.pause()
+            except Exception as e:
+                logger.error(f"[Movie] 暂停音乐失败: {e}")
+        wid = self._embed_wid if (self._embed and self._embed_wid) else None
+        if not self.mpv.is_running():
+            if not self.mpv.start(taskkill=False, wid=wid):
+                print("[Movie] mpv 启动失败（外部 URL）")
+                return False
+        try:
+            resp = self.mpv.loadfile(url)
+        except Exception as e:
+            logger.error(f"[Movie] loadfile(外部 URL) 异常: {e!r}")
+            return False
+        if resp is None or (isinstance(resp, dict) and resp.get("error") != "success"):
+            logger.error("[Movie] loadfile(外部 URL) 未确认/失败")
+            return False
+        self.mpv.set_property("pause", False)
+        try:
+            self.mpv._properties["pause"] = False
+        except Exception:
+            pass
+        self._last_idle = False
+        self._external_url_mode = True  # 外部 URL：播完不连播，idle 上升沿写 playing=False
+        self._external_url_seen_active = False  # 缓冲期保护
         self._write_state(playing=True, paused=False)
         return True
 
@@ -426,12 +473,39 @@ class MovieController:
     def tick(self):
         """供面板轮询调用（500ms）：检测 mpv idle 上升沿 → 播完自动下一集。
         手动 stop（_current=None）/ 开关关 → 不连播；末集播完 → 停（不循环）。"""
+        # 外部 URL 模式：播完 idle 上升沿 → 写 playing=False，不连播。
+        # 缓冲期保护：loadfile 成功 ≠ 媒体已播放，先观察到 idle=False 才认可"正在播"。
+        if getattr(self, "_external_url_mode", False):
+            now_idle = self.mpv.get_idle_active()
+            if not self._external_url_seen_active:
+                # 尚未观察到播放：idle=False → 标记已开始；idle=True 继续等（缓冲）
+                if not now_idle:
+                    self._external_url_seen_active = True
+            elif now_idle and not self._last_idle:
+                # 已开始播放后出现 idle 上升沿 → 播完
+                self._external_url_mode = False
+                self._external_url_seen_active = False
+                self._write_state(playing=False, paused=False)
+            self._last_idle = now_idle
+            return
         if self._current is None or not self._auto_next:
             self._last_idle = self.mpv.get_idle_active()
             return
         if not self.mpv.is_running():
             return
         now_idle = self.mpv.get_idle_active()
+        # IPC 静默检测：None = 进程活但 IPC 无响应
+        if now_idle is None:
+            self._ipc_fail_streak += 1
+            if (not self._ipc_recover_triggered
+                    and (time.time() - self._mpv_start_ts) > 10.0
+                    and self._ipc_fail_streak >= 10
+                    and self.mpv.is_running()):
+                self._ipc_recover_triggered = True
+                logger.warning("[Movie] IPC 连续 10 次无响应，触发重启")
+                self.restart_current()
+        else:
+            self._ipc_fail_streak = 0
         if now_idle and not self._last_idle:
             # 播完一集（idle 上升沿）→ 连播下一集
             self._advance_episode()
@@ -537,6 +611,9 @@ class MovieController:
         → loadfile 当前集 URL → seek 回崩溃前位置（续播，位置取最后一次成功轮询缓存）。
         返回 True=已调度恢复；False=超限放弃或无可恢复上下文（调用方直接收尾）。
         """
+        self._ipc_fail_streak = 0
+        self._mpv_start_ts = time.time()
+        self._ipc_recover_triggered = False
         with self._recover_lock:
             if self._recover_pending:
                 return True            # 已在恢复中（防重入：不重复起线程）
@@ -687,6 +764,14 @@ class MovieController:
         """Assrt Token（settings.yaml movie.assrt_token，永不 stage）。"""
         return str(self._config.get("movie.assrt_token") or "").strip()
 
+    def _assrt_proxies(self):
+        """读 movie.assrt_proxy 配置；默认沿用历史 PROXY；空串 → 直连（返回 None）。"""
+        try:
+            p = str(self._config.get("movie.assrt_proxy", PROXY) or "").strip()
+        except Exception:
+            p = PROXY
+        return {"http": p, "https": p} if p else None
+
     def subtitle_dir(self) -> str:
         d = (self._config.get("movie.subtitle_dir")
              or os.path.join(self._config.get("app.data_dir", str(PROJECT_ROOT / "data")),
@@ -708,7 +793,7 @@ class MovieController:
             r = requests.get(f"{ASSRT_BASE}/search",
                              params={"q": keyword.strip(), "cnt": 15, "pos": 0},
                              headers=headers, timeout=timeout,
-                             proxies={"http": PROXY, "https": PROXY})
+                             proxies=self._assrt_proxies())
             data = parse_cms_response(r.text)
             if data.get("status") != 0:
                 return []
@@ -737,7 +822,7 @@ class MovieController:
             return False, "未配置字幕 Token"
         try:
             headers = dict(UA, Authorization=f"Bearer {token}")
-            proxies = {"http": PROXY, "https": PROXY}
+            proxies = self._assrt_proxies()
             r = requests.get(f"{ASSRT_BASE}/detail", params={"id": sub_id},
                              headers=headers, timeout=timeout, proxies=proxies)
             data = parse_cms_response(r.text)

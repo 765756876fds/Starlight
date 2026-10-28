@@ -136,16 +136,27 @@ class VoiceRuntime:
         self._interrupt_thread: threading.Thread | None = None
         self._interrupt_stop = threading.Event()
 
-    def start(self):
-        """启动语音运行时"""
+    def start(self, bootstrap_result: str = "unknown"):
+        """启动语音运行时。
+
+        bootstrap_result:
+          "ok"        — main.py 已确认 ASR 服务就绪，跳过重复 ensure_and_launch 和 30s 等待；
+          "fail"      — main.py 已确认 ASR 不可用，跳过重复 bootstrap 和 30s 等待；
+          "disabled"  — asr.enabled=false，完全不初始化 ASR（TTS/其他仍可用）；
+          "unknown"   — 旧调用路径（未走 main.py initialize），保持原有行为。
+        """
         if self._running:
             return
 
         self._running = True
 
+        if bootstrap_result == "disabled":
+            print("[Voice] asr.enabled=false，跳过 ASR 初始化（TTS 仍可用）")
+            return
+
         # 初始化 ASR（加载模型可能需要时间）
         print("[Voice] 正在加载 ASR 模型...")
-        self.asr.initialize()
+        self.asr.initialize(bootstrap_result=bootstrap_result)
 
         # 采集/识别解耦：识别线程随 VoiceRuntime 生命周期（start 创建、stop 退出），
         # toggle_mic 只开关采集线程（识别线程常驻等待队列，无状态）。

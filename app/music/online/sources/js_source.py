@@ -560,9 +560,22 @@ class JSMusicSource(MusicSource):
         return r.get("lyric")
 
     def close(self) -> None:
+        """有界回收 node 子进程：terminate → wait(2s) → kill。幂等。"""
         self._closed = True
-        if self._proc:
-            try:
-                self._proc.terminate()
-            except Exception:
-                pass
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=2.0)
+                    except Exception:
+                        pass
+        except Exception:
+            pass

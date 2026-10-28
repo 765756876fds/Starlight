@@ -153,29 +153,36 @@ class OnlineSourceManager:
 
     def get_play_url(self, track: OnlineTrack, quality: str | None = None) -> dict | None:
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
+        tried = set()
         src = self._sources.get(track.source_name)
         if src is not None:
+            tried.add(id(src))
             try:
-                return self._normalize_play_result(self._call_get_url(src, track, quality))
+                r = self._normalize_play_result(self._call_get_url(src, track, quality))
+                if r:
+                    return r
             except Exception as e:
                 self._errors[track.source_name] = str(e)
-                return None
-        # 定向 miss：track.source_name 可能是 js_bridge 的内部插件名（如"酷狗音乐"），
-        # 而非注册名。优先调 accepts 命中的源（js_bridge 天然按插件名路由），
-        # 避免遍历 http 源对陌生 track 发无谓 HTTP 请求（旧行为每个源超时 8s）。
+                logger.warning(f"定向源 {track.source_name} 失败，回退其他源: {e}")
+        # 定向 miss 或定向失败：遍历 accepts 命中的源（不重复定向源）
         for s in self._sources.values():
+            if id(s) in tried:
+                continue
             try:
                 acc = getattr(s, "accepts", None)
                 if acc is None or not acc(track):
                     continue
+                tried.add(id(s))
                 r = self._normalize_play_result(self._call_get_url(s, track, quality))
                 if r:
                     return r
             except Exception as e:
                 logger.warning(f"获取在线源失败: {e}")
                 continue
-        # 仍 miss（未知 track / accepts 源也失败）：回退旧行为全遍历
+        # 仍 miss：回退全遍历（不重复已试源）
         for s in self._sources.values():
+            if id(s) in tried:
+                continue
             try:
                 r = self._normalize_play_result(self._call_get_url(s, track, quality))
                 if r:

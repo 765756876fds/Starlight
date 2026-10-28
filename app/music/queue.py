@@ -84,10 +84,10 @@ class PlayQueue:
                 return self._queue[next_index]
             return None
 
-    def next(self) -> dict[str, Any] | None:
-        """播放下一首，返回歌曲"""
+    def next(self, auto: bool = False) -> dict[str, Any] | None:
+        """播放下一首，返回歌曲。auto=True=自然结束（单曲重播），False=用户手动。"""
         with self._lock:
-            next_index = self._get_next_index()
+            next_index = self._get_next_index(auto=auto)
             if next_index is not None:
                 self._current_index = next_index
                 self._add_history(next_index)
@@ -145,13 +145,20 @@ class PlayQueue:
                 return self._queue[index]
             return None
 
-    def _get_next_index(self) -> int | None:
-        """计算下一首的索引"""
+    def _get_next_index(self, auto: bool = False) -> int | None:
+        """计算下一首的索引。auto=True=自然结束（单曲重播当前），False=用户手动。"""
         if not self._queue:
             return None
 
-        if self._play_mode == PlayMode.REPEAT_ONE:
+        if self._play_mode == PlayMode.REPEAT_ONE and auto:
             return max(self._current_index, 0)
+
+        if self._play_mode == PlayMode.REPEAT_ONE and not auto:
+            # 手动切歌：单曲模式下也跳到下一首
+            next_index = self._current_index + 1
+            if next_index >= len(self._queue):
+                next_index = 0
+            return next_index
 
         if self._play_mode == PlayMode.SHUFFLE:
             return self._get_shuffle_next()
