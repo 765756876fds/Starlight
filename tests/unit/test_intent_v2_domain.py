@@ -161,3 +161,32 @@ class TestV24HighlightRuleFix:
         assert RuleBasedIntent.match("下一首").intent_type == CommandType.MUSIC_NEXT
 
 
+class TestV242FalseTriggerGuard:
+    @pytest.mark.parametrize("text", [
+        "不要切歌", "别切歌", "先别切歌",
+        "不要暂停电影", "别继续播放",
+        "不要播放电影高潮", "不要停止音乐",
+        "今天这首歌还挺好听", "我不想看电影",
+        "这个电影名字叫下一集", "我刚才说的不是让你切歌",
+    ])
+    def test_negation_and_chat_return_unknown(self, text):
+        assert RuleBasedIntent.match(text) is None
+
+    @pytest.mark.parametrize("text, expected", [
+        ("下一首", CommandType.MUSIC_NEXT),
+        ("上一首", CommandType.MUSIC_PREV),
+        ("下一集", CommandType.MOVIE_NEXT_EPISODE),
+        ("上一集", CommandType.MOVIE_PREV_EPISODE),
+        ("暂停电影", CommandType.MOVIE_PAUSE),
+        ("继续电影", CommandType.MOVIE_RESUME),
+        ("播放高潮", CommandType.MUSIC_HIGHLIGHT),
+        ("停止音乐", CommandType.MUSIC_STOP),
+    ])
+    def test_explicit_commands_still_work(self, text, expected):
+        assert RuleBasedIntent.match(text).intent_type == expected
+
+    def test_stop_tts_still_works(self):
+        assert RuleBasedIntent.match("停止说话").intent_type == "system.stop_tts"
+
+
+
