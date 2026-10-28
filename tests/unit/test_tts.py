@@ -6,6 +6,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 import os
+import subprocess
 import sys
 import time
 import unittest
@@ -27,6 +28,44 @@ class FakeCommunicate:
             f.write(b"\x00" * 2048)
 
 
+class FakeMpvProcess:
+    """离线 fake：替代真实 mpv.exe 子进程。
+
+    模拟一个 duration 秒后自然退出的播放器；支持 terminate/kill/poll/wait，
+    使 TTS 控制器的完整状态机（IDLE→GENERATING→PLAYING→IDLE、stop 打断、
+    代际防护、异步收尾）在不安装 mpv.exe 的 CI runner 上也可预测地跑通。
+    不伪造播放成功：真实 mpv 路径解析仍走原逻辑，只是 Popen 不真拉起进程。
+    """
+
+    def __init__(self, duration: float = 1.5):
+        self._start = time.time()
+        self._duration = duration
+        self._terminated = False
+        self.returncode = None
+
+    def poll(self):
+        if self._terminated or (time.time() - self._start) >= self._duration:
+            self.returncode = self.returncode if self.returncode is not None else 0
+            return self.returncode
+        return None
+
+    def wait(self, timeout=None):
+        deadline = time.time() + (timeout if timeout is not None else self._duration + 1)
+        while time.time() < deadline:
+            if self.poll() is not None:
+                return
+            time.sleep(0.02)
+        raise subprocess.TimeoutExpired("fake-mpv", timeout)
+
+    def terminate(self):
+        self._terminated = True
+        self.returncode = -15
+
+    def kill(self):
+        self._terminated = True
+        self.returncode = -9
+
+
 class TestTTSController(unittest.TestCase):
     """TTS 控制器测试"""
 
@@ -37,12 +76,22 @@ class TestTTSController(unittest.TestCase):
             "rate": "+0%",
             "volume": "+0%",
             "output_dir": "./data/tts_test",
-            "mpv_path": r"D:\新建文件夹 (2)\mpv.exe",
+            # 不写死开发机 mpv 路径；sys.executable 必然存在，仅用于通过
+            # _resolve_mpv_path 的 isfile 检查，真实 Popen 由下面的 mock 拦截。
+            "mpv_path": sys.executable,
             "enabled": True,
         }
         # 离线化：mock Edge TTS（避免真实网络 403 依赖）
         self._edge_patcher = mock.patch("edge_tts.Communicate", FakeCommunicate)
         self._edge_patcher.start()
+        # 离线化：mock mpv 子进程（避免 CI runner 无 mpv.exe）。
+        # side_effect 每次调用新建 FakeMpvProcess，保证连续 speak/压力测试里
+        # 每次播放都是独立的"新进程"，不共享已 terminate 的旧实例。
+        self._popen_patcher = mock.patch(
+            "app.speech.tts.subprocess.Popen",
+            side_effect=lambda *a, **k: FakeMpvProcess(),
+        )
+        self._popen_patcher.start()
         self.tts = TTSController(self.config)
         self.tts.start()
 
@@ -51,6 +100,7 @@ class TestTTSController(unittest.TestCase):
         self.tts.stop()
         time.sleep(0.5)
         self._edge_patcher.stop()
+        self._popen_patcher.stop()
 
     def _wait_state(self, state, timeout=3.0):
         """轮询等待 TTS 进入指定状态。
