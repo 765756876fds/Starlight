@@ -59,6 +59,8 @@ class CommandType:
     MOVIE_SEARCH_PLAY = "movie.search_play"
     MOVIE_PAUSE = "movie.pause"
     MOVIE_RESUME = "movie.resume"
+    MOVIE_NEXT_EPISODE = "movie.next_episode"
+    MOVIE_PREV_EPISODE = "movie.prev_episode"
 
     # ===== GameAlarm 命令 =====
     ALARM_CREATE_FLASH = "alarm.create_flash"

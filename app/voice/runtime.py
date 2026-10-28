@@ -595,6 +595,19 @@ class VoiceRuntime:
         except Exception:
             return None
 
+    def _enqueue_speak(self, text: str, category: str = "voice"):
+        try:
+            sq = self.speech_queue_provider() if self.speech_queue_provider else None
+            if sq is None:
+                return
+            from app.speech.speech_queue import SpeechItem, PRIORITY_B
+            import time as _t
+            sq.enqueue(SpeechItem(text=text, priority=PRIORITY_B,
+                                  expire_at=_t.time() + 30.0,
+                                  category=category, interruptible=True))
+        except Exception as e:
+            print(f"[Voice] _enqueue_speak failed: {e}")
+
     def _global_pause(self):
         """V2-2：裸"暂停"→ 暂停所有实际在播的媒体，实时 IPC 确认后写快照。"""
         self._global_pause_snapshot = {}
@@ -818,6 +831,19 @@ class VoiceRuntime:
                 params=params,
                 source="voice",
             ))
+
+        elif intent_type in (CommandType.MOVIE_NEXT_EPISODE, CommandType.MOVIE_PREV_EPISODE):
+            paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
+            if paused is None:
+                self._enqueue_speak("电影状态无法确认", "voice_movie_episode")
+            elif paused:
+                self._enqueue_speak("电影当前暂停中", "voice_movie_episode")
+            else:
+                self.command_bus.execute(Command(
+                    command_type=intent_type,
+                    params=params,
+                    source="voice",
+                ))
 
         elif intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
                              CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,

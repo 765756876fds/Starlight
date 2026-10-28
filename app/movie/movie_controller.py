@@ -187,6 +187,8 @@ class MovieController:
             bus.register(CommandType.MOVIE_SEARCH_PLAY, self._cmd_search_play)
             bus.register(CommandType.MOVIE_PAUSE, lambda c: self.pause())
             bus.register(CommandType.MOVIE_RESUME, lambda c: self.resume())
+            bus.register(CommandType.MOVIE_NEXT_EPISODE, lambda c: self.next_episode())
+            bus.register(CommandType.MOVIE_PREV_EPISODE, lambda c: self.prev_episode())
         except Exception as e:
             logger.error(f"[Movie] 注册语音命令失败: {e}")
 
@@ -562,6 +564,37 @@ class MovieController:
             logger.error(f"[Movie] 自动连播 loadfile 失败: error={err}")
             return False
         self._current_index = nxt
+        return True
+
+    def next_episode(self) -> bool:
+        """语音切下一集（复用 _advance_episode）。"""
+        return self._advance_episode()
+
+    def prev_episode(self) -> bool:
+        """语音切上一集；首集返回 False。"""
+        item = self._current
+        if item is None:
+            return False
+        cur = self._current_index or 0
+        if cur <= 0:
+            logger.info("[Movie] 已是首集，无法切上一集")
+            return False
+        prev = cur - 1
+        eps = self.episodes(item)
+        if prev >= len(eps):
+            return False
+        name, url = eps[prev]
+        try:
+            resp = self.mpv.loadfile(url)
+        except Exception as e:
+            logger.error(f"[Movie] 切上一集 loadfile 异常: {e!r}")
+            return False
+        if resp is None:
+            return False
+        if not isinstance(resp, dict) or resp.get("error") != "success":
+            return False
+        self._current_index = prev
+        logger.info(f"[Movie] 切到上一集: {name}")
         return True
 
     def stop(self):
