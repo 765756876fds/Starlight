@@ -2034,7 +2034,7 @@ class MusicController:
         self.mpv.set_volume(volume)
         self.state_store.set(StateNamespace.MUSIC, "volume", volume)
 
-    def volume_up(self, step: int = 5):
+    def volume_up(self, step: int = 10):
         """音量增加"""
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
@@ -2042,7 +2042,7 @@ class MusicController:
         current = self.mpv.get_volume()
         self.set_volume(current + step)
 
-    def volume_down(self, step: int = 5):
+    def volume_down(self, step: int = 10):
         """音量减少"""
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")

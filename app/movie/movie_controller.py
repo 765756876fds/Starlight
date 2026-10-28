@@ -1053,8 +1053,13 @@ class MovieController:
     def set_volume(self, vol):
         if self.mpv.is_running():
             self.mpv.set_property("volume", max(0, min(100, int(vol))))
+            try:
+                from ..core.state_store import StateNamespace
+                self.state_store.set(StateNamespace.MOVIE, "volume", max(0, min(100, int(vol))))
+            except Exception:
+                pass
 
-    def volume_up(self, step: int = 5):
+    def volume_up(self, step: int = 10):
         if not self.mpv.is_running():
             return
         try:
@@ -1065,7 +1070,7 @@ class MovieController:
         except Exception:
             return
 
-    def volume_down(self, step: int = 5):
+    def volume_down(self, step: int = 10):
         if not self.mpv.is_running():
             return
         try:
