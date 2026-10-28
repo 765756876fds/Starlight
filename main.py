@@ -137,6 +137,13 @@ class Application:
         # LoadingPanel 构造后回放。字典读写必须持锁。
         self._module_status: dict[str, str] = {}
         self._module_status_lock = threading.Lock()
+        # 阶段 2：把 initialize() 里 bootstrap 的结果传给 start() → voice.start()，
+        # 避免 ASRManager.initialize() 重复 ensure_and_launch 和 30s 等待。
+        # "ok" / "fail" / "unknown"（未走 initialize，旧调用路径）。
+        self._voice_bootstrap_result = "unknown"
+        # 本进程自己拉起的 legacy llama-server（bootstrap 路径用 asr_bootstrap 内部登记）。
+        # 外部复用的 ASR 不登记，退出时不杀。
+        self._asr_legacy_proc = None
 
     _initialized = False
     def _set_module_status(self, key: str, status: str):
@@ -166,15 +173,25 @@ class Application:
         for key, status in snapshot.items():
             w._loading.status_changed.emit(key, status)
 
-    def _ensure_asr_running(self):
-        """自动拉起 ASR llama-server（如果端口 8080 未运行）"""
+    def _ensure_asr_running(self) -> bool:
+        """自动拉起 ASR llama-server（如果端口 8080 未运行）。
+
+        返回 True 表示当前代码定义的"就绪"条件成立（外部已有服务 / 本进程拉起后健康检查通过）；
+        返回 False 表示模型缺失、后端全灭、legacy 超时等任何失败路径。
+        不抛异常——失败由调用方按状态灯 fail 处理，不阻断其他模块。
+        """
         # 优先走 asr_bootstrap（内置模型发现 + 空模型拦截 + 启动校验）
         # 开关 asr.bootstrap_enabled 默认 True；关闭时保持旧行为
         try:
             if self.config_data.get("asr", {}).get("bootstrap_enabled", True):
-                from app.voice.asr_bootstrap import ensure_and_launch
+                from app.voice.asr_bootstrap import ensure_and_launch, _is_server_up
                 ensure_and_launch(self.config_data.get("asr", {}))
-                return
+                # ensure_and_launch 返回 None 既可能是"外部已有服务复用"（成功），
+                # 也可能是"全部后端失败"（失败）。用 _is_server_up() 区分。
+                try:
+                    return bool(_is_server_up())
+                except Exception:
+                    return False
         except Exception as _e:
             logger.info(f"[ASR] asr_bootstrap 异常，回退内置拉起逻辑: {_e}")
         # 以下为旧逻辑（bootstrap_enabled=False 或 asr_bootstrap 异常时执行）
@@ -200,22 +217,32 @@ class Application:
                 return False
 
         if _port_in_use():
-            logger.info(f"[ASR] 端口 {port} 已在运行，直接连接")
-            return
+            # 端口占用 ≠ 就绪：可能是其他服务，也可能是 llama-server 刚监听未加载模型。
+            # 与 bootstrap 同一标准：/v1/models 返回 200 且 data 非空。
+            try:
+                import requests as _rq2
+                resp = _rq2.get(f"http://{host}:{port}/v1/models", timeout=1.5)
+                if resp.status_code == 200 and resp.json().get("data"):
+                    logger.info(f"[ASR] 端口 {port} 已有可用 ASR 服务，直接连接")
+                    return True
+                logger.info(f"[ASR] 端口 {port} 被占用但非可用 ASR（data 空），继续尝试拉起")
+            except Exception as e:
+                logger.info(f"[ASR] 端口 {port} 被占用但健康检查失败: {e}")
+            return False
 
         # 需要启动 ASR
         model_path = asr_config.get("qwen3_asr_model", "")
         mmproj_path = asr_config.get("qwen3_asr_mmproj", "")
         if not model_path:
             logger.warning("[ASR] WARNING: 模型路径为空且内置模型未发现，跳过拉起（避免 router 模式）")
-            return
+            return False
 
         # llama-server 路径：配置 → 自动搜索（PATH / LM Studio 扩展目录）→ 降级
         llama_server = find_llama_server(asr_config)
         if not llama_server:
             logger.warning("[ASR] WARNING: llama-server 未找到（设置 asr.llama_server，或安装 LM Studio 扩展）")
             logger.info("[ASR] 请手动启动 ASR，或检查 llama-server 路径")
-            return
+            return False
 
         logger.info(f"[ASR] 端口 {port} 未运行，正在自动拉起 llama-server...")
         logger.info(f"[ASR] model: {model_path}")
@@ -232,36 +259,77 @@ class Application:
         ]
 
         try:
-            subprocess.Popen(
-                args,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=open("asr_server_out.txt", "w"),
-                stderr=open("asr_server_err.txt", "w"),
-            )
+            # 日志写 USER_DATA_DIR/logs，不依赖当前工作目录（避免 CWD 污染/Program Files 只读）
+            _asr_log_dir = os.path.join(USER_DATA_DIR, "logs")
+            try:
+                os.makedirs(_asr_log_dir, exist_ok=True)
+            except Exception:
+                _asr_log_dir = os.devnull
+            _out_path = os.path.join(_asr_log_dir, "asr_server_out.txt") if _asr_log_dir != os.devnull else os.devnull
+            _err_path = os.path.join(_asr_log_dir, "asr_server_err.txt") if _asr_log_dir != os.devnull else os.devnull
+            # 文件句柄由 Popen 接管（子进程退出后关闭）；Popen 失败时需手动关闭
+            _out_fp = open(_out_path, "w")
+            _err_fp = open(_err_path, "w")
+            try:
+                proc = subprocess.Popen(
+                    args,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=_out_fp,
+                    stderr=_err_fp,
+                )
+            except Exception:
+                _out_fp.close()
+                _err_fp.close()
+                raise
+            # 登记为本进程所有的 legacy llama-server，退出时 terminate。
+            # 外部复用的 ASR（_port_in_use 分支）不走这里，不会被误杀。
+            self._asr_legacy_proc = proc
+            import atexit as _atexit
+            def _kill_legacy_asr(p=proc):
+                try:
+                    if p.poll() is None:
+                        p.terminate()
+                        try:
+                            p.wait(timeout=3)
+                        except Exception:
+                            p.kill()
+                except Exception:
+                    pass
+            _atexit.register(_kill_legacy_asr)
             logger.info("[ASR] llama-server 已启动，等待就绪...")
         except Exception as e:
             logger.error(f"[ASR] 启动 llama-server 失败: {e}")
             self.logger.error(f"[ASR] 启动 llama-server 失败: {e}")
-            return
+            return False
 
-        # 等待 ASR 就绪（最多 60 秒）：轮询 /models 返回 200 才算就绪。
-        # 端口占用 ≠ 就绪——llama-server 先监听端口再加载模型（模型未就绪时 /models 返回 503）
+        # 等待 ASR 就绪（最多 60 秒）：轮询 /models 返回 200 且 data 非空才算就绪。
+        # 与 asr_bootstrap._is_server_up 同一标准——避免 router 模式（-m ""）下
+        # HTTP 200 但 data 为空被误判为就绪。
         import requests as _rq
         for i in range(60):
             time.sleep(1)
             try:
                 resp = _rq.get(f"http://{host}:{port}/v1/models", timeout=1)
                 if resp.status_code == 200:
-                    logger.info(f"[ASR] 就绪（等待 {i+1} 秒）")
-                    return
+                    payload = resp.json()
+                    if payload.get("data"):
+                        logger.info(f"[ASR] 就绪（等待 {i+1} 秒）")
+                        return True
             except Exception:
                 pass
             if i % 10 == 0:
                 logger.info(f"[ASR] 等待中... ({i}s)")
 
         logger.info("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
+        return False
 
     def initialize(self):
+        # 类级单例守卫：整个进程内只 initialize 一次。
+        # 入口即置 True，而非函数末尾——当前生产代码只有 run() 一个调用点（main.py:1016），
+        # 无递归或并发初始化路径（已 grep 确认）。
+        # 契约：initialize() 中途异常后，_initialized 保持 True，不支持同一进程内重试；
+        # _handle_startup_failure() 已尽力 stop() 清理已构造模块，但不重置本标志。
+        # 若未来需要重试，必须先证明 stop() 能完整回收所有子进程/句柄，再引入状态机。
         if Application._initialized:
             logger.info("[Startup] already initialized, skip")
             return
@@ -362,9 +430,21 @@ class Application:
         # 5. 语音输入
         logger.info("[5/5] 初始化语音输入(ASR + Intent)...")
         self._set_module_status("asr", "loading")
-        self._ensure_asr_running()
+        asr_enabled_raw = self.config_data.get("asr", {}).get("enabled", True)
+        # 兼容字符串 "false"/"true"（某些配置导入路径可能给字符串）
+        if isinstance(asr_enabled_raw, str):
+            asr_enabled = asr_enabled_raw.strip().lower() not in ("false", "0", "no", "off", "")
+        else:
+            asr_enabled = bool(asr_enabled_raw)
+        if not asr_enabled:
+            logger.info("[ASR] asr.enabled=false，跳过 ASR 启动/下载/健康检查")
+            self._voice_bootstrap_result = "disabled"
+            asr_ok = False
+        else:
+            asr_ok = self._ensure_asr_running()
+            self._voice_bootstrap_result = "ok" if asr_ok else "fail"
         self.voice = VoiceRuntime(self.config_data, tts_provider=lambda: self.tts)
-        self._set_module_status("asr", "ok")
+        self._set_module_status("asr", "disabled" if not asr_enabled else ("ok" if asr_ok else "fail"))
         self._set_module_status("intent", "ok")
 
         # 注册 GameAlarm 指令处理（通过事件）
@@ -438,7 +518,7 @@ class Application:
         self.speech_judge.start()
 
         # 启动语音输入
-        self.voice.start()
+        self.voice.start(bootstrap_result=self._voice_bootstrap_result)
 
         # 发布启动事件
         self.event_bus.publish(Event(
@@ -489,6 +569,24 @@ class Application:
             _safe("lol.stop", self.lol.stop)
         if self.music:
             _safe("music.stop", self.music.stop)
+
+        # 批次1：主动回收本进程拉起的 legacy llama-server（不依赖 atexit）。
+        # 外部复用的 ASR 不登记，这里不会杀到它。
+        proc = getattr(self, "_asr_legacy_proc", None)
+        if proc is not None:
+            self._asr_legacy_proc = None  # 幂等：atexit 兜底再调时 poll()=None 已结束
+            def _kill(p=proc):
+                if p.poll() is None:
+                    p.terminate()
+                    try:
+                        p.wait(timeout=3)
+                    except Exception:
+                        p.kill()
+                        try:
+                            p.wait(timeout=3)
+                        except Exception:
+                            pass
+            _safe("legacy_asr.terminate", _kill)
 
         if getattr(self, "combo_manager", None):
             _safe("combo_manager.stop", self.combo_manager.stop)
@@ -1074,7 +1172,15 @@ class Application:
                     window._loading.show_failure(state["error"])
                 except Exception:
                     pass
-                # 不切页，停留在 LoadingPanel 显示错误
+                # 不切页，停留在 LoadingPanel 显示错误。
+                # P0 修复：立即回收已构造的子系统。stop() 入口检查 _running，
+                # 而 initialize 失败时 _running=False（start() 未跑），这里强制置位再 stop，
+                # 与 _handle_startup_failure 的做法一致；不弹 QMessageBox（错误已在面板上）。
+                try:
+                    self._running = True
+                    self.stop()
+                except Exception:
+                    logger.error("[Run] 启动失败后清理出错", exc_info=True)
                 return
             if state["done"] and not state["switched"]:
                 state["switched"] = True

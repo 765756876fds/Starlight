@@ -76,6 +76,7 @@ def _default_config() -> dict[str, Any]:
             "qwen_rate": 1.0,
         },
         "asr": {
+            "enabled": True,  # 第二刀：总开关；false 时不下载模型/不拉起 llama-server/不轮询
             "engine": "qwen3_server",
             "bootstrap_enabled": True,  # 轻量版：模型缺失时自动下载（hf-mirror）+ 拉起 llama-server
             "llama_backend": "auto",  # R2: auto/vulkan/cpu
