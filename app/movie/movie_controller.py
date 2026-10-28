@@ -190,6 +190,9 @@ class MovieController:
             bus.register(CommandType.MOVIE_NEXT_EPISODE, lambda c: self.next_episode())
             bus.register(CommandType.MOVIE_PREV_EPISODE, lambda c: self.prev_episode())
             bus.register(CommandType.MOVIE_STOP, lambda c: self.stop())
+            bus.register(CommandType.MOVIE_VOLUME_SET, lambda c: self.set_volume(c.get("volume", 50)))
+            bus.register(CommandType.MOVIE_VOLUME_UP, lambda c: self.volume_up(c.get("step", 5)))
+            bus.register(CommandType.MOVIE_VOLUME_DOWN, lambda c: self.volume_down(c.get("step", 5)))
         except Exception as e:
             logger.error(f"[Movie] 注册语音命令失败: {e}")
 
@@ -1050,6 +1053,28 @@ class MovieController:
     def set_volume(self, vol):
         if self.mpv.is_running():
             self.mpv.set_property("volume", max(0, min(100, int(vol))))
+
+    def volume_up(self, step: int = 5):
+        if not self.mpv.is_running():
+            return
+        try:
+            cur = self.mpv.get_property("volume", timeout=1.0)
+            if cur is None:
+                return
+            self.set_volume(int(cur) + step)
+        except Exception:
+            return
+
+    def volume_down(self, step: int = 5):
+        if not self.mpv.is_running():
+            return
+        try:
+            cur = self.mpv.get_property("volume", timeout=1.0)
+            if cur is None:
+                return
+            self.set_volume(int(cur) - step)
+        except Exception:
+            return
 
     def toggle_mute(self):
         if self.mpv.is_running():

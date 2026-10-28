@@ -295,10 +295,23 @@ class RuleBasedIntent:
              CommandType.MOVIE_PREV_EPISODE, {}),
             (r"^(停止电影|停止影片|停止片子|电影停止|影片停止|片子停止|关掉电影|关闭电影)$",
              CommandType.MOVIE_STOP, {}),
+            (r"^(电影声音大一点|电影声音大点|电影音量大一点|电影大声一点)$",
+             CommandType.MOVIE_VOLUME_UP, {}),
+            (r"^(电影声音小一点|电影声音小点|电影音量小一点|电影小声一点)$",
+             CommandType.MOVIE_VOLUME_DOWN, {}),
+            (r"^电影音量(\d+|[零一二两三四五六七八九十]+)$",
+             CommandType.MOVIE_VOLUME_SET, {}),
         ]
         for pattern, intent_type, params in MOVIE_EXPLICIT_RULES:
-            if re.match(pattern, text):
-                return Intent(intent_type, confidence=0.99, params=dict(params))
+            m = re.match(pattern, text)
+            if m:
+                p = dict(params)
+                if intent_type == CommandType.MOVIE_VOLUME_SET and m.groups():
+                    raw = m.group(1)
+                    vol = int(raw) if raw.isdigit() else cls._cn_episode_to_int(raw)
+                    if vol is not None and 0 <= vol <= 100:
+                        p["volume"] = vol
+                return Intent(intent_type, confidence=0.99, params=p)
 
         # 音乐明确命令（继续音乐/音乐暂停 等显式说法）
         MUSIC_EXPLICIT_RULES = [
