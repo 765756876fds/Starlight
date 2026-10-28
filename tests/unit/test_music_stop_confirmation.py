@@ -227,7 +227,8 @@ class TestStopCurrentConfirmation:
         # 不假装成功，也不断言一定仍在播放 → 保留状态
         assert ctrl._current_song is not None
         assert ctrl._current_song["id"] == 1
-        assert ctrl._last_idle is False
+        # V2-4.5.5：None 分支也置 _last_idle=True，防止 stop 导致的 idle 被误判为自然播完而自动续播
+        assert ctrl._last_idle is True
         assert _playing_state(ctrl) is True
         assert not ctrl.queue.is_empty()
         assert ctrl.queue.get_current()["id"] == 1
