@@ -279,6 +279,27 @@ class RuleBasedIntent:
             if re.match(pattern, text):
                 return Intent(intent_type, confidence=0.99, params={})
 
+        # ===== 明确领域命令（优先于通用 MUSIC_RULES，避免"暂停电影"被吞）=====
+        # 电影明确命令：暂停/继续电影、电影暂停/继续
+        MOVIE_EXPLICIT_RULES = [
+            (r"^(暂停电影|暂停影片|暂停片子|电影暂停|影片暂停|片子暂停)$",
+             CommandType.MOVIE_PAUSE, {}),
+            (r"^(继续电影|继续影片|继续片子|电影继续|影片继续|片子继续|恢复电影)$",
+             CommandType.MOVIE_RESUME, {}),
+        ]
+        for pattern, intent_type, params in MOVIE_EXPLICIT_RULES:
+            if re.match(pattern, text):
+                return Intent(intent_type, confidence=0.99, params=dict(params))
+
+        # 音乐明确命令（继续音乐/音乐暂停 等显式说法）
+        MUSIC_EXPLICIT_RULES = [
+            (r"^(继续音乐|继续放歌|恢复音乐|音乐继续)$",
+             CommandType.MUSIC_RESUME, {}),
+        ]
+        for pattern, intent_type, params in MUSIC_EXPLICIT_RULES:
+            if re.match(pattern, text):
+                return Intent(intent_type, confidence=0.99, params=dict(params))
+
         # 音乐控制
         for pattern, command, base_params in cls.MUSIC_RULES:
             match = re.search(pattern, text)
@@ -376,23 +397,26 @@ class RuleBasedIntent:
         # 第二条无集数 → 播第一集（现状不变）。
         movie_patterns = [
             r"^(?:播放|放|看)(?:一部)?(电影|影片|片子)(.+?)(?:第)?([0-9零一二两三四五六七八九十百]+)(?:集|话|期)$",
-            r"^(?:播放|放|看)(?:一部)?(电影|影片|片子)(.+)$",
+            r"^(?:播放|放|看)(?:一部)?(电影|影片|片子)(.*)$",
         ]
         for pattern in movie_patterns:
             match = re.match(pattern, text)
             if match:
                 query = match.group(2).strip()
-                if query and query not in cls.SEARCH_NEGATION_WORDS:
-                    params = {"query": query}
-                    if len(match.groups()) > 2 and match.group(3):
-                        episode = cls._cn_episode_to_int(match.group(3))
-                        if episode is not None:
-                            params["episode"] = episode
-                    return Intent(
-                        CommandType.MOVIE_SEARCH_PLAY,
-                        confidence=0.9,
-                        params=params,
-                    )
+                # 空 query（"播放电影"）也走电影链路：controller TTS 提示"请说电影名字"，
+                # 不再落到 ^播放(.+)$ 被误识别为音乐搜索"电影"。
+                if query and query in cls.SEARCH_NEGATION_WORDS:
+                    continue
+                params = {"query": query}
+                if len(match.groups()) > 2 and match.group(3):
+                    episode = cls._cn_episode_to_int(match.group(3))
+                    if episode is not None:
+                        params["episode"] = episode
+                return Intent(
+                    CommandType.MOVIE_SEARCH_PLAY,
+                    confidence=0.9,
+                    params=params,
+                )
 
         # 搜索播放："播放XXX" / "来一首XXX" / "放点XXX"
         search_patterns = [

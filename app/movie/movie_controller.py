@@ -191,6 +191,7 @@ class MovieController:
         无集数 → 播第一集（现状不变）；集数越界 → 提示 + False（不崩）。"""
         query = ((command.params or {}).get("query") or "").strip()
         if not query:
+            self._notify_voice("请说电影名字")
             return False
         episode = (command.params or {}).get("episode")
         try:
