@@ -611,14 +611,16 @@ class VoiceRuntime:
                 import time as _t; _t.sleep(0.2)
                 paused = self._real_paused(getattr(self, "music_mpv_provider", None))
                 if paused is True:
-                    gen = 0
                     try:
                         mc = self.music_controller_provider() if self.music_controller_provider else None
-                        gen = getattr(mc, "_playback_gen", 0) if mc else 0
+                        gen = getattr(mc, "_playback_gen", None) if mc else None
                     except Exception:
-                        pass
-                    self._global_pause_snapshot["music"] = {"gen": gen}
-                    msgs.append("音乐已暂停")
+                        gen = None
+                    if isinstance(gen, int):
+                        self._global_pause_snapshot["music"] = {"gen": gen}
+                        msgs.append("音乐已暂停")
+                    else:
+                        msgs.append("音乐已暂停，但会话标识不可用")
                 elif paused is False:
                     msgs.append("音乐暂停失败")
                 else:
@@ -635,14 +637,16 @@ class VoiceRuntime:
                 import time as _t; _t.sleep(0.2)
                 paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
                 if paused is True:
-                    gen = 0
                     try:
                         mv = self.movie_controller_provider() if self.movie_controller_provider else None
-                        gen = getattr(mv, "_playback_gen", 0) if mv else 0
+                        gen = getattr(mv, "_playback_gen", None) if mv else None
                     except Exception:
-                        pass
-                    self._global_pause_snapshot["movie"] = {"gen": gen}
-                    msgs.append("电影已暂停")
+                        gen = None
+                    if isinstance(gen, int):
+                        self._global_pause_snapshot["movie"] = {"gen": gen}
+                        msgs.append("电影已暂停")
+                    else:
+                        msgs.append("电影已暂停，但会话标识不可用")
                 elif paused is False:
                     msgs.append("电影暂停失败")
                 else:
@@ -721,22 +725,35 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] 全局恢复 {domain} 失败: {e}")
                 msgs.append(f"{domain} 恢复失败")
-        # 音乐恢复后（MUSIC_PLAY 互斥同步暂停电影）复查电影最终态
+        # 命令执行后实时复查最终态（音乐 MUSIC_PLAY 互斥同步暂停电影）
+        import time as _t; _t.sleep(0.2)
         if music_attempted:
-            msgs.append("音乐已恢复")
-            import time as _t; _t.sleep(0.15)
-            movie_paused_now = self._real_paused(getattr(self, "movie_mpv_provider", None))
-            if movie_paused_now is True:
-                msgs.append("电影因音乐优先保持暂停")
-            elif movie_paused_now is False:
-                if movie_attempted:
-                    msgs.append("电影已恢复")
+            music_paused_now = self._real_paused(getattr(self, "music_mpv_provider", None))
+            if music_paused_now is False:
+                msgs.append("音乐已恢复")
+            elif music_paused_now is True:
+                msgs.append("音乐恢复后仍处于暂停")
             else:
-                if movie_attempted:
+                msgs.append("音乐恢复状态无法确认")
+            # 音乐恢复后电影最终态（仅当电影曾在快照或被互斥影响时播报）
+            movie_in_snap = "movie" in self._global_pause_snapshot
+            if movie_in_snap:
+                movie_paused_now = self._real_paused(getattr(self, "movie_mpv_provider", None))
+                if movie_paused_now is True:
+                    msgs.append("电影因音乐优先保持暂停")
+                elif movie_paused_now is False:
+                    msgs.append("电影已恢复")
+                else:
                     msgs.append("电影状态无法确认")
         else:
             if movie_attempted:
-                msgs.append("电影已恢复")
+                movie_paused_now = self._real_paused(getattr(self, "movie_mpv_provider", None))
+                if movie_paused_now is False:
+                    msgs.append("电影已恢复")
+                elif movie_paused_now is True:
+                    msgs.append("电影恢复后仍处于暂停")
+                else:
+                    msgs.append("电影状态无法确认")
         self._global_pause_snapshot = {}
         try:
             sq = self.speech_queue_provider() if self.speech_queue_provider else None
