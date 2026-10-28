@@ -66,6 +66,8 @@ def _mk_rt(playing, paused):
     rt._global_pause_snapshot = {}
     rt.music_mpv_provider = None
     rt.movie_mpv_provider = None
+    rt.music_controller_provider = None
+    rt.movie_controller_provider = None
     return rt
 
 
@@ -94,7 +96,7 @@ class TestVoiceMovieRouting(unittest.TestCase):
 
     def test_resume_movie_paused(self):
         rt = _mk_rt(True, True)
-        rt._global_pause_snapshot = {"movie": True}
+        rt._global_pause_snapshot = {"movie": {"gen": 0}}
         fake_mpv = MagicMock()
         fake_mpv.is_running.return_value = True
         fake_mpv.get_property.return_value = True  # paused=True
@@ -105,7 +107,7 @@ class TestVoiceMovieRouting(unittest.TestCase):
 
     def test_resume_movie_playing_idempotent(self):
         rt = _mk_rt(True, False)
-        rt._global_pause_snapshot = {"movie": True}
+        rt._global_pause_snapshot = {"movie": {"gen": 0}}
         fake_mpv = MagicMock()
         fake_mpv.is_running.return_value = True
         fake_mpv.get_property.return_value = False  # 在播
@@ -115,7 +117,7 @@ class TestVoiceMovieRouting(unittest.TestCase):
 
     def test_resume_music_only(self):
         rt = _mk_rt(False, False)
-        rt._global_pause_snapshot = {"music": True}
+        rt._global_pause_snapshot = {"music": {"gen": 0}}
         fake_mpv = MagicMock()
         fake_mpv.is_running.return_value = True
         fake_mpv.get_property.return_value = True
