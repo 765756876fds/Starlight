@@ -2438,6 +2438,9 @@ class MusicController:
             else:  # None：IPC 超时/管道失效/无响应 → 结果未确认
                 logger.error(
                     "[Music] stop_current: mpv.stop() 结果未确认（IPC 超时/管道失效/无响应，命令可能已执行），保留停止前状态")
+                # V2-4.5.5：即便结果未确认，mpv.stop() 大概率已执行，mpv 即将进入 idle。
+                # 必须置 _last_idle=True，防止轮询把"停止导致的 idle"误判为自然播完而自动续播。
+                self._last_idle = True
                 return
 
     def set_play_mode(self, mode: str):

@@ -280,6 +280,25 @@ class TestV2452MovieStop:
         assert RuleBasedIntent.match("不要停止电影") is None
 
 
+class TestV2455VolumeChinese:
+    @pytest.mark.parametrize("text, expected", [
+        ("音量50", 50),
+        ("音量五十", 50),
+        ("音量0", 0),
+        ("音量100", 100),
+    ])
+    def test_volume_set(self, text, expected):
+        it = RuleBasedIntent.match(text)
+        assert it.intent_type == CommandType.MUSIC_VOLUME_SET
+        assert it.params["volume"] == expected
+
+    def test_volume_101_no_param(self):
+        it = RuleBasedIntent.match("音量101")
+        assert it.intent_type == CommandType.MUSIC_VOLUME_SET
+        assert "volume" not in it.params
+
+
+
 
 
 

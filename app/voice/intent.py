@@ -90,8 +90,8 @@ class RuleBasedIntent:
         (r"^(声音小一点|音量小一点|小声一点|声音小点|音量小点|小点声|调小音量|静音)$",
          CommandType.MUSIC_VOLUME_DOWN, {}),
         (r"音量减(\d+)", CommandType.MUSIC_VOLUME_DOWN, {"step": 1}),
-        # 设置音量
-        (r"音量(\d+)", CommandType.MUSIC_VOLUME_SET, {}),
+        # 设置音量（支持阿拉伯数字与中文数字，0-100）
+        (r"音量(\d+|[零一二两三四五六七八九十]+)", CommandType.MUSIC_VOLUME_SET, {}),
         # 高潮模式开关（必须在通用"高潮"之前）
         (r"(关闭高潮模式|退出高潮模式|高潮模式关|关掉高潮模式)$",
          CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": False}),
@@ -322,7 +322,10 @@ class RuleBasedIntent:
                         pass
                 if command == CommandType.MUSIC_VOLUME_SET and match.groups():
                     try:
-                        params["volume"] = int(match.group(1))
+                        raw = match.group(1)
+                        vol = int(raw) if raw.isdigit() else cls._cn_episode_to_int(raw)
+                        if vol is not None and 0 <= vol <= 100:
+                            params["volume"] = vol
                     except (ValueError, IndexError):
                         pass
                 return Intent(command, confidence=0.99, params=params)
