@@ -151,6 +151,8 @@ class MusicController:
         self._running = False
         self._lock = threading.Lock()
         self._current_song: dict[str, Any] | None = None
+        # V2-2：播放会话代次，每次加载新媒体递增；全局暂停快照据此判断会话是否变化
+        self._playback_gen: int = 0
         # P1 候选旁路：最近一次语音搜歌的候选（事件只带展示，track 本体留本对象）
         self._candidate_generation: int = 0
         self._active_candidates: list = []
@@ -1371,6 +1373,7 @@ class MusicController:
             "extra": getattr(track, 'extra', None) or {},
         }
         self._current_song = online_song
+        self._playback_gen += 1  # V2-2：在线流加载，会话代次递增
         self._update_state(playing=True, current_song=online_song)
         return online_song
 
@@ -1522,6 +1525,7 @@ class MusicController:
         except Exception:
             pass
         self._current_song = song
+        self._playback_gen += 1  # V2-2：新媒体加载，会话代次递增
 
         # 异步播放确认：坏文件（MPEG header junk 等）loadfile 返回 success 但
         # 解码失败——mpv 会立刻回到 idle，或卡在“播放中”却拿不到任何播放时间

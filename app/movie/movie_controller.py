@@ -147,6 +147,8 @@ class MovieController:
         self._music = music
         self._current = None
         self._current_index = None
+        # V2-2：播放会话代次，每次加载新片递增；全局暂停快照据此判断会话是否变化
+        self._playback_gen: int = 0
         self._stopping = False
         self._pausing = False
         self._subscribed = False
@@ -432,6 +434,7 @@ class MovieController:
             pass
         self._current = item
         self._current_index = idx
+        self._playback_gen += 1  # V2-2：新片加载，会话代次递增
         self._last_idle = False  # 新播放开始，等播完再触发连播
         self._external_url_mode = False  # 切回正常剧集模式
         self._external_url_seen_active = False

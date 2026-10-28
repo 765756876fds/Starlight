@@ -91,6 +91,9 @@ class VoiceRuntime:
         # 约定：返回带 stop_current() 方法的对象，或 None（降级：只停 TTS）
         self.speech_queue_provider = speech_queue_provider
 
+        # V2-2：全局暂停快照 {domain: {"gen": int}}，只记录 IPC 确认暂停成功的媒体
+        self._global_pause_snapshot: dict[str, dict] = {}
+
         # 打断旁路（Side-channel）参数：
         # TTS 播放期间采集的段走独立队列与独立检测线程（不挤占主 ASR 队列）。
         self._INTERRUPT_SLICE_SECONDS = 1.5  # 旁路只截取音频前 1.5s 识别（缩短耗时）
@@ -571,6 +574,111 @@ class VoiceRuntime:
             return CommandType.MOVIE_RESUME
         return CommandType.MUSIC_RESUME
 
+    def _global_pause(self):
+        """V2-2：裸"暂停"→ 暂停所有实际在播的媒体，确认后写快照。"""
+        self._global_pause_snapshot = {}  # 新一次全局暂停替换旧快照
+        msgs = []
+        # 音乐
+        try:
+            music_playing = bool(self.state_store.get(StateNamespace.MUSIC, "playing", False))
+        except Exception:
+            music_playing = False
+        if music_playing:
+            try:
+                self.command_bus.execute(Command(command_type=CommandType.MUSIC_PAUSE,
+                                                params={}, source="voice"))
+                import time as _t; _t.sleep(0.15)
+                still = bool(self.state_store.get(StateNamespace.MUSIC, "playing", False))
+                if not still:
+                    self._global_pause_snapshot["music"] = True
+                    msgs.append("音乐已暂停")
+                else:
+                    msgs.append("音乐暂停状态无法确认")
+            except Exception as e:
+                print(f"[Voice] 全局暂停音乐失败: {e}")
+                msgs.append("音乐暂停失败")
+        # 电影
+        mv_playing, mv_paused = self._movie_state()
+        if mv_playing and not mv_paused:
+            try:
+                self.command_bus.execute(Command(command_type=CommandType.MOVIE_PAUSE,
+                                                 params={}, source="voice"))
+                import time as _t; _t.sleep(0.15)
+                _, after_paused = self._movie_state()
+                if after_paused:
+                    self._global_pause_snapshot["movie"] = True
+                    msgs.append("电影已暂停")
+                else:
+                    msgs.append("电影暂停状态无法确认")
+            except Exception as e:
+                print(f"[Voice] 全局暂停电影失败: {e}")
+                msgs.append("电影暂停失败")
+        if not msgs:
+            msgs.append("没有正在播放的媒体")
+        # TTS 反馈（经 speech_queue_provider 惰性取）
+        try:
+            sq = self.speech_queue_provider() if self.speech_queue_provider else None
+            if sq is not None:
+                from app.speech.speech_queue import SpeechItem, PRIORITY_B
+                import time as _t2
+                sq.enqueue(SpeechItem(text="，".join(msgs), priority=PRIORITY_B,
+                                      expire_at=_t2.time() + 30.0,
+                                      category="voice_global_pause", interruptible=True))
+        except Exception as e:
+            print(f"[Voice] 全局暂停反馈失败: {e}")
+
+    def _global_resume(self):
+        """V2-2：裸"继续"→ 只恢复本次全局暂停确认过的媒体。"""
+        if not self._global_pause_snapshot:
+            try:
+                sq = self.speech_queue_provider() if self.speech_queue_provider else None
+                if sq is not None:
+                    from app.speech.speech_queue import SpeechItem, PRIORITY_B
+                    import time as _t
+                    sq.enqueue(SpeechItem(text="没有需要恢复的播放", priority=PRIORITY_B,
+                                          expire_at=_t.time() + 30.0,
+                                          category="voice_global_resume", interruptible=True))
+            except Exception:
+                pass
+            return
+        msgs = []
+        # 恢复顺序：先电影后音乐（音乐 resume 发 MUSIC_PLAY 会互斥暂停电影）
+        for domain in ("movie", "music"):
+            if domain not in self._global_pause_snapshot:
+                continue
+            # 会话仍有效检查：音乐 playing=True 说明用户已手动恢复或切歌
+            try:
+                if domain == "music":
+                    playing = bool(self.state_store.get(StateNamespace.MUSIC, "playing", False))
+                    if playing:
+                        msgs.append("音乐已在播放，无需恢复")
+                        continue
+                    self.command_bus.execute(Command(command_type=CommandType.MUSIC_RESUME,
+                                                     params={}, source="voice"))
+                    msgs.append("音乐已恢复")
+                else:
+                    mv_playing, mv_paused = self._movie_state()
+                    if not mv_playing or not mv_paused:
+                        msgs.append("电影不在暂停状态，跳过")
+                        continue
+                    self.command_bus.execute(Command(command_type=CommandType.MOVIE_RESUME,
+                                                     params={}, source="voice"))
+                    msgs.append("电影已恢复")
+            except Exception as e:
+                print(f"[Voice] 全局恢复 {domain} 失败: {e}")
+                msgs.append(f"{domain}恢复失败")
+        self._global_pause_snapshot = {}
+        try:
+            sq = self.speech_queue_provider() if self.speech_queue_provider else None
+            if sq is not None:
+                from app.speech.speech_queue import SpeechItem, PRIORITY_B
+                import time as _t
+                sq.enqueue(SpeechItem(text="，".join(msgs), priority=PRIORITY_B,
+                                      expire_at=_t.time() + 30.0,
+                                      category="voice_global_resume", interruptible=True))
+        except Exception as e:
+            print(f"[Voice] 全局恢复反馈失败: {e}")
+
     def _stop_tts_now(self):
         """立即停止 TTS 播报（独立打断路由，不走 CommandBus）。
 
@@ -612,20 +720,12 @@ class VoiceRuntime:
         if intent_type == "system.stop_tts":
             self._stop_tts_now()
 
-        # 音乐命令（暂停/继续：谁在播谁响应——电影在播时路由给电影，包2b）
+        # V2-2：裸"暂停"→ 全局暂停所有在播媒体；裸"继续"→ 只恢复本次确认暂停的媒体
         elif intent_type == CommandType.MUSIC_PAUSE:
-            self.command_bus.execute(Command(
-                command_type=self._route_pause_cmd(),
-                params=params,
-                source="voice",
-            ))
+            self._global_pause()
 
         elif intent_type == CommandType.MUSIC_RESUME:
-            self.command_bus.execute(Command(
-                command_type=self._route_resume_cmd(),
-                params=params,
-                source="voice",
-            ))
+            self._global_resume()
 
         # 明确电影命令：用户明说"暂停电影"/"继续电影"，直接分发，不走谁在播路由
         elif intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME):
