@@ -511,12 +511,14 @@ class MoviePanel(QWidget):
     _parse_done = Signal(str, str, str)    # (title, play_url, display_url)
     _parse_failed = Signal(str)
 
-    def __init__(self, movie=None, music=None, parent=None):
+    def __init__(self, movie=None, music=None, speech_queue=None, parent=None):
         super().__init__(parent)
-        self._movie = movie if movie is not None else MovieController(music=music)
+        self._movie = movie if movie is not None else MovieController(music=music, speech_queue=speech_queue)
         # P1：语音搜电影结果 → 状态栏（controller 构造自注册 MOVIE_* 命令，回调在面板侧）
         try:
             self._movie._voice_feedback = self._on_voice_feedback
+            if speech_queue is not None:
+                self._movie._speech_queue = speech_queue
         except Exception:
             pass
         self._voice_attach_requested.connect(self._on_voice_attach_requested)

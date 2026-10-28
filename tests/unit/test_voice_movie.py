@@ -230,6 +230,41 @@ class TestMovieControllerVoice(unittest.TestCase):
         self.assertFalse(ctrl._cmd_search_play(
             Command(CommandType.MOVIE_SEARCH_PLAY, {"query": "  "}, "test")))
 
+    def test_empty_query_enqueues_tts(self):
+        """空 query → enqueue SpeechItem('请说电影名字')，不只刷 UI。"""
+        from app.speech.speech_queue import SpeechItem
+        fake_sq = MagicMock()
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = False
+        fake_mpv.start.return_value = True
+        with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
+            ctrl = MovieController(config={}, speech_queue=fake_sq)
+        try:
+            ok = ctrl._cmd_search_play(
+                Command(CommandType.MOVIE_SEARCH_PLAY, {"query": ""}, "test"))
+            self.assertFalse(ok)
+            fake_sq.enqueue.assert_called_once()
+            item = fake_sq.enqueue.call_args[0][0]
+            self.assertIsInstance(item, SpeechItem)
+            self.assertEqual(item.text, "请说电影名字")
+        finally:
+            ctrl.close()
+
+    def test_speech_queue_enqueue_failure_does_not_crash(self):
+        """SpeechQueue.enqueue 异常 → 不崩，只记日志。"""
+        fake_sq = MagicMock()
+        fake_sq.enqueue.side_effect = RuntimeError("sq down")
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = False
+        fake_mpv.start.return_value = True
+        with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
+            ctrl = MovieController(config={}, speech_queue=fake_sq)
+        try:
+            self.assertFalse(ctrl._cmd_search_play(
+                Command(CommandType.MOVIE_SEARCH_PLAY, {"query": ""}, "test")))
+        finally:
+            ctrl.close()
+
     def test_cmd_search_play_search_exception(self):
         ctrl = self._mk_controller()
         with patch.object(ctrl, "search", side_effect=RuntimeError("boom")):

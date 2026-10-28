@@ -33,7 +33,7 @@ class MainTabs(QWidget):
                  snapshot_provider=None, history_repo=None,
                  combo_manager=None, tts=None, equip_toggle=None,
                  overlay_toggle=None, overlay_enabled: bool = True,
-                 parent=None):
+                 speech_queue=None, parent=None):
         super().__init__(parent)
         print("[UI] MainTabs 创建中")
         self._music = music
@@ -68,7 +68,7 @@ class MainTabs(QWidget):
         _add(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息", "ongoing")
         # _add(lambda: CooldownPanel(cooldown_manager), "计时器")  # 隐藏计时器tab
         _add(lambda: MusicPanel(music), "音乐", "music")
-        _add(lambda: MoviePanel(movie=None, music=self._music), "电影", "movie")
+        _add(lambda: MoviePanel(movie=None, music=self._music, speech_queue=speech_queue), "电影", "movie")
         _add(lambda: ConsolePanel(), "控制台", "console")
         _add(lambda: SettingsPanel(
                 music=music, tts=tts, combo_manager=combo_manager,

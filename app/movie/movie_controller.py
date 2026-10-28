@@ -113,10 +113,13 @@ class MovieController:
 
     def __init__(self, source_url=None, mpv_path=None, ipc_pipe=None,
                  music=None, config=None, source_manager=None,
-                 voice_feedback=None):
+                 voice_feedback=None, speech_queue=None):
         self._config = config or get_config()
         # P1：语音搜电影结果 → UI 反馈回调（MoviePanel 注入；None 时只 print 兜底）
         self._voice_feedback = voice_feedback
+        # SpeechQueue 引用（main wiring 注入）：_notify_voice 时同时 TTS 播报，
+        # 避免"请说电影名字"只刷状态栏不发声。
+        self._speech_queue = speech_queue
         self.source_url = source_url or self._config.get("movie.source_url") or DEFAULT_SOURCE_URL
         # 多源（包2c后续）：构造注入 manager（测试/复用）；显式 source_url → 单源兼容；否则自建
         if source_manager is not None:
@@ -222,15 +225,27 @@ class MovieController:
         return self.play(item)
 
     def _notify_voice(self, msg: str):
-        """语音命令结果 → UI 反馈（回调优先；无回调只 print 兜底）。"""
+        """语音命令结果 → UI 反馈 + TTS 播报。"""
         cb = getattr(self, "_voice_feedback", None)
         if callable(cb):
             try:
                 cb(msg)
-                return
             except Exception as e:
                 logger.error(f"[Movie] 语音反馈回调异常: {e}")
-        print(f"[Movie] 语音反馈: {msg}")
+        # 同时 TTS 播报（SpeechQueue.enqueue 是线程安全的，可在 worker 线程调）
+        sq = getattr(self, "_speech_queue", None)
+        if sq is not None and msg:
+            try:
+                from app.speech.speech_queue import SpeechItem, PRIORITY_B
+                import time as _t
+                sq.enqueue(SpeechItem(
+                    text=msg, priority=PRIORITY_B,
+                    expire_at=_t.time() + 30.0,
+                    category="movie_voice", interruptible=True))
+            except Exception as e:
+                logger.error(f"[Movie] TTS 播报失败: {e}")
+        else:
+            print(f"[Movie] 语音反馈: {msg}")
 
     def _write_state(self, playing=None, paused=None):
         """写播放态到 state_store（语音"谁在播谁响应"路由用）。

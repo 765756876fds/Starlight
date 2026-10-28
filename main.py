@@ -1293,6 +1293,7 @@ class Application:
             combo_manager=getattr(self, "combo_manager", None),
             services_dict={"lcu": getattr(self.lol, "lcu", None) if getattr(self, "lol", None) else None},
             tts=getattr(self, "tts", None),
+            speech_queue=getattr(self, "speech_queue", None),
             equip_toggle=lambda on: setattr(self, "_equip_enabled", bool(on)),
             overlay_toggle=window._on_overlay_toggle,
             overlay_enabled=True,
