@@ -97,10 +97,10 @@ class TestVoiceMovieRouting(unittest.TestCase):
     def test_resume_movie_paused(self):
         rt = _mk_rt(True, True)
         rt._global_pause_snapshot = {"movie": {"gen": 0}}
-        fake_mpv = MagicMock()
-        fake_mpv.is_running.return_value = True
-        fake_mpv.get_property.return_value = True  # paused=True
+        fake_mpv = MagicMock(); fake_mpv.is_running.return_value = True; fake_mpv.get_property.return_value = True
         rt.movie_mpv_provider = lambda: fake_mpv
+        fake_mv = MagicMock(); fake_mv._playback_gen = 0
+        rt.movie_controller_provider = lambda: fake_mv
         rt._execute_intent(Intent(CommandType.MUSIC_RESUME), "继续播放")
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
         self.assertIn(CommandType.MOVIE_RESUME, types)
@@ -108,20 +108,20 @@ class TestVoiceMovieRouting(unittest.TestCase):
     def test_resume_movie_playing_idempotent(self):
         rt = _mk_rt(True, False)
         rt._global_pause_snapshot = {"movie": {"gen": 0}}
-        fake_mpv = MagicMock()
-        fake_mpv.is_running.return_value = True
-        fake_mpv.get_property.return_value = False  # 在播
+        fake_mpv = MagicMock(); fake_mpv.is_running.return_value = True; fake_mpv.get_property.return_value = False
         rt.movie_mpv_provider = lambda: fake_mpv
+        fake_mv = MagicMock(); fake_mv._playback_gen = 0
+        rt.movie_controller_provider = lambda: fake_mv
         rt._execute_intent(Intent(CommandType.MUSIC_RESUME), "继续播放")
         rt.command_bus.execute.assert_not_called()
 
     def test_resume_music_only(self):
         rt = _mk_rt(False, False)
         rt._global_pause_snapshot = {"music": {"gen": 0}}
-        fake_mpv = MagicMock()
-        fake_mpv.is_running.return_value = True
-        fake_mpv.get_property.return_value = True
+        fake_mpv = MagicMock(); fake_mpv.is_running.return_value = True; fake_mpv.get_property.return_value = True
         rt.music_mpv_provider = lambda: fake_mpv
+        fake_mc = MagicMock(); fake_mc._playback_gen = 0
+        rt.music_controller_provider = lambda: fake_mc
         rt._execute_intent(Intent(CommandType.MUSIC_RESUME), "继续播放")
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
         self.assertIn(CommandType.MUSIC_RESUME, types)

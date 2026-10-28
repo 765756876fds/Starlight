@@ -444,13 +444,23 @@ class Application:
             asr_ok = self._ensure_asr_running()
             self._voice_bootstrap_result = "ok" if asr_ok else "fail"
         self.voice = VoiceRuntime(self.config_data, tts_provider=lambda: self.tts)
-        # V2-2：惰性 mpv provider（全局暂停/继续实时 IPC 确认用）
+        # V2-2：惰性 mpv/控制器 provider（全局暂停/继续实时 IPC 确认用）
         self.voice.music_mpv_provider = lambda: getattr(self.music, "mpv", None) if self.music else None
-        def _movie_mpv():
+        self.voice.music_controller_provider = lambda: self.music if self.music else None
+        def _movie_ctrl():
             try:
                 mt = getattr(self, "_movie_panel", None)
                 if mt is not None:
-                    return getattr(mt, "_movie", None) and mt._movie.mpv
+                    return getattr(mt, "_movie", None)
+            except Exception:
+                pass
+            return None
+        self.voice.movie_controller_provider = _movie_ctrl
+        def _movie_mpv():
+            try:
+                mv = _movie_ctrl()
+                if mv is not None:
+                    return getattr(mv, "mpv", None)
             except Exception:
                 pass
             return None

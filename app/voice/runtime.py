@@ -678,23 +678,32 @@ class VoiceRuntime:
                 pass
             return
         msgs = []
+        movie_attempted = False
+        music_attempted = False
         for domain in ("movie", "music"):
             entry = self._global_pause_snapshot.get(domain)
             if not entry:
                 continue
             try:
-                # 代次检查：切歌/换片后 gen 变化 → 跳过
-                expected_gen = entry.get("gen", 0)
+                expected_gen = entry.get("gen", None)
+                if expected_gen is None:
+                    msgs.append(f"{domain} 快照无效，跳过")
+                    continue
                 if domain == "music":
                     mc = self.music_controller_provider() if self.music_controller_provider else None
-                    cur_gen = getattr(mc, "_playback_gen", 0) if mc else 0
+                    if mc is None:
+                        msgs.append("音乐控制器不可用，跳过")
+                        continue
+                    cur_gen = getattr(mc, "_playback_gen", None)
                 else:
                     mv = self.movie_controller_provider() if self.movie_controller_provider else None
-                    cur_gen = getattr(mv, "_playback_gen", 0) if mv else 0
+                    if mv is None:
+                        msgs.append("电影控制器不可用，跳过")
+                        continue
+                    cur_gen = getattr(mv, "_playback_gen", None)
                 if cur_gen != expected_gen:
                     msgs.append(f"{domain} 已切换，跳过恢复")
                     continue
-                # 实时 IPC 检查当前暂停态
                 provider = self.music_mpv_provider if domain == "music" else self.movie_mpv_provider
                 paused = self._real_paused(provider)
                 if paused is False:
@@ -705,15 +714,29 @@ class VoiceRuntime:
                     continue
                 cmd = CommandType.MUSIC_RESUME if domain == "music" else CommandType.MOVIE_RESUME
                 self.command_bus.execute(Command(command_type=cmd, params={}, source="voice"))
-                msgs.append(f"{domain} 已恢复")
+                if domain == "music":
+                    music_attempted = True
+                else:
+                    movie_attempted = True
             except Exception as e:
                 print(f"[Voice] 全局恢复 {domain} 失败: {e}")
                 msgs.append(f"{domain} 恢复失败")
-        # 音乐恢复后复查电影最终状态（MUSIC_PLAY 互斥会暂停电影）
-        if "music" in self._global_pause_snapshot:
-            paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
-            if paused is True:
-                msgs.append("电影已自动暂停")
+        # 音乐恢复后（MUSIC_PLAY 互斥同步暂停电影）复查电影最终态
+        if music_attempted:
+            msgs.append("音乐已恢复")
+            import time as _t; _t.sleep(0.15)
+            movie_paused_now = self._real_paused(getattr(self, "movie_mpv_provider", None))
+            if movie_paused_now is True:
+                msgs.append("电影因音乐优先保持暂停")
+            elif movie_paused_now is False:
+                if movie_attempted:
+                    msgs.append("电影已恢复")
+            else:
+                if movie_attempted:
+                    msgs.append("电影状态无法确认")
+        else:
+            if movie_attempted:
+                msgs.append("电影已恢复")
         self._global_pause_snapshot = {}
         try:
             sq = self.speech_queue_provider() if self.speech_queue_provider else None
