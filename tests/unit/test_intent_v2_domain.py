@@ -58,6 +58,24 @@ class TestPlayMovieRouting:
         assert m and m.intent_type == CommandType.MUSIC_SEARCH_PLAY
         assert m.params["query"] == "黑白电影"
 
+    def test_song_starting_with_ge_not_stripped(self):
+        """以"歌"开头的合法歌名（如"歌声"）不得被误删首字。"""
+        m = RuleBasedIntent.match("播放歌声")
+        assert m and m.intent_type == CommandType.MUSIC_SEARCH_PLAY
+        assert m.params["query"] == "歌声"
+
+    def test_song_type_prefix_stripped(self):
+        for text, expected in [
+            ("播放歌曲黑白电影", "黑白电影"),
+            ("播放一首七里香", "七里香"),
+            ("播放这首周杰伦", "周杰伦"),
+            ("播放那首情歌", "情歌"),
+            ("播放曲子回家", "回家"),
+        ]:
+            m = RuleBasedIntent.match(text)
+            assert m and m.intent_type == CommandType.MUSIC_SEARCH_PLAY, text
+            assert m.params["query"] == expected, text
+
 
 class TestBareCommandsUnchanged:
     def test_bare_pause_still_music_pause(self):
