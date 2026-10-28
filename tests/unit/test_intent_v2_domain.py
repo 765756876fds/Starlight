@@ -265,6 +265,22 @@ class TestV244MusicSeek:
         assert RuleBasedIntent.match(text) is None
 
 
+class TestV2452MovieStop:
+    def test_stop_movie(self):
+        assert RuleBasedIntent.match("停止电影").intent_type == CommandType.MOVIE_STOP
+
+    def test_stop_music_unchanged(self):
+        assert RuleBasedIntent.match("停止音乐").intent_type == CommandType.MUSIC_STOP
+
+    def test_stop_tts_unchanged(self):
+        assert RuleBasedIntent.match("停止说话").intent_type == "system.stop_tts"
+        assert RuleBasedIntent.match("停止").intent_type == "system.stop_tts"
+
+    def test_negative_stop_movie_unknown(self):
+        assert RuleBasedIntent.match("不要停止电影") is None
+
+
+
 
 
 

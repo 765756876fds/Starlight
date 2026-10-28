@@ -189,6 +189,7 @@ class MovieController:
             bus.register(CommandType.MOVIE_RESUME, lambda c: self.resume())
             bus.register(CommandType.MOVIE_NEXT_EPISODE, lambda c: self.next_episode())
             bus.register(CommandType.MOVIE_PREV_EPISODE, lambda c: self.prev_episode())
+            bus.register(CommandType.MOVIE_STOP, lambda c: self.stop())
         except Exception as e:
             logger.error(f"[Movie] 注册语音命令失败: {e}")
 

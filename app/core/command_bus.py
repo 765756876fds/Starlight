@@ -61,6 +61,7 @@ class CommandType:
     MOVIE_RESUME = "movie.resume"
     MOVIE_NEXT_EPISODE = "movie.next_episode"
     MOVIE_PREV_EPISODE = "movie.prev_episode"
+    MOVIE_STOP = "movie.stop"
     PLAYER_NEXT = "player.next"
 
     # ===== GameAlarm 命令 =====

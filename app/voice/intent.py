@@ -293,6 +293,8 @@ class RuleBasedIntent:
              CommandType.MOVIE_NEXT_EPISODE, {}),
             (r"^(上一集|上一集了|切上一集|播放上一集|看上一集|回到上一集)$",
              CommandType.MOVIE_PREV_EPISODE, {}),
+            (r"^(停止电影|停止影片|停止片子|电影停止|影片停止|片子停止|关掉电影|关闭电影)$",
+             CommandType.MOVIE_STOP, {}),
         ]
         for pattern, intent_type, params in MOVIE_EXPLICIT_RULES:
             if re.match(pattern, text):
