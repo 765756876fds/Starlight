@@ -93,6 +93,9 @@ class VoiceRuntime:
 
         # V2-2：全局暂停快照 {domain: {"gen": int}}，只记录 IPC 确认暂停成功的媒体
         self._global_pause_snapshot: dict[str, dict] = {}
+        # V2-2：mpv 提供者（惰性，默认 None；测试注入；生产由 main wiring 注入）
+        self.music_mpv_provider = None  # callable -> MpvController 或 None
+        self.movie_mpv_provider = None
 
         # 打断旁路（Side-channel）参数：
         # TTS 播放期间采集的段走独立队列与独立检测线程（不挤占主 ASR 队列）。
@@ -574,9 +577,24 @@ class VoiceRuntime:
             return CommandType.MOVIE_RESUME
         return CommandType.MUSIC_RESUME
 
+    def _real_paused(self, provider) -> bool | None:
+        """V2-2：实时 IPC 查 mpv pause 属性。True=暂停, False=在播, None=未知。"""
+        if provider is None:
+            return None
+        try:
+            mpv = provider()
+            if mpv is None or not mpv.is_running():
+                return None
+            v = mpv.get_property("pause", timeout=1.0)
+            if v is None:
+                return None
+            return bool(v)
+        except Exception:
+            return None
+
     def _global_pause(self):
-        """V2-2：裸"暂停"→ 暂停所有实际在播的媒体，确认后写快照。"""
-        self._global_pause_snapshot = {}  # 新一次全局暂停替换旧快照
+        """V2-2：裸"暂停"→ 暂停所有实际在播的媒体，实时 IPC 确认后写快照。"""
+        self._global_pause_snapshot = {}
         msgs = []
         # 音乐
         try:
@@ -587,11 +605,13 @@ class VoiceRuntime:
             try:
                 self.command_bus.execute(Command(command_type=CommandType.MUSIC_PAUSE,
                                                 params={}, source="voice"))
-                import time as _t; _t.sleep(0.15)
-                still = bool(self.state_store.get(StateNamespace.MUSIC, "playing", False))
-                if not still:
+                import time as _t; _t.sleep(0.2)
+                paused = self._real_paused(getattr(self, "music_mpv_provider", None))
+                if paused is True:
                     self._global_pause_snapshot["music"] = True
                     msgs.append("音乐已暂停")
+                elif paused is False:
+                    msgs.append("音乐暂停失败")
                 else:
                     msgs.append("音乐暂停状态无法确认")
             except Exception as e:
@@ -603,11 +623,13 @@ class VoiceRuntime:
             try:
                 self.command_bus.execute(Command(command_type=CommandType.MOVIE_PAUSE,
                                                  params={}, source="voice"))
-                import time as _t; _t.sleep(0.15)
-                _, after_paused = self._movie_state()
-                if after_paused:
+                import time as _t; _t.sleep(0.2)
+                paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
+                if paused is True:
                     self._global_pause_snapshot["movie"] = True
                     msgs.append("电影已暂停")
+                elif paused is False:
+                    msgs.append("电影暂停失败")
                 else:
                     msgs.append("电影暂停状态无法确认")
             except Exception as e:
@@ -615,7 +637,6 @@ class VoiceRuntime:
                 msgs.append("电影暂停失败")
         if not msgs:
             msgs.append("没有正在播放的媒体")
-        # TTS 反馈（经 speech_queue_provider 惰性取）
         try:
             sq = self.speech_queue_provider() if self.speech_queue_provider else None
             if sq is not None:
@@ -642,24 +663,28 @@ class VoiceRuntime:
                 pass
             return
         msgs = []
-        # 恢复顺序：先电影后音乐（音乐 resume 发 MUSIC_PLAY 会互斥暂停电影）
         for domain in ("movie", "music"):
             if domain not in self._global_pause_snapshot:
                 continue
-            # 会话仍有效检查：音乐 playing=True 说明用户已手动恢复或切歌
             try:
                 if domain == "music":
-                    playing = bool(self.state_store.get(StateNamespace.MUSIC, "playing", False))
-                    if playing:
+                    paused = self._real_paused(getattr(self, "music_mpv_provider", None))
+                    if paused is False:
                         msgs.append("音乐已在播放，无需恢复")
+                        continue
+                    if paused is None:
+                        msgs.append("音乐状态无法确认，跳过")
                         continue
                     self.command_bus.execute(Command(command_type=CommandType.MUSIC_RESUME,
                                                      params={}, source="voice"))
                     msgs.append("音乐已恢复")
                 else:
-                    mv_playing, mv_paused = self._movie_state()
-                    if not mv_playing or not mv_paused:
-                        msgs.append("电影不在暂停状态，跳过")
+                    paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
+                    if paused is False:
+                        msgs.append("电影已在播放，无需恢复")
+                        continue
+                    if paused is None:
+                        msgs.append("电影状态无法确认，跳过")
                         continue
                     self.command_bus.execute(Command(command_type=CommandType.MOVIE_RESUME,
                                                      params={}, source="voice"))

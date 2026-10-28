@@ -62,6 +62,10 @@ def _mk_rt(playing, paused):
         ("movie", "playing"): playing,
         ("movie", "paused"): paused,
     }.get((ns, k), d)
+    rt.speech_queue_provider = None
+    rt._global_pause_snapshot = {}
+    rt.music_mpv_provider = None
+    rt.movie_mpv_provider = None
     return rt
 
 
@@ -91,20 +95,31 @@ class TestVoiceMovieRouting(unittest.TestCase):
     def test_resume_movie_paused(self):
         rt = _mk_rt(True, True)
         rt._global_pause_snapshot = {"movie": True}
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = True
+        fake_mpv.get_property.return_value = True  # paused=True
+        rt.movie_mpv_provider = lambda: fake_mpv
         rt._execute_intent(Intent(CommandType.MUSIC_RESUME), "继续播放")
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
         self.assertIn(CommandType.MOVIE_RESUME, types)
 
     def test_resume_movie_playing_idempotent(self):
-        # 电影在播未暂停 → 跳过
         rt = _mk_rt(True, False)
         rt._global_pause_snapshot = {"movie": True}
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = True
+        fake_mpv.get_property.return_value = False  # 在播
+        rt.movie_mpv_provider = lambda: fake_mpv
         rt._execute_intent(Intent(CommandType.MUSIC_RESUME), "继续播放")
         rt.command_bus.execute.assert_not_called()
 
     def test_resume_music_only(self):
         rt = _mk_rt(False, False)
         rt._global_pause_snapshot = {"music": True}
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = True
+        fake_mpv.get_property.return_value = True
+        rt.music_mpv_provider = lambda: fake_mpv
         rt._execute_intent(Intent(CommandType.MUSIC_RESUME), "继续播放")
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
         self.assertIn(CommandType.MUSIC_RESUME, types)
