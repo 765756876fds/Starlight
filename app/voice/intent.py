@@ -398,6 +398,16 @@ class RuleBasedIntent:
 
                 return Intent(intent_type, confidence=0.95, params=params)
 
+        # V2-4.4：相对跳转（快进/后退 X 秒，1-60s）
+        seek_match = re.match(r"^(快进|前进|后退|倒退|倒带)(\d+|[一二两三四五六七八九十]+)秒$", text)
+        if seek_match:
+            direction, num_str = seek_match.groups()
+            secs = cls._cn_episode_to_int(num_str)
+            if secs is not None and 1 <= secs <= 60:
+                sign = 1 if direction in ("快进", "前进") else -1
+                return Intent(CommandType.MUSIC_SEEK, confidence=0.95,
+                              params={"seconds": sign * secs, "mode": "relative"})
+
         # 电影搜索播放（包2b）：显式带"电影/影片/片子"才走电影；裸"播放XX"保持音乐。
         # 必须在 search_patterns 之前：否则"播放电影流浪地球"会被 ^播放(.+)$ 截成音乐搜索。
         # 包2c：第一条带集数（"第X集/第X话/X集"，中文+阿拉伯数字）→ params["episode"] 直跳；

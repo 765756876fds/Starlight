@@ -869,6 +869,7 @@ class VoiceRuntime:
                              CommandType.MUSIC_SET_PLAY_MODE,
                              CommandType.MUSIC_CLEAR_QUEUE,
                              CommandType.MUSIC_STOP,
+                             CommandType.MUSIC_SEEK,
                              CommandType.MUSIC_IDENTIFY) or intent_type == CommandType.MUSIC_VOLUME_SET:
             self.command_bus.execute(Command(
                 command_type=intent_type,

@@ -241,5 +241,30 @@ class _FakeMpv:
     def get_property(self, name, timeout=1.0): return self._paused
 
 
+class TestV244MusicSeek:
+    @pytest.mark.parametrize("text, expected", [
+        ("快进十秒", 10),
+        ("快进10秒", 10),
+        ("前进五秒", 5),
+        ("后退五秒", -5),
+        ("倒退五秒", -5),
+        ("快进1秒", 1),
+        ("快进60秒", 60),
+    ])
+    def test_seek_relative(self, text, expected):
+        it = RuleBasedIntent.match(text)
+        assert it.intent_type == CommandType.MUSIC_SEEK
+        assert it.params["seconds"] == expected
+        assert it.params["mode"] == "relative"
+
+    @pytest.mark.parametrize("text", [
+        "快进61秒", "快进0秒", "快进一百秒", "快进十", "快进秒",
+        "快进abc秒", "不要快进十秒", "今天快进一下",
+    ])
+    def test_seek_rejects_invalid(self, text):
+        assert RuleBasedIntent.match(text) is None
+
+
+
 
 
