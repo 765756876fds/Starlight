@@ -599,12 +599,9 @@ class VoiceRuntime:
         """V2-2：裸"暂停"→ 暂停所有实际在播的媒体，实时 IPC 确认后写快照。"""
         self._global_pause_snapshot = {}
         msgs = []
-        # 音乐
-        try:
-            music_playing = bool(self.state_store.get(StateNamespace.MUSIC, "playing", False))
-        except Exception:
-            music_playing = False
-        if music_playing:
+        # 音乐：用实时 IPC 判断是否在播
+        music_paused_now = self._real_paused(getattr(self, "music_mpv_provider", None))
+        if music_paused_now is False:  # pause=False = 正在播放
             try:
                 self.command_bus.execute(Command(command_type=CommandType.MUSIC_PAUSE,
                                                 params={}, source="voice"))
@@ -628,9 +625,9 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] 全局暂停音乐失败: {e}")
                 msgs.append("音乐暂停失败")
-        # 电影
-        mv_playing, mv_paused = self._movie_state()
-        if mv_playing and not mv_paused:
+        # 电影：用实时 IPC 判断是否在播（state_store 仅辅助）
+        mv_paused_now = self._real_paused(getattr(self, "movie_mpv_provider", None))
+        if mv_paused_now is False:  # pause=False = 正在播放
             try:
                 self.command_bus.execute(Command(command_type=CommandType.MOVIE_PAUSE,
                                                  params={}, source="voice"))

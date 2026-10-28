@@ -31,8 +31,11 @@ def _mk_rt(music_playing=False, movie_playing=False, movie_paused=False,
     }.get((ns, k), d)
     rt.speech_queue_provider = None
     rt._global_pause_snapshot = {}
-    fm = MagicMock(); fm.is_running.return_value = True; fm.get_property.return_value = music_paused
-    fv = MagicMock(); fv.is_running.return_value = True; fv.get_property.return_value = movie_paused_state
+    # 音乐 mpv：gate 读=pause=False（在播），pause 后读=music_paused
+    fm = MagicMock(); fm.is_running.return_value = True
+    fm.get_property.side_effect = [False, music_paused] if music_paused is not None else [None]
+    fv = MagicMock(); fv.is_running.return_value = True
+    fv.get_property.side_effect = [False, movie_paused_state] if movie_paused_state is not None else [None]
     rt.music_mpv_provider = lambda: fm
     rt.movie_mpv_provider = lambda: fv
     mc = MagicMock(); mc._playback_gen = music_gen
@@ -92,6 +95,8 @@ class TestGlobalResume(unittest.TestCase):
 
     def test_resume_music(self):
         rt = _mk_rt(music_paused=True)
+        mpv = rt.music_mpv_provider(); mpv.get_property.side_effect = None
+        mpv.get_property.return_value = True
         rt._global_pause_snapshot = {"music": {"gen": 0}}
         rt._global_resume()
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
@@ -100,18 +105,24 @@ class TestGlobalResume(unittest.TestCase):
 
     def test_resume_skips_when_already_playing(self):
         rt = _mk_rt(music_paused=False)
+        mpv = rt.music_mpv_provider(); mpv.get_property.side_effect = None
+        mpv.get_property.return_value = False
         rt._global_pause_snapshot = {"music": {"gen": 0}}
         rt._global_resume()
         rt.command_bus.execute.assert_not_called()
 
     def test_resume_skips_when_unknown(self):
         rt = _mk_rt(music_paused=None)
+        mpv = rt.music_mpv_provider(); mpv.get_property.side_effect = None
+        mpv.get_property.return_value = None
         rt._global_pause_snapshot = {"music": {"gen": 0}}
         rt._global_resume()
         rt.command_bus.execute.assert_not_called()
 
     def test_resume_movie(self):
         rt = _mk_rt(movie_paused_state=True)
+        mpv = rt.movie_mpv_provider(); mpv.get_property.side_effect = None
+        mpv.get_property.return_value = True
         rt._global_pause_snapshot = {"movie": {"gen": 0}}
         rt._global_resume()
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
@@ -119,6 +130,8 @@ class TestGlobalResume(unittest.TestCase):
 
     def test_resume_movie_not_paused_skips(self):
         rt = _mk_rt(movie_paused_state=False)
+        mpv = rt.movie_mpv_provider(); mpv.get_property.side_effect = None
+        mpv.get_property.return_value = False
         rt._global_pause_snapshot = {"movie": {"gen": 0}}
         rt._global_resume()
         rt.command_bus.execute.assert_not_called()
@@ -142,7 +155,7 @@ class TestGlobalResume(unittest.TestCase):
         }.get((ns, k), d)
         fake_mpv = MagicMock()
         fake_mpv.is_running.return_value = True
-        fake_mpv.get_property.return_value = True
+        fake_mpv.get_property.side_effect = [False, True]  # gate=playing, post=paused
         rt.movie_mpv_provider = lambda: fake_mpv
         rt._global_pause()
         self.assertNotIn("music", rt._global_pause_snapshot)

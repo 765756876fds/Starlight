@@ -76,13 +76,19 @@ class TestVoiceMovieRouting(unittest.TestCase):
 
     def test_pause_movie_playing(self):
         rt = _mk_rt(True, False)
+        # IPC gate: movie playing (pause=False), post-pause paused=True
+        fv = MagicMock(); fv.is_running.return_value = True
+        fv.get_property.side_effect = [False, True]
+        rt.movie_mpv_provider = lambda: fv
         rt._execute_intent(Intent(CommandType.MUSIC_PAUSE), "暂停")
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
         self.assertIn(CommandType.MOVIE_PAUSE, types)
 
     def test_pause_movie_paused_noop(self):
-        # 电影已暂停 → 不再发 MOVIE_PAUSE
         rt = _mk_rt(True, True)
+        fv = MagicMock(); fv.is_running.return_value = True
+        fv.get_property.return_value = True  # already paused
+        rt.movie_mpv_provider = lambda: fv
         rt._execute_intent(Intent(CommandType.MUSIC_PAUSE), "暂停")
         types = [c[0][0].command_type for c in rt.command_bus.execute.call_args_list]
         self.assertNotIn(CommandType.MOVIE_PAUSE, types)
