@@ -583,16 +583,23 @@ class VoiceRuntime:
     def _real_paused(self, provider) -> bool | None:
         """V2-2：实时 IPC 查 mpv pause 属性。True=暂停, False=在播, None=未知。"""
         if provider is None:
+            print("[Voice] _real_paused: provider=None")
             return None
         try:
             mpv = provider()
-            if mpv is None or not mpv.is_running():
+            if mpv is None:
+                print("[Voice] _real_paused: mpv instance None")
+                return None
+            if not mpv.is_running():
+                print("[Voice] _real_paused: mpv process not running")
                 return None
             v = mpv.get_property("pause", timeout=1.0)
             if v is None:
+                print("[Voice] _real_paused: get_property pause returned None (IPC timeout/no data/busy)")
                 return None
             return bool(v)
-        except Exception:
+        except Exception as e:
+            print(f"[Voice] _real_paused exception: {e!r}")
             return None
 
     def _enqueue_speak(self, text: str, category: str = "voice"):
