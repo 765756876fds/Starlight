@@ -432,6 +432,8 @@ class RuleBasedIntent:
             match = re.match(pattern, text)
             if match:
                 query = match.group(1).strip()
+                # 剥掉歌曲类型前缀（"播放歌曲黑白电影"→"黑白电影"），不影响片名含"电影"的音乐搜索
+                query = re.sub(r"^(?:一首|首|曲子|歌曲|歌|这首|那首)\s*", "", query).strip()
                 # "停止播放"/"播放停止" → query="停止"：意图是停止，跳过搜歌（最终 unknown）
                 if query in cls.SEARCH_NEGATION_WORDS:
                     continue
