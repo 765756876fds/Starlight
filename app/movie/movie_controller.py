@@ -728,6 +728,7 @@ class MovieController:
                 self.mpv.pause()
                 # 仍占播放权（playing=True），标记暂停态（语音"继续"可恢复）
                 self._write_state(paused=True)
+                self._notify_voice("电影已暂停")
         finally:
             self._pausing = False
 
@@ -738,6 +739,7 @@ class MovieController:
         self.mpv.play()
         if self._current is not None:
             self._write_state(playing=True, paused=False)
+            self._notify_voice("电影继续播放")
 
     def seek(self, seconds, mode="relative"):
         self.mpv.seek(seconds, mode)

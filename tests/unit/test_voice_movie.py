@@ -539,6 +539,74 @@ class TestVoiceFeedback(unittest.TestCase):
         ctrl.close()
 
 
+class TestMoviePauseResumeVoiceFeedback(unittest.TestCase):
+    """暂停/继续成功后 TTS 播报。"""
+
+    def setUp(self):
+        st = get_state_store()
+        for k in ("playing", "paused"):
+            st.delete(StateNamespace.MOVIE, k)
+
+    def tearDown(self):
+        st = get_state_store()
+        for k in ("playing", "paused"):
+            st.delete(StateNamespace.MOVIE, k)
+
+    def _mk(self):
+        fake_sq = MagicMock()
+        fake_mpv = MagicMock()
+        fake_mpv.is_running.return_value = True
+        fake_mpv.start.return_value = True
+        fake_mpv.stop.return_value = True
+        fake_mpv.loadfile.return_value = {"error": "success"}
+        with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
+            ctrl = MovieController(config={}, speech_queue=fake_sq)
+        ctrl._fake_mpv = fake_mpv
+        return ctrl, fake_sq
+
+    def test_pause_with_movie_notifies(self):
+        ctrl, sq = self._mk()
+        ctrl.play({"vod_name": "流浪地球", "first_url": "http://x/1.m3u8",
+                   "play_url": "正片$http://x/1.m3u8"})
+        ctrl.pause()
+        sq.enqueue.assert_called_once()
+        self.assertEqual(sq.enqueue.call_args[0][0].text, "电影已暂停")
+        ctrl.close()
+
+    def test_pause_without_movie_no_notify(self):
+        ctrl, sq = self._mk()
+        ctrl.pause()
+        sq.enqueue.assert_not_called()
+        ctrl.close()
+
+    def test_resume_with_movie_notifies(self):
+        ctrl, sq = self._mk()
+        ctrl.play({"vod_name": "流浪地球", "first_url": "http://x/1.m3u8",
+                   "play_url": "正片$http://x/1.m3u8"})
+        ctrl.pause()
+        sq.enqueue.reset_mock()
+        ctrl.resume()
+        sq.enqueue.assert_called_once()
+        self.assertEqual(sq.enqueue.call_args[0][0].text, "电影继续播放")
+        ctrl.close()
+
+    def test_resume_without_movie_no_notify(self):
+        ctrl, sq = self._mk()
+        ctrl.resume()
+        sq.enqueue.assert_not_called()
+        ctrl.close()
+
+    def test_pause_sq_failure_does_not_crash(self):
+        ctrl, sq = self._mk()
+        sq.enqueue.side_effect = RuntimeError("sq down")
+        ctrl.play({"vod_name": "流浪地球", "first_url": "http://x/1.m3u8",
+                   "play_url": "正片$http://x/1.m3u8"})
+        with patch("app.movie.movie_controller.logger") as mock_logger:
+            ctrl.pause()
+            mock_logger.error.assert_called()
+        ctrl.close()
+
+
 # ================= 问题1：ASR 重复文本折叠（轻量去重，不动 VAD） =================
 
 class TestFoldDuplicatedText(unittest.TestCase):
