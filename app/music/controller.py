@@ -204,6 +204,8 @@ class MusicController:
         self._highlight_stop: threading.Event = threading.Event()
         self._highlight_poller: threading.Thread | None = None
         self._skip_pending: bool = False  # 坏文件自动跳过防重入
+        # 播放倍速（mpv speed 属性；切歌保留，mpv 重启后由 mpv 默认 1.0 重置）
+        self._speed: float = 1.0
         # UI「音源管理」导入的自定义 HTTP 源，sync_custom_sources() 维护的注册名单
         self._custom_http_sources: set = set()
 
@@ -426,6 +428,13 @@ class MusicController:
                 self._last_idle = bool(self.mpv.get_property("idle-active", timeout=1.0))
             except Exception:
                 self._last_idle = True
+            # 重应用用户倍速：新 mpv 进程 speed 重置为默认 1.0，Controller 仍记录
+            # 用户上次设定值；在恢复播放前重设，避免重启后无声回到原速（与 UI 显示不一致）。
+            try:
+                if self._speed and self._speed != 1.0:
+                    self.mpv.set_property("speed", float(self._speed))
+            except Exception as e:
+                logger.info(f"[Music] 重启后重设倍速失败(忽略): {e!r}")
             # 恢复当前歌曲（仅本地文件；在线 URL 交给 idle 上升沿自动切歌）。
             # 用重启时点快照 + 代次校验，避免重启完成时用户已切歌却恢复旧歌。
             self._try_resume_after_restart(restart_song, restart_req_id)
@@ -2037,6 +2046,41 @@ class MusicController:
     def get_volume(self) -> int:
         """获取当前音量"""
         return self.mpv.get_volume()
+
+    # ===== 倍速 =====
+    # 允许档位（与电影侧 movie_panel._speed_steps 一致）
+    SPEED_STEPS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+
+    def set_speed(self, rate: float) -> bool:
+        """设置播放倍速。
+
+        复用 mpv 全局 speed 属性（切歌保留，mpv 进程自愈重启后会重置为 1.0）。
+        非法档位拒绝并返回 False；mpv 调用失败向上抛异常，不假装成功。
+        """
+        try:
+            rate = float(rate)
+        except (TypeError, ValueError):
+            logger.warning(f"[Music] 非法倍速: {rate!r}")
+            return False
+        # 档位精确匹配（浮点容差 0.001）
+        if not any(abs(rate - s) < 0.001 for s in self.SPEED_STEPS):
+            logger.warning(f"[Music] 倍速 {rate} 不在允许档位 {self.SPEED_STEPS}")
+            return False
+        if not self._mpv_available:
+            logger.info("[Music] mpv 不可用，忽略倍速")
+            return False
+        self.mpv.set_property("speed", rate)
+        self._speed = rate
+        try:
+            self.state_store.set(StateNamespace.MUSIC, "speed", rate)
+        except Exception:
+            pass
+        logger.info(f"[Music] 倍速 -> {rate}x")
+        return True
+
+    def get_speed(self) -> float:
+        """当前倍速（Controller 记录值；mpv 未启动时为上次设定/默认 1.0）。"""
+        return self._speed
 
     # ===== 跳转 =====
 

@@ -298,8 +298,16 @@ class MusicPanel(QWidget):
         self.btn_mark_highlight.setToolTip("把当前播放位置保存为这首歌的人工高潮起点")
         self.btn_mark_highlight.setIcon(lucide_icon("map-pin", 14, Tokens.TEXT_SECONDARY))
         self.btn_mark_highlight.clicked.connect(self._on_mark_highlight)
+        # 倍速按钮（9 档，与电影侧一致；点按钮弹菜单选档）
+        self.btn_speed = QPushButton("倍速 1x")
+        self.btn_speed.setObjectName("btn_speed")
+        self.btn_speed.setToolTip("播放倍速")
+        self._speed_steps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+        self._speed_idx = 2  # 1.0x
+        self.btn_speed.clicked.connect(self._on_speed)
         row_sub.addWidget(self.btn_highlight)
         row_sub.addWidget(self.btn_mode)
+        row_sub.addWidget(self.btn_speed)
         row_sub.addWidget(self.btn_clear_queue)
         row_sub.addWidget(self.btn_mark_highlight)
         row_sub.addStretch()
@@ -775,6 +783,43 @@ class MusicPanel(QWidget):
             self.lbl_status.setText("已标记当前位置为高潮起点")
         else:
             self.lbl_status.setText("标记失败：没有正在播放的歌曲或位置无效")
+
+    # ---- 倍速 ----
+    @staticmethod
+    def _speed_label(rate: float) -> str:
+        return f"{rate:g}x"
+
+    def _on_speed(self):
+        """点倍速按钮 → 弹菜单选档（当前档勾选高亮），对齐电影侧交互。"""
+        menu = QMenu(self)
+        for i, rate in enumerate(self._speed_steps):
+            act = menu.addAction(self._speed_label(rate))
+            act.setCheckable(True)
+            act.setChecked(i == self._speed_idx)
+            act.triggered.connect(
+                lambda _checked=False, r=rate, idx=i: self._apply_speed(r, idx))
+        menu.exec_(self.btn_speed.mapToGlobal(self.btn_speed.rect().bottomLeft()))
+
+    def _apply_speed(self, rate: float, idx: int | None = None):
+        """应用倍速档位。Controller 返回 False 或抛错时不更新 UI 显示。"""
+        if self._music is None:
+            return
+        if idx is None:
+            try:
+                idx = self._speed_steps.index(rate)
+            except ValueError:
+                return
+        try:
+            ok = self._music.set_speed(rate)
+        except Exception as e:
+            ok = False
+            self.lbl_status.setText(f"倍速失败: {e}")
+            return
+        if ok:
+            self._speed_idx = idx
+            self.btn_speed.setText(f"倍速 {self._speed_label(rate)}")
+        else:
+            self.lbl_status.setText("倍速设置失败")
 
     # ---- 播放控制 ----
     def _safe_call(self, fn, *args) -> None:
