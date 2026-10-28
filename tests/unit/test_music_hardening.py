@@ -76,6 +76,7 @@ class TestScannerHighlightWorker:
 
         from app.music.scanner import MusicScanner, get_source_tag
         sc = MusicScanner(db, [str(tmp_path)])
+        sc._highlight_gen = 0
         with patch("app.music.scanner.detect_highlight", return_value=(30.0, 60.0, 0.8)):
             sc._highlight_worker()
 

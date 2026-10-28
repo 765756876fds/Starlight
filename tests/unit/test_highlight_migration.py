@@ -91,6 +91,7 @@ def test_worker_skips_manual_and_existing_v4(db, tmp_path):
     db.save_highlight(c, 80.0, 115.0, confidence=0.5, source="pychorus")
 
     sc = MusicScanner(db, [], [".flac"], "mpv")
+    sc._highlight_gen = 0
     with patch("app.music.scanner.detect_highlight", return_value=(52.0, 87.0, 1.0)) as mock_detect:
         sc._highlight_worker()
 
@@ -125,6 +126,7 @@ def test_worker_v4_failure_keeps_pychorus(db):
     _, _, c = _song_ids(db)
     db.save_highlight(c, 80.0, 115.0, confidence=0.5, source="pychorus")
     sc = MusicScanner(db, [], [".flac"], "mpv")
+    sc._highlight_gen = 0
     with patch("app.music.scanner.detect_highlight", return_value=None):
         sc._highlight_worker()
     h = db.get_highlight(c)
@@ -181,6 +183,7 @@ def test_worker_double_check_skips_if_already_written(db, monkeypatch):
     # c 初始是 pychorus
     db.save_highlight(c, 80.0, 115.0, confidence=0.5, source="pychorus")
     sc = MusicScanner(db, [], [".flac"], "mpv")
+    sc._highlight_gen = 0
 
     call_count = {"n": 0}
     real_detect = __import__("app.music.scanner", fromlist=["detect_highlight"]).detect_highlight

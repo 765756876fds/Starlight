@@ -428,9 +428,9 @@ class TestSkipOnlineEmptyQueue:
         # 模拟 next 期间已有新请求递增代次（旧跳曲不得清除新请求状态）
         orig_next = ctrl.queue.next
 
-        def racing_next():
+        def racing_next(auto=False):
             ctrl._play_request_id += 1
-            return orig_next()
+            return orig_next(auto=auto)
 
         ctrl.queue.next = racing_next
 
