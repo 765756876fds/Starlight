@@ -95,8 +95,9 @@ class RuleBasedIntent:
          CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": False}),
         (r"(打开高潮模式|开启高潮模式|高潮模式开|进入高潮模式)$",
          CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": True}),
-        # 跳高潮（一次性）
-        (r"(播放高潮|放高潮|听高潮|播放这首歌高潮|跳到高潮|跳高潮|高潮|副歌|播放高光|放高光|听高光)", CommandType.MUSIC_HIGHLIGHT, {}),
+        # 跳高潮（一次性）：^锚定，避免"播放电影高潮"被吞；"不要"开头否定句不命中
+        (r"^(播放高潮|放高潮|听高潮|播放这首歌高潮|跳到高潮|跳高潮|播放高光|放高光|听高光)$",
+         CommandType.MUSIC_HIGHLIGHT, {}),
         # 播放顺序模式
         # sequential：顺序播放/连续播放/正常播放（播完停止）；repeat_all：列表/全部循环
         (r"(连续播放|顺序播放|正常播放|顺序模式)$",

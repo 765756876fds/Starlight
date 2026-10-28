@@ -136,3 +136,28 @@ class TestRuntimeDispatch(unittest.TestCase):
         assert it.intent_type == CommandType.MUSIC_SEARCH_PLAY
         assert it.params["query"] == "黑白电影"
 
+
+class TestV24HighlightRuleFix:
+    def test_movie_high_not_stolen_by_music_highlight(self):
+        it = RuleBasedIntent.match("播放电影高潮")
+        assert it.intent_type == CommandType.MOVIE_SEARCH_PLAY
+        assert it.params["query"] == "高潮"
+
+    def test_music_highlight_still_works(self):
+        it = RuleBasedIntent.match("播放高潮")
+        assert it.intent_type == CommandType.MUSIC_HIGHLIGHT
+
+    def test_negative_sentence_not_trigger_highlight(self):
+        assert RuleBasedIntent.match("不要播放电影高潮") is None
+
+    def test_bare_gaochao_not_trigger(self):
+        assert RuleBasedIntent.match("高潮") is None
+        assert RuleBasedIntent.match("副歌") is None
+
+    def test_next_episode_prevails(self):
+        assert RuleBasedIntent.match("下一集").intent_type == CommandType.MOVIE_NEXT_EPISODE
+
+    def test_next_song_prevails(self):
+        assert RuleBasedIntent.match("下一首").intent_type == CommandType.MUSIC_NEXT
+
+
