@@ -184,6 +184,7 @@ class MusicController:
         # 消除 0.8s 采样 × 200ms 读取的阶梯感。
         self._playback_time_cache: tuple = (0.0, 0.0, False)
         self._paused_snapshot: bool = False  # 暂停标志快照（供快照外推判断）
+        self._user_stopped: bool = False  # V2-4.5.6：用户主动停止，防止 idle/EOF 自动续播
 
         # mpv 可用性（mpv 未安装/路径错/启动失败 → 模块降级运行，不崩主程序）
         self._mpv_available = True
@@ -1374,6 +1375,7 @@ class MusicController:
         }
         self._current_song = online_song
         self._playback_gen += 1  # V2-2：在线流加载，会话代次递增
+        self._user_stopped = False  # V2-4.5.6：新会话清除停止标记
         self._update_state(playing=True, current_song=online_song)
         return online_song
 
@@ -1526,6 +1528,7 @@ class MusicController:
             pass
         self._current_song = song
         self._playback_gen += 1  # V2-2：新媒体加载，会话代次递增
+        self._user_stopped = False  # V2-4.5.6：新会话清除停止标记
 
         # 异步播放确认：坏文件（MPEG header junk 等）loadfile 返回 success 但
         # 解码失败——mpv 会立刻回到 idle，或卡在“播放中”却拿不到任何播放时间
@@ -2421,6 +2424,7 @@ class MusicController:
         """
         with self._lock:
             self._invalidate_highlight()
+            self._user_stopped = True  # V2-4.5.6：标记用户主动停止，阻止 idle/EOF 自动续播
             try:
                 result = self.mpv.stop()  # True=成功 / False=错误响应 / None=未确认
             except Exception as e:
@@ -2493,7 +2497,7 @@ class MusicController:
 
     def _on_idle_change(self, value: Any):
         """mpv 空闲状态变化"""
-        if value and self._running:
+        if value and self._running and not self._user_stopped:
             # 播放结束，自动下一首
             # 延迟一点，确保 eof 事件处理完
             threading.Timer(0.5, self._auto_next).start()
@@ -2515,6 +2519,9 @@ class MusicController:
                 logger.info("[Music] 换源中，跳过自动切歌")
                 return
             if not self._running:
+                return
+            if self._user_stopped:
+                logger.info("[Music] auto_next: 用户已主动停止，跳过自动切歌")
                 return
             # 守卫必须与 _poll_idle 同源（实时 get_property）。
             # 不能用 self.mpv.is_idle()：它读的是启动时初始化的属性缓存，
