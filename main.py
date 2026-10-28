@@ -444,6 +444,7 @@ class Application:
             asr_ok = self._ensure_asr_running()
             self._voice_bootstrap_result = "ok" if asr_ok else "fail"
         self.voice = VoiceRuntime(self.config_data, tts_provider=lambda: self.tts)
+        self.voice.speech_queue_provider = lambda: self.speech_queue
         # V2-2：惰性 mpv/控制器 provider（全局暂停/继续实时 IPC 确认用）
         self.voice.music_mpv_provider = lambda: getattr(self.music, "mpv", None) if self.music else None
         self.voice.music_controller_provider = lambda: self.music if self.music else None
