@@ -359,3 +359,13 @@ def _kill_server() -> None:
                     proc.kill()
         except Exception:
             pass
+
+
+def shutdown_server() -> None:
+    """公开关闭入口：主动回收本应用 bootstrap 拉起的 llama-server。
+
+    幂等：与 atexit 注册的 _kill_server 共用同一把 _lock 与同一进程句柄，
+    取出即清空 _server_proc。stop() 主动回收与 atexit 兜底重复调用均安全，
+    不会对已退出进程重复 terminate。外部复用的 ASR 服务不登记在此，不会被误杀。
+    """
+    _kill_server()

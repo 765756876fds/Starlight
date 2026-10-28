@@ -588,6 +588,14 @@ class Application:
                             pass
             _safe("legacy_asr.terminate", _kill)
 
+        # 批次N-2：主动回收 bootstrap 路径拉起的 llama-server（与 legacy 并列）。
+        # 复用 asr_bootstrap 的锁与进程存活判断，不复制终止逻辑；幂等，
+        # 重复 stop() 或后续 atexit 兜底均安全。单步失败不阻断后续清理。
+        def _shutdown_bootstrap_asr():
+            from app.voice import asr_bootstrap
+            asr_bootstrap.shutdown_server()
+        _safe("bootstrap_asr.shutdown", _shutdown_bootstrap_asr)
+
         if getattr(self, "combo_manager", None):
             _safe("combo_manager.stop", self.combo_manager.stop)
 
