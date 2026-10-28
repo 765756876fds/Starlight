@@ -801,7 +801,9 @@ class MusicPanel(QWidget):
         menu.exec_(self.btn_speed.mapToGlobal(self.btn_speed.rect().bottomLeft()))
 
     def _apply_speed(self, rate: float, idx: int | None = None):
-        """应用倍速档位。Controller 返回 False 或抛错时不更新 UI 显示。"""
+        """应用倍速档位。Controller 返回 False 或抛错时不更新 UI 显示。
+        set_speed 会走 mpv IPC（最长 3s 超时），放 daemon 线程避免卡 UI；
+        结果用 QTimer 回主线程更新按钮文字（对齐 next/toggle/volume 后台模式）。"""
         if self._music is None:
             return
         if idx is None:
@@ -809,17 +811,27 @@ class MusicPanel(QWidget):
                 idx = self._speed_steps.index(rate)
             except ValueError:
                 return
-        try:
-            ok = self._music.set_speed(rate)
-        except Exception as e:
-            ok = False
-            self.lbl_status.setText(f"倍速失败: {e}")
-            return
+
+        def _do():
+            try:
+                ok = self._music.set_speed(rate)
+                err = None
+            except Exception as e:
+                ok = False
+                err = e
+            QTimer.singleShot(0, lambda: self._after_speed(ok, rate, idx, err))
+
+        threading.Thread(target=_do, daemon=True,
+                         name="ui-music-speed").start()
+
+    def _after_speed(self, ok: bool, rate: float, idx: int, err):
+        """主线程回调：根据 Controller 实际结果更新按钮文字。"""
         if ok:
             self._speed_idx = idx
             self.btn_speed.setText(f"倍速 {self._speed_label(rate)}")
         else:
-            self.lbl_status.setText("倍速设置失败")
+            self.lbl_status.setText(
+                f"倍速失败: {err}" if err else "倍速设置失败")
 
     # ---- 播放控制 ----
     def _safe_call(self, fn, *args) -> None:
