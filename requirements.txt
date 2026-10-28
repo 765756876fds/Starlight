@@ -39,5 +39,7 @@ PySide6>=6.6.0,<6.10.0
 # ===== 工具 =====
 psutil>=5.9.6
 loguru>=0.7.2
+# 全局键盘监听/模拟按键（app/combo 连击触发，Windows 桌面应用运行依赖）
+keyboard>=0.13.5
 # 影视网页链接解析（videofetch 是 pip 包名，import 名为 videodl；0.9.1 起含 m3u8/curl-cffi 依赖）
 videofetch>=0.9.1
