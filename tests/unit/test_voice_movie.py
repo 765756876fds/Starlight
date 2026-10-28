@@ -251,7 +251,7 @@ class TestMovieControllerVoice(unittest.TestCase):
             ctrl.close()
 
     def test_speech_queue_enqueue_failure_does_not_crash(self):
-        """SpeechQueue.enqueue 异常 → 不崩，只记日志。"""
+        """SpeechQueue.enqueue 异常 → 不崩，记错误日志（含"TTS 播报失败"）。"""
         fake_sq = MagicMock()
         fake_sq.enqueue.side_effect = RuntimeError("sq down")
         fake_mpv = MagicMock()
@@ -260,8 +260,12 @@ class TestMovieControllerVoice(unittest.TestCase):
         with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
             ctrl = MovieController(config={}, speech_queue=fake_sq)
         try:
-            self.assertFalse(ctrl._cmd_search_play(
-                Command(CommandType.MOVIE_SEARCH_PLAY, {"query": ""}, "test")))
+            with patch("app.movie.movie_controller.logger") as mock_logger:
+                self.assertFalse(ctrl._cmd_search_play(
+                    Command(CommandType.MOVIE_SEARCH_PLAY, {"query": ""}, "test")))
+                mock_logger.error.assert_called()
+                self.assertTrue(any("TTS 播报失败" in str(c) for c in mock_logger.error.call_args_list),
+                                mock_logger.error.call_args_list)
         finally:
             ctrl.close()
 
