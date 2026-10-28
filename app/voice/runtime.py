@@ -839,6 +839,16 @@ class VoiceRuntime:
                 source="voice",
             ))
 
+        elif intent_type == CommandType.PLAYER_NEXT:
+            # V2-4.3：裸"下一个"上下文仲裁：仅当一边明确在播、另一边明确暂停才执行。
+            m_paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
+            s_paused = self._real_paused(getattr(self, "music_mpv_provider", None))
+            if m_paused is False and s_paused is True:
+                self.command_bus.execute(Command(command_type=CommandType.MOVIE_NEXT_EPISODE, params=params, source="voice"))
+            elif s_paused is False and m_paused is True:
+                self.command_bus.execute(Command(command_type=CommandType.MUSIC_NEXT, params=params, source="voice"))
+            # 其他情况（None/都暂停/都在播）静默不执行
+
         elif intent_type in (CommandType.MOVIE_NEXT_EPISODE, CommandType.MOVIE_PREV_EPISODE):
             paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
             if paused is None:

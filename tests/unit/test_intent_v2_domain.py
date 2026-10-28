@@ -189,4 +189,57 @@ class TestV242FalseTriggerGuard:
         assert RuleBasedIntent.match("停止说话").intent_type == "system.stop_tts"
 
 
+class TestV243PlayerNextArbitration:
+    def test_next_one_is_player_next(self):
+        assert RuleBasedIntent.match("下一个").intent_type == CommandType.PLAYER_NEXT
+
+    def test_explicit_music_next_still_music(self):
+        assert RuleBasedIntent.match("下一首").intent_type == CommandType.MUSIC_NEXT
+
+    def test_explicit_movie_next_episode_still_movie(self):
+        assert RuleBasedIntent.match("下一集").intent_type == CommandType.MOVIE_NEXT_EPISODE
+
+    def test_player_next_routes_movie_when_movie_playing_music_paused(self):
+        rt = _mk_rt()
+        rt.movie_mpv_provider = lambda: _FakeMpv(paused=False)
+        rt.music_mpv_provider = lambda: _FakeMpv(paused=True)
+        it = RuleBasedIntent.match("下一个")
+        rt._execute_intent(it, "下一个")
+        types = [call[0][0].command_type for call in rt.command_bus.execute.call_args_list]
+        assert CommandType.MOVIE_NEXT_EPISODE in types
+
+    def test_player_next_routes_music_when_music_playing_movie_paused(self):
+        rt = _mk_rt()
+        rt.movie_mpv_provider = lambda: _FakeMpv(paused=True)
+        rt.music_mpv_provider = lambda: _FakeMpv(paused=False)
+        it = RuleBasedIntent.match("下一个")
+        rt._execute_intent(it, "下一个")
+        types = [call[0][0].command_type for call in rt.command_bus.execute.call_args_list]
+        assert CommandType.MUSIC_NEXT in types
+
+    def test_player_next_silent_on_unknown(self):
+        rt = _mk_rt()
+        rt.movie_mpv_provider = lambda: None
+        rt.music_mpv_provider = lambda: _FakeMpv(paused=False)
+        it = RuleBasedIntent.match("下一个")
+        rt._execute_intent(it, "下一个")
+        rt.command_bus.execute.assert_not_called()
+
+    def test_player_next_silent_both_playing(self):
+        rt = _mk_rt()
+        rt.movie_mpv_provider = lambda: _FakeMpv(paused=False)
+        rt.music_mpv_provider = lambda: _FakeMpv(paused=False)
+        it = RuleBasedIntent.match("下一个")
+        rt._execute_intent(it, "下一个")
+        rt.command_bus.execute.assert_not_called()
+
+
+class _FakeMpv:
+    def __init__(self, paused):
+        self._paused = paused
+    def is_running(self): return True
+    def get_property(self, name, timeout=1.0): return self._paused
+
+
+
 
