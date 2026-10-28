@@ -2129,6 +2129,15 @@ class MusicPanel(QWidget):
         if self._music is None:
             return
         try:
+            # V2-4.6.5：同步语音/外部修改的音乐音量到滑块（blockSignals 防回环）
+            v = int(self._music.get_volume() or 0)
+            if self.slider_vol.value() != v:
+                self.slider_vol.blockSignals(True)
+                self.slider_vol.setValue(v)
+                self.slider_vol.blockSignals(False)
+        except Exception:
+            pass
+        try:
             # 进度滑块/时间由后台轮询线程（_progress_signal → _on_progress）驱动，
             # 主线程绝不同步 IPC 读 mpv——playback-time/duration 响应慢曾造成拖拽窗口卡顿。
             song = self._music.get_current_song()

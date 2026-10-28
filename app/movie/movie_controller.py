@@ -1059,6 +1059,16 @@ class MovieController:
             except Exception:
                 pass
 
+    def get_volume(self):
+        try:
+            if self.mpv.is_running():
+                v = self.mpv.get_property("volume", timeout=0.5)
+                if v is not None:
+                    return int(v)
+        except Exception:
+            pass
+        return None
+
     def volume_up(self, step: int = 10):
         if not self.mpv.is_running():
             return
