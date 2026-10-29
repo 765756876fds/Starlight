@@ -880,6 +880,15 @@ class VoiceRuntime:
                 source="voice",
             ))
 
+        elif intent_type == CommandType.MUSIC_SET_SPEED:
+            ok = self.command_bus.execute(Command(
+                command_type=intent_type,
+                params=params,
+                source="voice",
+            ))
+            if not ok:
+                self._enqueue_speak("倍速切换失败", "voice")
+
         elif intent_type == CommandType.MUSIC_VOLUME_UP:
             self.command_bus.execute(Command(
                 command_type=CommandType.MUSIC_VOLUME_UP,
