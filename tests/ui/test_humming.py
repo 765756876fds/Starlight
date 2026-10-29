@@ -77,9 +77,12 @@ def test_identify_hit(tmp_path):
     service = HummingService([], str(tmp_path / "fp.db"))
     tr = SimpleNamespace(title="晴天", artist="周杰伦",
                          filepath=r"D:\落雪\音乐文件\晴天.flac", filename="晴天.flac")
+    from app.third_party.fingerprint.core.matcher import Occurrence
     m = SimpleNamespace(track=tr, confidence=0.9, aligned_hashes=120,
-                        peak_ratio=88.0, best=SimpleNamespace(offset_sec=42.5))
-    rt = SimpleNamespace(search_file=lambda p: SimpleNamespace(matches=[m]))
+                        peak_ratio=88.0,
+                        best=Occurrence(100, 120, 0.9, 88.0, 0, 20))
+    query = SimpleNamespace(frames_to_seconds=lambda frames: frames * 0.425)
+    rt = SimpleNamespace(search_file=lambda p: SimpleNamespace(matches=[m], query=query))
     service._runtime = rt
     r = service.identify_file(str(wav))
     assert r["title"] == "晴天" and r["artist"] == "周杰伦"

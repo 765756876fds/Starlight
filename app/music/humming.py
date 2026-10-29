@@ -168,7 +168,10 @@ class HummingService:
             "aligned": int(m.aligned_hashes),
             "peak_ratio": float(m.peak_ratio),
             "quality": quality_label(m.confidence, m.peak_ratio),
-            "offset_sec": float(m.best.offset_sec),
+            # Occurrence stores the signed offset in fingerprint frames.  Convert
+            # with the query fingerprint's hop length/sample rate; it has no
+            # offset_sec attribute (the API response layer performs the same conversion).
+            "offset_sec": float(result.query.frames_to_seconds(m.best.offset_frames)),
             "candidate_count": len(result.matches),
         }
 
