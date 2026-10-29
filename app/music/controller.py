@@ -504,6 +504,7 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT, lambda c: self.jump_to_highlight())
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT_MODE, self._cmd_highlight_mode)
         self.command_bus.register(CommandType.MUSIC_SET_PLAY_MODE, self._cmd_set_play_mode)
+        self.command_bus.register(CommandType.MUSIC_SET_SPEED, lambda c: self.set_speed(c.params.get("speed")) if "speed" in c.params else False)
         self.command_bus.register(CommandType.MUSIC_RESCAN, lambda c: self.rescan())
         self.command_bus.register(CommandType.MUSIC_CLEANUP, lambda c: self.cleanup_missing())
         self.command_bus.register(CommandType.MUSIC_CLEAR_QUEUE, lambda c: self.clear_queue())

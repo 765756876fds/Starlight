@@ -47,6 +47,7 @@ class CommandType:
     MUSIC_HIGHLIGHT = "music.highlight"
     MUSIC_HIGHLIGHT_MODE = "music.highlight_mode"
     MUSIC_SET_PLAY_MODE = "music.set_play_mode"
+    MUSIC_SET_SPEED = "music.set_speed"
     MUSIC_RESCAN = "music.rescan"
     MUSIC_CLEANUP = "music.cleanup"
     MUSIC_CLEAR_QUEUE = "music.clear_queue"

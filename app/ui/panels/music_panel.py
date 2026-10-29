@@ -2107,6 +2107,15 @@ class MusicPanel(QWidget):
         """主线程槽：只做内存级 UI 更新（setValue/setText），不碰 mpv IPC。"""
         try:
             self._last_dur = dur  # 供拖动预览换算目标时间（_on_seek_preview）
+            # 同步倍速按钮显示（语音/外部调用 set_speed 后本地 _speed_idx 可能过期）
+            try:
+                cur = self._music.get_speed()
+                target_idx = self._speed_steps.index(cur) if cur in self._speed_steps else None
+                if target_idx is not None and target_idx != self._speed_idx:
+                    self._speed_idx = target_idx
+                    self.btn_speed.setText(f"倍速{self._speed_label(cur)}")
+            except Exception:
+                pass
             # 切换态（controller._is_switching_track）：在线解析窗口内 mpv 仍报
             # 旧歌实时位置，禁止渲染——保持归零 + "加载中"，新歌 loadfile 起播
             # （controller 置 False）后恢复渲染。

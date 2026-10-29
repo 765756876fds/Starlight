@@ -110,6 +110,11 @@ class RuleBasedIntent:
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "shuffle"}),
         (r"(单曲循环|单曲循环播放|循环这首|循环这首歌|就循环这一首)$",
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "repeat_one"}),
+        # 倍速（小数点会被预处理剥掉，故中文数字用"一点五"等；阿拉伯仅整数 1/2/3）
+        (r"^(恢复正常速度|正常速度|正常倍速|恢复倍速|倍速正常|速度正常)$",
+         CommandType.MUSIC_SET_SPEED, {"speed": 1.0}),
+        (r"^(倍速|播放速度|速度)(零点五|零点七五|一点二五|一点五|一点七五|两倍|二点五|三倍|一?倍)倍?$",
+         CommandType.MUSIC_SET_SPEED, {}),
         # 重新扫描
         (r"(重新扫描|扫描音乐|更新音乐库)", CommandType.MUSIC_RESCAN, {}),
         # 清理失效歌曲
@@ -350,6 +355,12 @@ class RuleBasedIntent:
                             params["volume"] = vol
                     except (ValueError, IndexError):
                         pass
+                if command == CommandType.MUSIC_SET_SPEED and match.lastindex and match.lastindex >= 2:
+                    raw = match.group(2)
+                    cn_map = {"零点五": 0.5, "零点七五": 0.75, "一点二五": 1.25,
+                              "一点五": 1.5, "一点七五": 1.75, "两倍": 2.0,
+                              "二点五": 2.5, "三倍": 3.0, "一倍": 1.0}
+                    params["speed"] = cn_map.get(raw)
                 return Intent(command, confidence=0.99, params=params)
 
         # ===== Cooldown 手动计时器（优先于 alarm 规则，避免被旧规则吞掉） =====
