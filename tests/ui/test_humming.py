@@ -173,13 +173,7 @@ def _make_dialog(tmp_path, monkeypatch, has_library=True):
     service._runtime = SimpleNamespace(
         storage=SimpleNamespace(count_tracks=lambda: 1 if has_library else 0))
     dlg = IdentifyDialog(service, on_play=lambda r: None)
-    monkeypatch.setattr(dlg, "_start_identify_worker", lambda wav: None)  # 不启真线程
-    # 建库也走假实现（pytest 无事件循环：queued 槽不执行 → 真线程会卡运行中被析构崩溃）
-    def fake_show_build():
-        dlg._busy = True
-        dlg.lbl_title.setText("首次使用")
-        dlg.lbl_status.setText("正在为本地音乐建指纹库，请稍候...")
-    monkeypatch.setattr(dlg, "_show_build", fake_show_build)
+    monkeypatch.setattr(dlg, "_start_identify_worker", lambda wav, source="microphone": None)  # 不启真线程
     return dlg
 
 
@@ -224,21 +218,24 @@ def test_dialog_failed(tmp_path, monkeypatch):
     assert not dlg._busy
 
 
-def test_dialog_first_build_then_record(tmp_path, monkeypatch):
+def test_dialog_empty_library_prompts_without_auto_build(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch, has_library=False)
     dlg.start()
-    assert dlg._busy is True
-    assert "指纹库" in dlg.lbl_status.text()
-    dlg._on_build_done({"indexed": 5, "skipped": 0})
-    assert dlg._busy is True  # 建库完成自动进入录音
-    assert "录音中" in dlg.lbl_status.text()
+    assert dlg._busy is False
+    assert "请先扫描音乐库建立指纹库" in dlg.lbl_status.text()
 
 
-def test_dialog_build_failed(tmp_path, monkeypatch):
+def test_dialog_source_selection(tmp_path, monkeypatch):
+    dlg = _make_dialog(tmp_path, monkeypatch)
+    dlg.source_combo.setCurrentIndex(1)
+    assert dlg._source == "system"
+    dlg.source_combo.setCurrentIndex(0)
+    assert dlg._source == "microphone"
+
+
+def test_dialog_build_failed_no_longer_auto_runs(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch, has_library=False)
     dlg.start()
-    dlg._on_build_failed("磁盘不足")
-    assert "建库失败" in dlg.lbl_status.text()
     assert not dlg._busy
 
 

@@ -10,7 +10,7 @@ import os
 import tempfile
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton
 
 from ..theme.colors import Colors
 from ..widgets.glass_dialog import GlassDialog
@@ -23,15 +23,16 @@ class _IdentifyWorker(QObject):
     done = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, service, wav_path):
+    def __init__(self, service, wav_path, source):
         super().__init__()
         self._service = service
         self._wav_path = wav_path
+        self._source = source
 
     @Slot()
     def run(self):
         try:
-            result = self._service.record_and_identify(self._wav_path)
+            result = self._service.record_and_identify(self._wav_path, source=self._source)
         except Exception as e:  # 故障隔离：任何异常 → failed，不崩
             self.failed.emit(str(e))
             return
@@ -72,11 +73,17 @@ class IdentifyDialog(GlassDialog):
         self._timer = None
         self._identify_thread = None
         self._build_thread = None
+        self._source = "microphone"
 
         root = self.body_layout
         self.lbl_title = QLabel("把手机/音箱凑近麦克风，听 8 秒就能识别")
         self.lbl_title.setWordWrap(True)
         root.addWidget(self.lbl_title)
+        self.source_combo = QComboBox()
+        self.source_combo.addItem("麦克风环境音", "microphone")
+        self.source_combo.addItem("电脑系统声音", "system")
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        root.addWidget(self.source_combo)
         self.lbl_status = QLabel("准备就绪")
         self.lbl_status.setWordWrap(True)
         root.addWidget(self.lbl_status)
@@ -103,10 +110,11 @@ class IdentifyDialog(GlassDialog):
             return
         if self._build_thread is not None and self._build_thread.isRunning():
             return
-        # 首次无库 → 后台建库，完成后自动进入录音
         try:
             if not self._service.has_library():
-                self._show_build()
+                self._busy = False
+                self.lbl_title.setText("本地指纹库为空")
+                self.lbl_status.setText("请先扫描音乐库建立指纹库，再开始识曲")
                 return
         except Exception as e:
             self.lbl_status.setText(f"指纹库不可用：{e}")
@@ -122,18 +130,19 @@ class IdentifyDialog(GlassDialog):
         self._result = None
         self.btn_play.hide()
         self._countdown = self._service.record_seconds
-        self.lbl_title.setText("正在听...（把声音放出来）")
-        self.lbl_status.setText(f"录音中... {self._countdown} 秒")
+        source_name = "麦克风" if self._source == "microphone" else "系统声音"
+        self.lbl_title.setText(f"正在采集{source_name}...（约 {self._countdown} 秒）")
+        self.lbl_status.setText(f"采集中... {self._countdown} 秒")
         if self._timer is None:
             self._timer = QTimer(self)
             self._timer.timeout.connect(self._on_tick)
         self._timer.start(1000)
         wav_path = os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav")
-        self._start_identify_worker(wav_path)
+        self._start_identify_worker(wav_path, self._source)
 
-    def _start_identify_worker(self, wav_path):
+    def _start_identify_worker(self, wav_path, source="microphone"):
         self._identify_thread = QThread()
-        self._identify_worker = _IdentifyWorker(self._service, wav_path)
+        self._identify_worker = _IdentifyWorker(self._service, wav_path, source)
         self._identify_worker.moveToThread(self._identify_thread)
         self._identify_thread.started.connect(self._identify_worker.run)
         self._identify_worker.done.connect(self._on_done)
@@ -163,11 +172,30 @@ class IdentifyDialog(GlassDialog):
             return
         title = result.get("title") or result.get("filename") or "未知歌曲"
         artist = result.get("artist") or ""
-        conf = result.get("confidence", 0)
+        conf = result.get("confidence")
         name = f"{title} - {artist}" if artist else title
         self.lbl_title.setText(f"匹配到：{name}")
-        self.lbl_status.setText(f"置信度 {conf:.0%}（{result.get('quality', '')}）")
+        source_name = "麦克风" if result.get("source", self._source) == "microphone" else "系统声音"
+        details = f"来源：{source_name}"
+        if conf is not None:
+            details += f"；置信度 {float(conf):.0%}（{result.get('quality', '')}）"
+        filepath = result.get("filepath") or ""
+        if filepath:
+            details += f"；文件：{filepath}"
+        if int(result.get("candidate_count", 1) or 1) > 1:
+            self.lbl_status.setText(f"找到多个候选，当前未自动选择；{details}")
+            self.btn_play.hide()
+            return
+        self.lbl_status.setText(details)
         self.btn_play.show()
+
+    def _on_source_changed(self, _index):
+        self._source = self.source_combo.currentData() or "microphone"
+        if not self._busy:
+            if self._source == "system":
+                self.lbl_title.setText("准备采集电脑系统声音")
+            else:
+                self.lbl_title.setText("准备采集麦克风环境音")
 
     @Slot(str)
     def _on_failed(self, msg):

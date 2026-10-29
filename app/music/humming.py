@@ -11,6 +11,8 @@ import sys
 import time
 import wave
 
+from .capture import CaptureCancelled, CaptureError, MicrophoneCapture, SystemLoopbackCapture
+
 # ---- third_party 加载（不依赖 main.py 改 sys.path，红线：不碰 main.py）----
 _THIRD_PARTY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "third_party")
 if os.path.isdir(_THIRD_PARTY) and _THIRD_PARTY not in sys.path:
@@ -167,14 +169,21 @@ class HummingService:
             "peak_ratio": float(m.peak_ratio),
             "quality": quality_label(m.confidence, m.peak_ratio),
             "offset_sec": float(m.best.offset_sec),
+            "candidate_count": len(result.matches),
         }
 
-    def record_and_identify(self, wav_path: str) -> dict[str, object] | None:
-        """录 `record_seconds` 秒麦克风 → 临时 wav → 识别。供后台线程调用。"""
+    def record_and_identify(self, wav_path: str, source: str = "microphone") -> dict[str, object] | None:
+        """按来源一次性采集 → 临时 wav → 本地识别。供后台线程调用。"""
         t0 = time.perf_counter()
-        _pyaudio_record(wav_path, seconds=self.record_seconds)
+        if source == "microphone":
+            MicrophoneCapture(seconds=self.record_seconds).capture(wav_path)
+        elif source == "system":
+            SystemLoopbackCapture(seconds=self.record_seconds).capture(wav_path)
+        else:
+            raise HummingError(f"不支持的识曲输入来源: {source}")
         result = self.identify_file(wav_path)
         elapsed = time.perf_counter() - t0
         if result is not None:
             result["elapsed_sec"] = round(elapsed, 1)
+            result["source"] = source
         return result
