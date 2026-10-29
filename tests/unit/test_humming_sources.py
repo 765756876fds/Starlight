@@ -14,14 +14,14 @@ def _service(monkeypatch):
         def __init__(self, **kwargs):
             calls.append(("mic_init", kwargs))
 
-        def capture(self, path):
+        def capture(self, path, cancel_event=None):
             calls.append(("mic_capture", path))
 
     class FakeLoopback:
         def __init__(self, **kwargs):
             calls.append(("system_init", kwargs))
 
-        def capture(self, path):
+        def capture(self, path, cancel_event=None):
             calls.append(("system_capture", path))
 
     monkeypatch.setattr(humming, "MicrophoneCapture", FakeCapture)

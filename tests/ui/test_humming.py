@@ -176,13 +176,14 @@ def _make_dialog(tmp_path, monkeypatch, has_library=True):
     service._runtime = SimpleNamespace(
         storage=SimpleNamespace(count_tracks=lambda: 1 if has_library else 0))
     dlg = IdentifyDialog(service, on_play=lambda r: None)
-    monkeypatch.setattr(dlg, "_start_identify_worker", lambda wav, source="microphone": None)  # 不启真线程
+    monkeypatch.setattr(dlg, "_start_identify_worker", lambda wav, source="microphone", cancel_event=None: None)  # 不启真线程
     return dlg
 
 
 def test_dialog_recording_then_identifying(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch)
     dlg.start()
+    dlg.begin()
     assert dlg._busy is True
     assert dlg._countdown == dlg._service.record_seconds
     assert "采集中" in dlg.lbl_status.text()
@@ -221,11 +222,21 @@ def test_dialog_failed(tmp_path, monkeypatch):
     assert not dlg._busy
 
 
+def test_dialog_cancelled_can_start_again(tmp_path, monkeypatch):
+    dlg = _make_dialog(tmp_path, monkeypatch)
+    dlg._begin_record()
+    dlg._on_cancelled()
+    assert not dlg._busy
+    assert "可以重新开始" in dlg.lbl_status.text()
+    assert dlg.btn_start.isEnabled()
+
+
 def test_dialog_empty_library_prompts_without_auto_build(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch, has_library=False)
     dlg.start()
     assert dlg._busy is False
-    assert "请先扫描音乐库建立指纹库" in dlg.lbl_status.text()
+    dlg.begin()
+    assert "请先点击" in dlg.lbl_status.text()
 
 
 def test_dialog_index_button_explicitly_starts_build(tmp_path, monkeypatch):
@@ -248,10 +259,11 @@ def test_dialog_index_done_does_not_start_recording(tmp_path, monkeypatch):
 
 def test_dialog_source_selection(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch)
+    assert dlg.source_combo.currentData() == "system"
     dlg.source_combo.setCurrentIndex(1)
-    assert dlg._source == "system"
-    dlg.source_combo.setCurrentIndex(0)
     assert dlg._source == "microphone"
+    dlg.source_combo.setCurrentIndex(0)
+    assert dlg._source == "system"
 
 
 def test_dialog_build_failed_no_longer_auto_runs(tmp_path, monkeypatch):
@@ -264,7 +276,7 @@ def test_dialog_busy_blocks_restart(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch)
     dlg._begin_record()
     assert dlg._busy is True
-    dlg.start()  # busy 中 → 忽略
+    dlg.begin()  # busy 中 → 忽略
     assert dlg._countdown == dlg._service.record_seconds  # 未重置（未重新 begin）
 
 
@@ -358,7 +370,7 @@ def test_panel_identify_button_opens_dialog(monkeypatch):
         p.btn_identify.click()
         assert p._identify_dialog is not None
         assert p._identify_dialog.isVisible()
-        assert "请先扫描音乐库" in p._identify_dialog.lbl_status.text()
+        assert p._identify_dialog.lbl_status.text() == "准备就绪"
     finally:
         p._identify_dialog.hide()
         from app.core.command_bus import get_command_bus

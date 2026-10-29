@@ -8,10 +8,12 @@
 """
 import os
 import tempfile
+import threading
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton
 
+from ...music.capture import CaptureCancelled
 from ..theme.colors import Colors
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.icon_utils import lucide_icon
@@ -22,17 +24,23 @@ class _IdentifyWorker(QObject):
 
     done = Signal(object)
     failed = Signal(str)
+    cancelled = Signal()
 
-    def __init__(self, service, wav_path, source):
+    def __init__(self, service, wav_path, source, cancel_event):
         super().__init__()
         self._service = service
         self._wav_path = wav_path
         self._source = source
+        self._cancel_event = cancel_event
 
     @Slot()
     def run(self):
         try:
-            result = self._service.record_and_identify(self._wav_path, source=self._source)
+            result = self._service.record_and_identify(
+                self._wav_path, source=self._source, cancel_event=self._cancel_event)
+        except CaptureCancelled:
+            self.cancelled.emit()
+            return
         except Exception as e:  # 故障隔离：任何异常 → failed，不崩
             self.failed.emit(str(e))
             return
@@ -64,7 +72,8 @@ class IdentifyDialog(GlassDialog):
 
     def __init__(self, service, on_play=None, parent=None):
         super().__init__("识曲", parent)
-        self.resize(380, 200)
+        self.resize(520, 360)
+        self.setMinimumSize(460, 320)
         self._service = service
         self._on_play = on_play
         self._busy = False
@@ -73,25 +82,38 @@ class IdentifyDialog(GlassDialog):
         self._timer = None
         self._identify_thread = None
         self._build_thread = None
-        self._source = "microphone"
+        self._source = "system"
+        self._cancel_event = None
 
         root = self.body_layout
-        self.lbl_title = QLabel("把手机/音箱凑近麦克风，听 8 秒就能识别")
+        self.lbl_title = QLabel("选择声音来源后，点击“开始识曲”")
+        self.lbl_title.setStyleSheet("font-size: 18px; font-weight: 600;")
         self.lbl_title.setWordWrap(True)
         root.addWidget(self.lbl_title)
         self.source_combo = QComboBox()
-        self.source_combo.addItem("麦克风环境音", "microphone")
         self.source_combo.addItem("电脑系统声音", "system")
+        self.source_combo.addItem("麦克风环境音", "microphone")
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         root.addWidget(self.source_combo)
         self.lbl_status = QLabel("准备就绪")
         self.lbl_status.setWordWrap(True)
+        self.lbl_status.setMinimumHeight(52)
         root.addWidget(self.lbl_status)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        self.btn_start = QPushButton("开始识曲")
+        self.btn_start.clicked.connect(self.begin)
+        action_row.addWidget(self.btn_start)
+        self.btn_cancel = QPushButton("取消识曲")
+        self.btn_cancel.clicked.connect(self.cancel)
+        self.btn_cancel.setEnabled(False)
+        action_row.addWidget(self.btn_cancel)
         self.btn_play = QPushButton("立即播放")
         self.btn_play.setIcon(lucide_icon("play", 14, Colors.TEXT_PRIMARY))
         self.btn_play.hide()
         self.btn_play.clicked.connect(self._on_play_clicked)
-        root.addWidget(self.btn_play)
+        action_row.addWidget(self.btn_play)
+        root.addLayout(action_row)
         self.btn_index = QPushButton("建立/更新指纹库")
         self.btn_index.clicked.connect(self._on_index_clicked)
         root.addWidget(self.btn_index)
@@ -106,19 +128,23 @@ class IdentifyDialog(GlassDialog):
 
     # ------------------------------------------------------------------ 对外
     def start(self):
-        """开始一次识曲（防重入：录音/识别/建库中忽略重复触发）。"""
+        """只初始化窗口，不开始录音。"""
         if self._busy:
             return
-        if self._identify_thread is not None and self._identify_thread.isRunning():
-            return
-        if self._build_thread is not None and self._build_thread.isRunning():
+        self._result = None
+        self.btn_play.hide()
+        self.btn_start.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self._on_source_changed(self.source_combo.currentIndex())
+
+    def begin(self):
+        """用户明确点击后才检查指纹库并开始采集。"""
+        if self._busy or (self._identify_thread is not None and self._identify_thread.isRunning()):
             return
         try:
             if not self._service.has_library():
-                self._busy = False
                 self.lbl_title.setText("本地指纹库为空")
-                self.lbl_status.setText("请先扫描音乐库建立指纹库，再开始识曲")
-                self.btn_index.show()
+                self.lbl_status.setText("请先点击“建立/更新指纹库”，完成后再开始识曲")
                 return
         except Exception as e:
             self.lbl_status.setText(f"指纹库不可用：{e}")
@@ -131,6 +157,7 @@ class IdentifyDialog(GlassDialog):
     # ------------------------------------------------------------------ 录音/识别
     def _begin_record(self):
         self._busy = True
+        self._cancel_event = threading.Event()
         self._result = None
         self.btn_play.hide()
         self._countdown = self._service.record_seconds
@@ -141,18 +168,24 @@ class IdentifyDialog(GlassDialog):
             self._timer = QTimer(self)
             self._timer.timeout.connect(self._on_tick)
         self._timer.start(1000)
+        self.btn_start.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self.source_combo.setEnabled(False)
         wav_path = os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav")
-        self._start_identify_worker(wav_path, self._source)
+        self._start_identify_worker(wav_path, self._source, self._cancel_event)
 
-    def _start_identify_worker(self, wav_path, source="microphone"):
+    def _start_identify_worker(self, wav_path, source="microphone", cancel_event=None):
         self._identify_thread = QThread()
-        self._identify_worker = _IdentifyWorker(self._service, wav_path, source)
+        self._identify_worker = _IdentifyWorker(
+            self._service, wav_path, source, cancel_event or threading.Event())
         self._identify_worker.moveToThread(self._identify_thread)
         self._identify_thread.started.connect(self._identify_worker.run)
         self._identify_worker.done.connect(self._on_done)
         self._identify_worker.failed.connect(self._on_failed)
+        self._identify_worker.cancelled.connect(self._on_cancelled)
         self._identify_worker.done.connect(self._identify_thread.quit)
         self._identify_worker.failed.connect(self._identify_thread.quit)
+        self._identify_worker.cancelled.connect(self._identify_thread.quit)
         self._identify_thread.finished.connect(self._cleanup_wav)
         self._identify_thread.start()
 
@@ -167,6 +200,9 @@ class IdentifyDialog(GlassDialog):
     @Slot(object)
     def _on_done(self, result):
         self._busy = False
+        self.btn_start.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.source_combo.setEnabled(True)
         self._result = result
         if self._timer is not None:
             self._timer.stop()
@@ -204,10 +240,24 @@ class IdentifyDialog(GlassDialog):
     @Slot(str)
     def _on_failed(self, msg):
         self._busy = False
+        self.btn_start.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.source_combo.setEnabled(True)
         if self._timer is not None:
             self._timer.stop()
         self.lbl_title.setText("识曲")
         self.lbl_status.setText(f"识别失败：{msg}")
+
+    @Slot()
+    def _on_cancelled(self):
+        self._busy = False
+        self.btn_start.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.source_combo.setEnabled(True)
+        if self._timer is not None:
+            self._timer.stop()
+        self.lbl_title.setText("识曲已取消")
+        self.lbl_status.setText("已取消识曲，音频设备已释放，可以重新开始")
 
     # ------------------------------------------------------------------ 首次建库
     def _show_build(self):
@@ -253,6 +303,13 @@ class IdentifyDialog(GlassDialog):
     def _on_index_clicked(self):
         """用户明确触发后台建库，不自动开始录音。"""
         self._show_build()
+
+    def cancel(self):
+        if not self._busy or self._cancel_event is None:
+            return
+        self._cancel_event.set()
+        self.btn_cancel.setEnabled(False)
+        self.lbl_status.setText("正在取消识曲并释放音频设备…")
 
     # ------------------------------------------------------------------ 播放/关闭
     def _on_play_clicked(self):
