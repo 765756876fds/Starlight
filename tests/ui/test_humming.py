@@ -207,10 +207,47 @@ def test_dialog_success_card(tmp_path, monkeypatch):
 
 def test_dialog_miss(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch)
+    from app.ui.dialogs import identify_dialog
+    monkeypatch.setattr(identify_dialog.QMessageBox, "question",
+                        lambda *args, **kwargs: identify_dialog.QMessageBox.StandardButton.No)
     dlg._begin_record()
     dlg._on_done(None)
-    assert "未找到匹配结果" in dlg.lbl_status.text()
+    assert "已取消在线识曲" in dlg.lbl_status.text()
     assert dlg.btn_play.isHidden()
+
+
+def test_dialog_local_miss_requires_explicit_online_consent(tmp_path, monkeypatch):
+    dlg = _make_dialog(tmp_path, monkeypatch)
+    from app.ui.dialogs import identify_dialog
+    calls = []
+    monkeypatch.setattr(identify_dialog.QMessageBox, "question",
+                        lambda *args, **kwargs: calls.append(True) or
+                        identify_dialog.QMessageBox.StandardButton.No)
+    dlg._begin_record()
+    dlg._on_done(None)
+    assert calls == [True]
+    assert "不会发送" in dlg.lbl_status.text()
+
+
+def test_dialog_online_success_searches_without_playback(tmp_path, monkeypatch):
+    dlg = _make_dialog(tmp_path, monkeypatch)
+    from app.ui.dialogs import identify_dialog
+    searches = []
+    dlg._on_search = searches.append
+    result = SimpleNamespace(status=identify_dialog.ShazamRecognitionStatus.SUCCESS,
+                             title="K歌之王", artist="Eason Chan", track_id="1", url="")
+    dlg._on_online_done(result)
+    assert searches == ["K歌之王 Eason Chan"]
+    assert dlg.btn_play.isHidden()
+
+
+def test_dialog_online_no_match_is_not_local_failure(tmp_path, monkeypatch):
+    dlg = _make_dialog(tmp_path, monkeypatch)
+    from app.ui.dialogs import identify_dialog
+    result = SimpleNamespace(status=identify_dialog.ShazamRecognitionStatus.NO_MATCH,
+                             detail="未找到匹配歌曲")
+    dlg._on_online_done(result)
+    assert "在线服务未找到" in dlg.lbl_status.text()
 
 
 def test_dialog_failed(tmp_path, monkeypatch):

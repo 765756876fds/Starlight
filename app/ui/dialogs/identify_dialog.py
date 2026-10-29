@@ -11,9 +11,10 @@ import tempfile
 import threading
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton
 
 from ...music.capture import CaptureCancelled
+from ...music.shazamio_provider import ShazamRecognitionStatus
 from ..theme.colors import Colors
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.icon_utils import lucide_icon
@@ -67,15 +68,31 @@ class _BuildWorker(QObject):
         self.done.emit(stats)
 
 
+class _OnlineIdentifyWorker(QObject):
+    """后台在线识曲；provider 本身负责超时和网络资源关闭。"""
+
+    done = Signal(object)
+
+    def __init__(self, wav_path, provider):
+        super().__init__()
+        self._wav_path = wav_path
+        self._provider = provider
+
+    @Slot()
+    def run(self):
+        self.done.emit(self._provider.recognize(self._wav_path))
+
+
 class IdentifyDialog(GlassDialog):
     """听歌识曲窗口（也由语音"听听这是什么歌"触发）。"""
 
-    def __init__(self, service, on_play=None, parent=None):
+    def __init__(self, service, on_play=None, on_search=None, parent=None):
         super().__init__("识曲", parent)
         self.resize(520, 360)
         self.setMinimumSize(460, 320)
         self._service = service
         self._on_play = on_play
+        self._on_search = on_search
         self._busy = False
         self._result = None
         self._countdown = 0
@@ -84,6 +101,9 @@ class IdentifyDialog(GlassDialog):
         self._build_thread = None
         self._source = "system"
         self._cancel_event = None
+        self._current_wav = None
+        self._online_thread = None
+        self._online_cancelled = False
 
         root = self.body_layout
         self.lbl_title = QLabel("选择声音来源后，点击“开始识曲”")
@@ -172,6 +192,7 @@ class IdentifyDialog(GlassDialog):
         self.btn_cancel.setEnabled(True)
         self.source_combo.setEnabled(False)
         wav_path = os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav")
+        self._current_wav = wav_path
         self._start_identify_worker(wav_path, self._source, self._cancel_event)
 
     def _start_identify_worker(self, wav_path, source="microphone", cancel_event=None):
@@ -186,7 +207,6 @@ class IdentifyDialog(GlassDialog):
         self._identify_worker.done.connect(self._identify_thread.quit)
         self._identify_worker.failed.connect(self._identify_thread.quit)
         self._identify_worker.cancelled.connect(self._identify_thread.quit)
-        self._identify_thread.finished.connect(self._cleanup_wav)
         self._identify_thread.start()
 
     def _on_tick(self):
@@ -208,8 +228,9 @@ class IdentifyDialog(GlassDialog):
             self._timer.stop()
         if result is None:
             self.lbl_title.setText("识曲")
-            self.lbl_status.setText("未找到匹配结果（试试更清晰的片段或换一首）")
+            self._ask_online_identify()
             return
+        self._cleanup_wav()
         title = result.get("title") or result.get("filename") or "未知歌曲"
         artist = result.get("artist") or ""
         conf = result.get("confidence")
@@ -229,6 +250,74 @@ class IdentifyDialog(GlassDialog):
         self.lbl_status.setText(details)
         self.btn_play.show()
 
+    def _ask_online_identify(self):
+        """本地未命中时，在线发送前明确征得用户同意。"""
+        answer = QMessageBox.question(
+            self, "在线识曲确认",
+            "本地音乐库未找到这首歌。在线识曲会将本次约 8–12 秒的音频片段发送给第三方 Shazam 服务。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.lbl_status.setText("已取消在线识曲，音频不会发送到第三方服务")
+            self._cleanup_wav()
+            return
+        try:
+            from ...music.shazamio_provider import ShazamIOProvider
+            self._busy = True
+            self._online_cancelled = False
+            self.btn_cancel.setEnabled(True)
+            self._online_thread = QThread()
+            self._online_worker = _OnlineIdentifyWorker(self._current_wav, ShazamIOProvider())
+            self._online_worker.moveToThread(self._online_thread)
+            self._online_thread.started.connect(self._online_worker.run)
+            self._online_worker.done.connect(self._on_online_done)
+            self._online_worker.done.connect(self._online_thread.quit)
+            self._online_thread.finished.connect(self._cleanup_wav)
+            self._online_thread.start()
+            self.lbl_title.setText("正在在线识曲…")
+            self.lbl_status.setText("已同意发送短音频，正在等待识别结果")
+        except Exception as exc:
+            self._cleanup_wav()
+            self._on_failed(f"在线识曲初始化失败：{exc}")
+
+    @Slot(object)
+    def _on_online_done(self, result):
+        if self._online_cancelled:
+            self._busy = False
+            self.btn_cancel.setEnabled(False)
+            self._cleanup_wav()
+            self.lbl_title.setText("在线识曲已取消")
+            self.lbl_status.setText("已取消在线识曲，不会使用返回结果")
+            return
+        self._busy = False
+        self.btn_cancel.setEnabled(False)
+        if result.status is not ShazamRecognitionStatus.SUCCESS:
+            self._cleanup_wav()
+            messages = {
+                ShazamRecognitionStatus.NO_MATCH: "在线服务未找到匹配歌曲",
+                ShazamRecognitionStatus.TIMEOUT: "在线识曲超时",
+                ShazamRecognitionStatus.NETWORK_ERROR: "在线识曲网络不可用",
+                ShazamRecognitionStatus.RATE_LIMITED: "在线识曲请求过于频繁，请稍后再试",
+                ShazamRecognitionStatus.DEPENDENCY_MISSING: "在线识曲依赖未安装，本地识曲仍可使用",
+            }
+            self.lbl_title.setText("识曲")
+            self.lbl_status.setText(messages.get(result.status, result.detail or "在线识曲失败"))
+            return
+        self._cleanup_wav()
+        result_data = {"title": result.title, "artist": result.artist,
+                       "source": "shazamio", "track_id": result.track_id, "url": result.url}
+        self._result = result_data
+        self.lbl_title.setText(f"在线识别到：{result.title} - {result.artist}")
+        if self._on_search:
+            try:
+                self._on_search(f"{result.title} {result.artist}")
+                self.lbl_status.setText("已识别，正在搜索可用音源；不会自动播放")
+            except Exception as exc:
+                self.lbl_status.setText(f"歌曲已识别，但在线音源搜索失败：{exc}")
+        else:
+            self.lbl_status.setText("已识别，未连接在线音源搜索；不会自动播放")
+
     def _on_source_changed(self, _index):
         self._source = self.source_combo.currentData() or "microphone"
         if not self._busy:
@@ -245,6 +334,7 @@ class IdentifyDialog(GlassDialog):
         self.source_combo.setEnabled(True)
         if self._timer is not None:
             self._timer.stop()
+        self._cleanup_wav()
         self.lbl_title.setText("识曲")
         self.lbl_status.setText(f"识别失败：{msg}")
 
@@ -256,6 +346,7 @@ class IdentifyDialog(GlassDialog):
         self.source_combo.setEnabled(True)
         if self._timer is not None:
             self._timer.stop()
+        self._cleanup_wav()
         self.lbl_title.setText("识曲已取消")
         self.lbl_status.setText("已取消识曲，音频设备已释放，可以重新开始")
 
@@ -305,6 +396,11 @@ class IdentifyDialog(GlassDialog):
         self._show_build()
 
     def cancel(self):
+        if self._online_thread is not None and self._online_thread.isRunning():
+            self._online_cancelled = True
+            self.btn_cancel.setEnabled(False)
+            self.lbl_status.setText("正在取消在线识曲…")
+            return
         if not self._busy or self._cancel_event is None:
             return
         self._cancel_event.set()
@@ -323,10 +419,12 @@ class IdentifyDialog(GlassDialog):
         self.hide()
 
     def _cleanup_wav(self):
+        path = self._current_wav or os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav")
         try:
-            os.remove(os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav"))
+            os.remove(path)
         except OSError:
             pass
+        self._current_wav = None
 
     def closeEvent(self, event):
         # 运行中的线程引用保留（等自然结束），只隐藏窗口，避免 QThread 销毁崩溃

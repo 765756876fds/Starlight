@@ -1208,7 +1208,8 @@ class MusicPanel(QWidget):
         try:
             if self._identify_dialog is None:
                 self._identify_dialog = IdentifyDialog(
-                    self._get_identify_service(), on_play=self._on_identify_play, parent=self)
+                    self._get_identify_service(), on_play=self._on_identify_play,
+                    on_search=self._on_identify_search, parent=self)
             self._identify_dialog.show()
             self._identify_dialog.raise_()
             self._identify_dialog.start()
@@ -1217,6 +1218,11 @@ class MusicPanel(QWidget):
             logger.exception("识曲窗口打开失败")
             self._identify_dialog = None
             self.lbl_identify_status.setText(f"识曲暂不可用：{exc}")
+
+    def _on_identify_search(self, keyword):
+        """识曲结果复用现有在线搜索/展示链路，不触发播放。"""
+        self.edit_kw.setText(keyword)
+        self._do_search()
 
     def _on_identify_play(self, result):
         """识别成功 → 按指纹 filepath 回本地库 → play_song（失败静默提示）。"""
