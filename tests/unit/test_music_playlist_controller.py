@@ -64,8 +64,12 @@ def test_add_next_no_query():
 
 
 def test_play_playlist_enqueues_in_order():
-    """3 首歌单：播第一首 + 其余按原顺序入队（逆序调用 add_next 保持顺序）。"""
+    """3 首歌单：用真实 PlayQueue 验证最终待播顺序为 B、C。"""
+    from app.music.queue import PlayQueue
     c = _make_controller()
+    c.queue = PlayQueue()
+    c.queue._queue = [{"title": "A"}]  # 第一首已在队首播放
+    c.queue._current_index = 0
     c.get_playlists = MagicMock(return_value=[{"id": 1, "name": "工作"}])
     songs = [
         {"music_id": 1, "title": "A"},
@@ -74,14 +78,11 @@ def test_play_playlist_enqueues_in_order():
     ]
     c.get_playlist_songs = MagicMock(return_value=songs)
     c.play_playlist_item = MagicMock(return_value=True)
-    c.queue.get_current_index.return_value = 0
-    c.queue.add.return_value = None
     cmd = Command(command_type="music.play_playlist", params={"name": "工作"})
     assert c._cmd_play_playlist(cmd) is True
-    # add_next 被调用两次（B、C），逆序调用所以先 C 后 B
-    calls = [c.args[0]["title"] for c in c.queue.add.call_args_list]
-    # position=1 for both, but songs inserted: first C then B → queue order A, B, C
-    assert calls == ["C", "B"], f"逆序入队顺序错误: {calls}"
+    # 最终队列：A(当前), B, C
+    titles = [s["title"] for s in c.queue._queue]
+    assert titles == ["A", "B", "C"], f"队列顺序错误: {titles}"
 
 
 def test_add_next_queue_add_raises():
