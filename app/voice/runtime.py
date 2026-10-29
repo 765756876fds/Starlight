@@ -887,7 +887,7 @@ class VoiceRuntime:
                 source="voice",
             ))
             if not ok:
-                self._enqueue_speak("倍速切换失败", "voice")
+                self._enqueue_speak("暂不支持该倍速，请使用支持的档位", "voice")
 
         elif intent_type == CommandType.MUSIC_VOLUME_UP:
             self.command_bus.execute(Command(

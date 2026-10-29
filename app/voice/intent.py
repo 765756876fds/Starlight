@@ -115,6 +115,9 @@ class RuleBasedIntent:
          CommandType.MUSIC_SET_SPEED, {"speed": 1.0}),
         (r"^(倍速|播放速度|速度)(零点五|零点七五|一点二五|一点五|一点七五|两倍|二点五|三倍|一?倍)倍?$",
          CommandType.MUSIC_SET_SPEED, {}),
+        # 兜底：明确提到倍速+数字但不在支持档 → 进入命令分发，controller 拒绝并 TTS 提示
+        (r"^(倍速|播放速度|速度)\d+倍?$",
+         CommandType.MUSIC_SET_SPEED, {}),
         # 重新扫描
         (r"(重新扫描|扫描音乐|更新音乐库)", CommandType.MUSIC_RESCAN, {}),
         # 清理失效歌曲
