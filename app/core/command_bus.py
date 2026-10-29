@@ -65,6 +65,7 @@ class CommandType:
     MOVIE_VOLUME_SET = "movie.volume_set"
     MOVIE_VOLUME_UP = "movie.volume_up"
     MOVIE_VOLUME_DOWN = "movie.volume_down"
+    MOVIE_SEEK = "movie.seek"
     PLAYER_NEXT = "player.next"
 
     # ===== GameAlarm 命令 =====

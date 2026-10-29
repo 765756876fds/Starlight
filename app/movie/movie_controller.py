@@ -193,6 +193,7 @@ class MovieController:
             bus.register(CommandType.MOVIE_VOLUME_SET, lambda c: self.set_volume(c.get("volume", 50)))
             bus.register(CommandType.MOVIE_VOLUME_UP, lambda c: self.volume_up(c.get("step", 5)))
             bus.register(CommandType.MOVIE_VOLUME_DOWN, lambda c: self.volume_down(c.get("step", 5)))
+            bus.register(CommandType.MOVIE_SEEK, lambda c: self.seek(c.get("seconds", 0), c.get("mode", "relative")))
         except Exception as e:
             logger.error(f"[Movie] 注册语音命令失败: {e}")
 
@@ -782,7 +783,12 @@ class MovieController:
             self._notify_voice("电影继续播放")
 
     def seek(self, seconds, mode="relative"):
-        self.mpv.seek(seconds, mode)
+        try:
+            dur = self.get_duration()
+            if dur and dur > 0:
+                self.mpv.seek(seconds, mode)
+        except Exception:
+            pass
 
     def get_position(self) -> float:
         return self.mpv.get_live_playback_time()

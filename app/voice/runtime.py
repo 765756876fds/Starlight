@@ -833,7 +833,8 @@ class VoiceRuntime:
 
         # 明确电影命令：用户明说"暂停电影"/"继续电影"，直接分发，不走谁在播路由
         elif intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME, CommandType.MOVIE_STOP,
-                             CommandType.MOVIE_VOLUME_SET, CommandType.MOVIE_VOLUME_UP, CommandType.MOVIE_VOLUME_DOWN):
+                             CommandType.MOVIE_VOLUME_SET, CommandType.MOVIE_VOLUME_UP, CommandType.MOVIE_VOLUME_DOWN,
+                             CommandType.MOVIE_SEEK):
             self.command_bus.execute(Command(
                 command_type=intent_type,
                 params=params,

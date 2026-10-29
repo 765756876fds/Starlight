@@ -301,6 +301,8 @@ class RuleBasedIntent:
              CommandType.MOVIE_VOLUME_DOWN, {}),
             (r"^电影音量(\d+|[零一二两三四五六七八九十]+)$",
              CommandType.MOVIE_VOLUME_SET, {}),
+            (r"^电影(快进|前进|后退|倒退)(\d+|[零一二两三四五六七八九十]+)秒$",
+             CommandType.MOVIE_SEEK, {}),
         ]
         for pattern, intent_type, params in MOVIE_EXPLICIT_RULES:
             m = re.match(pattern, text)
@@ -311,6 +313,13 @@ class RuleBasedIntent:
                     vol = int(raw) if raw.isdigit() else cls._cn_episode_to_int(raw)
                     if vol is not None and 0 <= vol <= 100:
                         p["volume"] = vol
+                elif intent_type == CommandType.MOVIE_SEEK and m.groups():
+                    direction, num_str = m.group(1), m.group(2)
+                    secs = int(num_str) if num_str.isdigit() else cls._cn_episode_to_int(num_str)
+                    if secs is not None and 1 <= secs <= 60:
+                        sign = 1 if direction in ("快进", "前进") else -1
+                        p["seconds"] = sign * secs
+                        p["mode"] = "relative"
                 return Intent(intent_type, confidence=0.99, params=p)
 
         # 音乐明确命令（继续音乐/音乐暂停 等显式说法）
