@@ -2096,6 +2096,10 @@ class MusicController:
         return self._speed
 
     # ===== 歌单/榜单语音命令 =====
+    def set_voice_rank_tracks(self, tracks: list | None):
+        """UI 榜单加载成功后调用，供语音播放榜单第N首。"""
+        self._voice_rank_tracks = tracks or []
+
     def _cmd_play_playlist(self, command: Command) -> bool:
         name = command.params.get("name", "")
         if not name:
@@ -2109,7 +2113,16 @@ class MusicController:
         songs = self.get_playlist_songs(matches[0]["id"])
         if not songs:
             return False
-        return self.play_playlist_item(songs[0])
+        # 播第一首 + 其余入队
+        ok = self.play_playlist_item(songs[0])
+        if not ok:
+            return False
+        for s in songs[1:]:
+            try:
+                self.add_next(s)
+            except Exception:
+                pass
+        return True
 
     def _cmd_create_playlist(self, command: Command) -> bool:
         name = command.params.get("name", "").strip()

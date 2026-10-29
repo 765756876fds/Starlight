@@ -1545,6 +1545,8 @@ class MusicPanel(QWidget):
     def _on_rank_detail_done(self, payload: dict):
         tracks = (payload or {}).get("tracks") or []
         self._rank_tracks = tracks
+        if self._music is not None:
+            self._music.set_voice_rank_tracks(tracks)
         self.list_rank_songs.clear()
         for i, t in enumerate(tracks, 1):
             text = f"{i:>2}. {t.title}"
