@@ -28,6 +28,8 @@ soxr>=0.3
 
 # ===== 麦克风 / VAD =====
 pyaudio>=0.2.14
+# Windows 系统声音一次性采集（WASAPI loopback，按需使用）
+SoundCard>=0.4.3
 
 # ===== TTS =====
 edge-tts>=6.1.9
