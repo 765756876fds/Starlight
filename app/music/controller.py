@@ -2143,6 +2143,17 @@ class MusicController:
         matches = [p for p in playlists if p.get("name") == name]
         if len(matches) != 1:
             return False
+        song_query = command.params.get("song_query", "")
+        if song_query:
+            # 指定歌曲：本地搜索
+            try:
+                local = self.search.search(song_query, limit=5)
+            except Exception:
+                local = []
+            for s in local:
+                if s.get("path") and os.path.exists(s["path"]):
+                    return self.add_to_playlist(matches[0]["id"], s)
+            return False
         song = self.get_current_song()
         if not song:
             return False

@@ -127,6 +127,9 @@ class RuleBasedIntent:
         # 把这首歌加到歌单
         (r"^把这首歌加到(.+?)歌单$",
          CommandType.MUSIC_ADD_TO_PLAYLIST, {}),
+        # 把指定歌曲加入/加到/存入歌单
+        (r"^把(.+?)(?:加入|加到|存入)(.+?)歌单$",
+         CommandType.MUSIC_ADD_TO_PLAYLIST, {}),
         # 把XX放到下一首/放在下一首/插到下一首（兼容书名号）
         (r"^把《?(.+?)》?(?:放|插)(?:在|到)下一首$",
          CommandType.MUSIC_ADD_NEXT, {}),
@@ -381,9 +384,15 @@ class RuleBasedIntent:
                     params["speed"] = cn_map.get(raw)
                 if command in (CommandType.MUSIC_PLAY_PLAYLIST,
                                CommandType.MUSIC_CREATE_PLAYLIST,
-                               CommandType.MUSIC_ADD_TO_PLAYLIST,
                                CommandType.MUSIC_ADD_NEXT) and match.groups():
                     params["name" if command != CommandType.MUSIC_ADD_NEXT else "query"] = match.group(1).strip()
+                if command == CommandType.MUSIC_ADD_TO_PLAYLIST and match.groups():
+                    if match.lastindex and match.lastindex >= 2:
+                        # 把<歌曲>加入<歌单>
+                        params["song_query"] = match.group(1).strip()
+                        params["name"] = match.group(2).strip()
+                    else:
+                        params["name"] = match.group(1).strip()
                 if command == CommandType.MUSIC_PLAY_RANK_INDEX and match.groups():
                     raw = match.group(1)
                     cn_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
