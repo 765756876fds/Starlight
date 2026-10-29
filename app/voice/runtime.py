@@ -873,17 +873,25 @@ class VoiceRuntime:
                              CommandType.MUSIC_CLEAR_QUEUE,
                              CommandType.MUSIC_STOP,
                              CommandType.MUSIC_SEEK,
-                             CommandType.MUSIC_IDENTIFY,
-                             CommandType.MUSIC_PLAY_PLAYLIST,
-                             CommandType.MUSIC_CREATE_PLAYLIST,
-                             CommandType.MUSIC_ADD_TO_PLAYLIST,
-                             CommandType.MUSIC_ADD_NEXT,
-                             CommandType.MUSIC_PLAY_RANK_INDEX) or intent_type == CommandType.MUSIC_VOLUME_SET:
+                             CommandType.MUSIC_IDENTIFY) or intent_type == CommandType.MUSIC_VOLUME_SET:
             self.command_bus.execute(Command(
                 command_type=intent_type,
                 params=params,
                 source="voice",
             ))
+
+        elif intent_type in (CommandType.MUSIC_PLAY_PLAYLIST,
+                             CommandType.MUSIC_CREATE_PLAYLIST,
+                             CommandType.MUSIC_ADD_TO_PLAYLIST,
+                             CommandType.MUSIC_ADD_NEXT,
+                             CommandType.MUSIC_PLAY_RANK_INDEX):
+            ok = self.command_bus.execute(Command(
+                command_type=intent_type,
+                params=params,
+                source="voice",
+            ))
+            if not ok:
+                self._enqueue_speak("操作未成功", "voice")
 
         elif intent_type == CommandType.MUSIC_SET_SPEED:
             ok = self.command_bus.execute(Command(
