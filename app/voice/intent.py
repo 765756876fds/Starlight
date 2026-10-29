@@ -145,9 +145,9 @@ class RuleBasedIntent:
         (r"^播放当前榜单第(\d+|一|二|三|四|五|六|七|八|九|十)首$",
          CommandType.MUSIC_PLAY_RANK_INDEX, {}),
         # 重新扫描
-        (r"(重新扫描|扫描音乐|更新音乐库)", CommandType.MUSIC_RESCAN, {}),
+        (r"^(重新扫描|扫描音乐|更新音乐库)$", CommandType.MUSIC_RESCAN, {}),
         # 清理失效歌曲
-        (r"(清理音乐库|清理失效歌曲|清理坏歌|清除失效歌曲)", CommandType.MUSIC_CLEANUP, {}),
+        (r"^(清理音乐库|清理失效歌曲|清理坏歌|清除失效歌曲)$", CommandType.MUSIC_CLEANUP, {}),
         # 清空队列（整句锚定；"清空计时"等含"计时"的表述不匹配，不会吞 COOLDOWN）
         (r"^(清空队列|清空播放列表|清除队列|清空列表|清空歌单)$",
          CommandType.MUSIC_CLEAR_QUEUE, {}),

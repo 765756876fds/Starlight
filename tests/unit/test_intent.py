@@ -38,6 +38,29 @@ class TestRuleBasedIntent:
         intent = RuleBasedIntent.match(text)
         assert intent is None or intent.intent_type != "music.highlight_mode"
 
+    @pytest.mark.parametrize("text, expected", [
+        ("重新扫描", "music.rescan"),
+        ("更新音乐库啊", "music.rescan"),
+        ("清理音乐库", "music.cleanup"),
+        ("清除失效歌曲。", "music.cleanup"),
+    ])
+    def test_music_maintenance_commands_keep_explicit_scope(self, text, expected):
+        intent = RuleBasedIntent.match(text)
+        assert intent is not None
+        assert intent.intent_type == expected
+
+    @pytest.mark.parametrize("text", [
+        "别重新扫描音乐库",
+        "我刚才听说重新扫描音乐库",
+        "不要清理音乐库",
+        "有人说清理失效歌曲",
+    ])
+    def test_music_maintenance_negation_and_quotation_do_not_trigger(self, text):
+        intent = RuleBasedIntent.match(text)
+        assert intent is None or intent.intent_type not in {
+            "music.rescan", "music.cleanup"
+        }
+
     def test_punctuation_ignored_everywhere(self):
         """ASR 自带标点：指令中任意位置的标点都不影响识别。"""
         cases = [
