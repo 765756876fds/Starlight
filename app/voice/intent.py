@@ -365,6 +365,21 @@ class RuleBasedIntent:
             if re.match(pattern, text):
                 return Intent(intent_type, confidence=0.99, params=dict(params))
 
+        # 游戏自动化：必须明确打开/关闭，避免否定句、转述和闲聊触发。
+        AUTO_RULES = [
+            (r"^(打开|开启)(自动排队)$", CommandType.AUTO_QUEUE_SET, True),
+            (r"^(关闭|关掉)(自动排队)$", CommandType.AUTO_QUEUE_SET, False),
+            (r"^(打开|开启)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, True),
+            (r"^(关闭|关掉)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, False),
+            (r"^(打开|开启)(自动禁用|自动选禁)$", CommandType.AUTO_BANPICK_SET, True),
+            (r"^(关闭|关掉)(自动禁用|自动选禁)$", CommandType.AUTO_BANPICK_SET, False),
+            (r"^(打开|开启)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, True),
+            (r"^(关闭|关掉)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, False),
+        ]
+        for pattern, command, enabled in AUTO_RULES:
+            if re.match(pattern, text):
+                return Intent(command, confidence=0.99, params={"enabled": enabled})
+
         # 音乐控制
         for pattern, command, base_params in cls.MUSIC_RULES:
             match = re.search(pattern, text)

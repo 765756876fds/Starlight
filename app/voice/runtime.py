@@ -831,6 +831,23 @@ class VoiceRuntime:
         elif intent_type == CommandType.MUSIC_RESUME:
             self._global_resume()
 
+        elif intent_type in (CommandType.AUTO_QUEUE_SET, CommandType.AUTO_ACCEPT_SET,
+                             CommandType.AUTO_BANPICK_SET, CommandType.AUTO_COMBO_SET):
+            try:
+                ok = self.command_bus.execute(Command(
+                    command_type=intent_type,
+                    params={"enabled": bool(params.get("enabled"))},
+                    source="voice",
+                ))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
+            self._enqueue_speak(
+                "自动化已开启" if ok and params.get("enabled") else
+                "自动化已关闭" if ok else "自动化操作未成功",
+                "voice_automation",
+            )
+
         # 明确电影命令：用户明说"暂停电影"/"继续电影"，直接分发，不走谁在播路由
         elif intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME, CommandType.MOVIE_STOP,
                              CommandType.MOVIE_VOLUME_SET, CommandType.MOVIE_VOLUME_UP, CommandType.MOVIE_VOLUME_DOWN,

@@ -810,8 +810,33 @@ class Application:
                 enabled = self.automation.toggle_auto_banpick()
                 return {"auto_banpick": enabled}
 
+            def on_queue_set(command):
+                enabled = bool(command.get("enabled"))
+                self.automation.set_auto_queue(enabled)
+                return enabled
+
+            def on_accept_set(command):
+                enabled = bool(command.get("enabled"))
+                self.automation.set_auto_accept(enabled)
+                return enabled
+
+            def on_banpick_set(command):
+                enabled = bool(command.get("enabled"))
+                self.automation.set_auto_banpick(enabled)
+                return enabled
+
+            def on_combo_set(command):
+                combo = getattr(self, "combo_manager", None)
+                if combo is None:
+                    return False
+                return bool(combo.set_enabled(bool(command.get("enabled"))))
+
             self.command_bus.register(CommandType.AUTO_ACCEPT_TOGGLE, on_accept_toggle)
             self.command_bus.register(CommandType.AUTO_BANPICK_TOGGLE, on_banpick_toggle)
+            self.command_bus.register(CommandType.AUTO_QUEUE_SET, on_queue_set)
+            self.command_bus.register(CommandType.AUTO_ACCEPT_SET, on_accept_set)
+            self.command_bus.register(CommandType.AUTO_BANPICK_SET, on_banpick_set)
+            self.command_bus.register(CommandType.AUTO_COMBO_SET, on_combo_set)
             if cfg.enabled:
                 self.automation.start()
                 self._set_module_status("automation", "ok")

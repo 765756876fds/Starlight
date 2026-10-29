@@ -61,6 +61,25 @@ class TestRuleBasedIntent:
             "music.rescan", "music.cleanup"
         }
 
+    @pytest.mark.parametrize("text, command, enabled", [
+        ("打开自动排队", "auto.queue_set", True),
+        ("关闭自动确认", "auto.accept_set", False),
+        ("开启自动禁用", "auto.banpick_set", True),
+        ("关掉自动连招", "auto.combo_set", False),
+    ])
+    def test_game_automation_requires_explicit_switch(self, text, command, enabled):
+        intent = RuleBasedIntent.match(text)
+        assert intent and intent.intent_type == command
+        assert intent.params["enabled"] is enabled
+
+    @pytest.mark.parametrize("text", [
+        "别打开自动排队", "我刚才听说打开自动确认",
+        "自动连招怎么样", "有人说关闭自动禁用",
+    ])
+    def test_game_automation_negation_and_chat_do_not_trigger(self, text):
+        intent = RuleBasedIntent.match(text)
+        assert intent is None or not intent.intent_type.startswith("auto.")
+
     def test_punctuation_ignored_everywhere(self):
         """ASR 自带标点：指令中任意位置的标点都不影响识别。"""
         cases = [

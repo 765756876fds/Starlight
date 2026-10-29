@@ -91,6 +91,10 @@ class CommandType:
     # ===== 自动操作命令 =====
     AUTO_ACCEPT_TOGGLE = "auto.accept_toggle"
     AUTO_BANPICK_TOGGLE = "auto.banpick_toggle"
+    AUTO_QUEUE_SET = "auto.queue_set"
+    AUTO_ACCEPT_SET = "auto.accept_set"
+    AUTO_BANPICK_SET = "auto.banpick_set"
+    AUTO_COMBO_SET = "auto.combo_set"
 
     # ===== Cooldown 手动计时器 =====
     COOLDOWN_START = "cooldown.start"

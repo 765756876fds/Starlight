@@ -120,6 +120,10 @@ class LoLAutomationService:
         self._ensure_worker_running()
         return new_val
 
+    def toggle_auto_queue(self) -> bool:
+        self.set_auto_queue(not self.config.auto_queue)
+        return self.config.auto_queue
+
     def set_auto_ban(self, enabled: bool) -> None:
         with self._lock:
             self._config.auto_ban = bool(enabled)
