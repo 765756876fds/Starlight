@@ -2150,12 +2150,25 @@ class MusicController:
 
     def _cmd_add_next(self, command: Command) -> bool:
         query = command.params.get("query", "")
-        if not query or self.online_manager is None:
+        if not query:
+            return False
+        # 1. 本地优先
+        try:
+            local = self.search.search(query, limit=5)
+        except Exception as e:
+            logger.error(f"[Music] add_next local search error: {e}")
+            local = []
+        for s in local:
+            path = s.get("path") or ""
+            if path and os.path.exists(path):
+                return self.add_next(s)
+        # 2. 在线兜底
+        if self.online_manager is None:
             return False
         try:
             results = self.online_manager.search_all(query)
         except Exception as e:
-            logger.error(f"[Music] add_next search error: {e}")
+            logger.error(f"[Music] add_next online search error: {e}")
             return False
         if not results:
             return False
