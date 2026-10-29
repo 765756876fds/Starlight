@@ -182,7 +182,7 @@ def test_dialog_recording_then_identifying(tmp_path, monkeypatch):
     dlg.start()
     assert dlg._busy is True
     assert dlg._countdown == dlg._service.record_seconds
-    assert "录音中" in dlg.lbl_status.text()
+    assert "采集中" in dlg.lbl_status.text()
     dlg._on_tick()
     assert dlg._countdown == dlg._service.record_seconds - 1
     for _ in range(dlg._service.record_seconds):
