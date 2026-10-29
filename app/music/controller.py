@@ -2113,15 +2113,16 @@ class MusicController:
         songs = self.get_playlist_songs(matches[0]["id"])
         if not songs:
             return False
-        # 播第一首 + 其余入队
+        # 播第一首 + 其余入队（逆序插入 add_next 保持原顺序）
         ok = self.play_playlist_item(songs[0])
         if not ok:
             return False
-        for s in songs[1:]:
+        for s in reversed(songs[1:]):
             try:
                 self.add_next(s)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"[Music] 歌单入队失败: {e}")
+                return False
         return True
 
     def _cmd_create_playlist(self, command: Command) -> bool:
