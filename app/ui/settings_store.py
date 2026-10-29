@@ -30,6 +30,7 @@ DEFAULT_PREFS = {
     "combo_window_gate": True,   # 仅 LoL 前台时触发（持久化）
     "equip_notify": True,        # 敌方装备语音提醒（持久化）
     "ui_refresh_interval": 500,  # 界面刷新间隔 ms
+    "movie_content_filter": "全部",  # 仅影响电影搜索结果展示
 }
 
 

@@ -44,6 +44,7 @@ from app.core.logger import get_logger
 from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 from ...movie import douban_rank
+from ...movie.content_classification import classify_content
 from ...movie.rank_providers import TgmengProvider, default_provider
 from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..dialogs.parse_link_dialog import ParseLinkDialog
@@ -585,6 +586,16 @@ class MoviePanel(QWidget):
         status_row.addWidget(self.lbl_status, 1)
         status_row.addWidget(self.lbl_source)
         root.addLayout(status_row)
+        self.combo_content_filter = QComboBox()
+        self.combo_content_filter.addItems(["全部", "正片/剧集", "电影解说", "短剧", "翻拍短剧", "未知"])
+        try:
+            from ..settings_store import load_ui_prefs, save_ui_prefs
+            self.combo_content_filter.setCurrentText(load_ui_prefs().get("movie_content_filter", "全部"))
+            self.combo_content_filter.currentTextChanged.connect(
+                lambda value: (save_ui_prefs({"movie_content_filter": value}), self._apply_content_filter()))
+        except Exception:
+            self.combo_content_filter.currentTextChanged.connect(lambda _: self._apply_content_filter())
+        status_row.addWidget(self.combo_content_filter)
 
         # 结果区：列表/海报 双视图（QStackedWidget，默认海报墙）
         self.stack_results = QStackedWidget()
@@ -864,8 +875,9 @@ class MoviePanel(QWidget):
         self.list_results.clear()
         self.list_posters.clear()
         self._items_by_row = []
+        self._last_search_result = list(result or [])
         poster_jobs = []
-        for it in result:
+        for it in self._filtered_content_results(result):
             name = it.get("vod_name", "") or ""
             remarks = it.get("vod_remarks", "") or ""
             # 列表视图
@@ -892,7 +904,7 @@ class MoviePanel(QWidget):
                     poster_jobs.append((vod_id, pic))
         if poster_jobs:
             self._start_poster_jobs(poster_jobs)
-        n = len(result)
+        n = len(self._filtered_content_results(result))
         if n == 0:
             err = getattr(self._movie, "last_search_error", "") or ""
             self.lbl_status.setText(f"搜索失败: {err}" if err else "无结果")
@@ -904,8 +916,29 @@ class MoviePanel(QWidget):
             else:
                 self.lbl_status.setText(f"找到 {n} 部")
 
-    @staticmethod
-    def _poster_tip(it):
+    def _category_of(self, it):
+        category = it.get("content_category")
+        if category:
+            return category
+        try:
+            category = classify_content(it)
+            it["content_category"] = category
+            return category
+        except Exception:
+            return "未知"
+
+    def _filtered_content_results(self, result):
+        selected = self.combo_content_filter.currentText() if hasattr(self, "combo_content_filter") else "全部"
+        items = list(result or [])
+        if selected == "全部":
+            return items
+        return [it for it in items if self._category_of(it) == selected]
+
+    def _apply_content_filter(self):
+        if hasattr(self, "_last_search_result"):
+            self._on_search_done(self._last_search_result)
+
+    def _poster_tip(self, it):
         """悬停 tooltip：片名 / 评分 / 年份 / 备注。"""
         parts = [it.get("vod_name") or ""]
         score = it.get("vod_score") or ""
@@ -915,6 +948,7 @@ class MoviePanel(QWidget):
             parts.append(str(it["vod_year"]))
         if it.get("vod_remarks"):
             parts.append(str(it["vod_remarks"]))
+        parts.append(f"类型：{it.get('content_category') or classify_content(it)}")
         return "  ".join(p for p in parts if p)
 
     def _on_search_failed(self, err: str):

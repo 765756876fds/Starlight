@@ -319,6 +319,11 @@ class MovieController:
             if items:
                 for it in items:
                     it["_source"] = src["name"]
+                    try:
+                        from .content_classification import classify_content
+                        it["content_category"] = classify_content(it)
+                    except Exception:
+                        it["content_category"] = "未知"
                 self.last_search_source = src["name"]
                 self.last_search_error = ""
                 return items
