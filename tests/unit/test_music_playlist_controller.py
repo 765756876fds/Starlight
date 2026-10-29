@@ -61,3 +61,53 @@ def test_add_next_no_query():
     c = _make_controller()
     cmd = Command(command_type="music.add_next", params={})
     assert c._cmd_add_next(cmd) is False
+
+
+def test_play_playlist_enqueues_in_order():
+    """3 首歌单：播第一首 + 其余按原顺序入队（逆序调用 add_next 保持顺序）。"""
+    c = _make_controller()
+    c.get_playlists = MagicMock(return_value=[{"id": 1, "name": "工作"}])
+    songs = [
+        {"music_id": 1, "title": "A"},
+        {"music_id": 2, "title": "B"},
+        {"music_id": 3, "title": "C"},
+    ]
+    c.get_playlist_songs = MagicMock(return_value=songs)
+    c.play_playlist_item = MagicMock(return_value=True)
+    c.queue.get_current_index.return_value = 0
+    c.queue.add.return_value = None
+    cmd = Command(command_type="music.play_playlist", params={"name": "工作"})
+    assert c._cmd_play_playlist(cmd) is True
+    # add_next 被调用两次（B、C），逆序调用所以先 C 后 B
+    calls = [c.args[0]["title"] for c in c.queue.add.call_args_list]
+    # position=1 for both, but songs inserted: first C then B → queue order A, B, C
+    assert calls == ["C", "B"], f"逆序入队顺序错误: {calls}"
+
+
+def test_add_next_queue_add_raises():
+    c = _make_controller()
+    c.queue.get_current_index.return_value = 0
+    c.queue.add.side_effect = RuntimeError("queue full")
+    assert c.add_next({"title": "x"}) is False
+
+
+def test_cmd_add_next_propagates_failure():
+    c = _make_controller()
+    c.online_manager = MagicMock()
+    c.online_manager.search.return_value = [{"title": "七里香"}]
+    c.queue.get_current_index.return_value = 0
+    c.queue.add.side_effect = RuntimeError("boom")
+    cmd = Command(command_type="music.add_next", params={"query": "七里香"})
+    assert c._cmd_add_next(cmd) is False
+
+
+def test_cmd_play_playlist_fails_on_enqueue_error():
+    c = _make_controller()
+    c.get_playlists = MagicMock(return_value=[{"id": 1, "name": "工作"}])
+    songs = [{"music_id": 1, "title": "A"}, {"music_id": 2, "title": "B"}]
+    c.get_playlist_songs = MagicMock(return_value=songs)
+    c.play_playlist_item = MagicMock(return_value=True)
+    c.queue.get_current_index.return_value = 0
+    c.queue.add.side_effect = RuntimeError("queue full")
+    cmd = Command(command_type="music.play_playlist", params={"name": "工作"})
+    assert c._cmd_play_playlist(cmd) is False
