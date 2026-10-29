@@ -813,17 +813,23 @@ class Application:
             def on_queue_set(command):
                 enabled = bool(command.get("enabled"))
                 self.automation.set_auto_queue(enabled)
-                return enabled
+                return {"ok": True, "enabled": enabled,
+                        "client_ready": bool(self.lol.lcu.connected),
+                        "running": self.automation.running}
 
             def on_accept_set(command):
                 enabled = bool(command.get("enabled"))
                 self.automation.set_auto_accept(enabled)
-                return enabled
+                return {"ok": True, "enabled": enabled,
+                        "client_ready": bool(self.lol.lcu.connected),
+                        "running": self.automation.running}
 
             def on_banpick_set(command):
                 enabled = bool(command.get("enabled"))
                 self.automation.set_auto_banpick(enabled)
-                return enabled
+                return {"ok": True, "enabled": enabled,
+                        "client_ready": bool(self.lol.lcu.connected),
+                        "running": self.automation.running}
 
             def on_combo_set(command):
                 combo = getattr(self, "combo_manager", None)

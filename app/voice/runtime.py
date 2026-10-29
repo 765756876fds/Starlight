@@ -842,11 +842,16 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
-            self._enqueue_speak(
-                "自动化已开启" if ok and params.get("enabled") else
-                "自动化已关闭" if ok else "自动化操作未成功",
-                "voice_automation",
-            )
+            enabled = bool(params.get("enabled"))
+            if not ok:
+                message = "自动化操作未成功"
+            elif not enabled:
+                message = "自动化已关闭"
+            elif isinstance(ok, dict) and not ok.get("client_ready", False):
+                message = "自动化开关已开启，等待游戏连接"
+            else:
+                message = "自动化开关已开启"
+            self._enqueue_speak(message, "voice_automation")
 
         # 明确电影命令：用户明说"暂停电影"/"继续电影"，直接分发，不走谁在播路由
         elif intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME, CommandType.MOVIE_STOP,

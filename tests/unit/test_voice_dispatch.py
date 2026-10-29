@@ -67,6 +67,33 @@ class TestVoiceRuntimeDispatch:
         cmd = rt.command_bus.execute.call_args[0][0]
         assert cmd.params["mode"] == "repeat_one"
 
+    def test_automation_feedback_distinguishes_disconnected_client(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = {
+            "ok": True, "enabled": True,
+            "client_ready": False, "running": True,
+        }
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(
+            Intent(CommandType.AUTO_QUEUE_SET, params={"enabled": True}),
+            "打开自动排队",
+        )
+        cmd = rt.command_bus.execute.call_args[0][0]
+        assert cmd.params == {"enabled": True}
+        rt._enqueue_speak.assert_called_once_with(
+            "自动化开关已开启，等待游戏连接", "voice_automation")
+
+    def test_automation_failure_does_not_report_enabled(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = False
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(
+            Intent(CommandType.AUTO_COMBO_SET, params={"enabled": True}),
+            "打开自动连招",
+        )
+        rt._enqueue_speak.assert_called_once_with(
+            "自动化操作未成功", "voice_automation")
+
     # ===== system.stop_tts 独立打断路由（不走 CommandBus）=====
 
     def test_stop_tts_calls_providers_directly(self):
