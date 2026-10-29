@@ -1,0 +1,3 @@
+# Optional online song recognition prototype.  The normal application does
+# not import this provider and does not require these packages to start.
+shazamio==0.9.0
