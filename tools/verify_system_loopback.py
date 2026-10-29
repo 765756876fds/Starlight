@@ -6,8 +6,15 @@ r"""Windows 系统声音一次性回环验收工具。
 from __future__ import annotations
 
 import os
+import pathlib
+import sys
 import tempfile
 import wave
+
+# 允许从项目根目录直接运行，不要求用户设置 PYTHONPATH。
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.music.capture import CaptureCancelled, CaptureError, SystemLoopbackCapture
 

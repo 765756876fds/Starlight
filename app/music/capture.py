@@ -122,7 +122,9 @@ class SystemLoopbackCapture:
             speaker = sc.default_speaker()
             if speaker is None:
                 raise CaptureError("没有可用的 Windows 默认播放设备")
-            return speaker.loopback()
+            # SoundCard 0.4.x 的回环设备通过 get_microphone(...,
+            # include_loopback=True) 获取；_Speaker 没有 loopback() 方法。
+            return sc.get_microphone(speaker.id, include_loopback=True)
         except CaptureError:
             raise
         except Exception as exc:

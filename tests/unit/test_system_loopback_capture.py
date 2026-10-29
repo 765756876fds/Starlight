@@ -57,3 +57,18 @@ def test_loopback_missing_soundcard_is_explicit(monkeypatch):
     monkeypatch.setitem(sys.modules, "soundcard", None)
     with pytest.raises(CaptureError, match="SoundCard"):
         SystemLoopbackCapture()._recorder()
+
+
+def test_loopback_uses_soundcard_loopback_microphone_api(monkeypatch):
+    speaker = types.SimpleNamespace(id="speaker-id")
+    loopback = _Recorder()
+    calls = []
+    fake = types.SimpleNamespace(
+        default_speaker=lambda: speaker,
+        get_microphone=lambda device_id, include_loopback=False: (
+            calls.append((device_id, include_loopback)) or loopback
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "soundcard", fake)
+    assert SystemLoopbackCapture()._recorder() is loopback
+    assert calls == [("speaker-id", True)]
