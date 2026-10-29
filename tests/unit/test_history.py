@@ -167,6 +167,8 @@ def _make_ctrl(tmp_path):
     c.mpv = MagicMock()
     # mpv.py loadfile 契约：成功返回 {"error": "success"}（控制器据此收口播放成功）
     c.mpv.loadfile.return_value = {"error": "success"}
+    # 在线播放必须先确认电影已暂停；该夹具只测试音乐历史记录，模拟确认成功。
+    c.set_movie_pauser(lambda: True)
     return c
 
 

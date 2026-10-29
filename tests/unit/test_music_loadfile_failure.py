@@ -182,6 +182,8 @@ def _make_ctrl(tmp_path, fake, db_name="loadfile_failure.db"):
         lx_cls.return_value.is_connected.return_value = False
         ctrl = MusicController(cfg, mpv_adapter=fake)
         ctrl.lx_connected = False
+        # 在线播放的生产路径要求电影暂停确认；本文件专测 loadfile 失败收口。
+        ctrl.set_movie_pauser(lambda: True)
         return ctrl
 
 

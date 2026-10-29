@@ -2019,6 +2019,9 @@ class MusicController:
                 online_song = self._apply_stream(
                     track, url, result.get("headers"), before_load=_before_load)
                 if online_song is None:
+                    # 互斥确认或紧邻 loadfile 前置校验失败时，没有异常可供
+                    # 外层 except 收口；必须结束本次切换态，避免 UI 永久冻结。
+                    self._end_switch_state_if_current(req_id)
                     return False
                 logger.info("[Music] mpv loadfile ok")
         except Exception as e:
