@@ -12,6 +12,7 @@ def _make_controller():
     c.online_manager = None
     c._mpv_available = False
     c._voice_rank_tracks = []
+    c._movie_pauser = None
     return c
 
 
@@ -112,3 +113,45 @@ def test_cmd_play_playlist_fails_on_enqueue_error():
     c.queue.add.side_effect = RuntimeError("queue full")
     cmd = Command(command_type="music.play_playlist", params={"name": "工作"})
     assert c._cmd_play_playlist(cmd) is False
+
+
+def test_r001_pauser_missing_blocks_apply_stream():
+    c = _make_controller()
+    c._play_request_id = 0
+    c._is_switching_track = False
+    c._last_idle = False
+    c._shadow_loadfile_ts = 0
+    c._shadow_file_kind = ""
+    result = c._apply_stream(
+        MagicMock(title="x", source_name="demo", track_id="1"),
+        "http://example.com/s.mp3", None,
+    )
+    assert result is None
+
+
+def test_r001_pauser_false_blocks_apply_stream():
+    c = _make_controller()
+    c._play_request_id = 0
+    c._is_switching_track = False
+    c._last_idle = False
+    c.set_movie_pauser(lambda: False)
+    result = c._apply_stream(
+        MagicMock(title="x", source_name="demo", track_id="1"),
+        "http://example.com/s.mp3", None,
+    )
+    assert result is None
+
+
+def test_r001_pauser_exception_blocks_apply_stream():
+    c = _make_controller()
+    c._play_request_id = 0
+    c._is_switching_track = False
+    c._last_idle = False
+    def bad():
+        raise RuntimeError("ipc timeout")
+    c.set_movie_pauser(bad)
+    result = c._apply_stream(
+        MagicMock(title="x", source_name="demo", track_id="1"),
+        "http://example.com/s.mp3", None,
+    )
+    assert result is None

@@ -68,6 +68,7 @@ class MusicController:
     """
 
     def __init__(self, config: dict[str, Any], mpv_adapter: MpvAdapter | None = None):
+        self._movie_pauser = None  # 注入：电影暂停确认回调
         """mpv_adapter: 可选注入的播放器替身（满足 MpvAdapter 协议）。
         注入时 controller 不再实例化真实 MpvController——测试可挂
         不发真声音的 Fake，构造/播放全程无 IPC、无子进程。"""
@@ -1324,6 +1325,18 @@ class MusicController:
             pass
         if before_load is not None and not before_load():
             return None
+        # 互斥：在线起播前确认电影已暂停（未装配 pauser 时阻断）
+        if self._movie_pauser is None:
+            logger.warning("[Music] movie pauser not wired, blocking online play")
+            return None
+        try:
+            ok = self._movie_pauser()
+            if not ok:
+                logger.warning("[Music] 电影暂停确认失败，阻断在线起播")
+                return None
+        except Exception as e:
+            logger.error(f"[Music] 电影暂停确认异常: {e}")
+            return None
         # 影子模式：记录在线 loadfile 发起时刻与文件类型（classify 的 elapsed/kind 依据）
         self._shadow_loadfile_ts = time.perf_counter()
         self._shadow_file_kind = "online"
@@ -2101,6 +2114,10 @@ class MusicController:
     def set_voice_rank_tracks(self, tracks: list | None):
         """UI 榜单加载成功后调用，供语音播放榜单第N首。"""
         self._voice_rank_tracks = tracks or []
+
+    def set_movie_pauser(self, fn):
+        """注入电影暂停确认回调：fn() -> bool（True=确认已暂停）。"""
+        self._movie_pauser = fn
 
     def _cmd_play_playlist(self, command: Command) -> bool:
         name = command.params.get("name", "")

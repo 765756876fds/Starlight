@@ -1333,6 +1333,15 @@ class Application:
             logger.info(f"[UI] services wiring failed: {e}")
         window.switch_to_tabs(tabs)
         self._movie_panel = tabs._panels.get("movie")
+        # R001: 注入电影暂停确认回调到音乐控制器
+        try:
+            if self._movie_panel is not None and hasattr(self, "music"):
+                movie_ctrl = getattr(self._movie_panel, "_movie", None)
+                if movie_ctrl is not None and hasattr(movie_ctrl, "pause_and_confirm"):
+                    self.music.set_movie_pauser(movie_ctrl.pause_and_confirm)
+                    logger.info("[R001] movie pauser injected to music controller")
+        except Exception as e:
+            logger.warning(f"[R001] movie pauser wiring failed: {e}")
         logger.info("[Run] switched, showing tray")
         from app.ui.tray import TrayIcon
         tray = TrayIcon(window, on_quit=self.stop)

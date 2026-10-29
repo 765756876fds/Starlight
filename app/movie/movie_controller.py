@@ -773,6 +773,33 @@ class MovieController:
         finally:
             self._pausing = False
 
+    def pause_and_confirm(self, timeout: float = 1.0) -> bool:
+        """暂停并确认 mpv 已进入暂停态。返回 True=确认暂停成功。"""
+        if self._pausing:
+            return True
+        self._pausing = True
+        try:
+            if self._current is None or not self.mpv.is_running():
+                return True  # 电影未运行，视为已暂停
+            self.mpv.pause()
+            self._write_state(paused=True)
+            # 轮询确认
+            import time as _t
+            deadline = _t.perf_counter() + timeout
+            while _t.perf_counter() < deadline:
+                try:
+                    p = self.mpv.get_property("pause", timeout=0.2)
+                    if p is True:
+                        return True
+                except Exception:
+                    pass
+                _t.sleep(0.05)
+            return False
+        except Exception:
+            return False
+        finally:
+            self._pausing = False
+
     def toggle_pause(self):
         self.mpv.toggle_pause()
 
