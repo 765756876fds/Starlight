@@ -768,6 +768,13 @@ class VideoPlayerWindow(QWidget):
 
     def _tick(self):
         try:
+            # V2-4.6.8：同步语音/外部修改的电影音量到播放窗口 overlay 滑块
+            try:
+                v = self._movie.get_volume()
+                if v is not None and self.overlay.slider_vol.value() != v:
+                    self.overlay.slider_vol.setValue(v)
+            except Exception:
+                pass
             # 连播检测先行：播完一集 idle 上升沿 → 下一集（is_playing 恢复 True）。
             # 若先查 is_playing，播完瞬间会误判"停播"直接收尾，连播永远起不来。
             self._movie.tick()

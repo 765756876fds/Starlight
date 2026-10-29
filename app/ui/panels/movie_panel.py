@@ -1574,14 +1574,12 @@ class MoviePanel(QWidget):
     def _tick(self):
         try:
             # V2-4.6.5：同步语音/外部修改的电影音量到滑块
-            # 不 blockSignals：写回值相同，无回环；与音乐侧一致
             try:
                 mv = self._movie.get_volume()
                 if mv is not None and self.slider_vol.value() != mv:
-                    print(f"[MovieVol] tick sync slider {self.slider_vol.value()} -> {mv}")
                     self.slider_vol.setValue(mv)
-            except Exception as e:
-                print(f"[MovieVol] tick sync error: {e!r}")
+            except Exception:
+                pass
             # 内嵌播放中：面板轮询让位（连播/进度由播放窗口唯一驱动，防双 tick）
             if self._embed_playing:
                 return

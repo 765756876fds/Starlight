@@ -1051,23 +1051,9 @@ class MovieController:
             self.mpv.set_property("speed", float(rate))
 
     def set_volume(self, vol):
-        try:
-            running = self.mpv.is_running()
-        except Exception as e:
-            running = False
-            print(f"[MovieVol] set_volume is_running error: {e!r}")
-        print(f"[MovieVol] set_volume({vol!r}) mpv_running={running} mpv_id={id(self.mpv)}")
-        if running:
+        if self.mpv.is_running():
             clamped = max(0, min(100, int(vol)))
-            try:
-                self.mpv.set_property("volume", clamped)
-            except Exception as e:
-                print(f"[MovieVol] set_property error: {e!r}")
-            try:
-                after = self.mpv.get_property("volume", timeout=0.5)
-                print(f"[MovieVol] set_volume after set: requested={clamped} readback={after!r}")
-            except Exception as e:
-                print(f"[MovieVol] readback error: {e!r}")
+            self.mpv.set_property("volume", clamped)
             try:
                 from ..core.state_store import StateNamespace
                 self.state_store.set(StateNamespace.MOVIE, "volume", clamped)
@@ -1078,11 +1064,10 @@ class MovieController:
         try:
             if self.mpv.is_running():
                 v = self.mpv.get_property("volume", timeout=0.5)
-                print(f"[MovieVol] get_volume -> {v!r} mpv_id={id(self.mpv)} ctrl_id={id(self)}")
                 if v is not None:
                     return int(v)
-        except Exception as e:
-            print(f"[MovieVol] get_volume error: {e!r}")
+        except Exception:
+            pass
         return None
 
     def volume_up(self, step: int = 10):
