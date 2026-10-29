@@ -572,8 +572,20 @@ class MovieController:
         return True
 
     def next_episode(self) -> bool:
-        """语音切下一集（复用 _advance_episode）。"""
-        return self._advance_episode()
+        """语音切下一集；保留切换前的暂停状态。"""
+        was_paused = False
+        try:
+            if self.mpv.is_running():
+                was_paused = bool(self.mpv.get_property("pause", timeout=0.2))
+        except Exception:
+            pass
+        ok = self._advance_episode()
+        if ok and was_paused:
+            try:
+                self.mpv.set_property("pause", True)
+            except Exception as e:
+                logger.warning(f"[Movie] 下一集已切换但恢复暂停失败: {e!r}")
+        return ok
 
     def prev_episode(self) -> bool:
         """语音切上一集；首集返回 False。"""

@@ -117,6 +117,12 @@ class TestRuntimeDispatch(unittest.TestCase):
         cmd = rt.command_bus.execute.call_args[0][0]
         self.assertEqual(cmd.command_type, CommandType.MOVIE_RESUME)
 
+    def test_next_episode_dispatches_even_when_movie_is_paused(self):
+        rt = _mk_rt(playing=True, paused=True)
+        rt._execute_intent(Intent(CommandType.MOVIE_NEXT_EPISODE), "下一集")
+        cmd = rt.command_bus.execute.call_args[0][0]
+        self.assertEqual(cmd.command_type, CommandType.MOVIE_NEXT_EPISODE)
+
     def test_movie_command_failure_reports_feedback(self):
         rt = _mk_rt(playing=True, paused=False)
         rt.command_bus.execute.return_value = False

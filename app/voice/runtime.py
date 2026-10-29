@@ -892,17 +892,17 @@ class VoiceRuntime:
             # 其他情况（None/都暂停/都在播）静默不执行
 
         elif intent_type in (CommandType.MOVIE_NEXT_EPISODE, CommandType.MOVIE_PREV_EPISODE):
-            paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
-            if paused is None:
-                self._enqueue_speak("电影状态无法确认", "voice_movie_episode")
-            elif paused:
-                self._enqueue_speak("电影当前暂停中", "voice_movie_episode")
-            else:
-                self.command_bus.execute(Command(
+            try:
+                ok = self.command_bus.execute(Command(
                     command_type=intent_type,
                     params=params,
                     source="voice",
                 ))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
+            if ok is False:
+                self._enqueue_speak("电影切集未成功", "voice_movie_episode")
 
         elif intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
                              CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
