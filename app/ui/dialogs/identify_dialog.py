@@ -2,7 +2,7 @@
 
 线程模型（对齐 movie_source_dialog 的 QThread 惯例）：
 - 录音+识别在 _IdentifyWorker（后台 QThread），主线程 QTimer 展示倒计时；
-- 首次无库 → _BuildWorker 后台建库，完成自动进入录音；
+- 用户明确点击“建立/更新指纹库”后由 _BuildWorker 后台建库；
 - 防重入：_busy 标志 + thread.isRunning 检查（运行中绝不覆盖线程引用）；
 - 关闭窗口仅 hide（不销毁运行中的线程；下次 start 时 isRunning 拒绝）。
 """
@@ -92,6 +92,9 @@ class IdentifyDialog(GlassDialog):
         self.btn_play.hide()
         self.btn_play.clicked.connect(self._on_play_clicked)
         root.addWidget(self.btn_play)
+        self.btn_index = QPushButton("建立/更新指纹库")
+        self.btn_index.clicked.connect(self._on_index_clicked)
+        root.addWidget(self.btn_index)
         row = QHBoxLayout()
         self.btn_retry = QPushButton("重新识别")
         self.btn_retry.clicked.connect(self.start)
@@ -115,6 +118,7 @@ class IdentifyDialog(GlassDialog):
                 self._busy = False
                 self.lbl_title.setText("本地指纹库为空")
                 self.lbl_status.setText("请先扫描音乐库建立指纹库，再开始识曲")
+                self.btn_index.show()
                 return
         except Exception as e:
             self.lbl_status.setText(f"指纹库不可用：{e}")
@@ -207,9 +211,13 @@ class IdentifyDialog(GlassDialog):
 
     # ------------------------------------------------------------------ 首次建库
     def _show_build(self):
+        if self._busy:
+            return
         self._busy = True
+        self.btn_index.setEnabled(False)
+        self.btn_retry.setEnabled(False)
         self.lbl_title.setText("首次使用")
-        self.lbl_status.setText("正在为本地音乐建指纹库，请稍候...")
+        self.lbl_status.setText("正在建立/更新本地指纹库，请稍候...")
         self._build_thread = QThread()
         self._build_worker = _BuildWorker(self._service)
         self._build_worker.moveToThread(self._build_thread)
@@ -223,19 +231,28 @@ class IdentifyDialog(GlassDialog):
     @Slot(object)
     def _on_build_done(self, stats):
         self._busy = False
+        self.btn_index.setEnabled(True)
+        self.btn_retry.setEnabled(True)
         if self._timer is not None:
             self._timer.stop()
         indexed = stats.get("indexed", 0)
         skipped = stats.get("skipped", 0)
-        self.lbl_status.setText(f"建库完成：新增 {indexed} 首（已跳过 {skipped}）")
-        # 建库完成后自动开始识曲
-        self._begin_record()
+        failed = stats.get("failed", 0)
+        self.lbl_status.setText(f"指纹库更新完成：新增 {indexed} 首，跳过 {skipped} 首，失败 {failed} 首")
+        self.lbl_title.setText("可以开始识曲")
+        self.btn_index.show()
 
     @Slot(str)
     def _on_build_failed(self, msg):
         self._busy = False
+        self.btn_index.setEnabled(True)
+        self.btn_retry.setEnabled(True)
         self.lbl_title.setText("识曲")
-        self.lbl_status.setText(f"建库失败：{msg}")
+        self.lbl_status.setText(f"指纹库更新失败：{msg}")
+
+    def _on_index_clicked(self):
+        """用户明确触发后台建库，不自动开始录音。"""
+        self._show_build()
 
     # ------------------------------------------------------------------ 播放/关闭
     def _on_play_clicked(self):

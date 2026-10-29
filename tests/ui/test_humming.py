@@ -225,6 +225,24 @@ def test_dialog_empty_library_prompts_without_auto_build(tmp_path, monkeypatch):
     assert "请先扫描音乐库建立指纹库" in dlg.lbl_status.text()
 
 
+def test_dialog_index_button_explicitly_starts_build(tmp_path, monkeypatch):
+    dlg = _make_dialog(tmp_path, monkeypatch, has_library=False)
+    calls = []
+    monkeypatch.setattr(dlg, "_show_build", lambda: calls.append(True))
+    dlg.btn_index.click()
+    assert calls == [True]
+
+
+def test_dialog_index_done_does_not_start_recording(tmp_path, monkeypatch):
+    dlg = _make_dialog(tmp_path, monkeypatch)
+    started = []
+    monkeypatch.setattr(dlg, "_begin_record", lambda: started.append(True))
+    dlg._on_build_done({"indexed": 4, "skipped": 2, "failed": 1})
+    assert started == []
+    assert "新增 4 首" in dlg.lbl_status.text()
+    assert "失败 1 首" in dlg.lbl_status.text()
+
+
 def test_dialog_source_selection(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch)
     dlg.source_combo.setCurrentIndex(1)
