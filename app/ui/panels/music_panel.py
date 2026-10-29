@@ -1,4 +1,5 @@
 """音乐面板（本地 + 在线）。"""
+import logging
 import threading
 import time
 import zlib
@@ -33,6 +34,8 @@ from ..theme.colors import Colors
 from ..theme.tokens import Tokens
 from ..widgets.icon_utils import lucide_icon
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
+
+logger = logging.getLogger(__name__)
 
 
 class _LyricBuildWorker(QObject):
@@ -181,6 +184,9 @@ class MusicPanel(QWidget):
         self.btn_identify.setIcon(lucide_icon("mic", 16, Tokens.TEXT_SECONDARY))
         self.btn_identify.clicked.connect(self._on_identify_click)
         top_bar.addWidget(self.btn_identify)
+        self.lbl_identify_status = QLabel("")
+        self.lbl_identify_status.setWordWrap(True)
+        top_bar.addWidget(self.lbl_identify_status, 1)
         # 列表/网格 视图切换（Lucide grid/list，全局作用于全部歌曲列表）
         self.btn_view_toggle = QPushButton()
         self.btn_view_toggle.setCheckable(True)
@@ -1199,12 +1205,18 @@ class MusicPanel(QWidget):
 
     def _on_identify_click(self):
         """按钮或语音触发识曲：显示弹窗并开始（弹窗内部防重入）。"""
-        if self._identify_dialog is None:
-            self._identify_dialog = IdentifyDialog(
-                self._get_identify_service(), on_play=self._on_identify_play, parent=self)
-        self._identify_dialog.show()
-        self._identify_dialog.raise_()
-        self._identify_dialog.start()
+        try:
+            if self._identify_dialog is None:
+                self._identify_dialog = IdentifyDialog(
+                    self._get_identify_service(), on_play=self._on_identify_play, parent=self)
+            self._identify_dialog.show()
+            self._identify_dialog.raise_()
+            self._identify_dialog.start()
+            self.lbl_identify_status.clear()
+        except Exception as exc:
+            logger.exception("识曲窗口打开失败")
+            self._identify_dialog = None
+            self.lbl_identify_status.setText(f"识曲暂不可用：{exc}")
 
     def _on_identify_play(self, result):
         """识别成功 → 按指纹 filepath 回本地库 → play_song（失败静默提示）。"""

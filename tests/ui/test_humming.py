@@ -321,6 +321,47 @@ def test_panel_identify_cmd_opens_dialog():
         get_command_bus().unregister(CommandType.MUSIC_IDENTIFY)
 
 
+def test_panel_identify_button_opens_dialog(monkeypatch):
+    from app.ui.panels import music_panel
+    from app.ui.panels.music_panel import MusicPanel
+
+    class FakeService:
+        record_seconds = 8
+
+        def has_library(self):
+            return False
+
+    monkeypatch.setattr(music_panel, "HummingService", lambda **kwargs: FakeService())
+    p = MusicPanel(music=None)
+    try:
+        p.btn_identify.click()
+        assert p._identify_dialog is not None
+        assert p._identify_dialog.isVisible()
+        assert "请先扫描音乐库" in p._identify_dialog.lbl_status.text()
+    finally:
+        p._identify_dialog.hide()
+        from app.core.command_bus import get_command_bus
+        get_command_bus().unregister(CommandType.MUSIC_IDENTIFY)
+
+
+def test_panel_identify_button_reports_service_init_failure(monkeypatch):
+    from app.ui.panels import music_panel
+    from app.ui.panels.music_panel import MusicPanel
+
+    def fail(**kwargs):
+        raise RuntimeError("audiofp 未就绪")
+
+    monkeypatch.setattr(music_panel, "HummingService", fail)
+    p = MusicPanel(music=None)
+    try:
+        p.btn_identify.click()
+        assert "识曲暂不可用" in p.lbl_identify_status.text()
+        assert "audiofp 未就绪" in p.lbl_identify_status.text()
+    finally:
+        from app.core.command_bus import get_command_bus
+        get_command_bus().unregister(CommandType.MUSIC_IDENTIFY)
+
+
 def test_panel_identify_play():
     from app.ui.panels.music_panel import MusicPanel
 
