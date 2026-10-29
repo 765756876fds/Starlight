@@ -2129,12 +2129,12 @@ class MusicPanel(QWidget):
         if self._music is None:
             return
         try:
-            # V2-4.6.5：同步语音/外部修改的音乐音量到滑块（blockSignals 防回环）
+            # V2-4.6.5：同步语音/外部修改的音乐音量到滑块（不 blockSignals：
+            # VolumeButton.popover.slider 由 slider_vol.valueChanged 驱动，blockSignals 会
+            # 导致悬浮面板不刷新；写回值相同，无回环）
             v = int(self._music.get_volume() or 0)
             if self.slider_vol.value() != v:
-                self.slider_vol.blockSignals(True)
                 self.slider_vol.setValue(v)
-                self.slider_vol.blockSignals(False)
         except Exception:
             pass
         try:
