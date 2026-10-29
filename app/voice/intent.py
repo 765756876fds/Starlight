@@ -118,6 +118,21 @@ class RuleBasedIntent:
         # 兜底：明确提到倍速+数字但不在支持档 → 进入命令分发，controller 拒绝并 TTS 提示
         (r"^(倍速|播放速度|速度)\d+倍?$",
          CommandType.MUSIC_SET_SPEED, {}),
+        # 歌单：播放歌单
+        (r"^播放(.+?)歌单$",
+         CommandType.MUSIC_PLAY_PLAYLIST, {}),
+        # 新建歌单
+        (r"^新建歌单叫(.+)$",
+         CommandType.MUSIC_CREATE_PLAYLIST, {}),
+        # 把这首歌加到歌单
+        (r"^把这首歌加到(.+?)歌单$",
+         CommandType.MUSIC_ADD_TO_PLAYLIST, {}),
+        # 把XX放到下一首
+        (r"^把(.+?)放到下一首$",
+         CommandType.MUSIC_ADD_NEXT, {}),
+        # 播放当前榜单第N首
+        (r"^播放当前榜单第(\d+)首$",
+         CommandType.MUSIC_PLAY_RANK_INDEX, {}),
         # 重新扫描
         (r"(重新扫描|扫描音乐|更新音乐库)", CommandType.MUSIC_RESCAN, {}),
         # 清理失效歌曲
@@ -364,6 +379,16 @@ class RuleBasedIntent:
                               "一点五": 1.5, "一点七五": 1.75, "两倍": 2.0,
                               "二点五": 2.5, "三倍": 3.0, "一倍": 1.0}
                     params["speed"] = cn_map.get(raw)
+                if command in (CommandType.MUSIC_PLAY_PLAYLIST,
+                               CommandType.MUSIC_CREATE_PLAYLIST,
+                               CommandType.MUSIC_ADD_TO_PLAYLIST,
+                               CommandType.MUSIC_ADD_NEXT) and match.groups():
+                    params["name" if command != CommandType.MUSIC_ADD_NEXT else "query"] = match.group(1).strip()
+                if command == CommandType.MUSIC_PLAY_RANK_INDEX and match.groups():
+                    try:
+                        params["index"] = int(match.group(1)) - 1  # 1-based → 0-based
+                    except ValueError:
+                        pass
                 return Intent(command, confidence=0.99, params=params)
 
         # ===== Cooldown 手动计时器（优先于 alarm 规则，避免被旧规则吞掉） =====

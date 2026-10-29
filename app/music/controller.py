@@ -505,6 +505,11 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT_MODE, self._cmd_highlight_mode)
         self.command_bus.register(CommandType.MUSIC_SET_PLAY_MODE, self._cmd_set_play_mode)
         self.command_bus.register(CommandType.MUSIC_SET_SPEED, lambda c: self.set_speed(c.params.get("speed")) if "speed" in c.params else False)
+        self.command_bus.register(CommandType.MUSIC_PLAY_PLAYLIST, self._cmd_play_playlist)
+        self.command_bus.register(CommandType.MUSIC_CREATE_PLAYLIST, self._cmd_create_playlist)
+        self.command_bus.register(CommandType.MUSIC_ADD_TO_PLAYLIST, self._cmd_add_to_playlist)
+        self.command_bus.register(CommandType.MUSIC_ADD_NEXT, self._cmd_add_next)
+        self.command_bus.register(CommandType.MUSIC_PLAY_RANK_INDEX, self._cmd_play_rank_index)
         self.command_bus.register(CommandType.MUSIC_RESCAN, lambda c: self.rescan())
         self.command_bus.register(CommandType.MUSIC_CLEANUP, lambda c: self.cleanup_missing())
         self.command_bus.register(CommandType.MUSIC_CLEAR_QUEUE, lambda c: self.clear_queue())
@@ -2089,6 +2094,58 @@ class MusicController:
     def get_speed(self) -> float:
         """当前倍速（Controller 记录值；mpv 未启动时为上次设定/默认 1.0）。"""
         return self._speed
+
+    # ===== 歌单/榜单语音命令 =====
+    def _cmd_play_playlist(self, command: Command) -> bool:
+        name = command.params.get("name", "")
+        if not name:
+            return False
+        playlists = self.get_playlists()
+        matches = [p for p in playlists if p.get("name") == name]
+        if not matches:
+            return False
+        if len(matches) > 1:
+            return False  # 重名不静默选择
+        songs = self.get_playlist_songs(matches[0]["id"])
+        if not songs:
+            return False
+        return self.play_playlist_item(songs[0])
+
+    def _cmd_create_playlist(self, command: Command) -> bool:
+        name = command.params.get("name", "").strip()
+        if not name:
+            return False
+        return self.create_playlist(name) is not None
+
+    def _cmd_add_to_playlist(self, command: Command) -> bool:
+        name = command.params.get("name", "")
+        if not name:
+            return False
+        playlists = self.get_playlists()
+        matches = [p for p in playlists if p.get("name") == name]
+        if len(matches) != 1:
+            return False
+        song = self.get_current_song()
+        if not song:
+            return False
+        return self.add_to_playlist(matches[0]["id"], song)
+
+    def _cmd_add_next(self, command: Command) -> bool:
+        query = command.params.get("query", "")
+        if not query or self.online_manager is None:
+            return False
+        results = self.online_manager.search(query)
+        if not results:
+            return False
+        self.add_next(results[0])
+        return True
+
+    def _cmd_play_rank_index(self, command: Command) -> bool:
+        idx = command.params.get("index", -1)
+        tracks = getattr(self, "_voice_rank_tracks", None)
+        if not tracks or not isinstance(idx, int) or not 0 <= idx < len(tracks):
+            return False
+        return self.play_online_list(tracks, idx)
 
     # ===== 跳转 =====
 
