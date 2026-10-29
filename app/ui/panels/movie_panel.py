@@ -1578,9 +1578,10 @@ class MoviePanel(QWidget):
             try:
                 mv = self._movie.get_volume()
                 if mv is not None and self.slider_vol.value() != mv:
+                    print(f"[MovieVol] tick sync slider {self.slider_vol.value()} -> {mv}")
                     self.slider_vol.setValue(mv)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[MovieVol] tick sync error: {e!r}")
             # 内嵌播放中：面板轮询让位（连播/进度由播放窗口唯一驱动，防双 tick）
             if self._embed_playing:
                 return
