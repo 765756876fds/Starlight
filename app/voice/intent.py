@@ -131,7 +131,7 @@ class RuleBasedIntent:
         (r"^把(.+?)放到下一首$",
          CommandType.MUSIC_ADD_NEXT, {}),
         # 播放当前榜单第N首
-        (r"^播放当前榜单第(\d+)首$",
+        (r"^播放当前榜单第(\d+|一|二|三|四|五|六|七|八|九|十)首$",
          CommandType.MUSIC_PLAY_RANK_INDEX, {}),
         # 重新扫描
         (r"(重新扫描|扫描音乐|更新音乐库)", CommandType.MUSIC_RESCAN, {}),
@@ -385,8 +385,12 @@ class RuleBasedIntent:
                                CommandType.MUSIC_ADD_NEXT) and match.groups():
                     params["name" if command != CommandType.MUSIC_ADD_NEXT else "query"] = match.group(1).strip()
                 if command == CommandType.MUSIC_PLAY_RANK_INDEX and match.groups():
+                    raw = match.group(1)
+                    cn_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+                              "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
                     try:
-                        params["index"] = int(match.group(1)) - 1  # 1-based → 0-based
+                        n = cn_map.get(raw, int(raw))
+                        params["index"] = n - 1  # 1-based → 0-based
                     except ValueError:
                         pass
                 return Intent(command, confidence=0.99, params=params)

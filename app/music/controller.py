@@ -2152,10 +2152,23 @@ class MusicController:
         query = command.params.get("query", "")
         if not query or self.online_manager is None:
             return False
-        results = self.online_manager.search(query)
+        try:
+            results = self.online_manager.search_all(query)
+        except Exception as e:
+            logger.error(f"[Music] add_next search error: {e}")
+            return False
         if not results:
             return False
-        return self.add_next(results[0])
+        track = results[0]
+        song = {
+            "title": getattr(track, "title", "") or "",
+            "artist": getattr(track, "artist", "") or "",
+            "source_type": "online",
+            "source_name": getattr(track, "source_name", "") or "",
+            "track_id": getattr(track, "track_id", "") or "",
+            "extra": getattr(track, "extra", None) or {},
+        }
+        return self.add_next(song)
 
     def _cmd_play_rank_index(self, command: Command) -> bool:
         idx = command.params.get("index", -1)

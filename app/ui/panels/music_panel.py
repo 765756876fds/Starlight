@@ -2197,8 +2197,15 @@ class MusicPanel(QWidget):
                         self._mode_idx = i
                     if self.btn_mode.text() != label:
                         self.btn_mode.setText(label)
-                        print(f"[UI] 播放模式按钮同步: {label}")
                     break
+        # 语音创建歌单后自动刷新列表
+        try:
+            n = len(self._music.get_playlists())
+            if n != getattr(self, "_playlist_count", -1):
+                self._playlist_count = n
+                self._refresh_playlists()
+        except Exception:
+            pass
         try:
             hl = bool(self._music.is_highlight_mode())
         except Exception:
