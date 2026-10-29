@@ -389,7 +389,10 @@ class RuleBasedIntent:
                     cn_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
                               "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
                     try:
-                        n = cn_map.get(raw, int(raw))
+                        if raw in cn_map:
+                            n = cn_map[raw]
+                        else:
+                            n = int(raw)
                         params["index"] = n - 1  # 1-based → 0-based
                     except ValueError:
                         pass

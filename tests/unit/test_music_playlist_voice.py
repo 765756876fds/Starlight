@@ -33,6 +33,12 @@ def test_rank_index_intent():
     assert it.params.get("index") == 2  # 1-based → 0-based
 
 
+def test_rank_index_chinese():
+    assert R.match("播放当前榜单第二首").params["index"] == 1
+    assert R.match("播放当前榜单第三首").params["index"] == 2
+    assert R.match("播放当前榜单第10首").params["index"] == 9
+
+
 def test_no_conflict_with_song_search():
     # "播放七里香" 仍走搜索，不是歌单
     it = R.match("播放七里香")
