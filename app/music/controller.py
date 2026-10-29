@@ -985,13 +985,15 @@ class MusicController:
             logger.error(f"[Music] get_song_path error: {e}")
         return ""
 
-    def add_next(self, song: dict):
-        """下一首播放：插到当前播放位置之后（无播放时插队首）。"""
+    def add_next(self, song: dict) -> bool:
+        """下一首播放：插到当前播放位置之后（无播放时插队首）。返回是否成功。"""
         try:
             pos = self.queue.get_current_index() + 1
             self.queue.add(song, position=pos)
+            return True
         except Exception as e:
             logger.error(f"[Music] add_next error: {e}")
+            return False
 
     def delete_local_file(self, song: dict) -> tuple:
         """删除本地文件（不可逆）：删磁盘 + 从 music 表移除（FTS 同步）+ 从歌单移除（历史保留）。
@@ -2119,9 +2121,11 @@ class MusicController:
             return False
         for s in reversed(songs[1:]):
             try:
-                self.add_next(s)
+                if not self.add_next(s):
+                    logger.error(f"[Music] 歌单入队失败: {s.get('title')}")
+                    return False
             except Exception as e:
-                logger.error(f"[Music] 歌单入队失败: {e}")
+                logger.error(f"[Music] 歌单入队异常: {e}")
                 return False
         return True
 
@@ -2151,8 +2155,7 @@ class MusicController:
         results = self.online_manager.search(query)
         if not results:
             return False
-        self.add_next(results[0])
-        return True
+        return self.add_next(results[0])
 
     def _cmd_play_rank_index(self, command: Command) -> bool:
         idx = command.params.get("index", -1)
