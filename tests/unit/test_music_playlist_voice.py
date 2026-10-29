@@ -27,6 +27,16 @@ def test_add_next_intent():
     assert it.params.get("query") == "七里香"
 
 
+def test_add_next_variants():
+    assert R.match("把库里之歌放在下一首").params["query"] == "库里之歌"
+    assert R.match("把七里香插到下一首").params["query"] == "七里香"
+    assert R.match("把《库里之歌》放在下一首").params["query"] == "库里之歌"
+
+
+def test_add_next_no_false_trigger():
+    assert R.match("把门关好") is None
+
+
 def test_rank_index_intent():
     it = R.match("播放当前榜单第3首")
     assert it.intent_type == CommandType.MUSIC_PLAY_RANK_INDEX
