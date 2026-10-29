@@ -242,6 +242,18 @@ def test_play_online_fail_not_recorded(tmp_path, event_bus):
     assert c.db.get_history() == []
 
 
+def test_play_online_mutex_rejection_clears_switching_state(tmp_path, event_bus):
+    """电影暂停确认失败时拒绝起播，同时结束切换态，避免 UI 卡住。"""
+    c, rec = _ctrl_with_history(tmp_path, event_bus)
+    c.set_movie_pauser(lambda: False)
+    c.online_manager.get_play_url.return_value = {
+        "url": "http://x/a.mp3", "headers": None}
+
+    assert c.play_online(_mk_online_track()) is False
+    assert c._is_switching_track is False
+    assert c.db.get_history() == []
+
+
 def test_play_online_shared_dedup_with_event(tmp_path, event_bus):
     """共用去重：事件路径先记在线同歌，5 分钟内 play_online 同歌 → 不重复；不同歌新记。"""
     c, rec = _ctrl_with_history(tmp_path, event_bus)

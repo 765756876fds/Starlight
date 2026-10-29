@@ -2021,7 +2021,10 @@ class MusicController:
                 if online_song is None:
                     # 互斥确认或紧邻 loadfile 前置校验失败时，没有异常可供
                     # 外层 except 收口；必须结束本次切换态，避免 UI 永久冻结。
-                    self._end_switch_state_if_current(req_id)
+                    # 此处已经持有 _lock，直接完成等价的代次守卫，避免
+                    # 再次获取非可重入锁造成失败路径死锁。
+                    if req_id == self._play_request_id:
+                        self._is_switching_track = False
                     return False
                 logger.info("[Music] mpv loadfile ok")
         except Exception as e:
