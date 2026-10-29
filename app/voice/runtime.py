@@ -853,6 +853,18 @@ class VoiceRuntime:
                 message = "自动化开关已开启"
             self._enqueue_speak(message, "voice_automation")
 
+        elif intent_type in (CommandType.MUSIC_SLEEP_TIMER_SET,
+                             CommandType.MUSIC_SLEEP_TIMER_CANCEL):
+            try:
+                ok = self.command_bus.execute(Command(
+                    command_type=intent_type, params=params, source="voice"))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
+            self._enqueue_speak("睡眠定时已设置" if ok and intent_type == CommandType.MUSIC_SLEEP_TIMER_SET
+                                else "睡眠定时已取消" if ok else "睡眠定时操作未成功",
+                                "voice_music_timer")
+
         # 明确电影命令：用户明说"暂停电影"/"继续电影"，直接分发，不走谁在播路由
         elif intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME, CommandType.MOVIE_STOP,
                              CommandType.MOVIE_VOLUME_SET, CommandType.MOVIE_VOLUME_UP, CommandType.MOVIE_VOLUME_DOWN,

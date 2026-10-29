@@ -80,6 +80,12 @@ class TestRuleBasedIntent:
         intent = RuleBasedIntent.match(text)
         assert intent is None or not intent.intent_type.startswith("auto.")
 
+    def test_sleep_timer_parses_minutes_and_hours(self):
+        minute = RuleBasedIntent.match("设置睡眠定时30分钟")
+        hour = RuleBasedIntent.match("睡眠定时1小时")
+        assert minute.params["seconds"] == 1800
+        assert hour.params["seconds"] == 3600
+
     def test_punctuation_ignored_everywhere(self):
         """ASR 自带标点：指令中任意位置的标点都不影响识别。"""
         cases = [

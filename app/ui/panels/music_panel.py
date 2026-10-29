@@ -300,6 +300,9 @@ class MusicPanel(QWidget):
         self.btn_mark_highlight.setToolTip("把当前播放位置保存为这首歌的人工高潮起点")
         self.btn_mark_highlight.setIcon(lucide_icon("map-pin", 14, Tokens.TEXT_SECONDARY))
         self.btn_mark_highlight.clicked.connect(self._on_mark_highlight)
+        self.btn_sleep = QPushButton("睡眠定时")
+        self.btn_sleep.setObjectName("btn_sleep")
+        self.btn_sleep.clicked.connect(self._on_sleep_timer)
         # 倍速按钮（9 档，与电影侧一致；点按钮弹菜单选档）
         self.btn_speed = QPushButton("倍速 1x")
         self.btn_speed.setObjectName("btn_speed")
@@ -312,6 +315,7 @@ class MusicPanel(QWidget):
         row_sub.addWidget(self.btn_speed)
         row_sub.addWidget(self.btn_clear_queue)
         row_sub.addWidget(self.btn_mark_highlight)
+        row_sub.addWidget(self.btn_sleep)
         row_sub.addStretch()
         # 音量：MusicFree 悬浮极简风——平时仅喇叭图标，悬停/点击弹出垂直玻璃面板
         from ..widgets.glass_slider import GlassSlider, VolumeButton
@@ -790,6 +794,26 @@ class MusicPanel(QWidget):
     @staticmethod
     def _speed_label(rate: float) -> str:
         return f"{rate:g}x"
+
+    def _on_sleep_timer(self):
+        menu = QMenu(self)
+        for label, seconds in (("30 分钟", 1800), ("60 分钟", 3600),
+                               ("90 分钟", 5400), ("取消定时", None)):
+            action = menu.addAction(label)
+            if seconds is None:
+                action.triggered.connect(self._cancel_sleep_timer)
+            else:
+                action.triggered.connect(lambda _=False, s=seconds: self._set_sleep_timer(s))
+        menu.exec_(self.btn_sleep.mapToGlobal(self.btn_sleep.rect().bottomLeft()))
+
+    def _set_sleep_timer(self, seconds):
+        ok = self._music.set_sleep_timer(seconds) if self._music else False
+        self.btn_sleep.setText("睡眠定时" if not ok else f"定时 {seconds // 60}分")
+
+    def _cancel_sleep_timer(self):
+        if self._music:
+            self._music.cancel_sleep_timer()
+        self.btn_sleep.setText("睡眠定时")
 
     def _on_speed(self):
         """点倍速按钮 → 弹菜单选档（当前档勾选高亮），对齐电影侧交互。"""

@@ -210,6 +210,8 @@ class MusicController:
         self._skip_pending: bool = False  # 坏文件自动跳过防重入
         # 播放倍速（mpv speed 属性；切歌保留，mpv 重启后由 mpv 默认 1.0 重置）
         self._speed: float = 1.0
+        self._sleep_timer = None
+        self._sleep_timer_lock = threading.Lock()
         # UI「音源管理」导入的自定义 HTTP 源，sync_custom_sources() 维护的注册名单
         self._custom_http_sources: set = set()
 
@@ -480,6 +482,7 @@ class MusicController:
             "caller": "stop()",
         })
         self._running = False
+        self.cancel_sleep_timer()
         self._invalidate_highlight()
         if getattr(self, "online_manager", None) is not None:
             try:
@@ -515,6 +518,10 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_CLEANUP, lambda c: self.cleanup_missing())
         self.command_bus.register(CommandType.MUSIC_CLEAR_QUEUE, lambda c: self.clear_queue())
         self.command_bus.register(CommandType.MUSIC_STOP, lambda c: self.stop_current())
+        self.command_bus.register(CommandType.MUSIC_SLEEP_TIMER_SET,
+                                  lambda c: self.set_sleep_timer(c.params.get("seconds")))
+        self.command_bus.register(CommandType.MUSIC_SLEEP_TIMER_CANCEL,
+                                  lambda c: self.cancel_sleep_timer())
 
     # ===== 播放控制 =====
 
@@ -2115,6 +2122,43 @@ class MusicController:
     def get_speed(self) -> float:
         """当前倍速（Controller 记录值；mpv 未启动时为上次设定/默认 1.0）。"""
         return self._speed
+
+    def set_sleep_timer(self, seconds) -> bool:
+        """设置单一音乐睡眠定时器；到期停止当前音乐，不自动恢复。"""
+        try:
+            seconds = int(seconds)
+        except (TypeError, ValueError):
+            return False
+        if seconds <= 0 or seconds > 24 * 60 * 60:
+            return False
+        with self._sleep_timer_lock:
+            old = self._sleep_timer
+            if old is not None:
+                old.cancel()
+            timer = threading.Timer(seconds, self._sleep_timer_expired)
+            timer.daemon = True
+            self._sleep_timer = timer
+            timer.start()
+        return True
+
+    def cancel_sleep_timer(self) -> bool:
+        with self._sleep_timer_lock:
+            timer = self._sleep_timer
+            self._sleep_timer = None
+            if timer is None:
+                return False
+            timer.cancel()
+            return True
+
+    def _sleep_timer_expired(self):
+        with self._sleep_timer_lock:
+            self._sleep_timer = None
+        if not self._running:
+            return
+        try:
+            self.stop_current()
+        except Exception as e:
+            logger.error(f"[Music] 睡眠定时停止失败: {e}")
 
     # ===== 歌单/榜单语音命令 =====
     def set_voice_rank_tracks(self, tracks: list | None):

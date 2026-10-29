@@ -126,6 +126,10 @@ class RuleBasedIntent:
         # 兜底：明确提到倍速+数字但不在支持档 → 进入命令分发，controller 拒绝并 TTS 提示
         (r"^(倍速|播放速度|速度)\d+倍?$",
          CommandType.MUSIC_SET_SPEED, {}),
+        (r"^(?:设置|开启)?睡眠定时(?:器)?(?:为|到)?(\d+)(分钟|分|小时)$",
+         CommandType.MUSIC_SLEEP_TIMER_SET, {}),
+        (r"^(取消|关闭|停止)睡眠定时(?:器)?$",
+         CommandType.MUSIC_SLEEP_TIMER_CANCEL, {}),
         # 歌单：播放歌单
         (r"^播放(.+?)歌单$",
          CommandType.MUSIC_PLAY_PLAYLIST, {}),
@@ -405,6 +409,9 @@ class RuleBasedIntent:
                               "一点五": 1.5, "一点七五": 1.75, "两倍": 2.0,
                               "二点五": 2.5, "三倍": 3.0, "一倍": 1.0}
                     params["speed"] = cn_map.get(raw)
+                if command == CommandType.MUSIC_SLEEP_TIMER_SET and match.groups():
+                    amount = int(match.group(1))
+                    params["seconds"] = amount * (3600 if match.group(2) == "小时" else 60)
                 if command in (CommandType.MUSIC_PLAY_PLAYLIST,
                                CommandType.MUSIC_CREATE_PLAYLIST,
                                CommandType.MUSIC_ADD_NEXT) and match.groups():

@@ -58,6 +58,8 @@ class CommandType:
     MUSIC_CLEAR_QUEUE = "music.clear_queue"
     # 停止当前歌曲（保留队列；语音"停止音乐"等使用，不经过电影路由、不触发清空队列）
     MUSIC_STOP = "music.stop"
+    MUSIC_SLEEP_TIMER_SET = "music.sleep_timer_set"
+    MUSIC_SLEEP_TIMER_CANCEL = "music.sleep_timer_cancel"
     # 哼唱识曲（听歌识曲；UI 层注册，语音/按钮触发）
     MUSIC_IDENTIFY = "music.identify"
 
