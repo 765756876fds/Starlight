@@ -1043,11 +1043,18 @@ class VoiceRuntime:
         elif intent_type in ("cooldown.start", "cooldown.query",
                              "cooldown.cancel", "cooldown.cancel_all"):
             # 冷却计时 / 静态CD查询：转发给已在 main 注册的 CooldownManager
-            self.command_bus.execute(Command(
-                command_type=intent_type,
-                params=params,
-                source="voice",
-            ))
+            try:
+                ok = self.command_bus.execute(Command(
+                    command_type=intent_type,
+                    params=params,
+                    source="voice",
+                ))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
+            if intent_type == "cooldown.start":
+                self._enqueue_speak("技能记录成功" if ok else "技能记录未成功",
+                                    "voice_cooldown")
 
         elif intent_type == CommandType.PLAYER_QUERY:
             # 长任务（查询对局/玩家信息，走网络）：异步执行，不阻塞识别线程。

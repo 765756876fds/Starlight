@@ -94,6 +94,15 @@ class TestVoiceRuntimeDispatch:
         rt._enqueue_speak.assert_called_once_with(
             "自动化操作未成功", "voice_automation")
 
+    def test_cooldown_start_reports_failure(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = False
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent("cooldown.start", params={
+            "champion": "石头人", "skill": "闪现"}), "石头人用了闪现")
+        rt._enqueue_speak.assert_called_once_with(
+            "技能记录未成功", "voice_cooldown")
+
     # ===== system.stop_tts 独立打断路由（不走 CommandBus）=====
 
     def test_stop_tts_calls_providers_directly(self):
