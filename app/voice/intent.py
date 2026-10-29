@@ -66,8 +66,10 @@ class RuleBasedIntent:
         (r"^(下一部|下一部电影|换一部|换一部电影|播放下一部|看下一部)$",
          CommandType.MOVIE_NEXT_EPISODE, {}),
         # 音乐高潮模式开关
-        (r"^(开启高潮模式|打开高潮模式|高潮模式开|关闭高潮模式|高潮模式关)$",
-         CommandType.MUSIC_HIGHLIGHT_MODE, {}),
+        (r"^(开启高潮模式|打开高潮模式|高潮模式开)$",
+         CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": True}),
+        (r"^(关闭高潮模式|高潮模式关)$",
+         CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": False}),
         # 上一首（同义表达扩充）
         (r"^(上一首|上一曲|前一首|回到上一首|播放上一首|播放上一曲|上一首歌|"
          r"上一曲音乐|返回上一首|回到上一首|切上一首|切回上一首|换回上一首|"
@@ -99,9 +101,9 @@ class RuleBasedIntent:
         # 设置音量（支持阿拉伯数字与中文数字，0-100）
         (r"音量(\d+|[零一二两三四五六七八九十]+)", CommandType.MUSIC_VOLUME_SET, {}),
         # 高潮模式开关（必须在通用"高潮"之前）
-        (r"(关闭高潮模式|退出高潮模式|高潮模式关|关掉高潮模式)$",
+        (r"^(关闭高潮模式|退出高潮模式|高潮模式关|关掉高潮模式)$",
          CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": False}),
-        (r"(打开高潮模式|开启高潮模式|高潮模式开|进入高潮模式)$",
+        (r"^(打开高潮模式|开启高潮模式|高潮模式开|进入高潮模式)$",
          CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": True}),
         # 跳高潮（一次性）：^锚定，避免"播放电影高潮"被吞；"不要"开头否定句不命中
         (r"^(播放高潮|放高潮|听高潮|播放这首歌高潮|跳到高潮|跳高潮|播放高光|放高光|听高光)$",

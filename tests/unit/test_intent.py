@@ -18,6 +18,26 @@ class TestRuleBasedIntent:
         assert intent is not None
         assert intent.intent_type == "music.next"
 
+    @pytest.mark.parametrize("text, enabled", [
+        ("打开高潮模式", True),
+        ("打开高潮模式啊", True),  # 轻微 ASR/语气词偏差
+        ("高潮模式关", False),
+    ])
+    def test_highlight_mode_keeps_explicit_on_off(self, text, enabled):
+        intent = RuleBasedIntent.match(text)
+        assert intent is not None
+        assert intent.intent_type == "music.highlight_mode"
+        assert intent.params["enabled"] is enabled
+
+    @pytest.mark.parametrize("text", [
+        "别打开高潮模式",
+        "我刚才听到有人说打开高潮模式",
+        "今天播放列表挺好听的",
+    ])
+    def test_highlight_mode_does_not_trigger_on_negation_or_chat(self, text):
+        intent = RuleBasedIntent.match(text)
+        assert intent is None or intent.intent_type != "music.highlight_mode"
+
     def test_punctuation_ignored_everywhere(self):
         """ASR 自带标点：指令中任意位置的标点都不影响识别。"""
         cases = [
