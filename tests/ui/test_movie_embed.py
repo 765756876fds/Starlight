@@ -85,7 +85,11 @@ class TestMpvWid:
 def _mk_ctrl(config=None):
     with patch("app.movie.movie_controller.MpvController") as M:
         ctrl = MovieController(source_url="http://source.test/api", config=config)
-        return ctrl, M.return_value
+        mpv = M.return_value
+        # 真实 MpvController.loadfile() 返回协议响应；MagicMock 默认返回
+        # MagicMock，会被 MovieController 正确判定为未确认/失败。
+        mpv.loadfile.return_value = {"error": "success"}
+        return ctrl, mpv
 
 
 class _Cfg:
