@@ -835,11 +835,17 @@ class VoiceRuntime:
         elif intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME, CommandType.MOVIE_STOP,
                              CommandType.MOVIE_VOLUME_SET, CommandType.MOVIE_VOLUME_UP, CommandType.MOVIE_VOLUME_DOWN,
                              CommandType.MOVIE_SEEK):
-            self.command_bus.execute(Command(
-                command_type=intent_type,
-                params=params,
-                source="voice",
-            ))
+            try:
+                ok = self.command_bus.execute(Command(
+                    command_type=intent_type,
+                    params=params,
+                    source="voice",
+                ))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
+            if ok is False:
+                self._enqueue_speak("电影操作未成功", "voice_movie_control")
 
         elif intent_type == CommandType.PLAYER_NEXT:
             # V2-4.3：裸"下一个"上下文仲裁：仅当一边明确在播、另一边明确暂停才执行。

@@ -117,6 +117,16 @@ class TestRuntimeDispatch(unittest.TestCase):
         cmd = rt.command_bus.execute.call_args[0][0]
         self.assertEqual(cmd.command_type, CommandType.MOVIE_RESUME)
 
+    def test_movie_command_failure_reports_feedback(self):
+        rt = _mk_rt(playing=True, paused=False)
+        rt.command_bus.execute.return_value = False
+        rt._enqueue_speak = MagicMock()
+
+        rt._execute_intent(Intent(CommandType.MOVIE_PAUSE), "暂停电影")
+
+        rt._enqueue_speak.assert_called_once_with(
+            "电影操作未成功", "voice_movie_control")
+
     def test_play_movie_empty_query_dispatches_movie_not_music(self):
         rt = _mk_rt()
         it = RuleBasedIntent.match("播放电影")
