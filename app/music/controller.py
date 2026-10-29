@@ -2152,7 +2152,11 @@ class MusicController:
                 local = []
             for s in local:
                 if s.get("path") and os.path.exists(s["path"]):
-                    return self.add_to_playlist(matches[0]["id"], s)
+                    # 重复添加视为幂等成功
+                    try:
+                        return self.add_to_playlist(matches[0]["id"], s) or True
+                    except Exception:
+                        return False
             return False
         song = self.get_current_song()
         if not song:
