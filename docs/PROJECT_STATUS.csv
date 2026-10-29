@@ -1,0 +1,23 @@
+ID,模块,名称,状态,优先级,入口,测试,实机,提交,来源
+M001,音乐,本地播放,已完成（实机验收通过）,P0,MusicController.play,有,通过,,实机
+M002,音乐,在线播放,已完成（实机验收通过）,P0,online_manager,有,通过,,实机
+M003,音乐,歌单5项语音,已完成（实机验收通过）,P1,_cmd_play_playlist等,186 passed,通过,9947661,实机
+M004,音乐,倍速语音,已完成（实机验收通过）,P1,_cmd_set_speed,有,通过,,实机
+M005,音乐,高潮模式,已完成（实机验收通过）,P1,set_highlight_mode,有,通过,,实机
+M006,电影,搜索播放,已完成（实机验收通过）,P0,MovieController,有,通过,,实机
+M007,电影,上下集语音,已完成（实机验收通过）,P1,MOVIE_NEXT_EPISODE,有,通过,,实机
+V001,语音,Feature Registry,已完成（仅代码）,P1,app/voice/registry.py,无,未,9947661,代码
+V002,语音,旧规则迁移,规划中,P2,intent.py,,,,
+R001,风险,在线音乐互斥缺口,待审计,P1,play_online/_apply_stream,,,,千问调查待复核
+R002,风险,电影UI同步IPC轮询,待审计,P1,movie_panel/video_player_window,,,,千问调查待复核
+R003,风险,CommandBus异步失败反馈,待修复,P2,execute_async,,,,千问调查待复核
+R004,风险,CommandBus历史无界,待修复,P2,_command_history,,,,千问调查待复核
+R005,风险,MusicController锁内跨模块调用,暂缓,P2,,,,千问调查待复核
+R006,风险,电影恢复互斥边界,待审计,P2,MovieController.resume,,,,千问调查待复核
+R007,风险,全局语音状态领域边界,待审计,P1,,,,千问调查待复核
+R008,风险,IPC超时状态不确定,暂缓,P3,,,,千问调查待复核
+R009,风险,旧Runtime死代码,暂缓,P3,_route_pause_cmd等,,,,千问调查待复核
+F001,功能,电影本地播放,规划中,P2,,,,,
+F002,功能,睡眠定时,规划中,P2,,,,,
+F003,功能,播放位置记忆,规划中,P2,,,,,
+F004,功能,LoL语音控制,规划中,P2,,,,,
