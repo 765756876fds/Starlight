@@ -885,12 +885,18 @@ class VoiceRuntime:
                              CommandType.MUSIC_ADD_TO_PLAYLIST,
                              CommandType.MUSIC_ADD_NEXT,
                              CommandType.MUSIC_PLAY_RANK_INDEX):
-            ok = self.command_bus.execute(Command(
-                command_type=intent_type,
-                params=params,
-                source="voice",
-            ))
-            if not ok:
+            try:
+                ok = self.command_bus.execute(Command(
+                    command_type=intent_type,
+                    params=params,
+                    source="voice",
+                ))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
+            if ok:
+                self._enqueue_speak("好的", "voice")
+            else:
                 self._enqueue_speak("操作未成功", "voice")
 
         elif intent_type == CommandType.MUSIC_SET_SPEED:
