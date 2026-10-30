@@ -148,6 +148,7 @@ class MusicPanel(QWidget):
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
         self._identify_auto_generation = 0
         self._search_generation = 0
+        self._pending_identify_close = None
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
         self._play_result.connect(self._on_play_result)
@@ -1268,6 +1269,7 @@ class MusicPanel(QWidget):
                     return
                 try:
                     if self._music is not None and self._music.play_online(track):
+                        self._pending_identify_close = (generation, track.title, track.artist)
                         self._play_result.emit(True, f"正在播放：{track.title}", self.lbl_status)
                         return
                 except Exception:
@@ -1276,6 +1278,17 @@ class MusicPanel(QWidget):
                 self._play_result.emit(False, "歌曲已识别，但可用音源均无法播放", self.lbl_status)
 
         threading.Thread(target=run, daemon=True, name="ui-identify-auto-play").start()
+
+    def _finish_identify_playback(self, generation):
+        pending = self._pending_identify_close
+        if not pending or pending[0] != generation:
+            return
+        self._pending_identify_close = None
+        dialog = self._identify_dialog
+        if dialog is not None and dialog.isVisible():
+            dialog.hide()
+        if self.tabs.currentIndex() != 1:
+            self.tabs.setCurrentIndex(1)
 
     def _on_identify_play(self, result):
         """识别成功 → 按指纹 filepath 回本地库 → play_song（失败静默提示）。"""
@@ -2222,6 +2235,14 @@ class MusicPanel(QWidget):
                     self.slider_pos.setValue(0)
                 self.lbl_time.setText("加载中...")
                 return
+            pending = self._pending_identify_close
+            if pending and dur > 0 and pos >= 0:
+                generation, title, artist = pending
+                if generation == self._identify_auto_generation:
+                    current = self._music.get_current_song() or {}
+                    if ((current.get("title") or "") == title and
+                            (current.get("artist") or "") == artist):
+                        self._finish_identify_playback(generation)
             if dur > 0:
                 self.slider_pos.setEnabled(True)
                 if not self.slider_pos.isSliderDown():

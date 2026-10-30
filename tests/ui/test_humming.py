@@ -515,6 +515,64 @@ def test_panel_identify_search_waits_for_search_completion(monkeypatch):
     assert calls[-1] == (p._identify_auto_generation, [])
 
 
+def test_identify_window_closes_only_after_matching_playback_progress():
+    from app.ui.panels.music_panel import MusicPanel
+
+    class FakeMusic:
+        _is_switching_track = False
+        def get_current_song(self):
+            return {"title": "本轮", "artist": "歌手"}
+
+    class FakeTabs:
+        def __init__(self):
+            self.index = 0
+            self.calls = []
+        def currentIndex(self):
+            return self.index
+        def setCurrentIndex(self, index):
+            self.calls.append(index)
+            self.index = index
+
+    class FakeDialog:
+        def __init__(self):
+            self.hidden = False
+        def isVisible(self):
+            return not self.hidden
+        def hide(self):
+            self.hidden = True
+
+    p = MusicPanel(music=FakeMusic())
+    p.tabs = FakeTabs()
+    p._identify_dialog = FakeDialog()
+    p._pending_identify_close = (p._identify_auto_generation, "本轮", "歌手")
+    p._on_progress(0.1, 120.0)
+    assert p._identify_dialog.hidden
+    assert p.tabs.calls == [1]
+
+
+def test_identify_window_stays_open_before_matching_playback():
+    from app.ui.panels.music_panel import MusicPanel
+
+    class FakeMusic:
+        _is_switching_track = True
+        def get_current_song(self):
+            return {"title": "本轮", "artist": "歌手"}
+
+    class FakeDialog:
+        def __init__(self):
+            self.hidden = False
+        def isVisible(self):
+            return not self.hidden
+        def hide(self):
+            self.hidden = True
+
+    p = MusicPanel(music=FakeMusic())
+    p._identify_dialog = FakeDialog()
+    p._pending_identify_close = (p._identify_auto_generation, "本轮", "歌手")
+    p._on_progress(0.0, 120.0)
+    assert not p._identify_dialog.hidden
+
+
 def test_panel_search_generation_rejects_late_result_and_snapshots_candidates():
     from app.ui.panels.music_panel import MusicPanel
 
