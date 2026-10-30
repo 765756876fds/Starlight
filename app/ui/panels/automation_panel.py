@@ -135,6 +135,10 @@ class AutomationPanel(QWidget):
                     setattr(cfg, k, v)
                 except Exception:
                     pass
+            try:
+                setattr(cfg, "queue_configured", True)
+            except Exception:
+                pass
             print(f"[UI] auto_queue config saved: {vals}")
             try:
                 from app.ui.settings_store import save_settings_yaml
@@ -224,6 +228,8 @@ class AutomationPanel(QWidget):
                 self.btn_accept.set_state(bool(getattr(cfg, "auto_accept", False)))
                 self.btn_ban.set_state(bool(getattr(cfg, "auto_ban", False)))
                 self.btn_pick.set_state(bool(getattr(cfg, "auto_pick", False)))
+            if self._combo_manager is not None and hasattr(self, "btn_combo_enable"):
+                self.btn_combo_enable.set_state(bool(self._combo_manager.is_enabled()))
         except Exception:
             pass
 

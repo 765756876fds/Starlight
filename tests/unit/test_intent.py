@@ -162,6 +162,10 @@ class TestRuleBasedIntent:
         ("自动连招，关闭", "auto.combo_set", False),
         ("游戏，打开自动选人", "auto.banpick_set", True),
         ("自动禁用，关闭", "auto.banpick_set", False),
+        ("连招总开关打开", "auto.combo_set", True),
+        ("打开连招总开关", "auto.combo_set", True),
+        ("连招总开关关闭", "auto.combo_set", False),
+        ("关闭连招总开关", "auto.combo_set", False),
     ])
     def test_lol_automation_action_object_variants(self, text, command, enabled):
         intent = RuleBasedIntent.match(text)

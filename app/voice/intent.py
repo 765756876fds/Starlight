@@ -417,6 +417,10 @@ class RuleBasedIntent:
             (r"^(自动禁用|自动选禁|自动选人)(关闭|关掉|停止)$", CommandType.AUTO_BANPICK_SET, False),
             (r"^(自动连招|连招)(打开|开启)$", CommandType.AUTO_COMBO_SET, True),
             (r"^(自动连招|连招)(关闭|关掉|停止)$", CommandType.AUTO_COMBO_SET, False),
+            (r"^(?:游戏)?(打开|开启)(连招总开关)$", CommandType.AUTO_COMBO_SET, True),
+            (r"^(?:游戏)?(关闭|关掉|停止)(连招总开关)$", CommandType.AUTO_COMBO_SET, False),
+            (r"^(连招总开关)(打开|开启)$", CommandType.AUTO_COMBO_SET, True),
+            (r"^(连招总开关)(关闭|关掉|停止)$", CommandType.AUTO_COMBO_SET, False),
         ]
         AUTO_STATUS_RULES = [
             (r"^(?:游戏[，,]?)?(?:查询)?自动排队(?:状态|开着吗|开了吗)$", "queue"),
