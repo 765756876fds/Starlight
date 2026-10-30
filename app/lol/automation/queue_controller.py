@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import time
+import threading
 
 SEARCH_URL = "/lol-lobby/v2/lobby/matchmaking/search"
 SEARCH_STATE_URL = "/lol-lobby/v2/lobby/matchmaking/search-state"
@@ -51,6 +52,8 @@ class QueueController:
         self._lobby_create_pending = False
         self._lobby_retry_at = 0.0
         self._lobby_failures = 0
+        self._lobby_state_lock = threading.RLock()
+        self._lobby_generation = 0
 
     def is_currently_in_queue(self) -> bool:
         status, payload = self._request("GET", SEARCH_STATE_URL, None)
@@ -59,6 +62,11 @@ class QueueController:
         return False
 
     def reset(self) -> None:
+        with self._lobby_state_lock:
+            self._lobby_generation += 1
+            self._reset_state_locked()
+
+    def _reset_state_locked(self) -> None:
         self._search_posted = False
         self._prompted_user = False
         self._verified = False
@@ -147,8 +155,10 @@ class QueueController:
         if config is None:
             return False
 
-        if self._lobby_create_pending or time.monotonic() < self._lobby_retry_at:
-            return False
+        with self._lobby_state_lock:
+            if self._lobby_create_pending or time.monotonic() < self._lobby_retry_at:
+                return False
+            generation = self._lobby_generation
 
         mode = getattr(config, "auto_queue_mode", "normal")
         primary = getattr(config, "auto_queue_primary_role", "不限")
@@ -159,17 +169,28 @@ class QueueController:
 
         # 第一步：创建房间
         status, body = self._request("POST", LOBBY_URL, {"queueId": queue_id})
+        with self._lobby_state_lock:
+            if generation != self._lobby_generation:
+                print("[AUTO_QUEUE] stale lobby response ignored", flush=True)
+                return False
         if status not in (200, 201, 204):
-            self._lobby_failures += 1
-            delay = min(60.0, 5.0 * (2 ** min(self._lobby_failures - 1, 3)))
-            self._lobby_retry_at = time.monotonic() + delay
-            summary = str(body)[:200] if body is not None else ""
-            print(f"[AUTO_QUEUE] create lobby failed: status={status} retry_in={delay:.0f}s response={summary}", flush=True)
+            with self._lobby_state_lock:
+                if generation != self._lobby_generation:
+                    print("[AUTO_QUEUE] stale lobby failure ignored", flush=True)
+                    return False
+                self._lobby_failures += 1
+                delay = min(60.0, 5.0 * (2 ** min(self._lobby_failures - 1, 3)))
+                self._lobby_retry_at = time.monotonic() + delay
+            print(f"[AUTO_QUEUE] create lobby failed: status={status} retry_in={delay:.0f}s error=lcu_request_failed", flush=True)
             return False
         print("[AUTO_QUEUE] lobby created", flush=True)
-        self._lobby_create_pending = True
-        self._lobby_retry_at = 0.0
-        self._lobby_failures = 0
+        with self._lobby_state_lock:
+            if generation != self._lobby_generation:
+                print("[AUTO_QUEUE] stale lobby success ignored", flush=True)
+                return False
+            self._lobby_create_pending = True
+            self._lobby_retry_at = 0.0
+            self._lobby_failures = 0
 
         # 第二步：设置位置偏好（排位/匹配才需要，人机/极地不需要）
         if mode in ("solo_duo", "flex", "normal"):

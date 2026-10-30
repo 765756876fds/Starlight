@@ -46,6 +46,9 @@ class FakeLcu:
     def get_gameflow_phase(self):
         return self.gameflow_phase
 
+    def get_gameflow_phase_status(self):
+        return True, self.gameflow_phase
+
 
 def make_events():
     out = []
@@ -479,6 +482,7 @@ def test_service_clears_state_on_leaving_champ_select():
         connected = True
         def __init__(self): self.phase = "ChampSelect"
         def get_gameflow_phase(self): return self.phase
+        def get_gameflow_phase_status(self): return True, self.phase
     from app.lol.automation.service import LoLAutomationService
     lcu = FakeLcu()
     cfg = AutomationConfig(enabled=True, auto_pick=True)
@@ -609,6 +613,9 @@ class _SearchFake:
     def get_gameflow_phase(self):
         return self.gameflow_phase
 
+    def get_gameflow_phase_status(self):
+        return True, self.gameflow_phase
+
 
 def _queue_svc(cfg, lcu):
     from app.lol.automation.service import LoLAutomationService
@@ -731,6 +738,92 @@ def test_q13_unknown_phase_never_creates_lobby():
     svc = _queue_svc(AutomationConfig(enabled=True, auto_queue=True), lcu)
     svc._tick()
     assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+class _DelayedLobbyRequest:
+    def __init__(self, result):
+        self.calls = []
+        self.result = result
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, method, endpoint, data=None):
+        self.calls.append((method, endpoint, data))
+        if method == "GET":
+            return 200, {"isCurrentlyInQueue": False}
+        if endpoint == "/lol-lobby/v2/lobby":
+            self.started.set()
+            self.release.wait(timeout=2)
+            return self.result
+        return 204, None
+
+
+def test_q14_reset_discards_late_lobby_success():
+    request = _DelayedLobbyRequest((201, {}))
+    q = QueueController(request, make_events()[1])
+    worker = threading.Thread(target=q.try_start, args=("None", AutomationConfig()))
+    worker.start()
+    assert request.started.wait(timeout=1)
+    q.reset()
+    request.release.set()
+    worker.join(timeout=2)
+    assert q._lobby_create_pending is False
+    assert q._lobby_retry_at == 0.0
+    assert q._lobby_failures == 0
+
+
+def test_q15_reenabled_queue_ignores_late_old_result():
+    request = _DelayedLobbyRequest((201, {}))
+    q = QueueController(request, make_events()[1])
+    old = threading.Thread(target=q.try_start, args=("None", AutomationConfig()))
+    old.start()
+    assert request.started.wait(timeout=1)
+    q.reset()
+    request.release.set()
+    old.join(timeout=2)
+    # The stale result cannot block a fresh generation.
+    assert q._lobby_create_pending is False
+    request.result = (500, {"sessionId": "secret", "token": "secret-token"})
+    q.try_start("None", AutomationConfig())
+    assert q._lobby_failures == 1
+
+
+def test_q16_missing_phase_status_never_uses_legacy_cache_or_posts():
+    class NoSafePhaseLcu(_SearchFake):
+        get_gameflow_phase_status = None
+
+        def get_gameflow_phase(self):
+            raise AssertionError("legacy phase fallback must not be called")
+
+    lcu = NoSafePhaseLcu()
+    svc = _queue_svc(AutomationConfig(enabled=True, auto_queue=True), lcu)
+    svc._tick()
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_q17_unknown_phase_is_safe_even_when_status_query_succeeds():
+    class UnknownPhaseLcu(_SearchFake):
+        def get_gameflow_phase_status(self):
+            return True, "UnexpectedPhase"
+
+    lcu = UnknownPhaseLcu()
+    svc = _queue_svc(AutomationConfig(enabled=True, auto_queue=True), lcu)
+    svc._tick()
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
+def test_q18_lobby_error_log_does_not_include_response_body(capsys):
+    lcu = _SearchFake(post_status=500)
+    lcu.routes = {("POST", "/lol-lobby/v2/lobby"): (
+        500, {"sessionId": "secret-session", "gameId": "secret-game", "token": "secret-token"}
+    )}
+    q = QueueController(lcu.request_raw, make_events()[1])
+    q.try_start("None", AutomationConfig())
+    output = capsys.readouterr().out
+    assert "status=500" in output
+    assert "secret-session" not in output
+    assert "secret-game" not in output
+    assert "secret-token" not in output
 
 
 # ============================================================
