@@ -692,7 +692,7 @@ class VoiceRuntime:
                 if sq is not None:
                     from app.speech.speech_queue import SpeechItem, PRIORITY_B
                     import time as _t
-                    sq.enqueue(SpeechItem(text="没有需要恢复的播放", priority=PRIORITY_B,
+                    sq.enqueue(SpeechItem(text="当前没有可恢复的歌曲，请说出歌名，或先选择一首歌曲", priority=PRIORITY_B,
                                           expire_at=_t.time() + 30.0,
                                           category="voice_global_resume", interruptible=True))
             except Exception:
@@ -857,6 +857,9 @@ class VoiceRuntime:
                              CommandType.MUSIC_SLEEP_TIMER_CANCEL):
             if intent_type == CommandType.MUSIC_SLEEP_TIMER_SET and "seconds" not in params:
                 self._enqueue_speak("请说出睡眠定时的时长，例如三十分钟", "voice_music_timer")
+                return
+            if intent_type == CommandType.MUSIC_SLEEP_TIMER_SET and params.get("seconds") not in (1800, 3600, 5400):
+                self._enqueue_speak("目前支持三十分钟、六十分钟或九十分钟", "voice_music_timer")
                 return
             try:
                 ok = self.command_bus.execute(Command(

@@ -129,6 +129,17 @@ class TestRuleBasedIntent:
         assert speed and speed.intent_type == "music.set_speed" and speed.params == {}
         assert timer and timer.intent_type == "music.sleep_timer_set" and timer.params == {}
 
+    def test_sleep_timer_voice_accepts_existing_ui_options_in_chinese(self):
+        for text, seconds in (("设置睡眠定时三十分钟", 1800),
+                              ("设置睡眠定时一小时", 3600),
+                              ("睡眠定时九十分钟", 5400)):
+            intent = RuleBasedIntent.match(text)
+            assert intent and intent.params["seconds"] == seconds
+
+        for text in ("取消睡眠定时", "关闭睡眠定时"):
+            intent = RuleBasedIntent.match(text)
+            assert intent and intent.intent_type == "music.sleep_timer_cancel"
+
     def test_prev_song(self):
         intent = RuleBasedIntent.match("上一首")
         assert intent is not None

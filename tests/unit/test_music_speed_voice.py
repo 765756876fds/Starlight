@@ -29,10 +29,30 @@ def test_normal_speed():
         assert it.params.get("speed") == 1.0
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    ("倍速播放一点五倍", 1.5),
+    ("倍速播放，一点五倍", 1.5),
+    ("设置一点五倍速", 1.5),
+    ("调到一点五倍", 1.5),
+    ("倍速零点八倍", 0.8),
+    ("倍速播放2倍", 2.0),
+])
+def test_natural_speed_phrases_parse_decimal(text, expected):
+    it = R.match(text)
+    assert it and it.intent_type == CommandType.MUSIC_SET_SPEED
+    assert it.params["speed"] == expected
+
+
 def test_invalid():
     for t in ["倍速十点倍", "倍速", "倍速一百倍"]:
         it = R.match(t)
         assert it is None or it.intent_type != CommandType.MUSIC_SET_SPEED or "speed" not in it.params, t
+
+
+def test_missing_speed_keeps_parameters_empty_for_runtime_prompt():
+    it = R.match("倍速播放")
+    assert it and it.intent_type == CommandType.MUSIC_SET_SPEED
+    assert it.params == {}
 
 
 def test_music_commands_unaffected():

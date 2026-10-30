@@ -125,17 +125,18 @@ class RuleBasedIntent:
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "shuffle"}),
         (r"(单曲循环|单曲循环播放|循环这首|循环这首歌|就循环这一首)$",
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "repeat_one"}),
-        # 倍速（小数点会被预处理剥掉，故中文数字用"一点五"等；阿拉伯仅整数 1/2/3）
+        # 倍速：明确的动作/对象/数值组合；标点会在 match 开头统一去除。
         (r"^(恢复正常速度|正常速度|正常倍速|恢复倍速|倍速正常|速度正常)$",
          CommandType.MUSIC_SET_SPEED, {"speed": 1.0}),
-        (r"^(倍速|播放速度|速度)(零点五|零点七五|一点二五|一点五|一点七五|两倍|二点五|三倍|一?倍)倍?$",
+        (r"^(?:倍速播放|设置|调到|调整到|倍速|播放速度|速度)(?:为|到)?"
+         r"(\d+(?:\.\d+)?|[零一二两三四五六七八九十]+(?:点[零一二两三四五六七八九]+)?)(?:倍)?$",
          CommandType.MUSIC_SET_SPEED, {}),
-        # 兜底：明确提到倍速+数字但不在支持档 → 进入命令分发，controller 拒绝并 TTS 提示
-        (r"^(倍速|播放速度|速度)\d+倍?$",
+        # “设置一点五倍速”中的“倍速”位于数值之后。
+        (r"^设置(\d+(?:\.\d+)?|[零一二两三四五六七八九十]+(?:点[零一二两三四五六七八九]+)?)倍速$",
          CommandType.MUSIC_SET_SPEED, {}),
         # 参数缺失也进入明确命令，由 VoiceRuntime 提示用户补充，不执行空参数。
-        (r"^(倍速|播放速度|速度)$", CommandType.MUSIC_SET_SPEED, {}),
-        (r"^(?:设置|开启)?睡眠定时(?:器)?(?:为|到)?(\d+)(分钟|分|小时)$",
+        (r"^(倍速播放|倍速|播放速度|速度)$", CommandType.MUSIC_SET_SPEED, {}),
+        (r"^(?:设置|开启)?睡眠定时(?:器)?(?:为|到)?([0-9零一二两三四五六七八九十]+)(分钟|分|小时)$",
          CommandType.MUSIC_SLEEP_TIMER_SET, {}),
         (r"^(?:设置|开启)?睡眠定时(?:器)?$",
          CommandType.MUSIC_SLEEP_TIMER_SET, {}),
@@ -303,6 +304,24 @@ class RuleBasedIntent:
             return 1.0  # 默认 1
 
     @classmethod
+    def _parse_decimal_number(cls, text: str) -> float | None:
+        """解析语音中的整数/小数，不把无法解析的内容默认为 1。"""
+        text = text.strip().removesuffix("倍")
+        try:
+            return float(text)
+        except ValueError:
+            pass
+        if "点" not in text:
+            value = cls._parse_number(text)
+            return value if text in cls.CHINESE_NUMBERS or "十" in text else None
+        whole, fraction = text.split("点", 1)
+        if not fraction or any(ch not in cls.CHINESE_NUMBERS or ch == "半" for ch in fraction):
+            return None
+        whole_value = cls._parse_number(whole) if whole else 0.0
+        digits = "".join(str(int(cls.CHINESE_NUMBERS[ch])) for ch in fraction)
+        return float(f"{int(whole_value)}.{digits}")
+
+    @classmethod
     def match(cls, text: str) -> Intent | None:
         """
         规则匹配
@@ -414,14 +433,12 @@ class RuleBasedIntent:
                             params["volume"] = vol
                     except (ValueError, IndexError):
                         pass
-                if command == CommandType.MUSIC_SET_SPEED and match.lastindex and match.lastindex >= 2:
-                    raw = match.group(2)
-                    cn_map = {"零点五": 0.5, "零点七五": 0.75, "一点二五": 1.25,
-                              "一点五": 1.5, "一点七五": 1.75, "两倍": 2.0,
-                              "二点五": 2.5, "三倍": 3.0, "一倍": 1.0}
-                    params["speed"] = cn_map.get(raw)
+                if command == CommandType.MUSIC_SET_SPEED and "speed" not in params and match.lastindex:
+                    raw = match.group(match.lastindex)
+                    if raw not in ("倍速播放", "倍速", "播放速度", "速度"):
+                        params["speed"] = cls._parse_decimal_number(raw)
                 if command == CommandType.MUSIC_SLEEP_TIMER_SET and match.groups():
-                    amount = int(match.group(1))
+                    amount = cls._parse_number(match.group(1))
                     params["seconds"] = amount * (3600 if match.group(2) == "小时" else 60)
                 if command in (CommandType.MUSIC_PLAY_PLAYLIST,
                                CommandType.MUSIC_CREATE_PLAYLIST,
