@@ -506,9 +506,35 @@ def test_panel_identify_search_waits_for_search_completion(monkeypatch):
         calls.append((on_done, on_failed))
 
     monkeypatch.setattr(p, "_do_search", fake_search)
-    monkeypatch.setattr(p, "_auto_play_identify_results", lambda generation: calls.append(generation))
+    monkeypatch.setattr(p, "_auto_play_identify_results",
+                        lambda generation, tracks: calls.append((generation, tracks)))
     p._on_identify_search("歌名 歌手")
     assert p.edit_kw.text() == "歌名 歌手"
     assert len(calls) == 1 and callable(calls[0][0])
-    calls[0][0]({})
-    assert calls[-1] == p._identify_auto_generation
+    calls[0][0]([])
+    assert calls[-1] == (p._identify_auto_generation, [])
+
+
+def test_panel_search_generation_rejects_late_result_and_snapshots_candidates():
+    from app.ui.panels.music_panel import MusicPanel
+
+    class Track:
+        def __init__(self, title):
+            self.title = title
+            self.artist = "歌手"
+            self.source_name = "测试源"
+            self.track_id = title
+
+    p = MusicPanel(music=None)
+    p._search_generation = 2
+    p._tracks_by_row = [Track("当前")]
+    late = []
+    p._on_search_done({"source": [Track("旧结果")]}, 1, lambda tracks: late.append(tracks))
+    assert late == []
+    assert p._tracks_by_row[0].title == "当前"
+
+    current = []
+    p._on_search_done({"source": [Track("本轮")]}, 2, lambda tracks: current.append(tracks))
+    assert [t.title for t in current[0]] == ["本轮"]
+    p._tracks_by_row = [Track("后来搜索")]
+    assert [t.title for t in current[0]] == ["本轮"]

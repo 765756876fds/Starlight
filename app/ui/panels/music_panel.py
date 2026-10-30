@@ -147,6 +147,7 @@ class MusicPanel(QWidget):
         self._scan_thread = None
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
         self._identify_auto_generation = 0
+        self._search_generation = 0
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
         self._play_result.connect(self._on_play_result)
@@ -1061,6 +1062,8 @@ class MusicPanel(QWidget):
         # 覆盖运行中线程引用同样会触发 QThread: Destroyed while running）。
         if self._thread is not None and self._thread.isRunning():
             return
+        self._search_generation += 1
+        search_generation = self._search_generation
         # 搜索前同步一次音源列表（插件导入/刷新后无需重启即生效；
         # 保留选中项，失效自动回退「全部」，不影响正在播放的音乐）
         self.refresh_online_sources()
@@ -1069,20 +1072,20 @@ class MusicPanel(QWidget):
         self._worker = _SearchWorker(self._music, kw)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.done.connect(self._on_search_done)
-        self._worker.failed.connect(self._on_search_failed)
-        if on_done is not None:
-            self._worker.done.connect(on_done)
-        if on_failed is not None:
-            self._worker.failed.connect(on_failed)
+        self._worker.done.connect(
+            lambda result: self._on_search_done(result, search_generation, on_done))
+        self._worker.failed.connect(
+            lambda err: self._on_search_failed(err, search_generation, on_failed))
         self._worker.done.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
         self._thread.start()
 
-    def _on_search_done(self, result: dict):
+    def _on_search_done(self, result: dict, search_generation=None, on_done=None):
+        if search_generation is not None and search_generation != self._search_generation:
+            return
         self._voice_generation = None   # 手动搜索 → 重置语音候选代际
         self.list_results.clear()
-        self._tracks_by_row = []
+        tracks_for_search = []
         source_filter = self.cb_source.currentData()
         n = 0
         for src, tracks in result.items():
@@ -1111,12 +1114,19 @@ class MusicPanel(QWidget):
                     "cover_url": getattr(t, "cover_url", None) or None,
                 }, sub, f"net:{t.track_id}" if t.track_id else None))
                 self.list_results.addItem(item)
-                self._tracks_by_row.append(t)
+                tracks_for_search.append(t)
                 n += 1
+        self._tracks_by_row = tracks_for_search
         self.lbl_status.setText(f"已找到 {n} 首")
+        if on_done is not None:
+            on_done(list(tracks_for_search))
 
-    def _on_search_failed(self, err: str):
+    def _on_search_failed(self, err: str, search_generation=None, on_failed=None):
+        if search_generation is not None and search_generation != self._search_generation:
+            return
         self.lbl_status.setText(f"搜索失败: {err}")
+        if on_failed is not None:
+            on_failed(err)
 
     def _on_search_event(self, event):
         """后台线程 publish → Signal 桥到主线程（Qt 队列连接自动跨线程）。"""
@@ -1230,7 +1240,7 @@ class MusicPanel(QWidget):
         generation = self._identify_auto_generation
         self.edit_kw.setText(keyword)
         self._do_search(
-            on_done=lambda _result: self._auto_play_identify_results(generation),
+            on_done=lambda tracks: self._auto_play_identify_results(generation, tracks),
             on_failed=lambda err: self._on_identify_search_failed(generation, err),
         )
 
@@ -1242,11 +1252,11 @@ class MusicPanel(QWidget):
             return
         self.lbl_status.setText(f"识曲成功，但在线音源搜索失败：{err}")
 
-    def _auto_play_identify_results(self, generation):
+    def _auto_play_identify_results(self, generation, tracks=None):
         """搜索完成后按顺序尝试音源；旧识曲任务不能触发播放。"""
         if generation != self._identify_auto_generation:
             return
-        tracks = list(self._tracks_by_row)
+        tracks = list(self._tracks_by_row if tracks is None else tracks)
         if not tracks:
             self.lbl_status.setText("歌曲已识别，但没有找到可用在线音源")
             return
