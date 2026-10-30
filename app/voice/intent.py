@@ -410,6 +410,16 @@ class RuleBasedIntent:
             (r"^(打开|开启)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, True),
             (r"^(关闭|关掉)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, False),
         ]
+        AUTO_STATUS_RULES = [
+            (r"^(?:游戏[，,]?)?(?:查询)?自动排队(?:状态|开着吗|开了吗)$", "queue"),
+            (r"^(?:游戏[，,]?)?(?:查询)?自动同意(?:状态|开着吗|开了吗)$", "accept"),
+            (r"^(?:游戏[，,]?)?(?:查询)?自动(?:禁用|选禁|选人)(?:状态|开着吗|开了吗)$", "banpick"),
+            (r"^(?:游戏[，,]?)?(?:查询)?自动连招(?:状态|开着吗|开了吗)$", "combo"),
+        ]
+        for pattern, feature in AUTO_STATUS_RULES:
+            if re.match(pattern, text):
+                return Intent(CommandType.AUTO_STATUS_QUERY, confidence=0.99,
+                              params={"feature": feature})
         for pattern, command, enabled in AUTO_RULES:
             if re.match(pattern, text):
                 return Intent(command, confidence=0.99, params={"enabled": enabled})

@@ -869,6 +869,26 @@ class VoiceRuntime:
                 message = "自动化开关已开启"
             self._enqueue_speak(message, "voice_automation")
 
+        elif intent_type == CommandType.AUTO_STATUS_QUERY:
+            try:
+                result = self.command_bus.execute(Command(
+                    command_type=intent_type, params=params, source="voice"))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                result = False
+            labels = {"queue": "自动排队", "accept": "自动同意",
+                      "banpick": "自动禁用和选择英雄", "combo": "自动连招"}
+            label = labels.get(params.get("feature"), "游戏自动化")
+            if not isinstance(result, dict) or not result.get("available"):
+                message = f"暂时无法确认{label}状态"
+            elif result.get("enabled") and result.get("client_ready") is False:
+                message = f"{label}已开启，但游戏客户端当前未连接"
+            elif result.get("enabled"):
+                message = f"{label}已开启"
+            else:
+                message = f"{label}已关闭"
+            self._enqueue_speak(message, "voice_automation_status")
+
         elif intent_type in (CommandType.MUSIC_SLEEP_TIMER_SET,
                              CommandType.MUSIC_SLEEP_TIMER_CANCEL):
             if intent_type == CommandType.MUSIC_SLEEP_TIMER_SET and "seconds" not in params:
@@ -1080,6 +1100,14 @@ class VoiceRuntime:
             if intent_type == "cooldown.start":
                 self._enqueue_speak("技能记录成功" if ok else "技能记录未成功",
                                     "voice_cooldown")
+            elif intent_type == "cooldown.cancel":
+                self._enqueue_speak("技能计时已取消" if ok else "没有找到要取消的技能计时",
+                                    "voice_cooldown")
+            elif intent_type == "cooldown.cancel_all":
+                self._enqueue_speak(
+                    f"已取消全部技能计时，共{ok}个" if isinstance(ok, int) and ok > 0
+                    else "当前没有正在进行的技能计时",
+                    "voice_cooldown")
 
         elif intent_type == CommandType.PLAYER_QUERY:
             # 长任务（查询对局/玩家信息，走网络）：异步执行，不阻塞识别线程。

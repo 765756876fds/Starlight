@@ -837,12 +837,30 @@ class Application:
                     return False
                 return bool(combo.set_enabled(bool(command.get("enabled"))))
 
+            def on_auto_status_query(command):
+                feature = command.get("feature")
+                status = self.automation.feature_status()
+                if feature == "combo":
+                    combo = getattr(self, "combo_manager", None)
+                    if combo is None:
+                        return {"available": False}
+                    return {"available": True, "enabled": bool(combo.is_enabled())}
+                key = {"queue": "auto_queue", "accept": "auto_accept",
+                       "banpick": "auto_ban"}.get(feature)
+                if key is None or key not in status:
+                    return {"available": False}
+                return {"available": True,
+                        "enabled": bool(status[key]["enabled"]),
+                        "client_ready": bool(self.lol.lcu.connected),
+                        "running": bool(self.automation.running)}
+
             self.command_bus.register(CommandType.AUTO_ACCEPT_TOGGLE, on_accept_toggle)
             self.command_bus.register(CommandType.AUTO_BANPICK_TOGGLE, on_banpick_toggle)
             self.command_bus.register(CommandType.AUTO_QUEUE_SET, on_queue_set)
             self.command_bus.register(CommandType.AUTO_ACCEPT_SET, on_accept_set)
             self.command_bus.register(CommandType.AUTO_BANPICK_SET, on_banpick_set)
             self.command_bus.register(CommandType.AUTO_COMBO_SET, on_combo_set)
+            self.command_bus.register(CommandType.AUTO_STATUS_QUERY, on_auto_status_query)
             if cfg.enabled:
                 self.automation.start()
                 self._set_module_status("automation", "ok")

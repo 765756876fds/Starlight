@@ -103,6 +103,43 @@ class TestVoiceRuntimeDispatch:
         rt._enqueue_speak.assert_called_once_with(
             "技能记录未成功", "voice_cooldown")
 
+    @pytest.mark.parametrize(("feature", "enabled", "message"), [
+        ("queue", True, "自动排队已开启"),
+        ("accept", False, "自动同意已关闭"),
+        ("banpick", True, "自动禁用和选择英雄已开启"),
+        ("combo", False, "自动连招已关闭"),
+    ])
+    def test_automation_status_query_reports_live_result(self, feature, enabled, message):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = {"available": True, "enabled": enabled}
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent(CommandType.AUTO_STATUS_QUERY,
+                                  params={"feature": feature}), "查询自动化状态")
+        rt._enqueue_speak.assert_called_once_with(message, "voice_automation_status")
+
+    def test_automation_status_query_reports_unavailable(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = {"available": False}
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent(CommandType.AUTO_STATUS_QUERY,
+                                  params={"feature": "combo"}), "查询自动连招状态")
+        rt._enqueue_speak.assert_called_once_with(
+            "暂时无法确认自动连招状态", "voice_automation_status")
+
+    def test_cooldown_cancel_feedback(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = True
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent("cooldown.cancel", params={"champion": "石头人"}), "取消石头人计时")
+        rt._enqueue_speak.assert_called_once_with("技能计时已取消", "voice_cooldown")
+
+    def test_cooldown_cancel_all_feedback(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = 2
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent("cooldown.cancel_all", params={}), "取消所有计时")
+        rt._enqueue_speak.assert_called_once_with("已取消全部技能计时，共2个", "voice_cooldown")
+
     # ===== system.stop_tts 独立打断路由（不走 CommandBus）=====
 
     def test_stop_tts_calls_providers_directly(self):

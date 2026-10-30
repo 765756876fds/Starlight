@@ -112,7 +112,7 @@ class TestRuleBasedIntent:
         assert intent.intent_type == "music.next"
 
     @pytest.mark.parametrize("text, expected", [
-        ("播放音乐", "music.resume"),
+        ("播放音乐", "music.play"),
         ("暂停歌曲", "music.pause"),
         ("继续放歌", "music.resume"),
         ("停止音乐", "music.stop"),
@@ -139,6 +139,18 @@ class TestRuleBasedIntent:
         for text in ("取消睡眠定时", "关闭睡眠定时"):
             intent = RuleBasedIntent.match(text)
             assert intent and intent.intent_type == "music.sleep_timer_cancel"
+
+    def test_lol_automation_status_queries_are_read_only_intents(self):
+        cases = {
+            "游戏，查询自动排队状态": "queue",
+            "游戏，自动同意开着吗": "accept",
+            "游戏，查询自动选人状态": "banpick",
+            "游戏，自动连招开了吗": "combo",
+        }
+        for text, feature in cases.items():
+            intent = RuleBasedIntent.match(text)
+            assert intent and intent.intent_type == "auto.status_query"
+            assert intent.params == {"feature": feature}
 
     def test_prev_song(self):
         intent = RuleBasedIntent.match("上一首")

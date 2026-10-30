@@ -97,6 +97,7 @@ class CommandType:
     AUTO_ACCEPT_SET = "auto.accept_set"
     AUTO_BANPICK_SET = "auto.banpick_set"
     AUTO_COMBO_SET = "auto.combo_set"
+    AUTO_STATUS_QUERY = "auto.status_query"
 
     # ===== Cooldown 手动计时器 =====
     COOLDOWN_START = "cooldown.start"
