@@ -293,8 +293,11 @@ class TestP0ConcurrencyAndRobustness:
             track = MagicMock(title="晴天", artist="周杰伦", album="专辑",
                               source_name="酷我", track_id="t2",
                               extra={}, duration_seconds=200)
+            pause_movie = MagicMock(return_value=True)
+            ctrl.set_movie_pauser(pause_movie)
             online_song = ctrl._apply_stream(track, "http://kw/url.mp3", None)
             assert online_song is not None
+            pause_movie.assert_called_once_with()
             assert online_song["source"] == "online"
             assert online_song["id"] == -1
             assert fake._properties.get("http-header-fields", "").startswith(
@@ -310,6 +313,7 @@ class TestP0ConcurrencyAndRobustness:
             assert result is None
             assert len([c for c in fake.calls[n0:] if c[0] == "loadfile"]) == 0, \
                 "before_load 失败后不得 loadfile"
+            pause_movie.assert_called_once_with()
         finally:
             ctrl.stop()
             ctrl.db.close()

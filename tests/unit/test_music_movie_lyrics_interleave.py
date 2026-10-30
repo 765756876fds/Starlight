@@ -71,11 +71,16 @@ class MovieFakeMpv:
         self.calls.append(("set_property", name, value))
         self._properties[name] = value
 
+    def get_property(self, name, timeout=2.0):
+        return self._properties.get(name)
+
     def pause(self):
         self.calls.append(("pause",))
+        self._properties["pause"] = True
 
     def play(self):
         self.calls.append(("play",))
+        self._properties["pause"] = False
 
 
 class MovieFakeStore:

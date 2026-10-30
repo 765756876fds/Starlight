@@ -350,6 +350,7 @@ def test_search_play_online_uses_direct_source_lookup(tmp_path):
     try:
         ctrl.mpv = MagicMock()
         ctrl.mpv.loadfile.return_value = {"error": "success"}  # loadfile 协议契约
+        ctrl.set_movie_pauser(MagicMock(return_value=True))
 
         # 本地无结果 → 走在线 fallback
         ctrl.search = MagicMock()

@@ -133,7 +133,10 @@ def _make_ctrl(tmp_path, fake, db_name="gaps.db"):
         # 测试环境强制落雪未连接：MagicMock 的 is_connected() 默认返回 truthy，
         # 会让 pause/next/toggle 等走"优先控制落雪"分支短路（与真实环境不符）。
         lx_cls.return_value.is_connected.return_value = False
-        return MusicController(cfg, mpv_adapter=fake)
+        ctrl = MusicController(cfg, mpv_adapter=fake)
+    # 正常应用由 main.py 注入电影暂停确认；这些用例模拟已完成接线。
+    ctrl.set_movie_pauser(MagicMock(return_value=True))
+    return ctrl
 
 
 def _local_song(tmp_path, name, song_id):

@@ -28,6 +28,7 @@ def _make_ctrl(tmp_path):
         c = MusicController(cfg)
     c.mpv = MagicMock()
     c.mpv.loadfile.return_value = {"error": "success"}  # loadfile 协议契约
+    c.set_movie_pauser(MagicMock(return_value=True))
     c._mpv_available = True
     return c
 

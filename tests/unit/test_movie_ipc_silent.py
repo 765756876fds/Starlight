@@ -10,6 +10,7 @@ def _make_ctrl():
     c.mpv = MagicMock()
     c.mpv.is_running.return_value = True
     c._current = {"url": "http://x", "title": "t"}
+    c._pending_history = None
     c._auto_next = True
     c._external_url_mode = False
     c._external_url_seen_active = False

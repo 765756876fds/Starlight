@@ -28,6 +28,9 @@ class _FakeLCU:
     def get_gameflow_phase(self):
         return self.phase
 
+    def get_gameflow_phase_status(self):
+        return True, self.phase
+
     def request_raw(self, method, endpoint, data=None):
         self.calls.append((method, endpoint))
         # ChampSelect 相关 GET 一律 404：ban/pick 门控 + 404 双保险路径

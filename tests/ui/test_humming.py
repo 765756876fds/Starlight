@@ -345,12 +345,15 @@ def test_intent_identify_no_conflict_with_search():
 
 
 def test_runtime_dispatches_identify():
+    from app.core.command_bus import CommandBus
     from app.voice.intent import Intent
     from app.voice.runtime import VoiceRuntime
 
     rt = VoiceRuntime(config={})
     calls = []
-    rt.command_bus = SimpleNamespace(execute=lambda c: calls.append(c.command_type))
+    rt.command_bus = CommandBus()
+    rt.command_bus.register(CommandType.MUSIC_IDENTIFY,
+                            lambda c: calls.append(c.command_type))
     rt._execute_intent(Intent(CommandType.MUSIC_IDENTIFY, params={}), "听听这是什么歌")
     assert calls == [CommandType.MUSIC_IDENTIFY]
 

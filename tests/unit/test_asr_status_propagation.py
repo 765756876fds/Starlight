@@ -134,7 +134,9 @@ def test_asr_manager_unknown_preserves_original_behavior():
 def test_voice_runtime_start_disabled_skips_asr():
     """bootstrap_result="disabled" 时 VoiceRuntime.start 不调 asr.initialize。"""
     from app.voice.runtime import VoiceRuntime
+    from app.voice.intent import IntentRouter
     vr = VoiceRuntime.__new__(VoiceRuntime)
+    vr.intent_router = IntentRouter({})
     vr._running = False
     vr.asr = MagicMock()
     vr._asr_thread = None
@@ -180,7 +182,9 @@ def test_asr_enabled_string_parsing(raw, expected):
 
 def _make_fake_voice_runtime():
     from app.voice.runtime import VoiceRuntime
+    from app.voice.intent import IntentRouter
     vr = VoiceRuntime.__new__(VoiceRuntime)
+    vr.intent_router = IntentRouter({})
     vr._running = False
     vr.asr = MagicMock()
     vr._asr_thread = None
