@@ -146,6 +146,7 @@ class MusicPanel(QWidget):
         self._thread = None
         self._scan_thread = None
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
+        self._identify_auto_generation = 0
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
         self._play_result.connect(self._on_play_result)
@@ -1052,7 +1053,7 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] 刷新音源列表失败: {e}")
 
-    def _do_search(self):
+    def _do_search(self, on_done=None, on_failed=None):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
@@ -1070,6 +1071,10 @@ class MusicPanel(QWidget):
         self._thread.started.connect(self._worker.run)
         self._worker.done.connect(self._on_search_done)
         self._worker.failed.connect(self._on_search_failed)
+        if on_done is not None:
+            self._worker.done.connect(on_done)
+        if on_failed is not None:
+            self._worker.failed.connect(on_failed)
         self._worker.done.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
         self._thread.start()
@@ -1209,7 +1214,8 @@ class MusicPanel(QWidget):
             if self._identify_dialog is None:
                 self._identify_dialog = IdentifyDialog(
                     self._get_identify_service(), on_play=self._on_identify_play,
-                    on_search=self._on_identify_search, parent=self)
+                    on_search=self._on_identify_search,
+                    on_begin=self._invalidate_identify_auto_play, parent=self)
             self._identify_dialog.show()
             self._identify_dialog.raise_()
             self._identify_dialog.start()
@@ -1220,9 +1226,46 @@ class MusicPanel(QWidget):
             self.lbl_identify_status.setText(f"识曲暂不可用：{exc}")
 
     def _on_identify_search(self, keyword):
-        """识曲结果复用现有在线搜索/展示链路，不触发播放。"""
+        """识曲结果复用现有在线搜索链路，并在结果完成后自动尝试播放。"""
+        generation = self._identify_auto_generation
         self.edit_kw.setText(keyword)
-        self._do_search()
+        self._do_search(
+            on_done=lambda _result: self._auto_play_identify_results(generation),
+            on_failed=lambda err: self._on_identify_search_failed(generation, err),
+        )
+
+    def _invalidate_identify_auto_play(self):
+        self._identify_auto_generation += 1
+
+    def _on_identify_search_failed(self, generation, err):
+        if generation != self._identify_auto_generation:
+            return
+        self.lbl_status.setText(f"识曲成功，但在线音源搜索失败：{err}")
+
+    def _auto_play_identify_results(self, generation):
+        """搜索完成后按顺序尝试音源；旧识曲任务不能触发播放。"""
+        if generation != self._identify_auto_generation:
+            return
+        tracks = list(self._tracks_by_row)
+        if not tracks:
+            self.lbl_status.setText("歌曲已识别，但没有找到可用在线音源")
+            return
+        self.lbl_status.setText("歌曲已识别，正在尝试播放可用音源…")
+
+        def run():
+            for track in tracks:
+                if generation != self._identify_auto_generation:
+                    return
+                try:
+                    if self._music is not None and self._music.play_online(track):
+                        self._play_result.emit(True, f"正在播放：{track.title}", self.lbl_status)
+                        return
+                except Exception:
+                    continue
+            if generation == self._identify_auto_generation:
+                self._play_result.emit(False, "歌曲已识别，但可用音源均无法播放", self.lbl_status)
+
+        threading.Thread(target=run, daemon=True, name="ui-identify-auto-play").start()
 
     def _on_identify_play(self, result):
         """识别成功 → 按指纹 filepath 回本地库 → play_song（失败静默提示）。"""

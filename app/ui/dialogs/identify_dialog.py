@@ -86,13 +86,14 @@ class _OnlineIdentifyWorker(QObject):
 class IdentifyDialog(GlassDialog):
     """听歌识曲窗口（也由语音"听听这是什么歌"触发）。"""
 
-    def __init__(self, service, on_play=None, on_search=None, parent=None):
+    def __init__(self, service, on_play=None, on_search=None, on_begin=None, parent=None):
         super().__init__("识曲", parent)
         self.resize(520, 360)
         self.setMinimumSize(460, 320)
         self._service = service
         self._on_play = on_play
         self._on_search = on_search
+        self._on_begin = on_begin
         self._busy = False
         self._result = None
         self._countdown = 0
@@ -176,6 +177,8 @@ class IdentifyDialog(GlassDialog):
 
     # ------------------------------------------------------------------ 录音/识别
     def _begin_record(self):
+        if self._on_begin:
+            self._on_begin()
         self._busy = True
         self._cancel_event = threading.Event()
         self._result = None

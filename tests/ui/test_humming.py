@@ -454,3 +454,49 @@ def test_panel_identify_play():
     finally:
         from app.core.command_bus import get_command_bus
         get_command_bus().unregister(CommandType.MUSIC_IDENTIFY)
+
+
+def test_panel_identify_auto_play_tries_candidates_until_success(monkeypatch):
+    from app.ui.panels.music_panel import MusicPanel
+
+    class Track:
+        def __init__(self, title):
+            self.title = title
+
+    class FakeMusic:
+        def __init__(self):
+            self.calls = []
+        def play_online(self, track):
+            self.calls.append(track.title)
+            return track.title == "第二个"
+
+    class ImmediateThread:
+        def __init__(self, target, **kwargs):
+            self.target = target
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr("app.ui.panels.music_panel.threading.Thread", ImmediateThread)
+    p = MusicPanel(music=None)
+    p._music = FakeMusic()
+    p._tracks_by_row = [Track("第一个"), Track("第二个")]
+    p._auto_play_identify_results(p._identify_auto_generation)
+    assert p._music.calls == ["第一个", "第二个"]
+
+
+def test_panel_identify_auto_play_stale_generation_does_not_play(monkeypatch):
+    from app.ui.panels.music_panel import MusicPanel
+
+    class FakeMusic:
+        def __init__(self):
+            self.calls = 0
+        def play_online(self, _track):
+            self.calls += 1
+            return True
+
+    p = MusicPanel(music=None)
+    p._music = FakeMusic()
+    p._tracks_by_row = [SimpleNamespace(title="旧结果")]
+    p._identify_auto_generation = 2
+    p._auto_play_identify_results(1)
+    assert p._music.calls == 0
