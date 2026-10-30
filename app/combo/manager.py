@@ -111,6 +111,10 @@ class ComboManager:
     def is_enabled(self) -> bool:
         return self._enabled
 
+    def is_listener_running(self) -> bool:
+        """区分总开关与底层键盘监听器是否实际可用。"""
+        return self._listener.is_running()
+
     def set_window_gate(self, enabled: bool) -> bool:
         """仅 LoL 前台时触发（默认开，一期不持久化）。"""
         self._window_gate_enabled = bool(enabled)

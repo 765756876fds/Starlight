@@ -21,6 +21,7 @@ from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
 
 import threading
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -78,6 +79,12 @@ class VideoContainer(QWidget):
         self._win_id = None
         self._window = parent              # 播放窗口（转发鼠标活动）
         self.setMouseTracking(True)        # 无按键移动也收 mouseMoveEvent
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        # 使用 Qt/Windows 当前双击间隔，避免固定 220ms 过早执行单击，
+        # 导致一次双击被拆成“暂停后继续”。
+        self._click_timer.setInterval(QApplication.styleHints().mouseDoubleClickInterval())
+        self._click_timer.timeout.connect(self._on_single_click)
         # S5：点击画面 → 焦点到容器（--wid 嵌入后键盘焦点在 Qt 侧；容器聚焦
         # 后按键沿父链冒泡到播放窗口 keyPressEvent —— 键盘控制可用）
         self.setFocusPolicy(Qt.StrongFocus)
@@ -85,7 +92,17 @@ class VideoContainer(QWidget):
     def mousePressEvent(self, event):
         # S5：点画面收焦点（键盘事件到 Qt，不发 mpv——mpv 收不到 --wid 子窗口键盘）
         self.setFocus()
+        if event.button() == Qt.LeftButton:
+            self._click_timer.start()
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self._click_timer.stop()
+        super().mouseDoubleClickEvent(event)
+
+    def _on_single_click(self):
+        if self._window is not None:
+            self._window.toggle_pause()
 
     def native_id(self):
         """容器 HWND（uint32——win32 句柄 32 位，负值 mpv 拒收）。
@@ -629,6 +646,13 @@ class VideoPlayerWindow(QWidget):
             self._position_overlay()
         return ok
 
+    def show_for_playback(self):
+        """显示播放窗口；若被最小化，先恢复为正常窗口。"""
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+
     def attach_current(self):
         """外部已开始播放（语音路径：controller.play 已用注入的 winId 起 mpv），
         窗口负责接管轮询/overlay 呈现。"""
@@ -760,7 +784,9 @@ class VideoPlayerWindow(QWidget):
     def toggle_pause(self):
         try:
             if self._movie.is_playing():
-                self._movie.toggle_pause()
+                paused = self._movie.toggle_pause()
+                if paused is not None:
+                    self.overlay.set_play_icon(paused)
         except Exception:
             pass
 

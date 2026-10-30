@@ -555,6 +555,13 @@ class Application:
 
     def stop(self):
         """doc"""
+        single_instance = getattr(self, "_single_instance", None)
+        if single_instance is not None:
+            try:
+                single_instance.close()
+            except Exception:
+                logger.error("[SingleInstance] close failed", exc_info=True)
+            self._single_instance = None
         if not self._running:
             return
 
@@ -591,6 +598,13 @@ class Application:
             _safe("lol.stop", self.lol.stop)
         if self.music:
             _safe("music.stop", self.music.stop)
+
+        # MovieController 由电影面板懒加载，不能只依赖 SYSTEM_SHUTDOWN
+        # 订阅者存在；显式关闭其 mpv，且失败不影响其他播放器回收。
+        movie_panel = getattr(self, "_movie_panel", None)
+        movie_controller = getattr(movie_panel, "_movie", None)
+        if movie_controller:
+            _safe("movie.close", movie_controller.close)
 
         # 批次1：主动回收本进程拉起的 legacy llama-server（不依赖 atexit）。
         # 外部复用的 ASR 不登记，这里不会杀到它。
@@ -845,7 +859,9 @@ class Application:
                     combo = getattr(self, "combo_manager", None)
                     if combo is None:
                         return {"available": False}
-                    return {"available": True, "enabled": bool(combo.is_enabled())}
+                    return {"available": True,
+                            "enabled": bool(combo.is_enabled()),
+                            "listener_ready": bool(combo.is_listener_running())}
                 key = {"queue": "auto_queue", "accept": "auto_accept",
                        "banpick": "auto_ban"}.get(feature)
                 if key is None or key not in status:
@@ -1206,6 +1222,13 @@ class Application:
 
         app = QApplication.instance() or QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
+        from app.ui.single_instance import SingleInstance
+        self._single_instance = SingleInstance("Starlight", self._wake_main_window)
+        instance_role = self._single_instance.acquire_or_notify()
+        if instance_role != "primary":
+            logger.info("[SingleInstance] role=%s; exiting without business initialization",
+                        instance_role)
+            return 0
         try:
             from app.ui.theme.applier import apply_dark_theme
             apply_dark_theme(app)
@@ -1286,6 +1309,22 @@ class Application:
         finally:
             self.stop()
         return rc
+
+    def _wake_main_window(self):
+        window = getattr(self, "_main_window", None)
+        if window is None:
+            return
+        try:
+            from PySide6.QtCore import Qt
+            if window.isMinimized():
+                window.showNormal()
+            elif not window.isVisible():
+                window.show()
+            window.setWindowState(window.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
+            window.raise_()
+            window.activateWindow()
+        except Exception:
+            logger.error("[SingleInstance] wake window failed", exc_info=True)
 
     def _start_overlay(self):
         try:

@@ -31,7 +31,10 @@ DEFAULT_PREFS = {
     "equip_notify": True,        # 敌方装备语音提醒（持久化）
     "ui_refresh_interval": 500,  # 界面刷新间隔 ms
     "movie_content_filter": "全部",  # 仅影响电影搜索结果展示
+    "movie_content_tag_filter": "全部标签",  # 电影标签筛选
 }
+_MOVIE_FILTERS = {"全部", "正片/剧集", "电影解说", "短剧", "未知"}
+_MOVIE_TAG_FILTERS = {"全部标签", "翻拍"}
 
 
 def _read_json(path: str, default):
@@ -90,6 +93,10 @@ def load_ui_prefs() -> dict:
         merged = dict(DEFAULT_PREFS)
         if isinstance(data, dict):
             merged.update({k: data[k] for k in DEFAULT_PREFS if k in data})
+        if merged["movie_content_filter"] not in _MOVIE_FILTERS:
+            merged["movie_content_filter"] = DEFAULT_PREFS["movie_content_filter"]
+        if merged["movie_content_tag_filter"] not in _MOVIE_TAG_FILTERS:
+            merged["movie_content_tag_filter"] = DEFAULT_PREFS["movie_content_tag_filter"]
         return merged
 
 

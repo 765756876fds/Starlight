@@ -684,17 +684,22 @@ def test_q8_post_success_but_no_state_verify_failed():
     assert any(c == "automation.queue_search_verify_failed" for c, _ in ev)
 
 
-def test_q9_idle_phase_can_create_lobby_without_manual_room():
+def test_q9_idle_phase_waits_for_manual_lobby_without_any_post():
     lcu = _SearchFake()
     lcu.gameflow_phase = "None"
-    lcu.routes = {
-        ("POST", "/lol-lobby/v2/lobby"): (201, {}),
-        ("PUT", "/lol-lobby/v1/lobby/members/localMember/position-preferences"): (204, {}),
-    }
     cfg = AutomationConfig(enabled=True, auto_queue=True)
     svc = _queue_svc(cfg, lcu)
     svc._tick()
-    assert any(c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby" for c in lcu.calls)
+    assert not any(c[0] == "POST" for c in lcu.calls)
+    assert "请先手动进入人机大厅" in svc.get_status_hint()
+
+
+def test_q9b_lobby_client_phase_waits_without_creating_lobby():
+    lcu = _SearchFake()
+    lcu.gameflow_phase = "LobbyClient"
+    q = QueueController(lcu.request_raw, make_events()[1])
+    assert q.try_start("LobbyClient", AutomationConfig()) is False
+    assert not any(c[0] == "POST" for c in lcu.calls)
 
 
 def test_q10_missing_queue_config_skips_all_queue_requests_once():
@@ -712,19 +717,35 @@ def test_q10_missing_queue_config_skips_all_queue_requests_once():
 def test_q11_lobby_create_failure_is_bounded_with_backoff():
     lcu = _SearchFake(post_status=500)
     q = QueueController(lcu.request_raw, make_events()[1])
-    assert q.try_start("None", AutomationConfig()) is False
-    assert q.try_start("None", AutomationConfig()) is False
+    assert q._auto_create_lobby(AutomationConfig(), "None") is False
+    assert q._auto_create_lobby(AutomationConfig(), "None") is False
     posts = [c for c in lcu.calls if c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby"]
     assert len(posts) == 1
     assert q._lobby_retry_at > 0
+
+
+def test_q11b_five_lobby_failures_pause_until_reset():
+    lcu = _SearchFake(post_status=500)
+    lcu.routes = {("POST", "/lol-lobby/v2/lobby"): (500, None)}
+    q = QueueController(lcu.request_raw, make_events()[1])
+    for _ in range(5):
+        q._lobby_retry_at = 0.0
+        q._auto_create_lobby(AutomationConfig(), "None")
+    assert q._lobby_paused is True
+    post_count = len([c for c in lcu.calls if c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby"])
+    q._lobby_retry_at = 0.0
+    q._auto_create_lobby(AutomationConfig(), "None")
+    assert len([c for c in lcu.calls if c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby"]) == post_count
+    q.reset(clear_pause=True)
+    assert q._lobby_paused is False
 
 
 def test_q12_successful_lobby_create_waits_for_lobby_before_retry():
     lcu = _SearchFake()
     lcu.routes = {("POST", "/lol-lobby/v2/lobby"): (201, {})}
     q = QueueController(lcu.request_raw, make_events()[1])
-    assert q.try_start("None", AutomationConfig()) is True
-    assert q.try_start("None", AutomationConfig()) is False
+    assert q._auto_create_lobby(AutomationConfig(), "None") is True
+    assert q._auto_create_lobby(AutomationConfig(), "None") is False
     assert q._lobby_create_pending is True
 
 
@@ -761,7 +782,7 @@ class _DelayedLobbyRequest:
 def test_q14_reset_discards_late_lobby_success():
     request = _DelayedLobbyRequest((201, {}))
     q = QueueController(request, make_events()[1])
-    worker = threading.Thread(target=q.try_start, args=("None", AutomationConfig()))
+    worker = threading.Thread(target=q._auto_create_lobby, args=(AutomationConfig(), "None"))
     worker.start()
     assert request.started.wait(timeout=1)
     q.reset()
@@ -775,7 +796,7 @@ def test_q14_reset_discards_late_lobby_success():
 def test_q15_reenabled_queue_ignores_late_old_result():
     request = _DelayedLobbyRequest((201, {}))
     q = QueueController(request, make_events()[1])
-    old = threading.Thread(target=q.try_start, args=("None", AutomationConfig()))
+    old = threading.Thread(target=q._auto_create_lobby, args=(AutomationConfig(), "None"))
     old.start()
     assert request.started.wait(timeout=1)
     q.reset()
@@ -784,7 +805,7 @@ def test_q15_reenabled_queue_ignores_late_old_result():
     # The stale result cannot block a fresh generation.
     assert q._lobby_create_pending is False
     request.result = (500, {"sessionId": "secret", "token": "secret-token"})
-    q.try_start("None", AutomationConfig())
+    q._auto_create_lobby(AutomationConfig(), "None")
     assert q._lobby_failures == 1
 
 
@@ -818,12 +839,59 @@ def test_q18_lobby_error_log_does_not_include_response_body(capsys):
         500, {"sessionId": "secret-session", "gameId": "secret-game", "token": "secret-token"}
     )}
     q = QueueController(lcu.request_raw, make_events()[1])
-    q.try_start("None", AutomationConfig())
+    q._auto_create_lobby(AutomationConfig(), "None")
     output = capsys.readouterr().out
     assert "status=500" in output
     assert "secret-session" not in output
     assert "secret-game" not in output
     assert "secret-token" not in output
+
+
+def test_q19_lobby_error_log_keeps_only_safe_error_code(capsys):
+    lcu = _SearchFake(post_status=500)
+    lcu.routes = {("POST", "/lol-lobby/v2/lobby"): (
+        500, {"errorCode": "QUEUE_BUSY", "message": "do-not-log-this"}
+    )}
+    q = QueueController(lcu.request_raw, make_events()[1])
+    q._auto_create_lobby(AutomationConfig(), "None")
+    output = capsys.readouterr().out
+    assert "code=unclassified" in output
+    assert "QUEUE_BUSY" not in output
+    assert "do-not-log-this" not in output
+
+
+def test_q20_search_state_failure_does_not_create_lobby():
+    lcu = _SearchFake()
+    lcu.routes = {
+        ("GET", "/lol-lobby/v2/lobby/matchmaking/search-state"): (500, {"errorCode": "UNKNOWN"}),
+        ("POST", "/lol-lobby/v2/lobby"): (201, {}),
+    }
+    q = QueueController(lcu.request_raw, make_events()[1])
+    assert q.try_start("None", AutomationConfig()) is False
+    assert not any(c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby" for c in lcu.calls)
+
+
+def test_q21_internal_reset_preserves_failure_pause():
+    q = QueueController(lambda *_args: (200, {"isCurrentlyInQueue": False}), make_events()[1])
+    q._lobby_paused = True
+    q._lobby_failures = 5
+    q.reset()
+    assert q._lobby_paused is True
+    assert q._lobby_failures == 5
+    q.reset(clear_pause=True)
+    assert q._lobby_paused is False
+    assert q._lobby_failures == 0
+
+
+def test_q22_repeated_four_xx_failures_pause_with_finite_retry():
+    lcu = _SearchFake()
+    lcu.routes = {("POST", "/lol-lobby/v2/lobby"): (400, None)}
+    q = QueueController(lcu.request_raw, make_events()[1])
+    for _ in range(3):
+        q._lobby_retry_at = 0.0
+        q._auto_create_lobby(AutomationConfig(), "None")
+    assert q._lobby_paused is True
+    assert len([c for c in lcu.calls if c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby"]) == 3
 
 
 # ============================================================

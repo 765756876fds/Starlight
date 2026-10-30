@@ -27,6 +27,21 @@ def _build_acct(ongoing_service, services_dict):
         return None
 
 
+class GamePanel(QWidget):
+    """游戏主 TAB 的内部导航容器，页面实例由 MainTabs 统一创建一次。"""
+
+    def __init__(self, pages, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+                                  Tokens.SPACING_SM, Tokens.SPACING_SM)
+        self.tabs = QTabWidget()
+        for page, title in pages:
+            self.tabs.addTab(page, title)
+        self.tabs.setCurrentIndex(0)
+        layout.addWidget(self.tabs)
+
+
 class MainTabs(QWidget):
     def __init__(self, automation_service, cooldown_manager, music,
                  ongoing_service=None, services_dict=None,
@@ -63,9 +78,24 @@ class MainTabs(QWidget):
             lcu_get = lcu.get if lcu and hasattr(lcu, "get") else None
             lcu_post = lcu.post if lcu and hasattr(lcu, "post") else None
             return CurrentGamePanel(snapshot_provider, lcu_get=lcu_get, lcu_post=lcu_post, ongoing_service=ongoing_service)
-        _add(_make_current_game, "当前对局", "current")
-        _add(lambda: AutomationPanel(automation_service, lcu=(services_dict or {}).get("lcu"), combo_manager=combo_manager), "自动化", "automation")
-        _add(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息", "ongoing")
+        game_pages = []
+        def _add_game(make, title, attr):
+            try:
+                page = make()
+                game_pages.append((page, title))
+                self._panels[attr] = page
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                page = QLabel(f"{title} 加载失败: {e}")
+                game_pages.append((page, title))
+
+        _add_game(_make_current_game, "当前对局", "current")
+        _add_game(lambda: AutomationPanel(automation_service, lcu=(services_dict or {}).get("lcu"), combo_manager=combo_manager), "自动化", "automation")
+        _add_game(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息", "ongoing")
+        game_panel = GamePanel(game_pages)
+        self._game_panel = game_panel
+        tabs.addTab(game_panel, "游戏")
         # _add(lambda: CooldownPanel(cooldown_manager), "计时器")  # 隐藏计时器tab
         _add(lambda: MusicPanel(music), "音乐", "music")
         _add(lambda: MoviePanel(movie=None, music=self._music, speech_queue=speech_queue), "电影", "movie")

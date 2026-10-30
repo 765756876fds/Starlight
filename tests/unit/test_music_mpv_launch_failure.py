@@ -10,6 +10,7 @@ terminate() → 有界 wait(3) → 仍存活则 kill()，清理自身异常不�
 断言基于 Fake 进程的方法调用与最终状态，不依赖打印日志文本。
 """
 from types import SimpleNamespace
+import subprocess
 
 import pytest
 
@@ -49,7 +50,9 @@ class FakeProc:
 
     def wait(self, timeout=None):
         self.wait_calls.append(timeout)
-        return 0 if self._dead else None
+        if not self._dead:
+            raise subprocess.TimeoutExpired("fake-mpv", timeout)
+        return 0
 
 
 def _make_ctrl(monkeypatch, proc=None, wait_pipe_raises=None):
@@ -117,6 +120,35 @@ def test_popen_raises_returns_false_safely(monkeypatch):
     assert ctrl._process is None
     assert ctrl._pipe is None
     assert ctrl._running is False
+
+
+def test_stop_process_waits_again_after_forced_kill():
+    """进程拒绝 terminate 时，kill 后仍等待句柄退出，避免遗留子进程。"""
+    proc = FakeProc(stubborn=True)
+    ctrl = MpvController(mpv_path="mpv.exe")
+    ctrl._process = proc
+    ctrl._running = True
+
+    ctrl.stop_process()
+
+    assert proc.terminate_calls == 1
+    assert proc.kill_calls == 1
+    assert proc.wait_calls == [3, 3]
+    assert ctrl._process is None
+    assert ctrl._running is False
+
+
+def test_stop_process_is_idempotent():
+    """重复关闭不会重复操作已回收的进程。"""
+    proc = FakeProc()
+    ctrl = MpvController(mpv_path="mpv.exe")
+    ctrl._process = proc
+
+    ctrl.stop_process()
+    ctrl.stop_process()
+
+    assert proc.terminate_calls == 1
+    assert proc.wait_calls == [3]
 
 
 def test_cleanup_exceptions_do_not_block_reset(monkeypatch):

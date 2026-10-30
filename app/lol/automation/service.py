@@ -107,7 +107,7 @@ class LoLAutomationService:
             if enabled:
                 self._queue_config_warned = False
             else:
-                self._queue.reset()
+                self._queue.reset(clear_pause=True)
         if enabled:
             self._ensure_worker_running()
 
@@ -279,6 +279,8 @@ class LoLAutomationService:
                 hints.append("将自动开始匹配")
             elif phase == "Matchmaking":
                 hints.append("已在排队中")
+            elif phase in ("None", "LobbyClient"):
+                hints.append("请先手动进入人机大厅，进入后将自动开始匹配")
             elif cfg.queue_configured:
                 hints.append("等待进入组队房间")
         if cfg.auto_accept:
@@ -304,6 +306,8 @@ class LoLAutomationService:
         else:
             if cfg.auto_queue and cfg.queue_configured:
                 self._queue.try_start(phase, cfg)
+                if self._queue.is_lobby_paused():
+                    self._tick_hint = "自动排队已暂停：连续创建大厅失败，请关闭后重新开启"
             if phase == "ChampSelect":
                 # 日志降噪：仅首次进入选人阶段打一次（离开时复位），不再每 tick 刷屏
                 if cfg.auto_ban or cfg.auto_pick:

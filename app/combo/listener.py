@@ -82,6 +82,10 @@ class ComboListener:
             self._remove_hook = None
             self._hooked = False
 
+    def is_running(self) -> bool:
+        """只读报告监听器是否已成功建立 hook。"""
+        return bool(self._started and self._hooked and self._remove_hook is not None)
+
     def _callback(self, event) -> None:
         self._last_cb_ts = time.monotonic()  # 任何按键都证明 hook 存活
         try:

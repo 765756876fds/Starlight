@@ -14,7 +14,11 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 import zipfile
+from pathlib import Path
+from collections import Counter
+from difflib import SequenceMatcher
 
 import requests
 
@@ -25,6 +29,7 @@ from ..core.path_resolve import PROJECT_ROOT
 from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
 from .source_manager import MovieSourceManager, _SingleSourceManager
+from .history import MovieHistory
 
 logger = get_logger()
 
@@ -162,6 +167,11 @@ class MovieController:
         self._last_idle = True
         self._external_url_mode = False  # play() 正常剧集模式；play_external_url 置 True
         self._external_url_seen_active = False  # 外部 URL：是否已观察到 mpv 离开 idle
+        history_db = self._config.get("movie.history_db") or os.path.join(
+            self._config.get("app.data_dir", str(PROJECT_ROOT / "data")), "movie_history.db")
+        self.history = MovieHistory(history_db)
+        self._pending_history = None
+        self._history_recorded_gen = None
         self._sub_searched = set()
         # 崩溃自愈状态（对齐音乐链 _try_restart_mpv：防重入 + 3 次/5 分钟上限）
         self._recover_lock = threading.Lock()
@@ -320,8 +330,10 @@ class MovieController:
                 for it in items:
                     it["_source"] = src["name"]
                     try:
-                        from .content_classification import classify_content
-                        it["content_category"] = classify_content(it)
+                        from .content_classification import classify_content_info
+                        info = classify_content_info(it)
+                        it["content_classification"] = info
+                        it["content_category"] = info["category"]
                     except Exception:
                         it["content_category"] = "未知"
                 self.last_search_source = src["name"]
@@ -450,8 +462,118 @@ class MovieController:
         self._last_idle = False  # 新播放开始，等播完再触发连播
         self._external_url_mode = False  # 切回正常剧集模式
         self._external_url_seen_active = False
+        self._pending_history = (dict(item), str(url))
+        self._history_recorded_gen = None
         self._write_state(playing=True, paused=False)
+        if item.get("local_file"):
+            self._load_local_subtitle(str(url))
         return True
+
+    @staticmethod
+    def _local_subtitle(video_path: str) -> str | None:
+        path = Path(video_path)
+        if not path.is_file():
+            return None
+        priorities = {".srt": 0, ".ass": 1, ".ssa": 2, ".vtt": 3}
+        try:
+            candidates = [p for p in path.parent.iterdir()
+                          if p.is_file() and p.suffix.casefold() in priorities]
+        except OSError:
+            return None
+        if not candidates:
+            return None
+
+        video_stem = MovieController._subtitle_stem(path.name)
+        # 完全同名永远优先；格式优先级只在同名字幕之间起作用。
+        exact = [p for p in candidates
+                 if MovieController._subtitle_stem(p.name) == video_stem]
+        if exact:
+            exact.sort(key=lambda p: priorities[p.suffix.casefold()])
+            return str(exact[0])
+
+        scored = []
+        for candidate in candidates:
+            score = MovieController._subtitle_similarity(video_stem,
+                                                         MovieController._subtitle_stem(candidate.name))
+            if score is not None:
+                category, ratio, common = score
+                scored.append((category, ratio, common,
+                               -priorities[candidate.suffix.casefold()], candidate))
+        if not scored:
+            return None
+        scored.sort(key=lambda value: value[:4], reverse=True)
+        # 同一匹配类别下相似度过近无法安全区分，保持静默不加载；
+        # 格式优先级只用于相似度已经明确区分不了的实质同等候选。
+        best = scored[0]
+        if len(scored) > 1:
+            runner_up = scored[1]
+            if runner_up[0] == best[0] and (best[1] - runner_up[1]) <= 0.05:
+                return None
+        return str(best[4])
+
+    @staticmethod
+    def _subtitle_stem(name: str) -> str:
+        stem = Path(name).stem
+        stem = unicodedata.normalize("NFKC", stem).casefold()
+        return "".join(ch for ch in stem if ch.isalnum())
+
+    @staticmethod
+    def _subtitle_similarity(video_stem: str, subtitle_stem: str):
+        """Return (rule priority, sequence ratio, common count), or None."""
+        if not video_stem or not subtitle_stem:
+            return None
+        ratio = SequenceMatcher(None, video_stem, subtitle_stem).ratio()
+        # 仅字符相同但顺序/整体差异很大时，不认定为同一视频。
+        if ratio < 0.5:
+            return None
+        # 只统计英文字母；str.isalpha() 会把中文也算入字母。
+        letters_a = Counter(ch for ch in video_stem if "a" <= ch <= "z")
+        letters_b = Counter(ch for ch in subtitle_stem if "a" <= ch <= "z")
+        common_letters = sum((letters_a & letters_b).values())
+        if common_letters > 4:
+            return (3, ratio, common_letters)
+        digits_a = Counter(ch for ch in video_stem if ch.isdigit())
+        digits_b = Counter(ch for ch in subtitle_stem if ch.isdigit())
+        common_digits = sum((digits_a & digits_b).values())
+        if common_digits >= 3:
+            return (2, ratio, common_digits)
+        text_a = Counter(ch for ch in video_stem if "\u4e00" <= ch <= "\u9fff")
+        text_b = Counter(ch for ch in subtitle_stem if "\u4e00" <= ch <= "\u9fff")
+        common_text = sum((text_a & text_b).values())
+        if common_text > 2:
+            return (1, ratio, common_text)
+        return None
+
+    def _load_local_subtitle(self, video_path: str) -> str | None:
+        subtitle = self._local_subtitle(video_path)
+        if not subtitle:
+            return None
+        try:
+            self.mpv.sub_add(subtitle)
+            logger.info("[Movie] local subtitle loaded: %s", os.path.basename(subtitle))
+            return subtitle
+        except Exception as e:
+            logger.warning("[Movie] local subtitle load failed: %s", type(e).__name__)
+            return None
+
+    def _record_history_if_started(self, now_idle):
+        if now_idle is not False or not self._pending_history:
+            return
+        if self._history_recorded_gen == self._playback_gen:
+            return
+        item, replay_value = self._pending_history
+        media_type = "local" if item.get("local_file") else "online"
+        key = (os.path.normcase(os.path.abspath(replay_value)) if media_type == "local"
+               else str(item.get("vod_id") or replay_value))
+        try:
+            self.history.record(
+                media_key=key, title=str(item.get("vod_name") or "未命名视频"),
+                media_type=media_type, replay_value=replay_value,
+                source_name=str(item.get("source_name") or ""),
+                cover_url=str(item.get("vod_pic") or ""))
+            self._history_recorded_gen = self._playback_gen
+        except Exception as e:
+            logger.warning("[Movie] history record failed: %s", type(e).__name__)
 
     def play_external_url(self, url: str, title: str = "外部流") -> bool:
         """播放任意 URL（解析出来的外链，无 vod_id/剧集结构）。
@@ -525,6 +647,7 @@ class MovieController:
         if not self.mpv.is_running():
             return
         now_idle = self.mpv.get_idle_active()
+        self._record_history_if_started(now_idle)
         # IPC 静默检测：None = 进程活但 IPC 无响应
         if now_idle is None:
             self._ipc_fail_streak += 1
@@ -630,7 +753,7 @@ class MovieController:
         - MPV 本就未运行 → 无进程可停，按既有语义幂等清理播放上下文。
         """
         if self._stopping:
-            return
+            return None
         self._stopping = True
         try:
             if self.mpv.is_running():
@@ -639,7 +762,7 @@ class MovieController:
                 except Exception as e:
                     logger.error(f"[Movie] stop: mpv.stop() 失败，停止状态未确认: {e!r}")
                     self._last_idle = True
-                    return
+                    return False
                 if result is True:
                     self._current = None
                     self._current_index = None
@@ -655,13 +778,14 @@ class MovieController:
                         logger.error("[Movie] stop: mpv.stop() 返回错误响应，停止未执行，保留播放上下文")
                     else:
                         logger.error("[Movie] stop: mpv.stop() 结果未确认（IPC 超时/管道失效/无响应），保留播放上下文")
-                    return
+                    return False
             else:
                 # MPV 本就未运行：无进程可停，幂等清理播放上下文（既有语义，保持不变）
                 self._current = None
                 self._current_index = None
                 self._last_idle = True
                 self._write_state(playing=False, paused=False)
+            return True
         finally:
             self._stopping = False
 
@@ -818,7 +942,24 @@ class MovieController:
             self._pausing = False
 
     def toggle_pause(self):
+        """切换暂停并同步共享播放状态；返回 True=已暂停、False=已继续。"""
+        try:
+            paused = self.mpv.get_property("pause", timeout=0.5)
+        except Exception:
+            paused = None
+        if paused is True:
+            self.mpv.play()
+            if self._current is not None:
+                self._write_state(playing=True, paused=False)
+            return False
+        if paused is False:
+            self.mpv.pause()
+            if self._current is not None:
+                self._write_state(playing=True, paused=True)
+            return True
+        # 兼容无法查询 pause 属性的替身/旧接口，但此时不能伪造状态。
         self.mpv.toggle_pause()
+        return None
 
     def resume(self):
         self.mpv.play()
@@ -849,6 +990,29 @@ class MovieController:
     def current_item(self):
         """当前播放条目（面板字幕按钮取片名用）。"""
         return self._current
+
+    def get_history(self, limit=50):
+        return self.history.list(limit)
+
+    def delete_history(self, row_id):
+        return self.history.delete(row_id)
+
+    def history_item(self, row):
+        """将历史记录转换为现有 MoviePanel 播放入口可接受的条目。"""
+        if not isinstance(row, dict):
+            return None
+        value = str(row.get("replay_value") or "")
+        if not value or (row.get("media_type") == "local" and not os.path.isfile(value)):
+            return None
+        return {"vod_name": row.get("title") or "未命名视频",
+                "first_url": value,
+                "local_file": row.get("media_type") == "local",
+                "vod_id": row.get("media_key") or ""}
+
+    def play_history_item(self, row):
+        """兼容旧调用者；UI 播放优先使用 history_item + _play_item。"""
+        item = self.history_item(row)
+        return bool(item and self.play(item))
 
     def close(self):
         if self._subscribed:

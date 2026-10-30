@@ -68,6 +68,9 @@ def test_first_play_url():
 def _make_ctrl(**kw):
     with patch("app.movie.movie_controller.MpvController") as M:
         ctrl = MovieController(source_url="http://source.test/api", music=kw.pop("music", None))
+        # 模拟真实 mpv JSON IPC：loadfile 成功返回 error=success 的响应字典。
+        # MagicMock 不是有效的协议响应，生产代码应将其视为未确认/失败。
+        M.return_value.loadfile.return_value = {"error": "success"}
         return ctrl, M.return_value
 
 

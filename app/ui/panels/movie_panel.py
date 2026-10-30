@@ -23,6 +23,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -44,7 +45,7 @@ from app.core.logger import get_logger
 from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 from ...movie import douban_rank
-from ...movie.content_classification import classify_content
+from ...movie.content_classification import classify_content, classify_content_info
 from ...movie.rank_providers import TgmengProvider, default_provider
 from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..dialogs.parse_link_dialog import ParseLinkDialog
@@ -575,6 +576,12 @@ class MoviePanel(QWidget):
         self.btn_parse_link = QPushButton("🔗 链接解析")
         self.btn_parse_link.setToolTip("粘贴视频网页链接（爱奇艺/腾讯等）→ 后台解析出 m3u8 地址")
         search_row.addWidget(self.btn_parse_link)
+        self.btn_local_video = QPushButton("打开本地视频")
+        self.btn_local_video.setToolTip("选择电脑上的视频文件，用现有电影播放器播放")
+        search_row.addWidget(self.btn_local_video)
+        self.btn_movie_history = QPushButton("播放历史")
+        self.btn_movie_history.setToolTip("查看并重新播放最近观看的电影")
+        search_row.addWidget(self.btn_movie_history)
         root.addLayout(search_row)
 
         # 状态行：搜索状态 + 当前源
@@ -587,15 +594,24 @@ class MoviePanel(QWidget):
         status_row.addWidget(self.lbl_source)
         root.addLayout(status_row)
         self.combo_content_filter = QComboBox()
-        self.combo_content_filter.addItems(["全部", "正片/剧集", "电影解说", "短剧", "翻拍短剧", "未知"])
+        self.combo_content_filter.addItems(["全部", "正片/剧集", "电影解说", "短剧", "未知"])
+        self.combo_content_tag_filter = QComboBox()
+        self.combo_content_tag_filter.addItems(["全部标签", "翻拍"])
         try:
             from ..settings_store import load_ui_prefs, save_ui_prefs
-            self.combo_content_filter.setCurrentText(load_ui_prefs().get("movie_content_filter", "全部"))
+            prefs = load_ui_prefs()
+            self.combo_content_filter.setCurrentText(prefs.get("movie_content_filter", "全部"))
+            self.combo_content_tag_filter.setCurrentText(
+                prefs.get("movie_content_tag_filter", "全部标签"))
             self.combo_content_filter.currentTextChanged.connect(
                 lambda value: (save_ui_prefs({"movie_content_filter": value}), self._apply_content_filter()))
+            self.combo_content_tag_filter.currentTextChanged.connect(
+                lambda value: (save_ui_prefs({"movie_content_tag_filter": value}), self._apply_content_filter()))
         except Exception:
             self.combo_content_filter.currentTextChanged.connect(lambda _: self._apply_content_filter())
+            self.combo_content_tag_filter.currentTextChanged.connect(lambda _: self._apply_content_filter())
         status_row.addWidget(self.combo_content_filter)
+        status_row.addWidget(self.combo_content_tag_filter)
 
         # 结果区：列表/海报 双视图（QStackedWidget，默认海报墙）
         self.stack_results = QStackedWidget()
@@ -744,6 +760,8 @@ class MoviePanel(QWidget):
         self.btn_view.clicked.connect(self._on_toggle_view)
         self.btn_source.clicked.connect(self._on_source_manage)
         self.btn_parse_link.clicked.connect(self._on_parse_link)
+        self.btn_local_video.clicked.connect(self._open_local_video)
+        self.btn_movie_history.clicked.connect(self._show_movie_history)
         self.btn_toggle.clicked.connect(self._on_toggle)
         self.btn_stop.clicked.connect(self._on_stop)
         self.slider_pos.sliderReleased.connect(self._on_seek)
@@ -917,11 +935,15 @@ class MoviePanel(QWidget):
                 self.lbl_status.setText(f"找到 {n} 部")
 
     def _category_of(self, it):
-        category = it.get("content_category")
+        info = it.get("content_classification")
+        category = (info or {}).get("category") if isinstance(info, dict) else None
+        category = category or it.get("content_category")
         if category:
             return category
         try:
-            category = classify_content(it)
+            info = classify_content_info(it)
+            category = info["category"]
+            it["content_classification"] = info
             it["content_category"] = category
             return category
         except Exception:
@@ -929,10 +951,22 @@ class MoviePanel(QWidget):
 
     def _filtered_content_results(self, result):
         selected = self.combo_content_filter.currentText() if hasattr(self, "combo_content_filter") else "全部"
+        tag_selected = (self.combo_content_tag_filter.currentText()
+                        if hasattr(self, "combo_content_tag_filter") else "全部标签")
         items = list(result or [])
-        if selected == "全部":
-            return items
-        return [it for it in items if self._category_of(it) == selected]
+        out = []
+        for it in items:
+            if selected != "全部" and self._category_of(it) != selected:
+                continue
+            if tag_selected != "全部标签":
+                info = it.get("content_classification")
+                if not isinstance(info, dict):
+                    info = classify_content_info(it)
+                    it["content_classification"] = info
+                if tag_selected not in info.get("tags", []):
+                    continue
+            out.append(it)
+        return out
 
     def _apply_content_filter(self):
         if hasattr(self, "_last_search_result"):
@@ -948,13 +982,97 @@ class MoviePanel(QWidget):
             parts.append(str(it["vod_year"]))
         if it.get("vod_remarks"):
             parts.append(str(it["vod_remarks"]))
-        parts.append(f"类型：{it.get('content_category') or classify_content(it)}")
+        parts.append(f"类型：{self._category_of(it)}")
+        info = it.get("content_classification")
+        if isinstance(info, dict) and info.get("tags"):
+            parts.append("标签：" + ", ".join(info["tags"]))
         return "  ".join(p for p in parts if p)
 
     def _on_search_failed(self, err: str):
         self.lbl_status.setText(f"搜索失败: {err}")
 
     # ---- 播放 ----
+
+    def _open_local_video(self):
+        """选择本地视频并复用现有电影播放入口。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "打开本地视频",
+            "",
+            "视频文件 (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.m3u8);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        path = os.path.abspath(path)
+        if not os.path.isfile(path) or not os.access(path, os.R_OK):
+            self.lbl_status.setText("无法打开本地视频：文件不存在或不可访问")
+            return
+        item = {
+            "vod_name": os.path.basename(path),
+            "first_url": path,
+            "local_file": True,
+        }
+        try:
+            self._play_item(item, index=None)
+            if self._movie.is_playing():
+                self.lbl_status.setText("正在播放本地视频")
+        except Exception as e:
+            self.lbl_status.setText(f"本地视频播放失败: {e}")
+
+    def _show_movie_history(self):
+        dlg = GlassDialog("电影播放历史", self)
+        dlg.resize(620, 460)
+        lay = dlg.body_layout
+        lst = QListWidget()
+        for row in self._movie.get_history(limit=50):
+            kind = "本地" if row.get("media_type") == "local" else "在线"
+            item = QListWidgetItem(f"[{kind}] {row.get('title') or '未命名视频'}", lst)
+            item.setData(Qt.UserRole, row)
+        lay.addWidget(lst)
+        actions = QHBoxLayout()
+        play_btn = QPushButton("播放选中")
+        delete_btn = QPushButton("删除选中")
+        close_btn = QPushButton("关闭")
+        actions.addWidget(play_btn)
+        actions.addWidget(delete_btn)
+        actions.addStretch(1)
+        actions.addWidget(close_btn)
+        lay.addLayout(actions)
+
+        def current_row():
+            current = lst.currentItem()
+            return current.data(Qt.UserRole) if current is not None else None
+
+        def play_selected():
+            row = current_row()
+            if row is None:
+                return
+            self._play_movie_history_row(row, dlg)
+
+        def delete_selected():
+            row = current_row()
+            if row is not None and self._movie.delete_history(row.get("id")):
+                lst.takeItem(lst.currentRow())
+
+        play_btn.clicked.connect(play_selected)
+        lst.itemDoubleClicked.connect(lambda _item: play_selected())
+        delete_btn.clicked.connect(delete_selected)
+        close_btn.clicked.connect(dlg.reject)
+        dlg.exec()
+
+    def _play_movie_history_row(self, row, dialog=None):
+        """历史按钮和双击共用的播放入口。"""
+        item = self._movie.history_item(row)
+        if item is None:
+            self.lbl_status.setText("历史记录对应的视频已不存在或无法播放")
+            return False
+        # 必须复用普通播放入口：它负责显示/复用 VideoPlayerWindow、注入
+        # embed wid 以及接管窗口轮询；直接调用 controller.play 会只有声音。
+        self._play_item(item)
+        if dialog is not None:
+            dialog.accept()
+        self.lbl_status.setText("已开始播放历史视频")
+        return True
 
     def _on_item_activated(self, item):
         # 双击 → 直接播放（先取消单击详情定时器，防双击误触详情页）
@@ -1188,7 +1306,7 @@ class MoviePanel(QWidget):
                 self._ensure_video_win()
             if self._video_win is None:
                 return
-            self._video_win.show()
+            self._video_win.show_for_playback()
             QTimer.singleShot(0, self._video_win.raise_topmost)
             self._video_win.attach_current()
             self._embed_playing = True
@@ -1376,7 +1494,7 @@ class MoviePanel(QWidget):
         show 进 singleShot 回调——当前 slot 已先返回。窗口置顶用 SetWindowPos(HWND_TOPMOST)
         异步恢复（Qt raise_ 同步仍是卡死源；不恢复 activateWindow——宿主前台锁无效）。"""
         try:
-            self._video_win.show()
+            self._video_win.show_for_playback()
             # 宿主盖窗口修复：置顶异步执行（只动 z-order 不碰前台锁，宿主喘息后置顶）
             QTimer.singleShot(0, self._video_win.raise_topmost)
             ok = self._video_win.play(it, index=index)

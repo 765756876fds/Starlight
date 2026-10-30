@@ -37,6 +37,8 @@ def _mk_ctrl():
     """真 MovieController + mock MpvController（构造即返回 mock 实例）。"""
     with patch("app.movie.movie_controller.MpvController") as M:
         ctrl = MovieController(source_url="http://source.test/api", config=None)
+        # 模拟真实 mpv JSON IPC 成功响应；MagicMock 不是有效协议响应。
+        M.return_value.loadfile.return_value = {"error": "success"}
         return ctrl, M.return_value
 
 

@@ -381,7 +381,9 @@ def test_dialog_rows_and_add(tmp_path):
     assert dlg.list_widget.count() == 9
     dlg.inp_name.setText("自建源B")
     dlg.inp_url.setText("https://b.com/api.php/provide/vod/")
-    with patch.object(QMessageBox, "information"):
+    # _add_source 使用 movie_source_dialog 模块导入的自定义 glass_info，
+    # patch QMessageBox.information 不会拦截其模态对话框。
+    with patch("app.ui.dialogs.movie_source_dialog.glass_info"):
         dlg._add_source()
     assert any(s["name"] == "自建源B" for s in m.get_all_sources())
     assert dlg.list_widget.count() == 10
@@ -397,7 +399,7 @@ def test_dialog_set_active_and_delete(tmp_path):
     assert m.get_active_name() == "量子资源"
     # 删除（_set_active 重建列表后需重新选中；mock 确认弹窗 Yes）
     dlg.list_widget.setCurrentItem(dlg.list_widget.item(0))
-    with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+    with patch("app.ui.dialogs.movie_source_dialog.glass_question", return_value=True):
         dlg._delete_selected()
     assert not any(s["name"] == "量子资源" for s in m.get_all_sources())
 

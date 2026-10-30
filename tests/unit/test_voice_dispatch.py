@@ -67,6 +67,46 @@ class TestVoiceRuntimeDispatch:
         cmd = rt.command_bus.execute.call_args[0][0]
         assert cmd.params["mode"] == "repeat_one"
 
+    def test_speed_without_parameter_prompts_without_dispatch(self):
+        rt = self._make_runtime()
+        rt._enqueue_speak = MagicMock()
+
+        rt._execute_intent(Intent(CommandType.MUSIC_SET_SPEED, params={}), "倍速播放")
+
+        rt.command_bus.execute.assert_not_called()
+        rt._enqueue_speak.assert_called_once_with(
+            "请说出要设置的倍速，例如一点五倍", "voice_music_speed")
+
+    def test_speed_dispatches_once_and_reports_execution_failure(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = False
+        rt._enqueue_speak = MagicMock()
+
+        rt._execute_intent(
+            Intent(CommandType.MUSIC_SET_SPEED, params={"speed": 1.5}),
+            "倍速播放一点五倍",
+        )
+
+        rt.command_bus.execute.assert_called_once()
+        cmd = rt.command_bus.execute.call_args[0][0]
+        assert cmd.params == {"speed": 1.5}
+        rt._enqueue_speak.assert_called_once_with(
+            "暂不支持该倍速，请使用支持的档位", "voice")
+
+    def test_speed_execution_exception_reports_failure_once(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.side_effect = RuntimeError("player unavailable")
+        rt._enqueue_speak = MagicMock()
+
+        rt._execute_intent(
+            Intent(CommandType.MUSIC_SET_SPEED, params={"speed": 1.5}),
+            "设置一点五倍速",
+        )
+
+        rt.command_bus.execute.assert_called_once()
+        rt._enqueue_speak.assert_called_once_with(
+            "暂不支持该倍速，请使用支持的档位", "voice")
+
     def test_automation_feedback_distinguishes_disconnected_client(self):
         rt = self._make_runtime()
         rt.command_bus.execute.return_value = {
@@ -125,6 +165,47 @@ class TestVoiceRuntimeDispatch:
                                   params={"feature": "combo"}), "查询自动连招状态")
         rt._enqueue_speak.assert_called_once_with(
             "暂时无法确认自动连招状态", "voice_automation_status")
+
+    def test_combo_status_reports_listener_unavailable(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = {
+            "available": True, "enabled": True, "listener_ready": False,
+        }
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent(CommandType.AUTO_STATUS_QUERY,
+                                  params={"feature": "combo"}), "查询自动连招状态")
+        rt._enqueue_speak.assert_called_once_with(
+            "自动连招已开启，但键盘监听器不可用", "voice_automation_status")
+
+    def test_unknown_command_feedback_is_throttled(self):
+        rt = self._make_runtime()
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent("system.unknown"), "这是一条无法识别的指令")
+        rt._execute_intent(Intent("system.unknown"), "这是一条无法识别的指令")
+        rt._enqueue_speak.assert_called_once_with(
+            "没有听懂这条指令，请说得更具体一些", "voice_unknown")
+
+    def test_empty_unknown_input_is_silent(self):
+        rt = self._make_runtime()
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent("system.unknown"), "")
+        rt._enqueue_speak.assert_not_called()
+
+    def test_movie_stop_success_reports_once(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = True
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent(CommandType.MOVIE_STOP), "停止电影")
+        rt.command_bus.execute.assert_called_once()
+        rt._enqueue_speak.assert_called_once_with("电影已停止", "voice_movie_control")
+
+    def test_movie_stop_failure_reports_without_retry(self):
+        rt = self._make_runtime()
+        rt.command_bus.execute.return_value = False
+        rt._enqueue_speak = MagicMock()
+        rt._execute_intent(Intent(CommandType.MOVIE_STOP), "停止电影")
+        rt.command_bus.execute.assert_called_once()
+        rt._enqueue_speak.assert_called_once_with("电影操作未成功", "voice_movie_control")
 
     def test_cooldown_cancel_feedback(self):
         rt = self._make_runtime()

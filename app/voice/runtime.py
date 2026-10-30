@@ -888,6 +888,8 @@ class VoiceRuntime:
             label = labels.get(params.get("feature"), "游戏自动化")
             if not isinstance(result, dict) or not result.get("available"):
                 message = f"暂时无法确认{label}状态"
+            elif params.get("feature") == "combo" and result.get("enabled") and not result.get("listener_ready", True):
+                message = "自动连招已开启，但键盘监听器不可用"
             elif result.get("enabled") and result.get("client_ready") is False:
                 message = f"{label}已开启，但游戏客户端当前未连接"
             elif result.get("enabled"):
@@ -929,6 +931,8 @@ class VoiceRuntime:
                 ok = False
             if ok is False:
                 self._enqueue_speak("电影操作未成功", "voice_movie_control")
+            elif intent_type == CommandType.MOVIE_STOP and ok is True:
+                self._enqueue_speak("电影已停止", "voice_movie_control")
 
         elif intent_type == CommandType.PLAYER_NEXT:
             # V2-4.3：裸"下一个"上下文仲裁：仅当一边明确在播、另一边明确暂停才执行。
@@ -958,7 +962,6 @@ class VoiceRuntime:
                              CommandType.MUSIC_CLEANUP,
                              CommandType.MUSIC_HIGHLIGHT_MODE,
                              CommandType.MUSIC_SET_PLAY_MODE,
-                             CommandType.MUSIC_SET_SPEED,
                              CommandType.MUSIC_CLEAR_QUEUE,
                              CommandType.MUSIC_STOP,
                              CommandType.MUSIC_SEEK,
@@ -992,11 +995,15 @@ class VoiceRuntime:
             if "speed" not in params or params.get("speed") is None:
                 self._enqueue_speak("请说出要设置的倍速，例如一点五倍", "voice_music_speed")
                 return
-            ok = self.command_bus.execute(Command(
-                command_type=intent_type,
-                params=params,
-                source="voice",
-            ))
+            try:
+                ok = self.command_bus.execute(Command(
+                    command_type=intent_type,
+                    params=params,
+                    source="voice",
+                ))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
             if not ok:
                 self._enqueue_speak("暂不支持该倍速，请使用支持的档位", "voice")
 
@@ -1124,6 +1131,14 @@ class VoiceRuntime:
                 params=params,
                 source="voice",
             ))
+
+        elif intent_type == "system.unknown":
+            import time as _time
+            now = _time.monotonic()
+            last = getattr(self, "_last_unknown_feedback", 0.0)
+            if len((original_text or "").strip()) >= 2 and now - last >= 3.0:
+                self._last_unknown_feedback = now
+                self._enqueue_speak("没有听懂这条指令，请说得更具体一些", "voice_unknown")
 
         # 发布命令执行事件
         self.event_bus.publish(Event(

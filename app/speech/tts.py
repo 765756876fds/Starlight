@@ -101,6 +101,7 @@ class TTSController:
 
         # 播放完成监听线程
         self._watcher_thread: threading.Thread | None = None
+        self._stop_thread: threading.Thread | None = None
 
         # 停止标志
         self._stop_flag = threading.Event()
@@ -156,6 +157,19 @@ class TTSController:
         """停止 TTS"""
         self._running = False
         self.stop_playback()
+
+        # stop_playback 为了不阻塞普通播报调用而异步终止 mpv；应用退出时
+        # 必须等待这条清理线程完成，避免主进程退出后留下孤儿 mpv。
+        stop_thread = self._stop_thread
+        if stop_thread is not None and stop_thread is not threading.current_thread():
+            stop_thread.join(timeout=3)
+
+        # 若异步清理线程超时，退出路径再同步确认一次；不能把“已发起
+        # terminate”误当成 mpv 已经退出。
+        with self._lock:
+            process = self._play_process
+        if process is not None and not self._terminate_process(process):
+            print("[TTS] 退出时无法确认 mpv 已停止")
 
         if self._event_loop:
             self._event_loop.call_soon_threadsafe(self._event_loop.stop)
@@ -541,25 +555,40 @@ class TTSController:
         proc = self._play_process
         cur_file = self._current_file
         gen = self._generation
-        threading.Thread(
+        stop_thread = threading.Thread(
             target=self._async_stop_playback,
             args=(proc, cur_file, gen),
             daemon=True,
             name="tts-stop",
-        ).start()
+        )
+        self._stop_thread = stop_thread
+        stop_thread.start()
+
+    @staticmethod
+    def _terminate_process(process) -> bool:
+        """有界终止一个由本控制器启动的 mpv，并返回是否确认退出。"""
+        poll = getattr(process, "poll", None)
+        try:
+            if poll is not None and poll() is not None:
+                return True
+            process.terminate()
+            process.wait(timeout=2)
+            return True if poll is None else poll() is not None
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+                process.wait(timeout=1)
+            except Exception:
+                pass
+            return True if poll is None else poll() is not None
+        except Exception:
+            return True if poll is None else poll() is not None
 
     def _async_stop_playback(self, proc, cur_file, gen):
         """异步执行真正的终止 / 清理 / 收尾（不阻塞任何调用方）。"""
-        if proc is not None:
-            try:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=1)
-            except Exception as e:
-                print(f"[TTS] 停止播放失败: {e}")
+        stopped = proc is None or self._terminate_process(proc)
+        if not stopped:
+            print("[TTS] 停止播放失败：无法确认 mpv 已退出")
 
         if cur_file:
             try:
@@ -569,7 +598,7 @@ class TTSController:
 
         with self._lock:
             # 只清理本线程捕获的引用（新 speak 已复用的不碰）
-            if self._play_process is proc:
+            if self._play_process is proc and stopped:
                 self._play_process = None
             if self._current_file is cur_file:
                 self._current_file = None
@@ -580,6 +609,9 @@ class TTSController:
         publish_stopped = False
         with self._lock:
             if self._generation != gen:
+                return
+            if not stopped:
+                self._set_state(TTSState.STOPPING)
                 return
             self._set_state(TTSState.IDLE)
             if not self._finished_published:

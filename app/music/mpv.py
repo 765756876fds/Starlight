@@ -427,6 +427,10 @@ class MpvController:
                 self._process.kill()
             except Exception:
                 pass
+            try:
+                self._process.wait(timeout=3)
+            except Exception:
+                pass
         self._process = None
 
     def stop_process(self):
@@ -437,13 +441,19 @@ class MpvController:
             except Exception:
                 pass
             self._pipe = None
-        if self._process:
+        process = self._process
+        if process:
             try:
-                self._process.terminate()
-                self._process.wait(timeout=3)
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=3)
             except Exception:
                 try:
-                    self._process.kill()
+                    process.kill()
+                except Exception:
+                    pass
+                try:
+                    process.wait(timeout=3)
                 except Exception:
                     pass
             self._process = None

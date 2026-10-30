@@ -268,6 +268,17 @@ class TestVideoPlayerWindow:
         finally:
             w._timer.stop()
 
+    def test_show_for_playback_restores_minimized_window(self):
+        from app.ui.widgets.video_player_window import VideoPlayerWindow
+        w = VideoPlayerWindow(_FakeCtl())
+        try:
+            w.showMinimized()
+            w.show_for_playback()
+            assert not w.isMinimized()
+            assert w.isVisible()
+        finally:
+            w._timer.stop()
+
     def test_close_stops_and_hides(self):
         from app.ui.widgets.video_player_window import VideoPlayerWindow
         ctl = _FakeCtl()

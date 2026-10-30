@@ -550,6 +550,30 @@ class TestOverlayShowHide:
         finally:
             w._timer.stop()
 
+    def test_container_single_click_toggles_once(self):
+        w, ctl = _mk_window()
+        try:
+            w.container._on_single_click()
+            assert ctl.toggles == 1
+            # 双击事件会取消延迟中的单击，不额外调用控制器。
+            w.container._click_timer.start()
+            assert w.container._click_timer.isActive() is True
+            w.container.mouseDoubleClickEvent(self._mk_mouse_move((5, 5)))
+            assert w.container._click_timer.isActive() is False
+            assert ctl.toggles == 1
+        finally:
+            w._timer.stop()
+            w.container._click_timer.stop()
+
+    def test_container_click_delay_uses_system_double_click_interval(self):
+        w, _ = _mk_window()
+        try:
+            from PySide6.QtWidgets import QApplication
+            assert w.container._click_timer.interval() == QApplication.styleHints().mouseDoubleClickInterval()
+        finally:
+            w._timer.stop()
+            w.container._click_timer.stop()
+
     def test_container_mouse_move_forwards_to_window(self):
         """容器 mouseMove（穿透后画面区事件）→ 转发窗口公开接口 → overlay 浮现 +
         重置 3s 隐藏计时；容器自身 cursor 复原。"""
