@@ -596,6 +596,8 @@ class _SearchFake:
 
     def request_raw(self, method, endpoint, data=None):
         self.calls.append((method, endpoint, data))
+        if hasattr(self, "routes") and (method, endpoint) in self.routes:
+            return self.routes[(method, endpoint)]
         if endpoint == "/lol-lobby/v2/lobby/matchmaking/search-state":
             return 200, {"isCurrentlyInQueue": self.in_queue}
         if method == "POST" and endpoint == "/lol-lobby/v2/lobby/matchmaking/search":
@@ -673,6 +675,31 @@ def test_q8_post_success_but_no_state_verify_failed():
     q = QueueController(lcu.request_raw, on)
     q.try_start("Lobby")
     assert any(c == "automation.queue_search_verify_failed" for c, _ in ev)
+
+
+def test_q9_idle_phase_can_create_lobby_without_manual_room():
+    lcu = _SearchFake()
+    lcu.gameflow_phase = "None"
+    lcu.routes = {
+        ("POST", "/lol-lobby/v2/lobby"): (201, {}),
+        ("PUT", "/lol-lobby/v1/lobby/members/localMember/position-preferences"): (204, {}),
+    }
+    cfg = AutomationConfig(enabled=True, auto_queue=True)
+    svc = _queue_svc(cfg, lcu)
+    svc._tick()
+    assert any(c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby" for c in lcu.calls)
+
+
+def test_q10_missing_queue_config_skips_all_queue_requests_once():
+    lcu = _SearchFake()
+    cfg = AutomationConfig.from_dict({"enabled": True, "auto_queue": True})
+    svc = _queue_svc(cfg, lcu)
+    events = []
+    svc._publish = lambda code, data: events.append((code, data))
+    svc._tick()
+    svc._tick()
+    assert not any(c[0] == "POST" for c in lcu.calls)
+    assert [c for c, _ in events].count("automation.queue_not_configured") == 1
 
 
 # ============================================================

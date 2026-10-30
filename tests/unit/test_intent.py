@@ -152,6 +152,22 @@ class TestRuleBasedIntent:
             assert intent and intent.intent_type == "auto.status_query"
             assert intent.params == {"feature": feature}
 
+    @pytest.mark.parametrize(("text", "command", "enabled"), [
+        ("游戏，打开自动排队", "auto.queue_set", True),
+        ("自动排队，关闭", "auto.queue_set", False),
+        ("停止自动排队", "auto.queue_set", False),
+        ("自动接受，打开", "auto.accept_set", True),
+        ("自动接受，关闭", "auto.accept_set", False),
+        ("游戏，打开自动连招", "auto.combo_set", True),
+        ("自动连招，关闭", "auto.combo_set", False),
+        ("游戏，打开自动选人", "auto.banpick_set", True),
+        ("自动禁用，关闭", "auto.banpick_set", False),
+    ])
+    def test_lol_automation_action_object_variants(self, text, command, enabled):
+        intent = RuleBasedIntent.match(text)
+        assert intent and intent.intent_type == command
+        assert intent.params == {"enabled": enabled}
+
     def test_prev_song(self):
         intent = RuleBasedIntent.match("上一首")
         assert intent is not None

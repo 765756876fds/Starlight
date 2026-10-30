@@ -65,6 +65,7 @@ class AutomationConfig:
     auto_queue_mode: str = "bot"
     auto_queue_primary_role: str | None = None
     auto_queue_secondary_role: str | None = None
+    queue_configured: bool = True
     # 顶层默认优先级（UI配置直接写这里，优先于presets）
     pick_priority: list[int] = field(default_factory=list)
     ban_priority: list[int] = field(default_factory=list)
@@ -95,6 +96,7 @@ class AutomationConfig:
             auto_queue_mode=str(data.get("auto_queue_mode", "bot")),
             auto_queue_primary_role=data.get("auto_queue_primary_role"),
             auto_queue_secondary_role=data.get("auto_queue_secondary_role"),
+            queue_configured=("auto_queue_mode" in data),
             pick_priority=list(data.get("pick_priority") or []),
             ban_priority=list(data.get("ban_priority") or []),
         )

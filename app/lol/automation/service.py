@@ -40,6 +40,7 @@ class LoLAutomationService:
         self._cached_unmanaged = False
         # ChampSelect poll 日志降噪：仅首次进入选人阶段打一次
         self._champ_select_logged = False
+        self._queue_config_warned = False
 
         # 事件桥
         def _request_with_status(method: str, endpoint: str, data):
@@ -103,6 +104,8 @@ class LoLAutomationService:
     def set_auto_queue(self, enabled: bool) -> None:
         with self._lock:
             self._config.auto_queue = bool(enabled)
+            if enabled:
+                self._queue_config_warned = False
         if enabled:
             self._ensure_worker_running()
 
@@ -244,11 +247,15 @@ class LoLAutomationService:
 
         hints = []
         if cfg.auto_queue:
-            if phase == "Lobby":
+            if not cfg.queue_configured:
+                if not self._queue_config_warned:
+                    self._queue_config_warned = True
+                    self._publish("automation.queue_not_configured", {})
+            elif phase == "Lobby":
                 hints.append("将自动开始匹配")
             elif phase == "Matchmaking":
                 hints.append("已在排队中")
-            else:
+            elif cfg.queue_configured:
                 hints.append("等待进入组队房间")
         if cfg.auto_accept:
             if phase == "ReadyCheck":
@@ -271,7 +278,7 @@ class LoLAutomationService:
                 self._log("auto_accept", "ReadyCheck detected -> four-step check")
                 self._ready_check.check(cfg.accept_delay)
         else:
-            if cfg.auto_queue:
+            if cfg.auto_queue and cfg.queue_configured:
                 self._queue.try_start(phase, cfg)
             if phase == "ChampSelect":
                 # 日志降噪：仅首次进入选人阶段打一次（离开时复位），不再每 tick 刷屏

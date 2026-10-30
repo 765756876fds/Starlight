@@ -81,7 +81,7 @@ class TestVoiceRuntimeDispatch:
         cmd = rt.command_bus.execute.call_args[0][0]
         assert cmd.params == {"enabled": True}
         rt._enqueue_speak.assert_called_once_with(
-            "自动化开关已开启，等待游戏连接", "voice_automation")
+            "自动排队已开启，等待游戏连接", "voice_automation")
 
     def test_automation_failure_does_not_report_enabled(self):
         rt = self._make_runtime()

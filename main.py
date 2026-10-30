@@ -814,6 +814,7 @@ class Application:
                 enabled = bool(command.get("enabled"))
                 self.automation.set_auto_queue(enabled)
                 return {"ok": True, "enabled": enabled,
+                        "configured": bool(self.automation.config.queue_configured),
                         "client_ready": bool(self.lol.lcu.connected),
                         "running": self.automation.running}
 

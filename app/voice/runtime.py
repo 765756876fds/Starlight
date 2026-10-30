@@ -859,14 +859,21 @@ class VoiceRuntime:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
             enabled = bool(params.get("enabled"))
+            labels = {CommandType.AUTO_QUEUE_SET: "自动排队",
+                      CommandType.AUTO_ACCEPT_SET: "自动同意",
+                      CommandType.AUTO_BANPICK_SET: "自动选人设置",
+                      CommandType.AUTO_COMBO_SET: "自动连招"}
+            label = labels.get(intent_type, "自动化")
             if not ok:
                 message = "自动化操作未成功"
+            elif intent_type == CommandType.AUTO_QUEUE_SET and enabled and isinstance(ok, dict) and not ok.get("configured", True):
+                message = "自动排队尚未配置，请先完成排队设置"
             elif not enabled:
-                message = "自动化已关闭"
+                message = f"{label}已关闭"
             elif isinstance(ok, dict) and not ok.get("client_ready", False):
-                message = "自动化开关已开启，等待游戏连接"
+                message = f"{label}已开启，等待游戏连接"
             else:
-                message = "自动化开关已开启"
+                message = f"{label}已开启"
             self._enqueue_speak(message, "voice_automation")
 
         elif intent_type == CommandType.AUTO_STATUS_QUERY:

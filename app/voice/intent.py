@@ -401,14 +401,22 @@ class RuleBasedIntent:
 
         # 游戏自动化：必须明确打开/关闭，避免否定句、转述和闲聊触发。
         AUTO_RULES = [
-            (r"^(打开|开启)(自动排队)$", CommandType.AUTO_QUEUE_SET, True),
-            (r"^(关闭|关掉)(自动排队)$", CommandType.AUTO_QUEUE_SET, False),
-            (r"^(打开|开启)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, True),
-            (r"^(关闭|关掉)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, False),
-            (r"^(打开|开启)(自动禁用|自动选禁)$", CommandType.AUTO_BANPICK_SET, True),
-            (r"^(关闭|关掉)(自动禁用|自动选禁)$", CommandType.AUTO_BANPICK_SET, False),
-            (r"^(打开|开启)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, True),
-            (r"^(关闭|关掉)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, False),
+            (r"^(?:游戏)?(打开|开启)(自动排队)$", CommandType.AUTO_QUEUE_SET, True),
+            (r"^(?:游戏)?(关闭|关掉|停止)(自动排队)$", CommandType.AUTO_QUEUE_SET, False),
+            (r"^(?:游戏)?(打开|开启)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, True),
+            (r"^(?:游戏)?(关闭|关掉|停止)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, False),
+            (r"^(?:游戏)?(打开|开启)(自动禁用|自动选禁|自动选人)$", CommandType.AUTO_BANPICK_SET, True),
+            (r"^(?:游戏)?(关闭|关掉|停止)(自动禁用|自动选禁|自动选人)$", CommandType.AUTO_BANPICK_SET, False),
+            (r"^(?:游戏)?(打开|开启)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, True),
+            (r"^(?:游戏)?(关闭|关掉|停止)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, False),
+            (r"^(自动排队)(打开|开启)$", CommandType.AUTO_QUEUE_SET, True),
+            (r"^(自动排队)(关闭|关掉|停止)$", CommandType.AUTO_QUEUE_SET, False),
+            (r"^(自动同意|自动接受)(打开|开启)$", CommandType.AUTO_ACCEPT_SET, True),
+            (r"^(自动同意|自动接受)(关闭|关掉|停止)$", CommandType.AUTO_ACCEPT_SET, False),
+            (r"^(自动禁用|自动选禁|自动选人)(打开|开启)$", CommandType.AUTO_BANPICK_SET, True),
+            (r"^(自动禁用|自动选禁|自动选人)(关闭|关掉|停止)$", CommandType.AUTO_BANPICK_SET, False),
+            (r"^(自动连招|连招)(打开|开启)$", CommandType.AUTO_COMBO_SET, True),
+            (r"^(自动连招|连招)(关闭|关掉|停止)$", CommandType.AUTO_COMBO_SET, False),
         ]
         AUTO_STATUS_RULES = [
             (r"^(?:游戏[，,]?)?(?:查询)?自动排队(?:状态|开着吗|开了吗)$", "queue"),
