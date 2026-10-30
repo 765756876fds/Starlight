@@ -8,9 +8,13 @@ AI 不参与意图识别。规则要求明确动词才产生写操作副作用�
 裸陈述（如"对面莎弥拉闪现了"）返回 system.unknown。
 """
 import re
+import time
+import threading
 from typing import Any
 
 from ..core.command_bus import CommandType
+from .text import normalize_text
+from .numbers import parse_integer, parse_number
 
 
 class Intent:
@@ -21,13 +25,17 @@ class Intent:
         self.intent_type = intent_type
         self.confidence = confidence
         self.params = params or {}
+        self.scope = None  # explicit media domain, separate from handler params
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "intent": self.intent_type,
             "confidence": self.confidence,
             "params": self.params,
         }
+        if self.scope:
+            result["scope"] = self.scope
+        return result
 
     def __repr__(self):
         return f"Intent({self.intent_type}, conf={self.confidence:.2f}, params={self.params})"
@@ -100,13 +108,13 @@ class RuleBasedIntent:
         # 音量+
         (r"^(声音大一点|音量大一点|大声一点|声音大点|音量大点|大点声|调大音量)$",
          CommandType.MUSIC_VOLUME_UP, {}),
-        (r"音量加(\d+)", CommandType.MUSIC_VOLUME_UP, {"step": 1}),
+        (r"^音量加(\d+)$", CommandType.MUSIC_VOLUME_UP, {"step": 1}),
         # 音量-
         (r"^(声音小一点|音量小一点|小声一点|声音小点|音量小点|小点声|调小音量|静音)$",
          CommandType.MUSIC_VOLUME_DOWN, {}),
-        (r"音量减(\d+)", CommandType.MUSIC_VOLUME_DOWN, {"step": 1}),
+        (r"^音量减(\d+)$", CommandType.MUSIC_VOLUME_DOWN, {"step": 1}),
         # 设置音量（支持阿拉伯数字与中文数字，0-100）
-        (r"音量(\d+|[零一二两三四五六七八九十]+)", CommandType.MUSIC_VOLUME_SET, {}),
+        (r"^(?:音乐)?音量(\d+|[零一二两三四五六七八九十百]+)$", CommandType.MUSIC_VOLUME_SET, {}),
         # 高潮模式开关（必须在通用"高潮"之前）
         (r"^(关闭高潮模式|退出高潮模式|高潮模式关|关掉高潮模式)$",
          CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": False}),
@@ -117,13 +125,13 @@ class RuleBasedIntent:
          CommandType.MUSIC_HIGHLIGHT, {}),
         # 播放顺序模式
         # sequential：顺序播放/连续播放/正常播放（播完停止）；repeat_all：列表/全部循环
-        (r"(连续播放|顺序播放|正常播放|顺序模式)$",
+        (r"^(连续播放|顺序播放|正常播放|顺序模式)$",
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "sequential"}),
-        (r"(列表循环|循环播放|全部循环)$",
+        (r"^(列表循环|循环播放|全部循环)$",
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "repeat_all"}),
-        (r"(随机播放|随机模式|随机曲|随机)$",
+        (r"^(随机播放|随机模式|随机曲|随机)$",
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "shuffle"}),
-        (r"(单曲循环|单曲循环播放|循环这首|循环这首歌|就循环这一首)$",
+        (r"^(单曲循环|单曲循环播放|循环这首|循环这首歌|就循环这一首)$",
          CommandType.MUSIC_SET_PLAY_MODE, {"mode": "repeat_one"}),
         # 倍速：明确的动作/对象/数值组合；标点会在 match 开头统一去除。
         (r"^(恢复正常速度|正常速度|正常倍速|恢复倍速|倍速正常|速度正常)$",
@@ -184,25 +192,7 @@ class RuleBasedIntent:
         """语音集数：中文/阿拉伯数字 → int（"第五集"→5、"25集"→25）；不支持返回 None。"""
         if not s:
             return None
-        s = s.removeprefix("第")
-        if s.isdigit():
-            return int(s)
-        digits = {"零": 0, "一": 1, "两": 2, "二": 2, "三": 3, "四": 4,
-                  "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-        total = 0
-        n = 0
-        for ch in s:
-            if ch in digits:
-                n = digits[ch]
-            elif ch == "十":
-                total += (n or 1) * 10
-                n = 0
-            elif ch == "百":
-                total += (n or 1) * 100
-                n = 0
-            else:
-                return None
-        return total + n if (total or n) else None
+        return parse_integer(s.removeprefix("第"))
 
     # 游戏提醒规则
     ALARM_RULES = [
@@ -249,8 +239,9 @@ class RuleBasedIntent:
 
     # ===== Cooldown 手动计时器规则 =====
     COOLDOWN_RULES = [
-        (r"取消所有(?:技能)?计时", "cooldown.cancel_all", {}),
-        (r"取消(.+?)(?:计时|的计时)$", "cooldown.cancel", {"champion_group": 1}),
+        (r"^(?:查询|查看|列出)(?:当前|所有)?技能计时$", "cooldown.list", {}),
+        (r"^取消所有(?:技能)?计时$", "cooldown.cancel_all", {}),
+        (r"^取消(.+?)(?:计时|的计时)$", "cooldown.cancel", {"champion_group": 1}),
         # --- 静态 CD 查询（cooldown.query）：纯召唤师技能 ---
         (r"^(闪现|点燃|治疗|净化|屏障|虚弱|疾跑|传送|惩戒|tp|TP)\s*(?:的)?(?:冷却时间是多少秒|冷却时间是多少|冷却时间多少|冷却多久|冷却时间|冷却多少秒|冷却多少|冷却CD是多少秒|冷却CD多少秒|CD多久|cd多久|CD是多少|CD是多少秒|是多少秒|是多少|冷却|CD|cd|多久|多长|多少秒|几秒|多少|还有多久|还要多久|剩多久|剩多少秒|剩多少时间|什么时候好|什么时候转好|多久转好|好了没|好了吗|转好了吗|冷却好了吗|冷却好了没有|CD好了吗|CD还有多久|还在CD吗|还没好吗)$",
          "cooldown.query", {"skill_group": 1}),
@@ -272,7 +263,7 @@ class RuleBasedIntent:
          "cooldown.start", {"champion_group": 2, "skill_group": 3, "side_group": 1}),
         # 英雄技能：必须有 side 前缀（对面/敌方/我方/队友），避免与旧 alarm.spell 冲突
         (r"^(对面|敌方|我方|队友)(?:的)?(.*?)([QqWwEeRr]|大招)"
-         r"(?:交了|用了|放了|没了|好了)",
+         r"(?:交了|用了|放了|没了|好了)$",
          "cooldown.start", {"champion_group": 2, "skill_group": 3, "side_group": 1}),
         # 英雄技能：无 side 前缀短指令（"莎弥拉 W 用了"/"石头人 R 了"）
         (r"^(?:对面|敌方|我方|队友)?(?:的)?(.+?)\s*(?:的)?\s*([QqWwEeRr]|大招)\s*(?:的)?(?:用了|交了|放了)$",
@@ -282,47 +273,43 @@ class RuleBasedIntent:
     ]
 
     @classmethod
-    def _parse_number(cls, text: str) -> float:
+    def _parse_number(cls, text: str) -> float | None:
         """解析数字（支持阿拉伯数字和中文数字）"""
-        text = text.strip()
-        # 纯阿拉伯数字
-        if text.isdigit():
-            return float(text)
-        # 中文数字
-        if text in cls.CHINESE_NUMBERS:
-            return float(cls.CHINESE_NUMBERS[text])
-        # 简单的中文数字组合（如 "十二"、"二十"）
-        if "十" in text:
-            parts = text.split("十")
-            tens = cls.CHINESE_NUMBERS.get(parts[0], 1) if parts[0] else 1
-            ones = cls.CHINESE_NUMBERS.get(parts[1], 0) if len(parts) > 1 and parts[1] else 0
-            return float(tens * 10 + ones)
-        # 尝试直接转换
-        try:
-            return float(text)
-        except ValueError:
-            return 1.0  # 默认 1
+        return parse_number(text.strip())
 
     @classmethod
     def _parse_decimal_number(cls, text: str) -> float | None:
         """解析语音中的整数/小数，不把无法解析的内容默认为 1。"""
-        text = text.strip().removesuffix("倍")
-        try:
-            return float(text)
-        except ValueError:
-            pass
-        if "点" not in text:
-            value = cls._parse_number(text)
-            return value if text in cls.CHINESE_NUMBERS or "十" in text else None
-        whole, fraction = text.split("点", 1)
-        if not fraction or any(ch not in cls.CHINESE_NUMBERS or ch == "半" for ch in fraction):
-            return None
-        whole_value = cls._parse_number(whole) if whole else 0.0
-        digits = "".join(str(int(cls.CHINESE_NUMBERS[ch])) for ch in fraction)
-        return float(f"{int(whole_value)}.{digits}")
+        return parse_number(text.strip().removesuffix("倍"))
 
     @classmethod
     def match(cls, text: str) -> Intent | None:
+        # Detect multiple complete commands before punctuation normalization.
+        # “游戏，打开自动排队” remains one command; two executable clauses
+        # are deliberately not reduced to an arbitrary first action.
+        if re.fullmatch(r"""\s*["'“「『].+["'”」』]\s*""", text or "", flags=re.DOTALL):
+            return Intent("system.clarify", params={"message": "请直接说要执行的操作"})
+        normalized = normalize_text(text)
+        if re.match(r"^(?:你知道|我想知道|如何|怎样|怎么|能不能|能否|可不可以|有人问|我不想|我不要)", normalized):
+            return None
+        if not re.match(r"^(?:播放|放|看|听|我想听|来一?首)", normalized) and re.search(
+                r"(?:是什么意思|怎么用|如何使用|会怎样|会怎么样)$", normalized):
+            return None
+        parts = re.split(r"[，,。；;！？!?]|然后|并且|再把|(?:并|和)(?=打开|关闭|开启|播放|暂停|继续|停止)", text or "")
+        matched = [cls._match_rules(normalize_text(p)) for p in parts if p.strip()]
+        if sum(i is not None for i in matched) > 1:
+            return Intent("system.clarify", params={"message": "请一次说一个操作"})
+        intent = cls._match_rules(normalized)
+        if intent and intent.intent_type in (CommandType.AUTO_QUEUE_SET, CommandType.AUTO_ACCEPT_SET,
+                CommandType.AUTO_BANPICK_SET, CommandType.AUTO_COMBO_SET) and re.search(r"[?？]", text):
+            return Intent("system.clarify", params={"message": "请明确说打开、关闭，或查询状态"})
+        if intent and intent.intent_type in (CommandType.MUSIC_PAUSE, CommandType.MUSIC_RESUME):
+            if re.search(r"音乐|歌曲?|这首|放歌", normalized):
+                intent.scope = "music"
+        return intent
+
+    @classmethod
+    def _match_rules(cls, text: str) -> Intent | None:
         """
         规则匹配
 
@@ -332,7 +319,7 @@ class RuleBasedIntent:
         text = text.strip()
         # 忽略所有标点：ASR 自带逗号/句号/问号等，出现在任意位置都不应影响匹配
         # （例：「高潮模式，开。」与「高潮模式开」应识别为同一指令）
-        text = re.sub(r"[，。！？；：、,.;:!?\"'()\[\]{}<>《》【】「」『』（）〈〉…—～·\u3000]", "", text)
+        # Already normalized by match(); preserve decimal points here.
         # 确定性归一化（P2）：
         # 1) "R大招"/"W大招" 重复说法 -> 只保留技能字母
         text = re.sub(r'([QqWwEeRr])\s*大招', r'\1', text)
@@ -349,6 +336,20 @@ class RuleBasedIntent:
         for pattern, intent_type, _bp in cls.SYSTEM_STOP_TTS_RULES:
             if re.match(pattern, text):
                 return Intent(intent_type, confidence=0.99, params={})
+
+        # Negative requests/narration never become substring-based actions.
+        # Keep the existing explicit “不要…提醒” cancel contract below.
+        if re.match(r"^(?:不要|别|不用|先别|暂时别)", text) and not re.fullmatch(
+                r"不要(?:刚才|之前|刚刚)?(?:那个|上一个|这个|那条)?(?:提醒|记录|计时)", text):
+            if text != "别放了":
+                return None
+        if re.match(r"^(?:我(?:刚才|之前)?(?:说|听说|记得)|有人说|他说|她说|你说|听说|比如|例如)", text):
+            return None
+
+        from .registry import match_volume
+        volume = match_volume(text)
+        if volume is not None:
+            return Intent(volume[0], confidence=0.99, params=volume[1])
 
         # ===== 明确领域命令（优先于通用 MUSIC_RULES，避免"暂停电影"被吞）=====
         # 电影明确命令：暂停/继续电影、电影暂停/继续
@@ -367,7 +368,7 @@ class RuleBasedIntent:
              CommandType.MOVIE_VOLUME_UP, {}),
             (r"^(电影声音小一点|电影声音小点|电影音量小一点|电影小声一点)$",
              CommandType.MOVIE_VOLUME_DOWN, {}),
-            (r"^电影音量(\d+|[零一二两三四五六七八九十]+)$",
+            (r"^电影音量(\d+|[零一二两三四五六七八九十百]+)$",
              CommandType.MOVIE_VOLUME_SET, {}),
             (r"^电影(快进|前进|后退|倒退)(\d+|[零一二两三四五六七八九十]+)秒$",
              CommandType.MOVIE_SEEK, {}),
@@ -379,12 +380,12 @@ class RuleBasedIntent:
                 if intent_type == CommandType.MOVIE_VOLUME_SET and m.groups():
                     raw = m.group(1)
                     vol = int(raw) if raw.isdigit() else cls._cn_episode_to_int(raw)
-                    if vol is not None and 0 <= vol <= 100:
+                    if vol is not None:
                         p["volume"] = vol
                 elif intent_type == CommandType.MOVIE_SEEK and m.groups():
                     direction, num_str = m.group(1), m.group(2)
                     secs = int(num_str) if num_str.isdigit() else cls._cn_episode_to_int(num_str)
-                    if secs is not None and 1 <= secs <= 60:
+                    if secs is not None:
                         sign = 1 if direction in ("快进", "前进") else -1
                         p["seconds"] = sign * secs
                         p["mode"] = "relative"
@@ -403,8 +404,8 @@ class RuleBasedIntent:
         AUTO_RULES = [
             (r"^(?:游戏)?(打开|开启)(自动排队)$", CommandType.AUTO_QUEUE_SET, True),
             (r"^(?:游戏)?(关闭|关掉|停止)(自动排队)$", CommandType.AUTO_QUEUE_SET, False),
-            (r"^(?:游戏)?(打开|开启)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, True),
-            (r"^(?:游戏)?(关闭|关掉|停止)(自动确认|自动接受)$", CommandType.AUTO_ACCEPT_SET, False),
+            (r"^(?:游戏)?(打开|开启)(自动确认|自动接受|自动同意)$", CommandType.AUTO_ACCEPT_SET, True),
+            (r"^(?:游戏)?(关闭|关掉|停止)(自动确认|自动接受|自动同意)$", CommandType.AUTO_ACCEPT_SET, False),
             (r"^(?:游戏)?(打开|开启)(自动禁用|自动选禁|自动选人)$", CommandType.AUTO_BANPICK_SET, True),
             (r"^(?:游戏)?(关闭|关掉|停止)(自动禁用|自动选禁|自动选人)$", CommandType.AUTO_BANPICK_SET, False),
             (r"^(?:游戏)?(打开|开启)(自动连招|连招)$", CommandType.AUTO_COMBO_SET, True),
@@ -424,7 +425,7 @@ class RuleBasedIntent:
         ]
         AUTO_STATUS_RULES = [
             (r"^(?:游戏[，,]?)?(?:查询)?自动排队(?:状态|开着吗|开了吗)$", "queue"),
-            (r"^(?:游戏[，,]?)?(?:查询)?自动同意(?:状态|开着吗|开了吗)$", "accept"),
+            (r"^(?:游戏[，,]?)?(?:查询)?自动(?:同意|接受|确认)(?:状态|开着吗|开了吗)$", "accept"),
             (r"^(?:游戏[，,]?)?(?:查询)?自动(?:禁用|选禁|选人)(?:状态|开着吗|开了吗)$", "banpick"),
             (r"^(?:游戏[，,]?)?(?:查询)?自动连招(?:状态|开着吗|开了吗)$", "combo"),
         ]
@@ -451,7 +452,7 @@ class RuleBasedIntent:
                     try:
                         raw = match.group(1)
                         vol = int(raw) if raw.isdigit() else cls._cn_episode_to_int(raw)
-                        if vol is not None and 0 <= vol <= 100:
+                        if vol is not None:
                             params["volume"] = vol
                     except (ValueError, IndexError):
                         pass
@@ -461,7 +462,8 @@ class RuleBasedIntent:
                         params["speed"] = cls._parse_decimal_number(raw)
                 if command == CommandType.MUSIC_SLEEP_TIMER_SET and match.groups():
                     amount = cls._parse_number(match.group(1))
-                    params["seconds"] = amount * (3600 if match.group(2) == "小时" else 60)
+                    if amount is not None:
+                        params["seconds"] = amount * (3600 if match.group(2) == "小时" else 60)
                 if command in (CommandType.MUSIC_PLAY_PLAYLIST,
                                CommandType.MUSIC_CREATE_PLAYLIST,
                                CommandType.MUSIC_ADD_NEXT) and match.groups():
@@ -487,8 +489,13 @@ class RuleBasedIntent:
                         pass
                 return Intent(command, confidence=0.99, params=params)
 
+        # Explicit media requests reserve their title before game rules inspect
+        # it. A song/film title may contain a champion, skill or “used” verb.
+        media_request = re.match(r"^(?:播放|来一?首|放点|放一首|听|我想听|(?:放|看)(?:一部)?(?:电影|影片|片子))", text)
         # ===== Cooldown 手动计时器（优先于 alarm 规则，避免被旧规则吞掉） =====
         for pattern, intent_type, base_params in cls.COOLDOWN_RULES:
+            if media_request:
+                break
             match = re.search(pattern, text)
             if match:
                 params = {}
@@ -501,7 +508,7 @@ class RuleBasedIntent:
                         v = re.sub(r"^(对面|敌方|对面的|敌方的|我方|队友|的)", "", v)
                         v = v.strip("，。！？、,.!?;： ")
                         params["champion"] = v or None
-                    if sg:
+                    if sg and not base_params.get("skill_override"):
                         params["skill"] = match.group(int(sg)).strip()
                     if sdg:
                         s = match.group(int(sdg)) or "敌方"
@@ -509,11 +516,17 @@ class RuleBasedIntent:
                                           "我方": "ally", "队友": "ally"}.get(s, "enemy")
                 except (IndexError, ValueError):
                     pass
+                if base_params.get("skill_override"):
+                    params["skill"] = base_params["skill_override"]
                 return Intent(intent_type, confidence=0.95, params=params)
 
         # 游戏提醒
         for pattern, intent_type, base_params in cls.ALARM_RULES:
-            match = re.search(pattern, text)
+            if media_request:
+                break
+            match = re.match(pattern, text) if intent_type == "alarm.custom" else re.fullmatch(pattern, text)
+            if intent_type == "alarm.cancel_last" and match and match.group(0) != text:
+                continue
             if match:
                 params = dict(base_params)
                 # 提取英雄名
@@ -546,6 +559,8 @@ class RuleBasedIntent:
                         idx = int(time_group) if isinstance(time_group, str) and time_group.isdigit() else 1
                         raw_value = match.group(idx).strip()
                         value = cls._parse_number(raw_value)
+                        if value is None or value <= 0:
+                            return None
                         unit = base_params.get("unit", "minute")
                         params["duration"] = value * 60 if unit == "minute" else value
                         params["title"] = f"{raw_value}{'分钟' if unit == 'minute' else '秒'}提醒"
@@ -676,17 +691,58 @@ class IntentRouter:
     def __init__(self, config: dict[str, Any]):
         self.config = config
         self.rule_based = RuleBasedIntent()
+        self._pending_parameter = None
+        self._context_lock = threading.RLock()
+
+    def clear_context(self):
+        with self._context_lock:
+            self._pending_parameter = None
+
+    def _parameter_reply(self, text):
+        pending = self._pending_parameter
+        self._pending_parameter = None  # one reply only; never infer game writes
+        if pending is None or time.monotonic() >= pending[1]:
+            return None
+        command = pending[0]
+        normalized = normalize_text(text)
+        if command == CommandType.MUSIC_SET_SPEED:
+            value = RuleBasedIntent._parse_decimal_number(normalized)
+            params = {"speed": value} if value is not None else None
+        elif command == CommandType.MUSIC_SLEEP_TIMER_SET:
+            m = re.fullmatch(r"([0-9零一二两三四五六七八九十]+)(分钟|分|小时)", normalized)
+            value = RuleBasedIntent._parse_number(m[1]) if m else None
+            params = {"seconds": value * (3600 if m[2] == "小时" else 60)} if value is not None else None
+        else:
+            value = RuleBasedIntent._cn_episode_to_int(normalized)
+            params = {"volume": value} if value is not None else None
+        return Intent(command, params=params) if params is not None else None
 
     def parse(self, text: str) -> Intent:
+        with self._context_lock:
+            return self._parse_text(text)
+
+    def _parse_text(self, text: str) -> Intent:
         """
         解析意图：规则命中返回 Intent，否则返回 system.unknown。
         """
         if not text or not text.strip():
             return Intent("system.unknown", confidence=0.0)
+        if self._pending_parameter is not None and normalize_text(text) in ("取消", "算了", "不用了", "取消设置"):
+            self.clear_context()
+            return Intent("system.context_cancel", params={})
 
         intent = self.rule_based.match(text)
         if intent:
+            from .registry import PARAMETERS
+            spec = PARAMETERS.get(intent.intent_type)
+            self.clear_context()
+            if spec and (spec.key not in intent.params or intent.params[spec.key] is None):
+                self._pending_parameter = (intent.intent_type, time.monotonic() + 12.0)
             return intent
+
+        reply = self._parameter_reply(text)
+        if reply is not None:
+            return reply
 
         return Intent("system.unknown", confidence=0.0)
 

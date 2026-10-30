@@ -317,10 +317,13 @@ class TestV2455VolumeChinese:
         assert it.intent_type == CommandType.MUSIC_VOLUME_SET
         assert it.params["volume"] == expected
 
-    def test_volume_101_no_param(self):
+    def test_volume_101_preserved_for_execution_validation(self):
         it = RuleBasedIntent.match("音量101")
         assert it.intent_type == CommandType.MUSIC_VOLUME_SET
-        assert "volume" not in it.params
+        assert it.params["volume"] == 101
+        from app.voice.registry import parameter_issue
+        from app.core.operation_result import OperationStatus
+        assert parameter_issue(it.intent_type, it.params).status is OperationStatus.UNSUPPORTED
 
 
 

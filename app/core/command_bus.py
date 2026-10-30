@@ -25,6 +25,7 @@ class Command:
     timestamp: float = field(default_factory=time.time)
     source: str = ""  # 命令来源（voice, ui, system）
     require_confirmation: bool = False  # 是否需要确认
+    is_current: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.params.get(key, default)
@@ -195,20 +196,29 @@ class CommandBus:
 
         # 执行
         try:
+            if command.is_current is not None and not command.is_current():
+                return None
             return handler(command)
         except Exception as e:
             print(f"[CommandBus] 命令执行异常 {command.command_type}: {e}")
             raise
 
-    def execute_async(self, command: Command):
+    def execute_async(self, command: Command, on_done=None):
         """异步执行命令（子线程异常被捕获记录，不静默死）"""
 
         def _run():
+            result, error = None, None
             try:
-                self.execute(command)
+                result = self.execute(command)
             except Exception as e:
+                error = e
                 print(f"[CommandBus] 异步命令执行异常 {command.command_type}: {e}")
                 logger.error("异步命令执行异常 %s: %s", command.command_type, e)
+            if on_done is not None:
+                try:
+                    on_done(result, error)
+                except Exception:
+                    logger.exception("异步命令反馈异常 %s", command.command_type)
 
         thread = threading.Thread(
             target=_run,
@@ -216,6 +226,7 @@ class CommandBus:
             name=f"cmd-{command.command_type}"
         )
         thread.start()
+        return thread
 
     def has_handler(self, command_type: str) -> bool:
         """检查命令是否有处理器"""

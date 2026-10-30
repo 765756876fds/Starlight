@@ -91,7 +91,7 @@ class TestVoiceRuntimeDispatch:
         cmd = rt.command_bus.execute.call_args[0][0]
         assert cmd.params == {"speed": 1.5}
         rt._enqueue_speak.assert_called_once_with(
-            "暂不支持该倍速，请使用支持的档位", "voice")
+            "倍速设置未成功，请检查播放器状态", "voice")
 
     def test_speed_execution_exception_reports_failure_once(self):
         rt = self._make_runtime()
@@ -105,7 +105,7 @@ class TestVoiceRuntimeDispatch:
 
         rt.command_bus.execute.assert_called_once()
         rt._enqueue_speak.assert_called_once_with(
-            "暂不支持该倍速，请使用支持的档位", "voice")
+            "倍速设置未成功，请检查播放器状态", "voice")
 
     def test_automation_feedback_distinguishes_disconnected_client(self):
         rt = self._make_runtime()

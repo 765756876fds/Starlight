@@ -8,6 +8,7 @@ must remain an opt-in capability until it has passed real-device validation.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import wave
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from typing import Any
 
 MIN_SECONDS = 8.0
 MAX_SECONDS = 12.0
+logger = logging.getLogger(__name__)
 
 
 class ShazamRecognitionStatus(str, Enum):
@@ -73,21 +75,29 @@ class ShazamIOProvider:
         try:
             from shazamio import Shazam, Serialize
         except ImportError as exc:
+            logger.error("online_identify shazam_import_failed type=%s error=%s",
+                         type(exc).__name__, str(exc)[:300])
             return ShazamRecognitionResult(
                 ShazamRecognitionStatus.DEPENDENCY_MISSING,
-                detail=f"未安装可选依赖 shazamio：{exc}",
+                detail=f"在线识曲依赖加载失败：{exc}",
             )
+        logger.info("online_identify shazam_import_ok")
 
         try:
+            logger.info("online_identify shazam_request_started")
             async with Shazam() as client:
                 payload = await asyncio.wait_for(
                     client.recognize(wav_path), timeout=self.timeout_seconds)
+            logger.info("online_identify shazam_request_finished")
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
+            logger.warning("online_identify result=timeout")
             return ShazamRecognitionResult(ShazamRecognitionStatus.TIMEOUT, detail="在线识曲请求超时")
         except Exception as exc:  # library exposes several aiohttp exception types
             status = getattr(exc, "status", None)
+            logger.warning("online_identify request_failed type=%s status=%s error=%s",
+                           type(exc).__name__, status, str(exc)[:300])
             if status == 429:
                 return ShazamRecognitionResult(
                     ShazamRecognitionStatus.RATE_LIMITED, detail="在线识曲服务限流")
@@ -99,11 +109,14 @@ class ShazamIOProvider:
 
         track: Any = payload.get("track") if isinstance(payload, dict) else None
         if not isinstance(track, dict):
+            logger.info("online_identify result=no_match")
             return ShazamRecognitionResult(ShazamRecognitionStatus.NO_MATCH, detail="未找到匹配歌曲")
         title = str(track.get("title") or "").strip()
         artist = str(track.get("subtitle") or track.get("artist") or "").strip()
         if not title or not artist:
+            logger.info("online_identify result=no_match_missing_fields")
             return ShazamRecognitionResult(ShazamRecognitionStatus.NO_MATCH, detail="返回结果缺少歌曲或歌手")
+        logger.info("online_identify result=success track_id_present=%s", bool(track.get("key")))
         return ShazamRecognitionResult(
             ShazamRecognitionStatus.SUCCESS,
             title=title,

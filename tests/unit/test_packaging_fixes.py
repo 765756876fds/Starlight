@@ -74,6 +74,18 @@ class TestProjectRoot:
 
 
 class TestConfigFallback:
+    def test_runtime_log_dir_rejects_relative_legacy_path(self):
+        from main import USER_DATA_DIR, _runtime_log_dir
+
+        class LegacyConfig:
+            @staticmethod
+            def get(key, default=None):
+                return "./logs" if key == "app.log_dir" else default
+
+        result = Path(_runtime_log_dir(LegacyConfig()))
+        assert result.is_absolute()
+        assert result == Path(USER_DATA_DIR) / "logs"
+
     def test_missing_config_returns_defaults_and_writes_file(self, tmp_path):
         missing = tmp_path / "nested" / "settings.yaml"
         cfg = Config(str(missing))

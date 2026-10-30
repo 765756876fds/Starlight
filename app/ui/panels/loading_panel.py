@@ -12,14 +12,14 @@ from app.ui.theme.colors import Colors
 from app.ui.theme.tokens import Tokens
 
 MODULES = [
-    ("eventlog", "EventLog"),
-    ("music", "Music 模块"),
-    ("lol", "LoL 连接"),
-    ("tts", "TTS"),
-    ("speech", "SpeechQueue"),
-    ("asr", "ASR"),
-    ("intent", "Intent"),
-    ("js", "JS 桥接"),
+    ("eventlog", "运行记录"),
+    ("music", "音乐播放器"),
+    ("lol", "游戏服务"),
+    ("tts", "语音播报"),
+    ("speech", "播报队列"),
+    ("asr", "语音识别"),
+    ("intent", "语音指令"),
+    ("js", "在线音乐音源"),
     ("automation", "自动化"),
 ]
 
@@ -38,7 +38,7 @@ class LoadingPanel(QWidget):
         super().__init__(parent)
         self._labels: dict[str, QLabel] = {}
         lay = QVBoxLayout(self)
-        title = QLabel("正在启动 LoL Music Agent...")
+        title = QLabel("正在启动星芒…")
         title.setStyleSheet(f"font-size: {Tokens.FONT_SIZE_TITLE}px; font-weight: bold;")
         lay.addWidget(title)
         for key, name in MODULES:

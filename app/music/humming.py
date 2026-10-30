@@ -91,6 +91,7 @@ class HummingService:
         os.makedirs(db_dir, exist_ok=True)
         self.settings = Settings(sqlite_path=os.path.abspath(sqlite_path), data_dir=db_dir)
         self._runtime: Runtime | None = None
+        self.last_scan_count = 0
 
     # ------------------------------------------------------------------ runtime
     @property
@@ -127,6 +128,7 @@ class HummingService:
         返回 {indexed, skipped, failed}。skipped = 已入库 + 本次重复跳过。
         """
         paths = self._scan_audio()
+        self.last_scan_count = len(paths)
         if not paths:
             return {"indexed": 0, "skipped": 0, "failed": 0}
         rt = self.runtime

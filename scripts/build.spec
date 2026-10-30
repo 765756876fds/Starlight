@@ -17,11 +17,21 @@
 项目未使用，排除。
 """
 import os
+import sys
+import json
+import tempfile
 from PyInstaller.utils.hooks import collect_all
 
 # spec 已移入 scripts/：PyInstaller 的 SPECPATH = scripts/ 目录，
 # 所有相对路径必须回退一级到项目根（datas/binaries 源路径 + main.py + icon）
 ROOT = os.path.dirname(os.path.abspath(SPECPATH))
+sys.path.insert(0, ROOT)
+from app.core.build_info import create_manifest
+# Unique build-only file: no generated manifest overwrites source or user data.
+manifest_dir = tempfile.mkdtemp(prefix='starlight-build-info-')
+manifest_path = os.path.join(manifest_dir, 'build_info.json')
+with open(manifest_path, 'w', encoding='utf-8') as stream:
+    json.dump(create_manifest(ROOT), stream, ensure_ascii=False, indent=2)
 
 
 def P(rel: str) -> str:
@@ -30,6 +40,9 @@ def P(rel: str) -> str:
 
 # PySide6 全量收集（Qt 平台插件 / 翻译 / 动态库；官方 hook 之外的保险）
 pyside_datas, pyside_binaries, pyside_hidden = collect_all('PySide6')
+shazam_datas, shazam_binaries, shazam_hidden = collect_all('shazamio')
+pydantic_datas, pydantic_binaries, pydantic_hidden = collect_all('pydantic')
+pydantic_core_datas, pydantic_core_binaries, pydantic_core_hidden = collect_all('pydantic_core')
 
 # 动态加载 / 间接依赖库：audiofp（third_party 源码）运行时 import scipy/soundfile/soxr，
 # PyInstaller 静态分析看不到，必须显式 hiddenimports
@@ -48,9 +61,10 @@ hiddenimports = [
     'requests',
     'edge_tts',
     'certifi',      # P0-A: overlay_assets.py 显式用 certifi.where() 做 SSL CA bundle
-] + pyside_hidden
+] + pyside_hidden + shazam_hidden + pydantic_hidden + pydantic_core_hidden
 
 datas = [
+    (manifest_path, '.'),
     # UI 主题（dark.qss + icons/*.svg）：applier.py 用 __file__ 相对定位，
     # 打包态命中 _internal/app/ui/theme/ —— 缺失则新电脑 UI 崩溃（QSS 加载失败）
     (P('app/ui/theme'), 'app/ui/theme'),
@@ -71,16 +85,18 @@ datas = [
     # 应用图标（运行时 QIcon 加载：main_window/tray 用 __file__ 相对定位，
     # 打包态命中 _internal/assets/icon/app.ico；EXE 图标通过 icon= 参数嵌入）
     (P('assets/icon'), 'assets/icon'),
-] + pyside_datas
+] + pyside_datas + shazam_datas + pydantic_datas + pydantic_core_datas
 
 binaries = [
     # 目录整体收集：mpv/node 下的 .exe 与全部 dll（防新增 dll 遗漏）
     (P('third_party/mpv'), 'third_party/mpv'),
     (P('third_party/node'), 'third_party/node'),
+    # LGPL ffmpeg：指纹视频/M4A 等解码；运行时由 decoder 优先从 exe 同级目录查找
+    (P('third_party/ffmpeg'), 'third_party/ffmpeg'),
     # R2: ASR 双后端——vulkan GPU + cpu AVX2，各自的 llama-server.exe + ggml-*.dll 全套
     (P('third_party/llama/vulkan'), 'third_party/llama/vulkan'),
     (P('third_party/llama/cpu'), 'third_party/llama/cpu'),
-] + pyside_binaries
+] + pyside_binaries + shazam_binaries + pydantic_binaries + pydantic_core_binaries
 
 # R3: 模型种子由 setup_full.iss 单独安装到 {app}\models\（不进 PyInstaller datas，
 # 避免 1.2GB 模型被打进 _internal 后又被 setup 重复装一次）。
@@ -94,7 +110,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=['torch', 'torchaudio', 'pydantic'],  # pydantic 未被项目 import（requirements 冗余），排除避免 hook 报错
+    excludes=['torch', 'torchaudio'],
     noarchive=False,
 )
 

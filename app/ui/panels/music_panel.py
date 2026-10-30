@@ -137,7 +137,7 @@ class MusicPanel(QWidget):
     _sleep_timer_signal = Signal(bool, int)
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
     _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
-    _speed_result = Signal(bool, float, int, str)  # 倍速后台结果：ok, rate, idx, err_msg
+    _speed_result = Signal(object, float, int, str)  # 倍速三态结果：True / False / None
 
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
@@ -848,9 +848,9 @@ class MusicPanel(QWidget):
         menu.exec_(self.btn_speed.mapToGlobal(self.btn_speed.rect().bottomLeft()))
 
     def _apply_speed(self, rate: float, idx: int | None = None):
-        """应用倍速档位。Controller 返回 False 或抛错时不更新 UI 显示。
+        """应用倍速档位。仅明确成功才更新 UI 显示。
         set_speed 会走 mpv IPC（最长 3s 超时），放 daemon 线程避免卡 UI；
-        结果用 QTimer 回主线程更新按钮文字（对齐 next/toggle/volume 后台模式）。"""
+        结果用 Signal 回主线程更新按钮文字。"""
         if self._music is None:
             return
         if idx is None:
@@ -862,7 +862,11 @@ class MusicPanel(QWidget):
         def _do():
             try:
                 ok = self._music.set_speed(rate)
-                err = "" if ok else "倍速设置失败"
+                err = ("" if ok is True else "倍速设置失败" if ok is False
+                       else "暂时无法确认倍速设置结果，请检查播放状态")
+            except TimeoutError:
+                ok = None
+                err = "倍速设置超时，暂时无法确认结果"
             except Exception as e:
                 ok = False
                 err = f"倍速失败: {e}"
@@ -872,9 +876,9 @@ class MusicPanel(QWidget):
         threading.Thread(target=_do, daemon=True,
                          name="ui-music-speed").start()
 
-    def _after_speed(self, ok: bool, rate: float, idx: int, err: str):
+    def _after_speed(self, ok: bool | None, rate: float, idx: int, err: str):
         """主线程槽：根据后台实际结果更新按钮文字。"""
-        if ok:
+        if ok is True:
             self._speed_idx = idx
             self.btn_speed.setText(f"倍速 {self._speed_label(rate)}")
         else:
@@ -1223,9 +1227,20 @@ class MusicPanel(QWidget):
         """惰性创建识曲服务（scan_dirs / 指纹库路径 / 扩展名来自 music 配置）。"""
         if self._identify_service is None:
             music = self._music
-            scan_dirs = list(getattr(music, "scan_dirs", None) or [])
+            # 音乐目录的权威用户配置保存在 music_dirs.json；安装版的
+            # settings.yaml 通常只保留空的 scan_dirs 模板，不能只读 controller
+            # 初始化时的快照，否则识曲建库会扫描到 0 首。
+            from ..settings_store import load_music_dirs
+            configured_dirs = [d.get("path") for d in load_music_dirs()
+                               if d.get("enabled") and d.get("path")]
+            scan_dirs = configured_dirs or list(getattr(music, "scan_dirs", None) or [])
             config = getattr(music, "config", None) or {}
-            db_path = config.get("fingerprints", "data/music/fingerprints.db")
+            from app.core.path_resolve import USER_DATA_DIR, resolve_under_root
+            configured_db = config.get("fingerprints")
+            if configured_db:
+                db_path = resolve_under_root(str(configured_db))
+            else:
+                db_path = str(USER_DATA_DIR / "data" / "music" / "fingerprints.db")
             ext = list(config.get("extensions") or []) or None
             self._identify_service = HummingService(
                 scan_dirs=scan_dirs, sqlite_path=db_path, extensions=ext)

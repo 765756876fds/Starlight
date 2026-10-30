@@ -501,8 +501,8 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_NEXT, lambda c: self.next())
         self.command_bus.register(CommandType.MUSIC_PREV, lambda c: self.prev())
         self.command_bus.register(CommandType.MUSIC_VOLUME_SET, self._cmd_volume_set)
-        self.command_bus.register(CommandType.MUSIC_VOLUME_UP, lambda c: self.volume_up())
-        self.command_bus.register(CommandType.MUSIC_VOLUME_DOWN, lambda c: self.volume_down())
+        self.command_bus.register(CommandType.MUSIC_VOLUME_UP, lambda c: self.volume_up(c.get("step", 10)))
+        self.command_bus.register(CommandType.MUSIC_VOLUME_DOWN, lambda c: self.volume_down(c.get("step", 10)))
         self.command_bus.register(CommandType.MUSIC_SEEK, self._cmd_seek)
         self.command_bus.register(CommandType.MUSIC_SEARCH_PLAY, self._cmd_search_play)
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT, lambda c: self.jump_to_highlight())
@@ -2069,7 +2069,7 @@ class MusicController:
         """设置音量"""
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
-            return
+            return False
         volume = max(0, min(100, volume))
         self.mpv.set_volume(volume)
         self.state_store.set(StateNamespace.MUSIC, "volume", volume)
@@ -2078,17 +2078,17 @@ class MusicController:
         """音量增加"""
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
-            return
+            return False
         current = self.mpv.get_volume()
-        self.set_volume(current + step)
+        return self.set_volume(current + step)
 
     def volume_down(self, step: int = 10):
         """音量减少"""
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
-            return
+            return False
         current = self.mpv.get_volume()
-        self.set_volume(current - step)
+        return self.set_volume(current - step)
 
     def get_volume(self) -> int:
         """获取当前音量"""
@@ -2098,11 +2098,12 @@ class MusicController:
     # 允许档位（与电影侧 movie_panel._speed_steps 一致）
     SPEED_STEPS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
 
-    def set_speed(self, rate: float) -> bool:
+    def set_speed(self, rate: float) -> bool | None:
         """设置播放倍速。
 
         复用 mpv 全局 speed 属性（切歌保留，mpv 进程自愈重启后会重置为 1.0）。
-        非法档位拒绝并返回 False；mpv 调用失败向上抛异常，不假装成功。
+        True 为 MPV 协议确认成功；False 为拒绝/协议失败；None 为结果未知。
+        仅明确成功才记录新档位，IPC 异常原样向上抛出，不重试。
         """
         try:
             rate = float(rate)
@@ -2116,7 +2117,13 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略倍速")
             return False
-        self.mpv.set_property("speed", rate)
+        response = self.mpv.set_property("speed", rate)
+        if not isinstance(response, dict) or not isinstance(response.get("error"), str):
+            logger.warning("[Music] 倍速设置结果未确认，保留上次确认的档位")
+            return None
+        if response["error"] != "success":
+            logger.warning("[Music] 倍速设置失败（MPV 协议错误），保留原档位")
+            return False
         self._speed = rate
         try:
             self.state_store.set(StateNamespace.MUSIC, "speed", rate)
@@ -2242,7 +2249,15 @@ class MusicController:
                 if s.get("path") and os.path.exists(s["path"]):
                     # 重复添加视为幂等成功
                     try:
-                        return self.add_to_playlist(matches[0]["id"], s) or True
+                        added = self.add_to_playlist(matches[0]["id"], s)
+                        if added is True:
+                            return True
+                        # False can mean duplicate OR a caught storage error.
+                        # Idempotent success needs evidence the song exists.
+                        music_id = int(s.get("music_id") or s.get("id") or 0)
+                        return music_id > 0 and any(
+                            row.get("source_type") == "local" and row.get("music_id") == music_id
+                            for row in self.get_playlist_songs(matches[0]["id"]))
                     except Exception:
                         return False
             return False
@@ -2275,7 +2290,10 @@ class MusicController:
             return False
         if not results:
             return False
-        track = results[0]
+        tracks = [track for group in results.values() if isinstance(group, list) for track in group] if isinstance(results, dict) else []
+        if not tracks:
+            return False
+        track = tracks[0]
         song = {
             "title": getattr(track, "title", "") or "",
             "artist": getattr(track, "artist", "") or "",
@@ -2642,7 +2660,7 @@ class MusicController:
             elif result is False:
                 logger.error(
                     "[Music] stop_current: mpv.stop() 返回错误响应，停止未执行，保留停止前状态")
-                return
+                return False
             else:  # None：IPC 超时/管道失效/无响应 → 结果未确认
                 logger.error(
                     "[Music] stop_current: mpv.stop() 结果未确认（IPC 超时/管道失效/无响应，命令可能已执行），保留停止前状态")
@@ -2650,6 +2668,7 @@ class MusicController:
                 # 必须置 _last_idle=True，防止轮询把"停止导致的 idle"误判为自然播完而自动续播。
                 self._last_idle = True
                 return
+            return True
 
     def set_play_mode(self, mode: str):
         """设置播放模式（顺序/随机/单曲/列表循环）+ 写回 settings.yaml music.play_mode。
@@ -2677,7 +2696,7 @@ class MusicController:
 
     def _cmd_volume_set(self, command: Command):
         volume = command.get("volume", 50)
-        self.set_volume(int(volume))
+        return self.set_volume(int(volume))
 
     def _cmd_seek(self, command: Command):
         seconds = command.get("seconds", 0)
@@ -2687,7 +2706,7 @@ class MusicController:
     def _cmd_search_play(self, command: Command):
         query = command.get("query", "")
         index = command.get("index", 0)
-        self.play_search_result(query, int(index))
+        return self.play_search_result(query, int(index))
 
     def _cmd_highlight_mode(self, command: Command):
         enabled = command.get("enabled", True)

@@ -183,6 +183,8 @@ class TestMovieControllerVoice(unittest.TestCase):
         fake_mpv.start.return_value = True
         fake_mpv.stop.return_value = True  # 三态契约：协议成功才清停止状态
         fake_mpv.loadfile.return_value = {"error": "success"}  # loadfile 协议契约
+        fake_mpv.pause.side_effect = lambda: setattr(fake_mpv.get_property, "return_value", True)
+        fake_mpv.play.side_effect = lambda: setattr(fake_mpv.get_property, "return_value", False)
         with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
             ctrl = MovieController(config={})
         ctrl._fake_mpv = fake_mpv
@@ -556,7 +558,7 @@ class TestVoiceFeedback(unittest.TestCase):
             ok = ctrl._cmd_search_play(self._cmd("流浪地球"))
         self.assertTrue(ok)
         p.assert_called_once_with(item)
-        self.assertEqual(msgs, ["开始播放：流浪地球"])
+        self.assertEqual(msgs, ["正在加载：流浪地球"])
 
     def test_no_feedback_fallback_print(self):
         """无回调注入 → 不崩（print 兜底路径）。"""
@@ -589,6 +591,8 @@ class TestMoviePauseResumeVoiceFeedback(unittest.TestCase):
         fake_mpv.loadfile.return_value = {"error": "success"}
         with patch("app.movie.movie_controller.MpvController", return_value=fake_mpv):
             ctrl = MovieController(config={}, speech_queue=fake_sq)
+        fake_mpv.pause.side_effect = lambda: setattr(fake_mpv.get_property, "return_value", True)
+        fake_mpv.play.side_effect = lambda: setattr(fake_mpv.get_property, "return_value", False)
         ctrl._fake_mpv = fake_mpv
         return ctrl, fake_sq
 
@@ -642,7 +646,7 @@ class TestFoldDuplicatedText(unittest.TestCase):
 
     def test_user_case(self):
         self.assertEqual(fold_duplicated_text(
-            "播放电影X。播放X。播放电影X。"), "播放电影X。")
+            "播放电影X。播放X。播放电影X。"), "播放电影X。播放X。")
 
     def test_pause_case(self):
         self.assertEqual(fold_duplicated_text(
@@ -650,7 +654,7 @@ class TestFoldDuplicatedText(unittest.TestCase):
 
     def test_real_log_case(self):
         t = "播放电影《甄嬛传》第五集。播放《甄嬛传》。播放电影《甄嬛传》第五集。播放电影《甄嬛传》第五集。"
-        self.assertEqual(fold_duplicated_text(t), "播放电影《甄嬛传》第五集。")
+        self.assertEqual(fold_duplicated_text(t), "播放电影《甄嬛传》第五集。播放《甄嬛传》。")
 
     def test_identical_repeat(self):
         self.assertEqual(fold_duplicated_text("播放电影X。播放电影X。"), "播放电影X。")
@@ -675,6 +679,11 @@ class TestFoldDuplicatedText(unittest.TestCase):
         from app.voice.runtime import VoiceRuntime
         rt = VoiceRuntime.__new__(VoiceRuntime)
         rt._asr_enabled = True
+        rt._asr_generation = 0
+        rt._running = True
+        import threading
+        rt._feedback_lock = threading.RLock()
+        rt._recent_audio = {}
         rt.asr = MagicMock()
         rt.asr.transcribe.return_value = "播放电影X。播放X。播放电影X。"
         rt.tts_provider = None
@@ -686,8 +695,8 @@ class TestFoldDuplicatedText(unittest.TestCase):
         rt._process_speech(b"audio", 16000)
         # 第一次 publish = VOICE_TEXT_RECEIVED（text 已折叠）；第二次 = VOICE_INTENT_PARSED
         published = rt.event_bus.publish.call_args_list[0][0][0]
-        self.assertEqual(published.data["text"], "播放电影X。")
-        self.assertEqual(rt.intent_router.parse.call_args[0][0], "播放电影X。")
+        self.assertEqual(published.data["text"], "播放电影X。播放X。")
+        self.assertEqual(rt.intent_router.parse.call_args[0][0], "播放电影X。播放X。")
 
 
 if __name__ == "__main__":

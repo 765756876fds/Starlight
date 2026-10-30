@@ -9,59 +9,42 @@
 - 命令执行（通过 CommandBus）
 """
 import queue
+import hashlib
 import threading
 import time
 from typing import Any
 
 from ..core.command_bus import Command, CommandType, get_command_bus
+from ..core.operation_result import media_result, OperationResult, OperationStatus
 from ..core.event_bus import Event, EventType, get_event_bus
 from ..core.state_store import StateNamespace, get_state_store
 from .asr import ASRManager
-from .intent import Intent, IntentRouter
+from .intent import Intent, IntentRouter, RuleBasedIntent
+from .registry import parameter_issue
+from .text import normalize_text
 
 
 def fold_duplicated_text(text: str) -> str:
-    """折叠 ASR 输出中的重复拼接（含省略变体）。
+    """Fold only identical text or equivalent intent/params/domain.
 
-    背景：播放声进麦克风导致 ASR 段变长/污染，llama-server 输出同一句
-    重复 N 遍拼接（如 '播放电影X。播放X。播放电影X。' 4 遍）。
-    这里只做轻量去重（不动 VAD 阈值/静音——会误杀电影在播时说话）。
-
-    规则：按 。！？；切句；后续句与已保留句满足任一 → 丢弃（保留最先出现的完整版）：
-      - 完全相同
-      - 一方包含另一方
-      - 共同前缀 >= 1 字 且 短者是长者按序子序列（省略变体重复，如 '播放X。' ⊂ '播放电影X。'）
-
-    正常不同指令不受影响（'播放A。播放B。' 各自保留）。
+    Substring/subsequence similarity loses negations, numbers and domains.
+    Different commands stay intact for the parser's ambiguity check.
     """
     import re
     parts = [p.strip() for p in re.findall(r"[^。！？；]+[。！？；]?", text)]
     if len(parts) <= 1:
         return text
 
-    def _subseq(a, b):
-        it = iter(b)
-        return all(c in it for c in a)
-
     kept = []
+    meanings = []
     for p in parts:
-        dup = False
-        for k in kept:
-            if p == k or p in k or k in p:
-                dup = True
-                break
-            i = 0
-            while i < len(p) and i < len(k) and p[i] == k[i]:
-                i += 1
-            if i >= 1:
-                if len(p) < len(k) and _subseq(p, k):
-                    dup = True
-                    break
-                if len(k) < len(p) and _subseq(k, p):
-                    dup = True
-                    break
-        if not dup:
+        intent = RuleBasedIntent.match(p)
+        meaning = (intent.intent_type, intent.params, intent.scope) if intent else None
+        if not any(normalize_text(p) == normalize_text(k)
+                   or (meaning is not None and meaning == known)
+                   for k, known in zip(kept, meanings)):
             kept.append(p)
+            meanings.append(meaning)
     out = "".join(kept)
     return out if out.strip() else text
 
@@ -138,6 +121,9 @@ class VoiceRuntime:
         # 代际标记：stop 后立即 start 时，旧识别线程（若 transcribe 卡住未及时退出）
         # 发现代际过期后自动退出 → 防止双消费者同时取队列。
         self._asr_generation = 0
+        self._feedback_lock = threading.RLock()
+        self._voice_request_generation = 0
+        self._recent_audio = {}
 
         # 打断旁路队列（Side-channel）：TTS 播放期间采集的段（is_interrupt=True）
         # 绝不进主 ASR 队列，只进这里；offer_latest 语义（满丢旧塞新，最新打断意图优先）。
@@ -158,6 +144,7 @@ class VoiceRuntime:
             return
 
         self._running = True
+        self.intent_router.clear_context()
 
         if bootstrap_result == "disabled":
             print("[Voice] asr.enabled=false，跳过 ASR 初始化（TTS 仍可用）")
@@ -216,6 +203,10 @@ class VoiceRuntime:
     def stop(self):
         """停止语音运行时"""
         self._running = False
+        with self._feedback_lock:
+            self._voice_request_generation += 1
+            self._recent_audio.clear()
+            self.intent_router.clear_context()
         self._listening = False
 
         # 排空主队列 + put sentinel：让识别线程处理完当前段后退出。
@@ -398,6 +389,8 @@ class VoiceRuntime:
                 continue
             if seg is None:
                 break
+            if not self._running or self._asr_generation != my_gen:
+                break
             try:
                 self._process_speech(*seg)
             except Exception as e:
@@ -516,12 +509,26 @@ class VoiceRuntime:
 
         # ASR 识别
         _t0 = time.monotonic()
+        generation = self._asr_generation
+        running = self._running
         text = self.asr.transcribe(audio_data, sample_rate)
         _t_asr = time.monotonic()
+        if generation != self._asr_generation or (running and not self._running):
+            print("[Voice] stale ASR result ignored")
+            return
         if not text or not text.strip():
             return
+        if audio_data:
+            signature = (sample_rate, hashlib.sha256(audio_data).digest())
+            with self._feedback_lock:
+                self._recent_audio = {k: t for k, t in self._recent_audio.items() if _t_asr - t < 2.0}
+                if signature in self._recent_audio:
+                    print("[Voice] duplicate audio segment ignored")
+                    return
+                self._recent_audio[signature] = _t_asr
 
         # 轻量去重：ASR 重复拼接（播放声污染场景）→ 只保留一段
+        original_text = text
         text = fold_duplicated_text(text)
 
         print(f"[Voice] 识别: {text}")
@@ -529,7 +536,7 @@ class VoiceRuntime:
         # 发布识别结果事件
         self.event_bus.publish(Event(
             event_type=EventType.VOICE_TEXT_RECEIVED,
-            data={"text": text},
+            data={"text": text, "original_text": original_text},
             source="voice"
         ))
 
@@ -541,11 +548,14 @@ class VoiceRuntime:
         # 发布意图事件
         self.event_bus.publish(Event(
             event_type=EventType.VOICE_INTENT_PARSED,
-            data={"intent": intent.to_dict(), "original_text": text},
+            data={"intent": intent.to_dict(), "original_text": original_text},
             source="voice"
         ))
 
         # 执行命令
+        if generation != self._asr_generation or (running and not self._running):
+            print("[Voice] stale parsed intent ignored")
+            return
         self._execute_intent(intent, text)
         _t_cmd = time.monotonic()
         print("[PERF] asr=%.0fms intent=%.0fms command=%.0fms total=%.0fms i=%s" % (
@@ -597,7 +607,7 @@ class VoiceRuntime:
             if v is None:
                 print("[Voice] _real_paused: get_property pause returned None (IPC timeout/no data/busy)")
                 return None
-            return bool(v)
+            return v if type(v) is bool else None
         except Exception as e:
             print(f"[Voice] _real_paused exception: {e!r}")
             return None
@@ -609,9 +619,11 @@ class VoiceRuntime:
                 return
             from app.speech.speech_queue import SpeechItem, PRIORITY_B
             import time as _t
+            generation = getattr(self, "_voice_request_generation", None)
+            guard = (lambda: self._request_is_current(generation)) if generation is not None else None
             sq.enqueue(SpeechItem(text=text, priority=PRIORITY_B,
                                   expire_at=_t.time() + 30.0,
-                                  category=category, interruptible=True))
+                                  category=category, interruptible=True, is_current=guard))
         except Exception as e:
             print(f"[Voice] _enqueue_speak failed: {e}")
 
@@ -673,30 +685,12 @@ class VoiceRuntime:
                 msgs.append("电影暂停失败")
         if not msgs:
             msgs.append("没有正在播放的媒体")
-        try:
-            sq = self.speech_queue_provider() if self.speech_queue_provider else None
-            if sq is not None:
-                from app.speech.speech_queue import SpeechItem, PRIORITY_B
-                import time as _t2
-                sq.enqueue(SpeechItem(text="，".join(msgs), priority=PRIORITY_B,
-                                      expire_at=_t2.time() + 30.0,
-                                      category="voice_global_pause", interruptible=True))
-        except Exception as e:
-            print(f"[Voice] 全局暂停反馈失败: {e}")
+        self._enqueue_speak("，".join(msgs), "voice_global_pause")
 
     def _global_resume(self):
         """V2-2：裸"继续"→ 只恢复本次全局暂停确认过的媒体。"""
         if not self._global_pause_snapshot:
-            try:
-                sq = self.speech_queue_provider() if self.speech_queue_provider else None
-                if sq is not None:
-                    from app.speech.speech_queue import SpeechItem, PRIORITY_B
-                    import time as _t
-                    sq.enqueue(SpeechItem(text="当前没有可恢复的歌曲，请说出歌名，或先选择一首歌曲", priority=PRIORITY_B,
-                                          expire_at=_t.time() + 30.0,
-                                          category="voice_global_resume", interruptible=True))
-            except Exception:
-                pass
+            self._enqueue_speak("当前没有可恢复的歌曲，请说出歌名，或先选择一首歌曲", "voice_global_resume")
             return
         msgs = []
         movie_attempted = False
@@ -772,16 +766,7 @@ class VoiceRuntime:
                 else:
                     msgs.append("电影状态无法确认")
         self._global_pause_snapshot = {}
-        try:
-            sq = self.speech_queue_provider() if self.speech_queue_provider else None
-            if sq is not None:
-                from app.speech.speech_queue import SpeechItem, PRIORITY_B
-                import time as _t
-                sq.enqueue(SpeechItem(text="，".join(msgs), priority=PRIORITY_B,
-                                      expire_at=_t.time() + 30.0,
-                                      category="voice_global_resume", interruptible=True))
-        except Exception as e:
-            print(f"[Voice] 全局恢复反馈失败: {e}")
+        self._enqueue_speak("，".join(msgs), "voice_global_resume")
 
     def _stop_tts_now(self):
         """立即停止 TTS 播报（独立打断路由，不走 CommandBus）。
@@ -813,10 +798,102 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] 停止语音队列失败: {e}")
 
+    def _explicit_music_control(self, command_type, params, paused):
+        """Explicit music commands never act on the movie or global snapshot."""
+        action = "暂停" if paused else "继续"
+        try:
+            result = self.command_bus.execute(Command(command_type=command_type,
+                params=params, source="voice"))
+            actual = self._real_paused(getattr(self, "music_mpv_provider", None))
+            if result is False:
+                outcome = media_result(False, label="音乐", action=action)
+            elif actual is paused:
+                outcome = media_result(True, label="音乐", action=action)
+            else:
+                outcome = media_result(None, label="音乐", action=action)
+        except Exception:
+            outcome = media_result(False, label="音乐", action=action)
+        self._enqueue_speak(outcome.message, "voice_music_control")
+
+    def _async_feedback(self, command_type, generation):
+        """Feedback ownership: movie handler owns normal messages; runtime owns
+        otherwise-unhandled exceptions. Stale completion never speaks again.
+        """
+        completion_lock = threading.Lock()
+        delivered = False
+        def completed(value, error):
+            nonlocal delivered
+            with completion_lock:
+                if delivered:
+                    return
+                delivered = True
+            if isinstance(error, TimeoutError):
+                outcome = OperationResult(OperationStatus.TIMEOUT, "搜索超时，请稍后重试")
+            elif error is not None:
+                outcome = OperationResult(OperationStatus.FAILED, "搜索播放未成功，请检查网络和音源")
+            elif command_type == CommandType.MOVIE_SEARCH_PLAY:
+                return  # controller already supplies its own UI + TTS result
+            elif isinstance(value, dict) and (value.get("title") or value.get("path")):
+                outcome = OperationResult(OperationStatus.ACCEPTED, "已找到歌曲，正在加载")
+            elif value is False:
+                outcome = OperationResult(OperationStatus.FAILED, "歌曲播放未成功")
+            else:
+                # Existing music search returns None for both no result and
+                # source failures; do not pretend these are distinguishable.
+                outcome = OperationResult(OperationStatus.UNKNOWN, "未能确认歌曲播放，请检查搜索结果或更换音源")
+            with self._feedback_lock:
+                if self._voice_request_generation != generation:
+                    return
+                self._enqueue_speak(outcome.message, "voice_search_result")
+        return completed
+
+    def _request_is_current(self, generation):
+        with self._feedback_lock:
+            return self._voice_request_generation == generation
+
+    def _execute_control(self, command_type, params):
+        """Legacy controls may return None; report explicit failures only."""
+        try:
+            if self.command_bus.has_handler(command_type) is False:
+                self._enqueue_speak("该功能尚未就绪，请等待初始化完成", "voice_control")
+                return
+            value = self.command_bus.execute(Command(command_type=command_type,
+                params=params, source="voice"))
+        except TimeoutError:
+            self._enqueue_speak("操作超时，暂时无法确认结果", "voice_control")
+            return
+        except Exception:
+            self._enqueue_speak("操作未成功，请检查播放器状态", "voice_control")
+            return
+        if value is False:
+            self._enqueue_speak("操作未成功，请检查播放器状态", "voice_control")
+
     def _execute_intent(self, intent: Intent, original_text: str):
         """执行意图对应的命令"""
         intent_type = intent.intent_type
         params = intent.params
+        # All real instances initialize this in __init__. Lazy defaults preserve
+        # isolated legacy dispatch fixtures that intentionally bypass startup.
+        if not hasattr(self, "_feedback_lock"):
+            self._feedback_lock = threading.RLock()
+            self._voice_request_generation = 0
+        with self._feedback_lock:
+            if intent_type != "system.unknown":
+                self._voice_request_generation += 1
+            request_generation = self._voice_request_generation
+        issue = parameter_issue(intent_type, params)
+        if issue is not None:
+            category = "voice_music_speed" if intent_type == CommandType.MUSIC_SET_SPEED else (
+                "voice_music_timer" if intent_type == CommandType.MUSIC_SLEEP_TIMER_SET else "voice_parameter")
+            self._enqueue_speak(issue.message, category)
+            return
+
+        if intent_type == "system.clarify":
+            self._enqueue_speak(params.get("message", "请一次说一个操作"), "voice_parameter")
+            return
+        if intent_type == "system.context_cancel":
+            self._enqueue_speak("已取消这次设置", "voice_parameter")
+            return
 
         # 独立打断路由（system.stop_tts）：不走 CommandBus，
         # 直接停止 TTS 播报（物理停止 + 队列当前项标记取消），
@@ -826,10 +903,16 @@ class VoiceRuntime:
 
         # V2-2：裸"暂停"→ 全局暂停所有在播媒体；裸"继续"→ 只恢复本次确认暂停的媒体
         elif intent_type == CommandType.MUSIC_PAUSE:
-            self._global_pause()
+            if getattr(intent, "scope", None) == "music":
+                self._explicit_music_control(intent_type, params, True)
+            else:
+                self._global_pause()
 
         elif intent_type == CommandType.MUSIC_RESUME:
-            self._global_resume()
+            if getattr(intent, "scope", None) == "music":
+                self._explicit_music_control(intent_type, params, False)
+            else:
+                self._global_resume()
 
         elif intent_type == CommandType.MUSIC_PLAY:
             try:
@@ -842,8 +925,8 @@ class VoiceRuntime:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
             self._enqueue_speak(
-                "已开始播放本地歌曲" if ok else
-                "本地没有可播放的歌曲，请手动选择歌曲，或直接说出歌名播放",
+                media_result(ok, label="本地歌曲", action="播放", accepted_only=True).message
+                if ok is not False else "本地没有可播放的歌曲，请手动选择歌曲，或直接说出歌名播放",
                 "voice_music_play",
             )
 
@@ -864,14 +947,19 @@ class VoiceRuntime:
                       CommandType.AUTO_BANPICK_SET: "自动选人设置",
                       CommandType.AUTO_COMBO_SET: "自动连招"}
             label = labels.get(intent_type, "自动化")
-            if not ok:
+            if ok is False or (isinstance(ok, dict) and ok.get("ok") is False):
                 message = "自动化操作未成功"
+            elif ok is not True and (not isinstance(ok, dict) or ok.get("ok") is not True
+                    or ok.get("enabled") is not enabled):
+                message = "暂时无法确认自动化开关状态"
             elif intent_type == CommandType.AUTO_QUEUE_SET and enabled and isinstance(ok, dict) and not ok.get("configured", True):
                 message = "自动排队尚未配置，请先完成排队设置"
             elif not enabled:
                 message = f"{label}已关闭"
-            elif isinstance(ok, dict) and not ok.get("client_ready", False):
+            elif isinstance(ok, dict) and ok.get("client_ready") is False:
                 message = f"{label}已开启，等待游戏连接"
+            elif isinstance(ok, dict) and ok.get("client_ready") is not True:
+                message = f"{label}已开启，游戏连接状态无法确认"
             else:
                 message = f"{label}已开启"
             self._enqueue_speak(message, "voice_automation")
@@ -886,10 +974,12 @@ class VoiceRuntime:
             labels = {"queue": "自动排队", "accept": "自动同意",
                       "banpick": "自动禁用和选择英雄", "combo": "自动连招"}
             label = labels.get(params.get("feature"), "游戏自动化")
-            if not isinstance(result, dict) or not result.get("available"):
+            if not isinstance(result, dict) or result.get("available") is not True or type(result.get("enabled")) is not bool:
                 message = f"暂时无法确认{label}状态"
-            elif params.get("feature") == "combo" and result.get("enabled") and not result.get("listener_ready", True):
+            elif params.get("feature") == "combo" and result.get("enabled") and result.get("listener_ready") is False:
                 message = "自动连招已开启，但键盘监听器不可用"
+            elif params.get("feature") == "combo" and result.get("enabled") and result.get("listener_ready") is not True:
+                message = "自动连招已开启，但键盘监听器状态无法确认"
             elif result.get("enabled") and result.get("client_ready") is False:
                 message = f"{label}已开启，但游戏客户端当前未连接"
             elif result.get("enabled"):
@@ -912,8 +1002,11 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
-            self._enqueue_speak("睡眠定时已设置" if ok and intent_type == CommandType.MUSIC_SLEEP_TIMER_SET
-                                else "睡眠定时已取消" if ok else "睡眠定时操作未成功",
+            self._enqueue_speak("睡眠定时已设置" if ok is True and intent_type == CommandType.MUSIC_SLEEP_TIMER_SET
+                                else "睡眠定时已取消" if ok is True
+                                else "当前没有睡眠定时" if ok is False and intent_type == CommandType.MUSIC_SLEEP_TIMER_CANCEL
+                                else "睡眠定时操作未成功" if ok is False
+                                else "暂时无法确认睡眠定时状态",
                                 "voice_music_timer")
 
         # 明确电影命令：用户明说"暂停电影"/"继续电影"，直接分发，不走谁在播路由
@@ -933,6 +1026,11 @@ class VoiceRuntime:
                 self._enqueue_speak("电影操作未成功", "voice_movie_control")
             elif intent_type == CommandType.MOVIE_STOP and ok is True:
                 self._enqueue_speak("电影已停止", "voice_movie_control")
+            elif ok is None and intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME, CommandType.MOVIE_STOP):
+                action = {CommandType.MOVIE_PAUSE: "暂停", CommandType.MOVIE_RESUME: "继续",
+                          CommandType.MOVIE_STOP: "停止"}[intent_type]
+                self._enqueue_speak(media_result(ok, label="电影", action=action).message,
+                                    "voice_movie_control")
 
         elif intent_type == CommandType.PLAYER_NEXT:
             # V2-4.3：裸"下一个"上下文仲裁：仅当一边明确在播、另一边明确暂停才执行。
@@ -942,7 +1040,8 @@ class VoiceRuntime:
                 self.command_bus.execute(Command(command_type=CommandType.MOVIE_NEXT_EPISODE, params=params, source="voice"))
             elif s_paused is False and m_paused is True:
                 self.command_bus.execute(Command(command_type=CommandType.MUSIC_NEXT, params=params, source="voice"))
-            # 其他情况（None/都暂停/都在播）静默不执行
+            else:
+                self._enqueue_speak("请说下一首或下一集", "voice_parameter")
 
         elif intent_type in (CommandType.MOVIE_NEXT_EPISODE, CommandType.MOVIE_PREV_EPISODE):
             try:
@@ -957,6 +1056,15 @@ class VoiceRuntime:
             if ok is False:
                 self._enqueue_speak("电影切集未成功", "voice_movie_episode")
 
+        elif intent_type == CommandType.MUSIC_STOP:
+            try:
+                result = self.command_bus.execute(Command(
+                    command_type=intent_type, params=params, source="voice"))
+            except Exception:
+                result = False
+            self._enqueue_speak(media_result(result, label="音乐", action="停止").message,
+                                "voice_music_control")
+
         elif intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
                              CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
                              CommandType.MUSIC_CLEANUP,
@@ -966,11 +1074,7 @@ class VoiceRuntime:
                              CommandType.MUSIC_STOP,
                              CommandType.MUSIC_SEEK,
                              CommandType.MUSIC_IDENTIFY) or intent_type == CommandType.MUSIC_VOLUME_SET:
-            self.command_bus.execute(Command(
-                command_type=intent_type,
-                params=params,
-                source="voice",
-            ))
+            self._execute_control(intent_type, params)
 
         elif intent_type in (CommandType.MUSIC_PLAY_PLAYLIST,
                              CommandType.MUSIC_CREATE_PLAYLIST,
@@ -986,14 +1090,21 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
-            if ok:
+            if ok is True:
                 self._enqueue_speak("好的", "voice")
-            else:
+            elif ok is False:
                 self._enqueue_speak("操作未成功", "voice")
+            else:
+                self._enqueue_speak("暂时无法确认操作结果", "voice")
 
         elif intent_type == CommandType.MUSIC_SET_SPEED:
             if "speed" not in params or params.get("speed") is None:
                 self._enqueue_speak("请说出要设置的倍速，例如一点五倍", "voice_music_speed")
+                return
+            from ..music.controller import MusicController
+            speed = params["speed"]
+            if type(speed) not in (int, float) or not any(abs(speed - step) < 0.001 for step in MusicController.SPEED_STEPS):
+                self._enqueue_speak("暂不支持该倍速，请使用支持的档位", "voice")
                 return
             try:
                 ok = self.command_bus.execute(Command(
@@ -1001,25 +1112,22 @@ class VoiceRuntime:
                     params=params,
                     source="voice",
                 ))
+            except TimeoutError:
+                self._enqueue_speak("倍速设置超时，暂时无法确认结果", "voice")
+                return
             except Exception as e:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
-            if not ok:
-                self._enqueue_speak("暂不支持该倍速，请使用支持的档位", "voice")
+            if ok is False:
+                self._enqueue_speak("倍速设置未成功，请检查播放器状态", "voice")
+            elif ok is not True:
+                self._enqueue_speak("暂时无法确认倍速设置结果", "voice")
 
         elif intent_type == CommandType.MUSIC_VOLUME_UP:
-            self.command_bus.execute(Command(
-                command_type=CommandType.MUSIC_VOLUME_UP,
-                params={"step": params.get("step", 5)},
-                source="voice",
-            ))
+            self._execute_control(intent_type, {"step": params.get("step", 5)})
 
         elif intent_type == CommandType.MUSIC_VOLUME_DOWN:
-            self.command_bus.execute(Command(
-                command_type=CommandType.MUSIC_VOLUME_DOWN,
-                params={"step": params.get("step", 5)},
-                source="voice",
-            ))
+            self._execute_control(intent_type, {"step": params.get("step", 5)})
 
         elif intent_type == CommandType.MOVIE_SEARCH_PLAY:
             # 长任务（在线搜索）：异步执行，不阻塞识别线程（与 MUSIC_SEARCH_PLAY 同策略）
@@ -1031,7 +1139,8 @@ class VoiceRuntime:
                 command_type=CommandType.MOVIE_SEARCH_PLAY,
                 params=cmd_params,
                 source="voice",
-            ))
+                is_current=lambda: self._request_is_current(request_generation),
+            ), on_done=self._async_feedback(intent_type, request_generation))
 
         elif intent_type == CommandType.MUSIC_SEARCH_PLAY:
             # 长任务（在线搜索/JS 桥接，10s+）：异步执行，不阻塞识别线程
@@ -1043,7 +1152,8 @@ class VoiceRuntime:
                 command_type=CommandType.MUSIC_SEARCH_PLAY,
                 params={"query": query},
                 source="voice",
-            ))
+                is_current=lambda: self._request_is_current(request_generation),
+            ), on_done=self._async_feedback(intent_type, request_generation))
 
         elif intent_type == CommandType.MUSIC_RESCAN:
             # 长任务（重新扫描音乐库，大库可能数分钟）：异步执行，不阻塞识别线程。
@@ -1100,8 +1210,9 @@ class VoiceRuntime:
             ))
 
         elif intent_type in ("cooldown.start", "cooldown.query",
-                             "cooldown.cancel", "cooldown.cancel_all"):
+                             "cooldown.cancel", "cooldown.cancel_all", "cooldown.list"):
             # 冷却计时 / 静态CD查询：转发给已在 main 注册的 CooldownManager
+            failed = False
             try:
                 ok = self.command_bus.execute(Command(
                     command_type=intent_type,
@@ -1111,6 +1222,10 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
+                failed = True
+            if failed:
+                self._enqueue_speak("技能计时操作未成功，请稍后重试", "voice_cooldown")
+                return
             if intent_type == "cooldown.start":
                 self._enqueue_speak("技能记录成功" if ok else "技能记录未成功",
                                     "voice_cooldown")
@@ -1119,9 +1234,15 @@ class VoiceRuntime:
                                     "voice_cooldown")
             elif intent_type == "cooldown.cancel_all":
                 self._enqueue_speak(
-                    f"已取消全部技能计时，共{ok}个" if isinstance(ok, int) and ok > 0
-                    else "当前没有正在进行的技能计时",
+                    f"已取消全部技能计时，共{ok}个" if type(ok) is int and ok > 0
+                    else "当前没有正在进行的技能计时" if type(ok) is int and ok == 0
+                    else "暂时无法确认技能计时取消结果",
                     "voice_cooldown")
+            elif intent_type == "cooldown.list":
+                message = (f"当前有{len(ok)}个技能计时" if isinstance(ok, list) and ok
+                    else "当前没有正在进行的技能计时" if isinstance(ok, list)
+                    else "暂时无法查询技能计时")
+                self._enqueue_speak(message, "voice_cooldown")
 
         elif intent_type == CommandType.PLAYER_QUERY:
             # 长任务（查询对局/玩家信息，走网络）：异步执行，不阻塞识别线程。

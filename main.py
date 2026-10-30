@@ -3,6 +3,11 @@
 import os
 import sys
 
+# Run before configuration, log redirection, Qt windows or business services.
+if __name__ == "__main__" and "--self-check" in sys.argv:
+    from app.core.self_check import main as self_check_main
+    raise SystemExit(self_check_main(sys.argv[sys.argv.index("--self-check") + 1:]))
+
 # Force UTF-8 stdout/stderr so Chinese prints correctly in cmd.
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -28,6 +33,17 @@ if getattr(sys, "frozen", False):
 else:
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
     USER_DATA_DIR = PROJECT_ROOT
+
+
+# 旧版本配置可能仍保存相对的 app.log_dir；安装到 Program Files 后，
+# 相对路径不能直接交给可写日志组件。
+def _runtime_log_dir(config):
+    configured = config.get("app.log_dir")
+    if configured and os.path.isabs(str(configured)):
+        return str(configured)
+    return os.path.join(str(USER_DATA_DIR), "logs")
+
+
 sys.path.insert(0, PROJECT_ROOT)
 
 # 无黑窗兜底（PyInstaller console=False / pythonw 下 sys.stdout/stderr 可能为 None，
@@ -115,7 +131,7 @@ class Application:
         self.state_store = get_state_store()
         self.scheduler = get_scheduler()
         self.logger = get_logger(
-            log_dir=self.config.get("app.log_dir", "./logs"),
+            log_dir=_runtime_log_dir(self.config),
             level=self.config.get("app.log_level", "INFO"),
         )
 
@@ -1141,7 +1157,7 @@ class Application:
                 from PySide6.QtWidgets import QApplication, QMessageBox
                 app = QApplication.instance() or QApplication(sys.argv)
                 summary = f"{type(exc).__name__}: {exc}"
-                log_dir = self.config.get("app.log_dir", "./logs")
+                log_dir = _runtime_log_dir(self.config)
                 QMessageBox.critical(
                     None,
                     "Starlight 启动失败",
@@ -1473,3 +1489,5 @@ if __name__ == "__main__":
 
 
 
+# 用户配置可能来自旧版本，仍可能保存相对的 app.log_dir。安装到
+# Program Files 后不能把这类路径直接交给可写日志组件。

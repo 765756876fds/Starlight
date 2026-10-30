@@ -59,6 +59,18 @@ def test_index_pending_empty_dir(tmp_path):
     d.mkdir()
     service = HummingService([str(d)], str(tmp_path / "fp.db"))
     assert service.index_pending() == {"indexed": 0, "skipped": 0, "failed": 0}
+    assert service.last_scan_count == 0
+
+
+def test_index_pending_reports_scanned_files_before_indexing(tmp_path):
+    service = HummingService([_fake_audio_dir(tmp_path, ("a.mp3",))], str(tmp_path / "fp.db"))
+    service._runtime = SimpleNamespace(
+        storage=SimpleNamespace(find_by_filepath=lambda _p: object(), flush=lambda: None),
+        indexer=SimpleNamespace(),
+    )
+
+    assert service.index_pending() == {"indexed": 0, "skipped": 1, "failed": 0}
+    assert service.last_scan_count == 1
 
 
 def test_index_pending_skips_unsupported(tmp_path):
@@ -422,6 +434,38 @@ def test_panel_identify_button_reports_service_init_failure(monkeypatch):
         assert "识曲暂不可用" in p.lbl_identify_status.text()
         assert "audiofp 未就绪" in p.lbl_identify_status.text()
     finally:
+        from app.core.command_bus import get_command_bus
+        get_command_bus().unregister(CommandType.MUSIC_IDENTIFY)
+
+
+def test_panel_identify_uses_saved_music_dirs_and_user_data_db(monkeypatch):
+    from app.ui.panels import music_panel
+    from app.ui import settings_store
+    from app.ui.panels.music_panel import MusicPanel
+    from app.core.path_resolve import USER_DATA_DIR
+
+    captured = {}
+
+    class FakeService:
+        record_seconds = 8
+
+    def make_service(**kwargs):
+        captured.update(kwargs)
+        return FakeService()
+
+    monkeypatch.setattr(settings_store, "load_music_dirs", lambda: [
+        {"path": r"D:\music", "enabled": True},
+        {"path": r"D:\disabled", "enabled": False},
+    ])
+    monkeypatch.setattr(music_panel, "HummingService", make_service)
+    music = SimpleNamespace(scan_dirs=[], config={})
+    p = MusicPanel(music=music)
+    try:
+        p._get_identify_service()
+        assert captured["scan_dirs"] == [r"D:\music"]
+        assert captured["sqlite_path"] == str(USER_DATA_DIR / "data" / "music" / "fingerprints.db")
+    finally:
+        p._identify_dialog.hide() if p._identify_dialog else None
         from app.core.command_bus import get_command_bus
         get_command_bus().unregister(CommandType.MUSIC_IDENTIFY)
 

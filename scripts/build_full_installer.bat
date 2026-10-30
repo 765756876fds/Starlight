@@ -6,9 +6,9 @@ REM NOTE: the ASR model folder is defined in setup_full.iss via #define ModelsDi
 REM       (change it there if your models live elsewhere; cmd cannot carry the
 REM       unicode path safely, ISCC reads the .iss directly).
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
-if not exist "dist\Starlight\Starlight.exe" (
+if not exist "dist\staging\Starlight\Starlight.exe" (
     echo [ERROR] dist\Starlight\Starlight.exe not found. Run build.ps1 first.
     exit /b 1
 )
@@ -46,8 +46,8 @@ if not exist "%ISCC%" (
     echo [ERROR] Inno Setup not found. Download from https://jrsoftware.org/ and install.
     exit /b 1
 )
-echo [2/2] Compiling Starlight_Setup_Full.exe (models bundled per setup_full.iss ModelsDir) ...
-"%ISCC%" "setup_full.iss"
+echo [2/2] Compiling Starlight-Setup-x64.exe (models bundled per setup_full.iss ModelsDir) ...
+"%ISCC%" "scripts\setup_full.iss"
 if errorlevel 1 (
     echo [ERROR] Inno Setup compile failed.
     exit /b 1

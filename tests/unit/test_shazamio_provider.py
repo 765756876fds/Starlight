@@ -44,6 +44,24 @@ def test_missing_optional_dependency_is_safe(tmp_path, monkeypatch):
     assert result.status is ShazamRecognitionStatus.DEPENDENCY_MISSING
 
 
+def test_import_failure_logs_original_exception(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "sample.wav"
+    _wav(path)
+    real_import = __import__
+
+    def blocked(name, *args, **kwargs):
+        if name == "shazamio":
+            raise ImportError("missing shazamio_core.pyd")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", blocked)
+    with caplog.at_level("ERROR"):
+        result = ShazamIOProvider().recognize(str(path))
+    assert result.status is ShazamRecognitionStatus.DEPENDENCY_MISSING
+    assert "ImportError" in caplog.text
+    assert "missing shazamio_core.pyd" in caplog.text
+
+
 def test_success_and_no_match_are_parsed_without_playback(tmp_path, monkeypatch):
     path = tmp_path / "sample.wav"
     _wav(path)

@@ -70,20 +70,30 @@ class Logger:
         }
         return colors.get(level, "")
 
-    def debug(self, message: str, **kwargs):
-        self._write("DEBUG", message, kwargs)
+    def _format_message(self, message: str, args: tuple[Any, ...]) -> str:
+        """Support the standard logging ``message, *args`` calling style."""
+        if not args:
+            return message
+        try:
+            return message % args
+        except (TypeError, ValueError):
+            # Keep logging non-fatal if a caller supplies a mismatched format.
+            return " ".join([message, *(str(arg) for arg in args)])
 
-    def info(self, message: str, **kwargs):
-        self._write("INFO", message, kwargs)
+    def debug(self, message: str, *args: Any, **kwargs):
+        self._write("DEBUG", self._format_message(message, args), kwargs)
 
-    def warning(self, message: str, **kwargs):
-        self._write("WARNING", message, kwargs)
+    def info(self, message: str, *args: Any, **kwargs):
+        self._write("INFO", self._format_message(message, args), kwargs)
 
-    def error(self, message: str, **kwargs):
-        self._write("ERROR", message, kwargs)
+    def warning(self, message: str, *args: Any, **kwargs):
+        self._write("WARNING", self._format_message(message, args), kwargs)
 
-    def critical(self, message: str, **kwargs):
-        self._write("CRITICAL", message, kwargs)
+    def error(self, message: str, *args: Any, **kwargs):
+        self._write("ERROR", self._format_message(message, args), kwargs)
+
+    def critical(self, message: str, *args: Any, **kwargs):
+        self._write("CRITICAL", self._format_message(message, args), kwargs)
 
     def close(self):
         if self._file:

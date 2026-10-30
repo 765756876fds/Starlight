@@ -7,6 +7,7 @@
 - 关闭窗口仅 hide（不销毁运行中的线程；下次 start 时 isRunning 拒绝）。
 """
 import os
+import logging
 import tempfile
 import threading
 
@@ -14,10 +15,12 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton
 
 from ...music.capture import CaptureCancelled
-from ...music.shazamio_provider import ShazamRecognitionStatus
+from ...music.shazamio_provider import ShazamRecognitionStatus, ShazamRecognitionResult
 from ..theme.colors import Colors
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.icon_utils import lucide_icon
+
+logger = logging.getLogger(__name__)
 
 
 class _IdentifyWorker(QObject):
@@ -80,7 +83,14 @@ class _OnlineIdentifyWorker(QObject):
 
     @Slot()
     def run(self):
-        self.done.emit(self._provider.recognize(self._wav_path))
+        try:
+            result = self._provider.recognize(self._wav_path)
+        except Exception as exc:
+            logger.error("online_identify worker_failed type=%s", type(exc).__name__)
+            result = ShazamRecognitionResult(
+                ShazamRecognitionStatus.SERVICE_ERROR,
+                detail="在线识曲暂时无法完成，请重试并查看诊断结果")
+        self.done.emit(result)
 
 
 class IdentifyDialog(GlassDialog):
@@ -259,6 +269,8 @@ class IdentifyDialog(GlassDialog):
             from ...music.shazamio_provider import ShazamIOProvider
             self._busy = True
             self._online_cancelled = False
+            self.btn_start.setEnabled(False)
+            self.source_combo.setEnabled(False)
             self.btn_cancel.setEnabled(True)
             self._online_thread = QThread()
             self._online_worker = _OnlineIdentifyWorker(self._current_wav, ShazamIOProvider())
@@ -268,6 +280,7 @@ class IdentifyDialog(GlassDialog):
             self._online_worker.done.connect(self._online_thread.quit)
             self._online_thread.finished.connect(self._cleanup_wav)
             self._online_thread.start()
+            logger.info("online_identify_started")
             self.lbl_title.setText("正在在线识曲…")
             self.lbl_status.setText("已同意发送短音频，正在等待识别结果")
         except Exception as exc:
@@ -276,6 +289,8 @@ class IdentifyDialog(GlassDialog):
 
     @Slot(object)
     def _on_online_done(self, result):
+        self.btn_start.setEnabled(True)
+        self.source_combo.setEnabled(True)
         if self._online_cancelled:
             self._busy = False
             self.btn_cancel.setEnabled(False)
@@ -285,14 +300,15 @@ class IdentifyDialog(GlassDialog):
             return
         self._busy = False
         self.btn_cancel.setEnabled(False)
+        logger.info("online_identify_result status=%s", result.status.value)
         if result.status is not ShazamRecognitionStatus.SUCCESS:
             self._cleanup_wav()
             messages = {
-                ShazamRecognitionStatus.NO_MATCH: "在线服务未找到匹配歌曲",
-                ShazamRecognitionStatus.TIMEOUT: "在线识曲超时",
-                ShazamRecognitionStatus.NETWORK_ERROR: "在线识曲网络不可用",
+                ShazamRecognitionStatus.NO_MATCH: "在线服务未找到匹配歌曲，请播放清晰的歌曲片段后重试",
+                ShazamRecognitionStatus.TIMEOUT: "在线识曲超时，请检查网络后重试",
+                ShazamRecognitionStatus.NETWORK_ERROR: "在线识曲连接失败，请检查网络后重试",
                 ShazamRecognitionStatus.RATE_LIMITED: "在线识曲请求过于频繁，请稍后再试",
-                ShazamRecognitionStatus.DEPENDENCY_MISSING: "在线识曲依赖未安装，本地识曲仍可使用",
+                ShazamRecognitionStatus.DEPENDENCY_MISSING: "在线识曲组件加载失败，请打开设置 → 诊断，复制检查结果",
             }
             self.lbl_title.setText("识曲")
             self.lbl_status.setText(messages.get(result.status, result.detail or "在线识曲失败"))
@@ -372,8 +388,21 @@ class IdentifyDialog(GlassDialog):
         indexed = stats.get("indexed", 0)
         skipped = stats.get("skipped", 0)
         failed = stats.get("failed", 0)
+        scanned = int(getattr(self._service, "last_scan_count", 0) or 0)
         self.lbl_status.setText(f"指纹库更新完成：新增 {indexed} 首，跳过 {skipped} 首，失败 {failed} 首")
-        self.lbl_title.setText("可以开始识曲")
+        if not self._service.has_library():
+            if scanned == 0:
+                self.lbl_title.setText("未发现可扫描歌曲")
+                self.lbl_status.setText("请先在设置中添加并启用音乐目录，再建立指纹库")
+            elif failed:
+                self.lbl_title.setText("指纹库未就绪")
+                self.lbl_status.setText(
+                    f"扫描到 {scanned} 首歌曲，但全部指纹计算失败（失败 {failed} 首），请检查音频格式和 FFmpeg")
+            else:
+                self.lbl_title.setText("指纹库未就绪")
+                self.lbl_status.setText("未生成可用于识曲的指纹记录，请检查音乐文件")
+        else:
+            self.lbl_title.setText("可以开始识曲")
         self.btn_index.show()
 
     @Slot(str)

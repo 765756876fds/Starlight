@@ -75,7 +75,10 @@ class StatusBar(QStatusBar):
         if lcu is not None:
             lcu_ok = bool(getattr(lcu, "connected", False))
         self._update_state(self.lbl_lcu, "link", lcu_ok,
-                           "LCU 已连接" if lcu_ok else "LCU 未连接")
+                           "游戏已连接" if lcu_ok else "等待游戏客户端")
+        if not lcu_ok:
+            self.lbl_lcu.setStyleSheet(f"color: {_IDLE};")
+        self.lbl_lcu.setToolTip("英雄联盟客户端连接状态；未启动游戏不影响音乐和电影")
 
         asr = self._svc.get("asr")
         asr_label = "未就绪"
@@ -87,6 +90,17 @@ class StatusBar(QStatusBar):
                 names = [getattr(e, "name", type(e).__name__) for e in engines]
                 asr_label = "/".join(names) if names else "READY"
         self._update_state(self.lbl_asr, "cpu", asr_ok, f"ASR {asr_label}")
+        self.lbl_asr.setText("语音识别就绪" if asr_ok else "语音识别未就绪")
+        self.lbl_asr.setToolTip(f"识别引擎：{asr_label}" if asr_ok else "请在设置 → 诊断中检查运行环境")
+        voice = self._svc.get("voice")
+        try:
+            on = bool(voice.is_mic_on()) if voice is not None else False
+            self._render_mic_btn(on)
+            self.btn_mic.setChecked(on)
+            self.btn_mic.setEnabled(voice is not None)
+        except Exception:
+            self.btn_mic.setEnabled(False)
+            self.btn_mic.setToolTip("暂时无法读取语音状态，请查看设置 → 诊断")
 
     def _toggle_mic(self):
         try:
@@ -96,6 +110,8 @@ class StatusBar(QStatusBar):
                 self._render_mic_btn(on)
         except Exception as e:
             print(f"麦克风开关错误: {e}")
+            self.showMessage("语音开关未成功，请查看设置 → 诊断", 5000)
+        self.refresh()
 
     def _render_mic_btn(self, on: bool):
         self.btn_mic.setText("语音开" if on else "语音关")

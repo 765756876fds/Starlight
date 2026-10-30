@@ -1,202 +1,155 @@
-# LoL × 本地音乐 × 语音 Agent
+# Starlight · 星芒
 
-英雄联盟信息助手 + 本地音乐助手，语音作为快捷操作方式。
+音乐、电影、英雄联盟助手与本地语音控制，一个 Windows 桌面入口。
 
-## 核心原则
+星芒希望减少娱乐时反复切换工具的操作：听歌、看视频、查看对局信息，以及用一句话暂停、继续或查询状态，都能在同一个应用里完成。主界面包含 **游戏、音乐、电影、控制台、设置** 五个页面；游戏页内保留当前对局、自动化和对局信息三个子页面。
 
-1. **不为了 AI 而 AI** — 能用确定性代码解决的，优先用代码
-2. **意图识别纯规则** — RuleBasedIntent 确定性匹配，无 LLM fallback，不直接控制电脑
-3. **信息可以丰富，语音必须克制** — 监控详细，播报稀疏
+## 可以做什么
 
-## 功能模块
+| 模块 | 当前能力 |
+| --- | --- |
+| 音乐 | 本地曲库扫描与搜索、在线音源搜索、播放队列与歌单、切歌、音量、循环和随机播放、九档倍速、高潮段跳转与手动标记、睡眠定时 |
+| 识曲 | 系统声音或麦克风短音频采集、本地指纹匹配，以及通过 ShazamIO 接入的在线识曲；可将识别结果衔接到现有搜索与播放流程 |
+| 电影 | 本地视频选择、多个在线片源搜索、内容分类与筛选、同目录字幕自动匹配、在线与本地共用的50条播放历史及单条删除 |
+| 播放窗口 | 历史双击重播、画面单击暂停/继续、窗口最小化恢复、音量、进度和倍速控制；电影与音乐使用独立MPV实例并协调播放 |
+| 英雄联盟 | 客户端与当前对局信息、技能冷却和自定义提醒、自动接受、配置后的禁用/选人、已有大厅自动匹配，以及Combo开关与监听状态 |
+| 语音与诊断 | 本地ASR、确定性中文命令规则、有限参数追问、执行结果反馈、优先级播报队列；设置中的版本与依赖诊断 |
 
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| 🎵 本地音乐控制 | INTEGRATED | mpv + JSON IPC，播放/暂停/下一首/音量/随机/单曲循环 |
-| 🎵 音乐模糊搜索 | INTEGRATED | SQLite FTS5 + BM25 + 字符串相似度 |
-| 🎵 音乐扫描入库 | INTEGRATED | mutagen 读取标签，支持 FLAC/MP3/M4A |
-| 🎵 音乐 Highlight | IMPLEMENTED | 跳高潮 / 高潮段自动轮播 / 手动标记（SQLite 持久化） |
-| 🎧 在线音乐 | SKELETON | 框架已接，archive 源可用，JS/MusicFree 源需 node+音源数据 |
-| 🎮 2999 游戏状态 | IMPLEMENTED | Live Client Data API，快照+状态差异→EventBus |
-| 🎮 GameAlarm 计时 | IMPLEMENTED | 闪现/技能/眼位/自定义计时器 |
-| 🎮 LCU 客户端连接 | IMPLEMENTED | 游戏流程、英雄选择、国服锁文件/进程双通道 |
-| 🤖 对局自动化 | IMPLEMENTED（未真测） | Auto Queue / Accept / Ban / Pick / Safe Stop，默认关闭 |
-| ⏱️ 手动技能冷却提醒 | IMPLEMENTED | CooldownManager + 英雄/技能数据 + TTS（语音入口待接） |
-| 👥 玩家/队友/对手信息 | IMPLEMENTED | 对局内分析 + 语音历史查询 + ChampSelect 10 人快照 |
-| 🎙️ 语音识别 ASR | IMPLEMENTED | Qwen3-ASR（llama-server 主，llama.cpp 备） |
-| 🧠 意图理解 Intent | INTEGRATED | 纯规则匹配（RuleBasedIntent），无 LLM fallback，写操作要求明确动词 |
-| 🔊 TTS 语音输出 | INTEGRATED | Edge TTS → mpv |
-| 🎯 Speech Judge | INTEGRATED | S/A/B/C/DROP 等级 + 频控 + 优先级播报队列 |
-| 🖥️ UI 控制台 / Overlay | IMPLEMENTED（未目视真测） | PySide6 主窗口 + 面板 + 托盘 + 对局内 Overlay |
-| 🎬 电影搜索播放 | IMPLEMENTED（基础版） | 苹果 CMS 搜索 → mpv 独立视频实例（窗口可关后自动唤醒，断点续播，与音乐互斥暂停） |
+### 使用边界
 
-### 电影播放（mpv）快捷键
+- **在线媒体依赖来源。** 插件加载成功不代表每首歌都有可用地址，片源搜索成功也不代表链接始终可播放。
+- **在线识曲会发送短音频。** 主动点击“开始识曲”会采集所选来源的片段；本地未命中后会尝试在线识别。请只使用你允许发送的音频。ShazamIO接入依赖第三方服务及网络，不保证长期可用。
+- **游戏自动化需要明确开启和正确配置。** 自动排队要求先手动进入合法的人机大厅，星芒不会自动创建大厅。开关开启不等于客户端已连接或当前阶段可以执行。
+- **语音识别在本机运行，播报不等于离线。** 当前支持Qwen TTS和Edge TTS；两者的实际可用性依赖网络，Qwen TTS还需要有效的个人密钥。
+- **成功、失败和未知尽量分开反馈。** “正在加载”表示任务已接受，不表示已出声或出画面。部分旧接口仍缺少完整完成确认。
+- **过期检查不能撤销已发出的操作。** 它用于跳过尚未开始的旧任务及晚到反馈，不能撤回已发送的HTTP或播放器命令。
 
-mpv 播放窗口已禁用自带英文控件（`--osc=no`），常用快捷键（mpv 默认键位）：
+## 语音怎么说
 
-| 键 | 功能 |
-|----|------|
-| `空格` | 播放/暂停 |
-| `←` / `→` | 后退 / 前进 5 秒 |
-| `↑` / `↓` | 前进 / 后退 60 秒 |
-| `[` / `]` | 减速 / 加速 10% |
-| `9` / `0` | 音量减 / 加 |
-| `m` | 静音 |
-| `f` | 全屏 / 退出全屏 |
-| `q` | 退出播放（关窗口，电影进入暂停待唤醒） |
-| `s` | 截图 |
-| `o` | 显示/隐藏 OSD 信息 |
+麦克风默认关闭，准备好识别组件后，点击主界面底部的语音开关。没有统一唤醒词要求，建议每次说一个短而明确的操作，等播报结束后再继续。
 
-> 状态词：NOT_STARTED / SKELETON / IMPLEMENTED / INTEGRATED / REAL_TESTED / DONE。
-> "未真测"表示代码已实现但尚未在真实对局/选人中验证。
+| 想做什么 | 可以说 |
+| --- | --- |
+| 搜歌播放 | “播放晴天” |
+| 控制音乐 | “暂停音乐”“继续音乐”“下一首” |
+| 调整音乐 | “音量五十”“把音乐声音调小一点” |
+| 调整速度 | “倍速一点五倍”“恢复正常速度” |
+| 睡眠定时 | “睡眠定时三十分钟”“取消睡眠定时” |
+| 搜片与控制 | “播放电影流浪地球”“暂停电影”“继续电影” |
+| 技能计时 | “队友石头人交闪”“查询当前技能计时” |
+| 查询游戏开关 | “查询自动排队状态”“自动连招开了吗” |
+| 停止播报 | “停止说话” |
 
-## 技术栈
+音量、倍速和睡眠定时缺少参数时会追问；可在12秒内补充一次，或说“取消”。明确的否定、引用和歧义表达会被拒绝或提示澄清，但规则并不理解所有自然语言。
 
-- **语言**: Python 3.11
-- **音频引擎**: mpv (JSON IPC / Named Pipe)
-- **数据库**: SQLite + FTS5
-- **ASR**: Qwen3-ASR（llama-server HTTP 为主，llama.cpp 本地为备）
-- **Intent**: 纯规则（RuleBasedIntent，无 LLM）
-- **TTS**: Edge TTS
-- **游戏数据**: Riot Live Client Data API (2999) + LCU
-- **架构**: EventBus + CommandBus + StateStore + Scheduler
+音乐支持 **0.5、0.75、1、1.25、1.5、1.75、2、2.5、3倍速**。本地视频选择、字幕和历史管理仍主要通过界面操作。
 
-## 项目结构
+更多说法见[语音控制说明](docs/语音控制说明与功能介绍.md)和[语音能力矩阵](docs/语音能力矩阵.md)。表中的代码或测试支持不等于所有设备均已验收。
 
-```
-lol-music-agent/
-├── main.py                  # 主入口
-├── 启动.bat                 # Windows 启动脚本
-├── requirements.txt         # Python 依赖
-├── config/
-│   └── settings.yaml        # 全局配置
-├── app/
-│   ├── core/                # 核心基础设施
-│   │   ├── config.py        # 配置加载
-│   │   ├── event_bus.py     # 事件总线
-│   │   ├── command_bus.py   # 命令总线
-│   │   ├── state_store.py   # 状态存储
-│   │   ├── scheduler.py     # 任务调度
-│   │   └── logger.py        # 日志
-│   ├── music/               # 音乐模块
-│   │   ├── database.py      # SQLite + FTS5
-│   │   ├── scanner.py       # 音乐扫描
-│   │   ├── mpv.py           # mpv 控制
-│   │   ├── queue.py         # 播放队列
-│   │   ├── search.py        # 模糊搜索
-│   │   └── controller.py    # 音乐控制器
-│   ├── lol/                 # LoL 模块
-│   │   ├── live_client.py   # 2999 API
-│   │   ├── snapshot.py      # 游戏快照
-│   │   ├── state_diff.py    # 状态差异
-│   │   ├── events.py        # 事件定义
-│   │   ├── game_alarm.py    # 游戏提醒引擎
-│   │   ├── lcu.py           # LCU 连接
-│   │   └── runtime.py       # LoL 运行时
-│   ├── voice/               # 语音输入
-│   │   ├── asr.py           # ASR 引擎接口
-│   │   ├── intent.py        # 意图识别
-│   │   └── runtime.py       # 语音运行时
-│   ├── speech/             # 语音输出
-│   │   ├── tts.py           # TTS 控制（Edge TTS → mpv）
-│   │   ├── speech_judge.py  # 播报分级与频控
-│   │   ├── speech_queue.py  # 优先级播报队列
-│   │   └── rule_engine.py   # 游戏事件→播报文案
-│   ├── player/             # 玩家数据（身份/历史/分析/语音查询）
-│   ├── lol/
-│   │   ├── runtime.py       # LoL 运行时（2999 + LCU 轮询）
-│   │   ├── automation/      # Auto Queue/Accept/Ban/Pick/SafeStop
-│   │   ├── cooldown/        # 手动技能冷却提醒
-│   │   ├── ongoing/         # ChampSelect 对局内选手快照
-│   │   └── data/            # 英雄/技能/召唤师技能目录
-│   └── ui/                 # PySide6 控制台 + Overlay
-├── data/                    # 数据目录
-├── logs/                    # 日志目录
-└── tests/                   # 测试
+## 运行环境
+
+目前主要面向 **Windows 10/11 x64、Python 3.11**。源码依赖使用PySide6，当前要求版本范围为 `>=6.6,<6.10`。
+
+| 组件 | 用途与准备方式 |
+| --- | --- |
+| Python依赖 | 使用项目虚拟环境安装 `requirements.txt` |
+| MPV | 音乐、电影和TTS音频播放；推荐放在 `third_party/mpv/`，或设置有效路径 |
+| Node.js | MusicFree/LX等JS音源插件运行；需要Node运行时及兼容插件 |
+| Qwen3-ASR与llama-server | 本地语音识别；需要模型、投影文件及配套服务端运行文件，支持Vulkan路径和CPU回退 |
+| FFmpeg | 部分音频/视频容器的指纹解码与相关解析；优先查找 `third_party/ffmpeg/ffmpeg.exe`，再按现有规则回退 |
+| 麦克风与音频驱动 | 语音控制及环境音采集；系统声音采集使用WASAPI回环 |
+| LoL客户端 | 仅游戏相关能力需要；未启动客户端不影响音乐和电影的基本使用 |
+
+**Git源码不包含大型模型、MPV/Node/llama-server/FFmpeg二进制、个人音乐库或私人音源插件。** Python依赖安装不会自动补齐所有外部运行组件。不要把开发机的配置、密钥或数据库复制给其他用户。
+
+ASR常用目录为：
+
+```text
+models/
+  Qwen3-ASR-0.6B-Q8_0.gguf
+  mmproj-Qwen3-ASR-0.6B-bf16.gguf
+third_party/
+  mpv/mpv.exe
+  node/node.exe
+  ffmpeg/ffmpeg.exe
+  llama/vulkan/llama-server.exe
+  llama/cpu/llama-server.exe
 ```
 
-## 快速开始
+可执行文件如依赖DLL，需要保留同一发行组件的配套文件。模型缺失时现有启动流程会尝试下载，能否完成取决于网络和资源来源；不应把源码启动理解成完整离线安装。
 
-### 1. 环境要求
+## 从源码启动
 
-- Windows 10/11
-- Python 3.11+
-- mpv 播放器
-- 本地 GGUF 模型（Qwen3-ASR，用于语音识别）
+在PowerShell中执行，已有项目时直接进入其目录：
 
-### 2. 安装依赖
-
-```bash
-pip install -r requirements.txt
+```powershell
+git clone --branch a0-cleanup https://github.com/765756876fds/Starlight.git
+cd Starlight
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# 使用在线识曲时再安装：
+.\.venv\Scripts\python.exe -m pip install -r requirements-optional.txt
+.\.venv\Scripts\python.exe main.py
 ```
 
-### 3. 配置
+首次配置可参考[安全配置模板](config/settings.example.yaml)。若需要复制，只在目标文件不存在时操作：
 
-编辑 `config/settings.yaml`：
-- 音乐扫描目录
-- mpv 路径
-- 本地模型路径
-- ASR/Intent 参数
-
-### 4. 运行
-
-```bash
-# 方式一：直接运行
-python main.py
-
-# 方式二：Windows 启动脚本
-启动.bat
+```powershell
+if (-not (Test-Path config/settings.yaml)) {
+    Copy-Item config/settings.example.yaml config/settings.yaml
+}
 ```
 
-## 语音命令示例
+启动后：
 
-### 音乐控制
-- "下一首" / "换一首" / "切歌"
-- "上一首"
-- "暂停" / "暂停一下"
-- "继续" / "继续播放"
-- "声音大一点" / "音量小一点"
-- "音量 50"
-- "跳高潮" / "跳到副歌"
-- "播放周杰伦的歌"
-- "来一首类似现在这个的"
+1. 在设置中添加并启用本地音乐目录，再扫描曲库。
+2. 检查MPV路径；使用在线音乐时准备兼容的音源插件和Node。
+3. 在电影页选择本地文件，或检查已配置在线片源的可用性。
+4. 在设置中选择TTS方式；Qwen密钥只放在个人配置中。
+5. 确认ASR模型和服务端就绪后，再打开麦克风。
 
-### 游戏提醒
-- "对面莎弥拉闪现了，帮我记一下"
-- "莎弥拉 W 用了"
-- "这里插了个眼，帮我记一下"
-- "两分钟后提醒我"
+当前源码支持单实例唤醒。已运行时请使用现有窗口，避免把旧安装版的响应误认为新源码的执行结果。
 
-## 数据流
+## 数据、隐私与排查
 
-```
-麦克风 → VAD → ASR → 文本 → RuleBasedIntent → 命中 → CommandBus → 确定性执行
-                                    ↓ 未命中
-                                  system.unknown（不执行）
+- 源码模式的可写数据以项目目录为基础；安装模式通常使用 `%LOCALAPPDATA%/Starlight`，与程序资源分离。
+- `config/settings.yaml` 是个人配置，应保留在本机。不要将API Key、Cookie、Token、媒体库或播放历史提交到仓库。
+- 设置 → 诊断可以查看运行方式、构建信息和关键依赖是否可加载。诊断不会代替实际录音、联网识曲或游戏验收。
+- 遇到失败时，先核对运行的是源码还是安装版，再查看对应日志；分享前遮盖路径、账号、凭据和会话信息。
 
-                    2999 API → GameSnapshot → StateDiff → GameEvent → EventBus
-                                                                          ↓
-    mpv ← MusicController ← CommandBus ← Intent                GameAlarm
-                                                                          ↓
-                                                            SpeechJudge → TTS
+也可以生成一份新的依赖报告；报告文件必须尚不存在：
+
+```powershell
+$report = Join-Path $env:TEMP ("starlight-check-" + [guid]::NewGuid().ToString("N") + ".json")
+.\.venv\Scripts\python.exe main.py --self-check --report $report
 ```
 
-## 开发原则
+## 当前状态
 
-1. **先研究再实现** — 任何功能开发前先检索成熟项目和官方文档
-2. **确定性优先** — 能用代码解决的不上 AI
-3. **Read > Infer** — 游戏能直接读取的数据，不自己计算
-4. **安全第一** — 不做外挂/脚本/自动玩游戏，不读取游戏内存
-5. **模块化设计** — EventBus 解耦，模块可独立替换
+项目处于持续开发和Windows实机验收阶段。本地视频、字幕、播放历史及窗口交互已有用户实测记录；近期语音安全边界、操作结果和诊断功能已有自动化回归，但真实麦克风、TTS、键盘hook及不同在线来源仍需逐项验证。
 
-## 明确不做
+当前回归仍有两个未收口的测试问题：
 
-- ❌ 自动控制英雄移动/技能/攻击
-- ❌ 游戏内存读取 / DLL 注入
-- ❌ 视觉识别作为核心数据源
-- ❌ 聊天机器人式人格陪聊
-- ❌ 复杂多 Agent / RAG（第一版）
+- `tests/unit/test_music.py::TestP0ConcurrencyAndRobustness::test_apply_stream_unifies_headers_and_state`：缺少电影暂停回调注入，触发既有播放安全守卫；在近期修复前同样可复现。
+- `tests/ui/test_humming.py::test_runtime_dispatches_identify`：测试使用的替身只提供 `execute()`，未提供真实CommandBus已有的 `has_handler()`；真实CommandBus的识曲分发已另行验证。
 
-## 许可证
+这些失败仍保留，未通过放宽守卫、删除断言或跳过测试掩盖。完整测试集和GitHub CI不作全部通过承诺。
 
-个人项目，仅供学习使用。
+播放进度跨会话恢复、统一媒体快捷键和更完整的偏好体验不作已完成承诺。仓库源码更新也不代表本机已有安装包自动包含了新修复；本页不提供未经核实的发行下载链接。
+
+## 仓库目录
+
+```text
+main.py                 应用入口
+app/music/              音乐、音源、识曲和播放器适配
+app/movie/              电影搜索、分类、字幕与历史
+app/lol/、app/combo/     游戏集成、计时与自动化
+app/voice/、app/speech/  语音输入、命令和播报
+app/ui/                 桌面界面
+config/                 配置模板
+tests/                  单元、界面与集成测试
+scripts/                构建与安装器脚本
+docs/                   使用说明与维护记录
+```
+
+第三方组件、模型、插件和媒体来源有各自的使用与分发条件；本介绍不额外授予它们的授权。

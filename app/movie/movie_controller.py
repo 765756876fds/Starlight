@@ -211,19 +211,43 @@ class MovieController:
         """语音"播放电影XX"：搜索 → 播 Top1（语音直达，不弹 UI 选集对话框）。
         包2c：params["episode"] 直跳对应集（"播放电影甄嬛传第5集"→第5集）；
         无集数 → 播第一集（现状不变）；集数越界 → 提示 + False（不崩）。"""
+        def current():
+            guard = getattr(command, "is_current", None)
+            return guard is None or guard()
+
+        def notify(message):
+            if current():
+                guard = getattr(command, "is_current", None)
+                if guard is None:
+                    self._notify_voice(message)
+                else:
+                    self._notify_voice(message, is_current=guard)
+
+        def load(item, index=None):
+            if not current():
+                return None
+            ok = self.play(item) if index is None else self.play(item, index=index)
+            if ok is False:
+                notify("电影加载未成功，请尝试其他片源")
+            return ok
+
+        if not current():
+            return None
         query = ((command.params or {}).get("query") or "").strip()
         if not query:
-            self._notify_voice("请说电影名字")
+            notify("请说电影名字")
             return False
         episode = (command.params or {}).get("episode")
         try:
             items = self.search(query)
         except Exception as e:
-            self._notify_voice(f"语音搜索失败：{e}")
+            notify("语音搜索失败，请检查网络和片源")
             return False
+        if not current():
+            return None
         if not items:
             # P1：UI 反馈（面板状态栏显示"未找到：XX"）
-            self._notify_voice(f"未找到：{query}")
+            notify(f"未找到：{query}")
             return False
         item = items[0]
         if episode is not None:
@@ -231,20 +255,22 @@ class MovieController:
             eps = self.episodes(item)
             if len(eps) <= 1:
                 if ep == 1:
-                    self._notify_voice(f"开始播放：{item.get('vod_name') or ''}")
-                    return self.play(item)
-                self._notify_voice(f"该片只有 1 集，没有第 {ep} 集")
+                    notify(f"正在加载：{item.get('vod_name') or ''}")
+                    return load(item)
+                notify(f"该片只有 1 集，没有第 {ep} 集")
                 return False
             if ep < 1 or ep > len(eps):
-                self._notify_voice(f"该剧只有 {len(eps)} 集，没有第 {ep} 集")
+                notify(f"该剧只有 {len(eps)} 集，没有第 {ep} 集")
                 return False
-            self._notify_voice(f"开始播放：{item.get('vod_name') or ''} 第{ep}集")
-            return self.play(item, index=ep - 1)
-        self._notify_voice(f"开始播放：{item.get('vod_name') or ''}")
-        return self.play(item)
+            notify(f"正在加载：{item.get('vod_name') or ''} 第{ep}集")
+            return load(item, index=ep - 1)
+        notify(f"正在加载：{item.get('vod_name') or ''}")
+        return load(item)
 
-    def _notify_voice(self, msg: str):
+    def _notify_voice(self, msg: str, is_current=None):
         """语音命令结果 → UI 反馈 + TTS 播报。"""
+        if is_current is not None and not is_current():
+            return
         cb = getattr(self, "_voice_feedback", None)
         if callable(cb):
             try:
@@ -260,7 +286,7 @@ class MovieController:
                 sq.enqueue(SpeechItem(
                     text=msg, priority=PRIORITY_B,
                     expire_at=_t.time() + 30.0,
-                    category="movie_voice", interruptible=True))
+                    category="movie_voice", interruptible=True, is_current=is_current))
             except Exception as e:
                 logger.error(f"[Movie] TTS 播报失败: {e}")
         else:
@@ -908,9 +934,13 @@ class MovieController:
         try:
             if self._current is not None and self.mpv.is_running():
                 self.mpv.pause()
+                if self.mpv.get_property("pause", timeout=0.5) is not True:
+                    return None
                 # 仍占播放权（playing=True），标记暂停态（语音"继续"可恢复）
                 self._write_state(paused=True)
                 self._notify_voice("电影已暂停")
+                return True
+            return False
         finally:
             self._pausing = False
 
@@ -962,10 +992,15 @@ class MovieController:
         return None
 
     def resume(self):
+        if self._current is None or not self.mpv.is_running():
+            return False
         self.mpv.play()
+        if self.mpv.get_property("pause", timeout=0.5) is not False:
+            return None
         if self._current is not None:
             self._write_state(playing=True, paused=False)
             self._notify_voice("电影继续播放")
+        return True
 
     def seek(self, seconds, mode="relative"):
         try:
@@ -1265,14 +1300,15 @@ class MovieController:
             self.mpv.set_property("speed", float(rate))
 
     def set_volume(self, vol):
-        if self.mpv.is_running():
-            clamped = max(0, min(100, int(vol)))
-            self.mpv.set_property("volume", clamped)
-            try:
-                from ..core.state_store import StateNamespace
-                self.state_store.set(StateNamespace.MOVIE, "volume", clamped)
-            except Exception:
-                pass
+        if not self.mpv.is_running():
+            return False
+        clamped = max(0, min(100, int(vol)))
+        self.mpv.set_property("volume", clamped)
+        try:
+            from ..core.state_store import StateNamespace
+            self.state_store.set(StateNamespace.MOVIE, "volume", clamped)
+        except Exception:
+            pass
 
     def get_volume(self):
         try:

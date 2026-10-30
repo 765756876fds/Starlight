@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 # 优先级常量
 PRIORITY_S = 0
@@ -45,6 +45,7 @@ class SpeechItem:
     created_at: float = field(default_factory=time.time)
     # 内部状态
     status: str = "pending"  # pending / playing / cancelled / finished / expired
+    is_current: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
 
 
 class SpeechQueue:
@@ -288,6 +289,20 @@ class SpeechQueue:
             # 设置为当前
             item.status = "playing"
             self._current = item
+
+        # Check request freshness outside the queue lock: voice request guards
+        # have their own lock and enqueue() can run while holding it.
+        try:
+            current = item.is_current is None or item.is_current() is True
+        except Exception:
+            current = False
+        if not current:
+            with self._lock:
+                item.status = "cancelled"
+                if self._current is item:
+                    self._current = None
+                self._seen_event_ids.discard(item.event_id)
+            return
 
         # 播放（不在锁内）
         self.tts.speak(item.text)

@@ -314,8 +314,9 @@ class MpvController:
             return int(vol)
         return int(self._properties.get("volume", 0))
 
-    def set_property(self, name: str, value: Any):
-        self._send_command("set_property", [name, value])
+    def set_property(self, name: str, value: Any) -> dict[str, Any] | None:
+        """Return the IPC response; None means unconfirmed, not success."""
+        return self._send_command("set_property", [name, value])
 
     def get_property(self, name: str, timeout: float = 2.0) -> Any:
         resp = self._send_command("get_property", [name], timeout=timeout)

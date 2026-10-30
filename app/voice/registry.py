@@ -6,16 +6,72 @@ ASR 文本 → 动作/概念/参数提取 → Registry 检索 → 结构化意�
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
+import re
+from ..core.command_bus import CommandType
+from ..core.operation_result import OperationResult, OperationStatus
 
 
-# 通用动作映射（集中维护，不在每个功能重复）
-_ACTION_MAP: dict[str, str] = {
-    "播放": "play", "开": "on", "开启": "on", "打开": "on", "开一下": "on",
-    "关": "off", "关闭": "off", "关掉": "off",
-    "下一首": "next", "下一曲": "next", "换一首": "next",
-    "下一部": "next_film", "下一集": "next_episode",
-    "暂停": "pause", "继续": "resume",
+@dataclass(frozen=True)
+class ParameterSpec:
+    key: str
+    prompt: str
+    example: str
+
+
+# Shared by parameter clarification, execution validation and help tests.
+PARAMETERS = {
+    CommandType.MUSIC_SET_SPEED: ParameterSpec("speed", "请说出要设置的倍速，例如一点五倍", "倍速一点五倍"),
+    CommandType.MUSIC_SLEEP_TIMER_SET: ParameterSpec("seconds", "请说出睡眠定时的时长，例如三十分钟", "睡眠定时三十分钟"),
+    CommandType.MUSIC_VOLUME_SET: ParameterSpec("volume", "请说音量数值，范围零到一百", "音乐音量五十"),
+    CommandType.MOVIE_VOLUME_SET: ParameterSpec("volume", "请说电影音量数值，范围零到一百", "电影音量五十"),
 }
+
+
+def parameter_issue(command, params):
+    if command in (CommandType.AUTO_QUEUE_SET, CommandType.AUTO_ACCEPT_SET,
+                   CommandType.AUTO_BANPICK_SET, CommandType.AUTO_COMBO_SET):
+        if type(params.get("enabled")) is not bool:
+            return OperationResult(OperationStatus.NEEDS_PARAMETER, "请明确说打开或关闭哪项自动化功能")
+    spec = PARAMETERS.get(command)
+    if spec and (spec.key not in params or params[spec.key] is None):
+        return OperationResult(OperationStatus.NEEDS_PARAMETER, spec.prompt)
+    if command in (CommandType.MUSIC_VOLUME_SET, CommandType.MOVIE_VOLUME_SET):
+        value = params.get("volume")
+        if type(value) not in (int, float) or not 0 <= value <= 100:
+            return OperationResult(OperationStatus.UNSUPPORTED, "音量范围是零到一百")
+    if command in (CommandType.MUSIC_SEEK, CommandType.MOVIE_SEEK):
+        value = params.get("seconds")
+        if type(value) not in (int, float) or not 1 <= abs(value) <= 60:
+            return OperationResult(OperationStatus.NEEDS_PARAMETER, "请说快进或后退一到六十秒")
+    if command in (CommandType.MUSIC_VOLUME_UP, CommandType.MUSIC_VOLUME_DOWN,
+                   CommandType.MOVIE_VOLUME_UP, CommandType.MOVIE_VOLUME_DOWN) and "step" in params:
+        if type(params["step"]) is not int or not 1 <= params["step"] <= 100:
+            return OperationResult(OperationStatus.UNSUPPORTED, "请说一到一百之间的音量调整值")
+    return None
+
+
+def match_volume(text):
+    """Anchored action/object aliases; no arbitrary substring inference."""
+    if text in ("静音", "音乐静音"):
+        return CommandType.MUSIC_VOLUME_SET, {"volume": 0}
+    if text == "电影静音":
+        return CommandType.MOVIE_VOLUME_SET, {"volume": 0}
+    if re.fullmatch(r"(?:音乐)?音量", text):
+        return CommandType.MUSIC_VOLUME_SET, {}
+    if text == "电影音量":
+        return CommandType.MOVIE_VOLUME_SET, {}
+    m = re.fullmatch(r"(?:把)?(音乐|电影)(?:的)?(?:声音|音量)?(?:调)?(小|大)(?:一)?(?:点|点儿)", text)
+    if not m:
+        m = re.fullmatch(r"(音乐|电影)(小声|大声)(?:一)?点", text)
+    if m:
+        domain, direction = m.groups()
+        command = "movie" if domain == "电影" else "music"
+        return f"{command}.volume_{'down' if direction in ('小', '小声') else 'up'}", {}
+    m = re.fullmatch(r"音量(?:调)?(降低|减小|提高|增大)(?:一)?点", text)
+    if m:
+        return (CommandType.MUSIC_VOLUME_DOWN if m.group(1) in ("降低", "减小")
+                else CommandType.MUSIC_VOLUME_UP), {}
+    return None
 
 
 @dataclass
@@ -68,33 +124,25 @@ REGISTRY: list[Feature] = [
 
 
 def match(text: str) -> dict[str, Any] | None:
-    """通用语义匹配：从 ASR 文本提取动作+概念，检索 Registry。
-    返回结构化意图；未命中或歧义返回 None。"""
-    text = text.strip()
-    # 提取动作
-    action = None
-    for kw, act in _ACTION_MAP.items():
-        if kw in text:
-            action = act
-            break
-    if not action:
+    """Compatibility view of the real parser; no second substring parser."""
+    from .intent import RuleBasedIntent
+    from .text import normalize_text
+    intent = RuleBasedIntent.match(text)
+    if intent is None:
         return None
-    # 提取概念并匹配功能
-    candidates = []
-    for f in REGISTRY:
-        if action in f.actions:
-            for c in f.concepts:
-                if c in text:
-                    candidates.append(f)
-                    break
+    candidates = [f for f in REGISTRY if getattr(CommandType, f.executor) == intent.intent_type]
+    if len(candidates) > 1:
+        normalized = normalize_text(text)
+        candidates = [f for f in candidates if any(c in normalized for c in f.concepts)]
     if len(candidates) == 1:
         f = candidates[0]
+        action = ("on" if intent.params.get("enabled") else "off") if "enabled" in intent.params else f.actions[0]
         return {
             "domain": f.domain,
             "action": action,
             "feature_id": f.feature_id,
             "executor": f.executor,
-            "params": {"enabled": action == "on"} if f.executor == "MUSIC_HIGHLIGHT_MODE" else {},
+            "params": dict(intent.params),
             "match_quality": "explicit",
         }
     # 歧义或未命中

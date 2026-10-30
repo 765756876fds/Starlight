@@ -6,7 +6,9 @@
 #define MyAppName "星芒"
 #define MyAppVersion "0.1.0"
 #define MyAppExeName "Starlight.exe"
-#define SourceDir "..\dist\Starlight"
+#ifndef SourceDir
+#define SourceDir "..\dist\staging\Starlight"
+#endif
 #ifndef ModelsDir
 ; 模型目录：项目根 models/（相对 iss 所在目录 scripts/，用 ..\ 回退），换机可打包
 #define ModelsDir "..\models"
@@ -24,8 +26,11 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ; 全量版：含 ASR 模型（Q8_0 ~767MB + mmproj-bf16 ~361MB），断网可用，无需下载
 OutputDir=.
-OutputBaseFilename=Starlight_Setup_Full
-SetupIconFile=..\assets\icon\app.ico
+#ifndef StarlightOutputBaseName
+#define StarlightOutputBaseName "Starlight-Setup-x64"
+#endif
+OutputBaseFilename={#StarlightOutputBaseName}
+SetupIconFile=..\assets\installer\starlight.ico
 Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern

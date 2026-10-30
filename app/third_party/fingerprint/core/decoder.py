@@ -54,10 +54,37 @@ class FFmpegInfo:
     version: str | None = None
 
 
+def _bundled_ffmpeg_path() -> str | None:
+    """Return the packaged ffmpeg path, when the distribution contains it."""
+    try:
+        if getattr(sys, "frozen", False):
+            root = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            # decoder.py -> core/fingerprint/third_party/app/project root
+            root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        path = os.path.join(root, "third_party", "ffmpeg", "ffmpeg.exe")
+        return path if os.path.isfile(path) else None
+    except (OSError, TypeError):
+        return None
+
+
+def _resolve_ffmpeg(binary: str) -> str | None:
+    """Prefer an explicit binary, then the bundled binary, then PATH."""
+    explicit = str(binary or "").strip()
+    if explicit and explicit != "ffmpeg":
+        resolved = shutil.which(explicit)
+        if resolved:
+            return resolved
+        if os.path.isfile(explicit):
+            return explicit
+        return None
+    return _bundled_ffmpeg_path() or shutil.which("ffmpeg")
+
+
 @lru_cache(maxsize=8)
 def ffmpeg_info(binary: str = DEFAULT_FFMPEG) -> FFmpegInfo:
     """Locate ffmpeg once per process (cached). Use :func:`reset_ffmpeg_cache` in tests."""
-    resolved = shutil.which(binary)
+    resolved = _resolve_ffmpeg(binary)
     if not resolved:
         return FFmpegInfo(False)
     try:

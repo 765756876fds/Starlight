@@ -1,10 +1,15 @@
 ﻿# build.ps1 - LoL_Music_Agent one-click packaging (onedir portable folder)
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\build.ps1
+param(
+    [string]$DistRoot = 'dist\staging'
+)
 $ErrorActionPreference = 'Stop'
 # 位于 scripts/ 下：两级向上回退到项目根（third_party/config/data 等相对路径基于项目根）
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $root
-$py = 'C:\Program Files\Python311\python.exe'
+$py = Join-Path $root '.venv\Scripts\python.exe'
+if (-not (Test-Path $py)) { $py = 'C:\Program Files\Python311\python.exe' }
+if (-not (Test-Path $py)) { throw 'Python 3.11 runtime not found; create .venv or install Python311.' }
 
 Write-Host '[1/4] Prepare external tools (mpv / node) ...'
 if (-not (Test-Path 'third_party\mpv\mpv.exe')) {
@@ -50,7 +55,7 @@ Write-Host '[2/4] Running PyInstaller (build.spec) ...'
 # Start-Process 重定向：避开 PS 5.1 对 native stderr 的 NativeCommandError 误报
 try {
     $proc = Start-Process -FilePath $py `
-        -ArgumentList @('-m', 'PyInstaller', 'build.spec', '--clean', '--noconfirm') `
+        -ArgumentList @('-m', 'PyInstaller', (Join-Path $root 'scripts\build.spec'), '--clean', '--noconfirm', '--distpath', (Join-Path $root $DistRoot)) `
         -WorkingDirectory $root `
         -RedirectStandardOutput 'pyi_log.txt' -RedirectStandardError 'pyi_err.txt' `
         -Wait -PassThru -NoNewWindow
@@ -63,7 +68,7 @@ try {
 }
 
 Write-Host '[3/4] Post-process: move third_party/ and data/lol_data to exe dir (frozen PROJECT_ROOT = exe dir) ...'
-$dist = Join-Path $root 'dist\Starlight'
+$dist = Join-Path $root (Join-Path $DistRoot 'Starlight')
 $internal = Join-Path $dist '_internal'
 if (-not (Test-Path (Join-Path $dist 'third_party'))) {
     Move-Item (Join-Path $internal 'third_party') (Join-Path $dist 'third_party') -Force
@@ -137,3 +142,19 @@ Write-Host "    lol_data: $lold  $(Test-Path $lold)"
 $sz = (Get-ChildItem $dist -Recurse -File | Measure-Object Length -Sum).Sum
 Write-Host "    dist total: $([math]::Round($sz/1MB,1)) MB"
 Write-Host "DONE: $dist"
+
+# Probe the executable's own interpreter before an installer may be compiled.
+$reportPath = Join-Path ([System.IO.Path]::GetTempPath()) ('starlight-selfcheck-' + [guid]::NewGuid().ToString('N') + '.json')
+$probe = Start-Process -FilePath $exe -ArgumentList @('--self-check', '--report', ('"' + $reportPath + '"')) -WindowStyle Hidden -PassThru
+if (-not $probe.WaitForExit(60000)) {
+    $probe.Kill()
+    throw 'Frozen dependency self-check timed out; installer must not be built.'
+}
+if ($probe.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath)) {
+    throw "Frozen dependency self-check failed; report: $reportPath"
+}
+$probeReport = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+if (-not $probeReport.ok -or -not $probeReport.frozen) {
+    throw "Invalid frozen self-check report: $reportPath"
+}
+Write-Host "Frozen self-check passed. Report: $reportPath"

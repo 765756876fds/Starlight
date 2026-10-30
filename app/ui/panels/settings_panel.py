@@ -321,6 +321,8 @@ class SettingsPanel(QWidget):
         self._build_ui_group(tab_ui)
         tab_ui.addStretch(1)
         self._build_reset_row(tab_ui)
+        from ..widgets.diagnostics_panel import DiagnosticsPanel
+        self._tabs.addTab(DiagnosticsPanel(self), "诊断")
 
     def _make_tab_page(self, title: str) -> QVBoxLayout:
         """新建一个 tab 页：QScrollArea → QWidget → QVBoxLayout。

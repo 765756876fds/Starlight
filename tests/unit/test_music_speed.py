@@ -31,6 +31,10 @@ def _make_ctrl(tmp_path, mpv_available=True):
     with patch("app.music.controller.MpvController"):
         ctrl = MusicController(cfg)
     ctrl.mpv = MagicMock()
+    # A successful MPV write returns its JSON IPC response, not a truthy Mock.
+    # Error/None transport responses are covered through the real MPV wrapper
+    # in test_voice_speed_result_regressions.py.
+    ctrl.mpv.set_property.return_value = {"error": "success"}
     ctrl._mpv_available = mpv_available
     ctrl.db = db
     return ctrl, db
