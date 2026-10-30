@@ -106,6 +106,8 @@ class LoLAutomationService:
             self._config.auto_queue = bool(enabled)
             if enabled:
                 self._queue_config_warned = False
+            else:
+                self._queue.reset()
         if enabled:
             self._ensure_worker_running()
 
@@ -223,10 +225,21 @@ class LoLAutomationService:
             return
 
         if not self._lcu.connected:
+            self._queue.reset()
             self._set_state(AutomationState.CLIENT_DISCONNECTED)
             return
 
-        phase = self._lcu.get_gameflow_phase() or "None"
+        phase_status = getattr(self._lcu, "get_gameflow_phase_status", None)
+        if callable(phase_status):
+            phase_ok, phase = phase_status()
+            if not phase_ok:
+                self._queue.reset()
+                self._tick_hint = "游戏阶段未知，已暂停自动化操作"
+                self._set_state(AutomationState.IDLE)
+                self._publish("automation.phase_unknown", {})
+                return
+        else:
+            phase = self._lcu.get_gameflow_phase() or "None"
 
         # 离开 ChampSelect（正常进游戏 / 结算）主动清 state，避免跨 session 污染。
         # 不依赖 404；404 路径在 poll 内仍保留作为双保险。

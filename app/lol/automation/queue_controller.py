@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import time
+
 SEARCH_URL = "/lol-lobby/v2/lobby/matchmaking/search"
 SEARCH_STATE_URL = "/lol-lobby/v2/lobby/matchmaking/search-state"
 LOBBY_URL = "/lol-lobby/v2/lobby"
@@ -46,6 +48,9 @@ class QueueController:
         self._prompted_user = False
         self._verified = False
         self._verified_in_queue = False  # 终态短路：已确认排队成功后不再发 search-state GET
+        self._lobby_create_pending = False
+        self._lobby_retry_at = 0.0
+        self._lobby_failures = 0
 
     def is_currently_in_queue(self) -> bool:
         status, payload = self._request("GET", SEARCH_STATE_URL, None)
@@ -58,6 +63,9 @@ class QueueController:
         self._prompted_user = False
         self._verified = False
         self._verified_in_queue = False
+        self._lobby_create_pending = False
+        self._lobby_retry_at = 0.0
+        self._lobby_failures = 0
 
     def _mark_verified(self) -> None:
         if not self._verified:
@@ -72,6 +80,9 @@ class QueueController:
         # 0) 终态短路：已确认在队列中 → 直接返回，不再发 search-state GET
         if self._verified_in_queue:
             return False
+
+        if gameflow_phase == "Lobby":
+            self._lobby_create_pending = False
 
         # 1) 状态保护：已在队列中 → 绝不重复 POST
         if self.is_currently_in_queue():
@@ -108,6 +119,8 @@ class QueueController:
 
         # 5) 空闲阶段：自动创建房间（新增功能，失败不影响原有逻辑）
         if gameflow_phase in _IDLE_PHASES:
+            if self._lobby_create_pending or time.monotonic() < self._lobby_retry_at:
+                return False
             try:
                 return self._auto_create_lobby(config)
             except Exception as e:
@@ -134,6 +147,9 @@ class QueueController:
         if config is None:
             return False
 
+        if self._lobby_create_pending or time.monotonic() < self._lobby_retry_at:
+            return False
+
         mode = getattr(config, "auto_queue_mode", "normal")
         primary = getattr(config, "auto_queue_primary_role", "不限")
         secondary = getattr(config, "auto_queue_secondary_role", "不限")
@@ -142,11 +158,18 @@ class QueueController:
         print(f"[AUTO_QUEUE] auto create lobby: mode={mode} queueId={queue_id}", flush=True)
 
         # 第一步：创建房间
-        status, _ = self._request("POST", LOBBY_URL, {"queueId": queue_id})
+        status, body = self._request("POST", LOBBY_URL, {"queueId": queue_id})
         if status not in (200, 201, 204):
-            print(f"[AUTO_QUEUE] create lobby failed: status={status}", flush=True)
+            self._lobby_failures += 1
+            delay = min(60.0, 5.0 * (2 ** min(self._lobby_failures - 1, 3)))
+            self._lobby_retry_at = time.monotonic() + delay
+            summary = str(body)[:200] if body is not None else ""
+            print(f"[AUTO_QUEUE] create lobby failed: status={status} retry_in={delay:.0f}s response={summary}", flush=True)
             return False
         print("[AUTO_QUEUE] lobby created", flush=True)
+        self._lobby_create_pending = True
+        self._lobby_retry_at = 0.0
+        self._lobby_failures = 0
 
         # 第二步：设置位置偏好（排位/匹配才需要，人机/极地不需要）
         if mode in ("solo_duo", "flex", "normal"):

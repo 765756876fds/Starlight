@@ -429,6 +429,16 @@ class LCUConnection:
                 self._gameflow_phase = phase
         return self._gameflow_phase
 
+    def get_gameflow_phase_status(self) -> tuple[bool, str | None]:
+        """返回本次 phase 查询是否成功，避免把缓存/默认值当成实时空闲状态。"""
+        if not self._connected:
+            return False, None
+        status, phase = self.request_raw("GET", "/lol-gameflow/v1/gameflow-phase")
+        if status == 200 and isinstance(phase, str) and phase.strip():
+            self._gameflow_phase = phase
+            return True, phase
+        return False, None
+
     def get_current_summoner(self) -> dict[str, Any] | None:
         """获取当前登录召唤师信息"""
         if not self._connected:

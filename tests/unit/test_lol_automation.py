@@ -702,6 +702,37 @@ def test_q10_missing_queue_config_skips_all_queue_requests_once():
     assert [c for c, _ in events].count("automation.queue_not_configured") == 1
 
 
+def test_q11_lobby_create_failure_is_bounded_with_backoff():
+    lcu = _SearchFake(post_status=500)
+    q = QueueController(lcu.request_raw, make_events()[1])
+    assert q.try_start("None", AutomationConfig()) is False
+    assert q.try_start("None", AutomationConfig()) is False
+    posts = [c for c in lcu.calls if c[0] == "POST" and c[1] == "/lol-lobby/v2/lobby"]
+    assert len(posts) == 1
+    assert q._lobby_retry_at > 0
+
+
+def test_q12_successful_lobby_create_waits_for_lobby_before_retry():
+    lcu = _SearchFake()
+    lcu.routes = {("POST", "/lol-lobby/v2/lobby"): (201, {})}
+    q = QueueController(lcu.request_raw, make_events()[1])
+    assert q.try_start("None", AutomationConfig()) is True
+    assert q.try_start("None", AutomationConfig()) is False
+    assert q._lobby_create_pending is True
+
+
+class _UnknownPhaseLcu(_SearchFake):
+    def get_gameflow_phase_status(self):
+        return False, None
+
+
+def test_q13_unknown_phase_never_creates_lobby():
+    lcu = _UnknownPhaseLcu()
+    svc = _queue_svc(AutomationConfig(enabled=True, auto_queue=True), lcu)
+    svc._tick()
+    assert not any(c[0] == "POST" for c in lcu.calls)
+
+
 # ============================================================
 # A1.0: Auto Accept (A1-A8)
 # ============================================================
