@@ -128,12 +128,12 @@ $report = Join-Path $env:TEMP ("starlight-check-" + [guid]::NewGuid().ToString("
 
 项目处于持续开发和Windows实机验收阶段。本地视频、字幕、播放历史及窗口交互已有用户实测记录；近期语音安全边界、操作结果和诊断功能已有自动化回归，但真实麦克风、TTS、键盘hook及不同在线来源仍需逐项验证。
 
-当前回归仍有两个未收口的测试问题：
+此前记录的两项测试契约问题已修正：
 
-- `tests/unit/test_music.py::TestP0ConcurrencyAndRobustness::test_apply_stream_unifies_headers_and_state`：缺少电影暂停回调注入，触发既有播放安全守卫；在近期修复前同样可复现。
-- `tests/ui/test_humming.py::test_runtime_dispatches_identify`：测试使用的替身只提供 `execute()`，未提供真实CommandBus已有的 `has_handler()`；真实CommandBus的识曲分发已另行验证。
+- `tests/unit/test_music.py::TestP0ConcurrencyAndRobustness::test_apply_stream_unifies_headers_and_state`：已补齐正常启动流程中的电影暂停确认回调注入。
+- `tests/ui/test_humming.py::test_runtime_dispatches_identify`：已改用真实CommandBus注册并分发识曲命令，验证只执行一次。
 
-这些失败仍保留，未通过放宽守卫、删除断言或跳过测试掩盖。完整测试集和GitHub CI不作全部通过承诺。
+本轮仅修正测试初始化与替身契约，保留业务断言和生产安全守卫；相关回归168项通过。持续集成的最新结果请查看[GitHub Actions](https://github.com/765756876fds/Starlight/actions)。自动化测试不代表所有真实设备和在线服务均已验收。
 
 播放进度跨会话恢复、统一媒体快捷键和更完整的偏好体验不作已完成承诺。仓库源码更新也不代表本机已有安装包自动包含了新修复；本页不提供未经核实的发行下载链接。
 
