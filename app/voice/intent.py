@@ -54,6 +54,13 @@ class RuleBasedIntent:
 
     # 音乐控制规则
     MUSIC_RULES = [
+        # 明确音乐领域的动作+对象组合：比继续堆完整句式更稳定，且不影响电影规则。
+        (r"^(播放|开始播放|放)(音乐|歌曲?|歌)$", CommandType.MUSIC_RESUME, {}),
+        (r"^(暂停|停一下|先停)(音乐|歌曲?|歌)$", CommandType.MUSIC_PAUSE, {}),
+        (r"^(继续|恢复)(播放)?(音乐|歌曲?|歌)$", CommandType.MUSIC_RESUME, {}),
+        (r"^(停止|停掉|关掉)(音乐|歌曲?|歌)$", CommandType.MUSIC_STOP, {}),
+        (r"^(下一首|换一首|切歌)(音乐|歌曲?|歌)?$", CommandType.MUSIC_NEXT, {}),
+        (r"^(上一首|回上一首)(音乐|歌曲?|歌)?$", CommandType.MUSIC_PREV, {}),
         # 下一首（同义表达扩充）
         (r"^(下一首|下一曲|换一首|切歌|切下一首|换歌|不好听换一个|"
          r"播放下一首|播放下一曲|播下一首|播下一曲|换一曲|换个歌|换首歌|换首|"
@@ -126,7 +133,11 @@ class RuleBasedIntent:
         # 兜底：明确提到倍速+数字但不在支持档 → 进入命令分发，controller 拒绝并 TTS 提示
         (r"^(倍速|播放速度|速度)\d+倍?$",
          CommandType.MUSIC_SET_SPEED, {}),
+        # 参数缺失也进入明确命令，由 VoiceRuntime 提示用户补充，不执行空参数。
+        (r"^(倍速|播放速度|速度)$", CommandType.MUSIC_SET_SPEED, {}),
         (r"^(?:设置|开启)?睡眠定时(?:器)?(?:为|到)?(\d+)(分钟|分|小时)$",
+         CommandType.MUSIC_SLEEP_TIMER_SET, {}),
+        (r"^(?:设置|开启)?睡眠定时(?:器)?$",
          CommandType.MUSIC_SLEEP_TIMER_SET, {}),
         (r"^(取消|关闭|停止)睡眠定时(?:器)?$",
          CommandType.MUSIC_SLEEP_TIMER_CANCEL, {}),

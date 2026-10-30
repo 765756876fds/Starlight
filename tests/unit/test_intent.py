@@ -111,6 +111,24 @@ class TestRuleBasedIntent:
         assert intent is not None
         assert intent.intent_type == "music.next"
 
+    @pytest.mark.parametrize("text, expected", [
+        ("播放音乐", "music.resume"),
+        ("暂停歌曲", "music.pause"),
+        ("继续放歌", "music.resume"),
+        ("停止音乐", "music.stop"),
+        ("切歌", "music.next"),
+        ("上一首歌", "music.previous"),
+    ])
+    def test_music_action_object_phrases(self, text, expected):
+        intent = RuleBasedIntent.match(text)
+        assert intent is not None and intent.intent_type == expected
+
+    def test_speed_and_sleep_timer_missing_parameters_are_explicit(self):
+        speed = RuleBasedIntent.match("倍速")
+        timer = RuleBasedIntent.match("设置睡眠定时")
+        assert speed and speed.intent_type == "music.set_speed" and speed.params == {}
+        assert timer and timer.intent_type == "music.sleep_timer_set" and timer.params == {}
+
     def test_prev_song(self):
         intent = RuleBasedIntent.match("上一首")
         assert intent is not None

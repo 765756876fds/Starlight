@@ -855,6 +855,9 @@ class VoiceRuntime:
 
         elif intent_type in (CommandType.MUSIC_SLEEP_TIMER_SET,
                              CommandType.MUSIC_SLEEP_TIMER_CANCEL):
+            if intent_type == CommandType.MUSIC_SLEEP_TIMER_SET and "seconds" not in params:
+                self._enqueue_speak("请说出睡眠定时的时长，例如三十分钟", "voice_music_timer")
+                return
             try:
                 ok = self.command_bus.execute(Command(
                     command_type=intent_type, params=params, source="voice"))
@@ -940,6 +943,9 @@ class VoiceRuntime:
                 self._enqueue_speak("操作未成功", "voice")
 
         elif intent_type == CommandType.MUSIC_SET_SPEED:
+            if "speed" not in params or params.get("speed") is None:
+                self._enqueue_speak("请说出要设置的倍速，例如一点五倍", "voice_music_speed")
+                return
             ok = self.command_bus.execute(Command(
                 command_type=intent_type,
                 params=params,
