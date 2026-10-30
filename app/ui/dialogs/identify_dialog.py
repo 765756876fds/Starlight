@@ -11,7 +11,7 @@ import tempfile
 import threading
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton
 
 from ...music.capture import CaptureCancelled
 from ...music.shazamio_provider import ShazamRecognitionStatus
@@ -231,7 +231,7 @@ class IdentifyDialog(GlassDialog):
             self._timer.stop()
         if result is None:
             self.lbl_title.setText("识曲")
-            self._ask_online_identify()
+            self._start_online_identify()
             return
         self._cleanup_wav()
         title = result.get("title") or result.get("filename") or "未知歌曲"
@@ -253,18 +253,8 @@ class IdentifyDialog(GlassDialog):
         self.lbl_status.setText(details)
         self.btn_play.show()
 
-    def _ask_online_identify(self):
-        """本地未命中时，在线发送前明确征得用户同意。"""
-        answer = QMessageBox.question(
-            self, "在线识曲确认",
-            "本地音乐库未找到这首歌。在线识曲会将本次约 8–12 秒的音频片段发送给第三方 Shazam 服务。是否继续？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            self.lbl_status.setText("已取消在线识曲，音频不会发送到第三方服务")
-            self._cleanup_wav()
-            return
+    def _start_online_identify(self):
+        """本地正常未命中后自动在线识曲（仅由本次主动识曲触发）。"""
         try:
             from ...music.shazamio_provider import ShazamIOProvider
             self._busy = True

@@ -207,26 +207,20 @@ def test_dialog_success_card(tmp_path, monkeypatch):
 
 def test_dialog_miss(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch)
-    from app.ui.dialogs import identify_dialog
-    monkeypatch.setattr(identify_dialog.QMessageBox, "question",
-                        lambda *args, **kwargs: identify_dialog.QMessageBox.StandardButton.No)
+    monkeypatch.setattr(dlg, "_start_online_identify", lambda: dlg.lbl_status.setText("在线识曲已启动"))
     dlg._begin_record()
     dlg._on_done(None)
-    assert "已取消在线识曲" in dlg.lbl_status.text()
+    assert dlg.lbl_status.text() == "在线识曲已启动"
     assert dlg.btn_play.isHidden()
 
 
-def test_dialog_local_miss_requires_explicit_online_consent(tmp_path, monkeypatch):
+def test_dialog_local_miss_starts_online_without_confirmation(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch)
-    from app.ui.dialogs import identify_dialog
     calls = []
-    monkeypatch.setattr(identify_dialog.QMessageBox, "question",
-                        lambda *args, **kwargs: calls.append(True) or
-                        identify_dialog.QMessageBox.StandardButton.No)
+    monkeypatch.setattr(dlg, "_start_online_identify", lambda: calls.append(True))
     dlg._begin_record()
     dlg._on_done(None)
     assert calls == [True]
-    assert "不会发送" in dlg.lbl_status.text()
 
 
 def test_dialog_online_success_searches_without_playback(tmp_path, monkeypatch):
@@ -500,3 +494,21 @@ def test_panel_identify_auto_play_stale_generation_does_not_play(monkeypatch):
     p._identify_auto_generation = 2
     p._auto_play_identify_results(1)
     assert p._music.calls == 0
+
+
+def test_panel_identify_search_waits_for_search_completion(monkeypatch):
+    from app.ui.panels.music_panel import MusicPanel
+
+    p = MusicPanel(music=None)
+    calls = []
+
+    def fake_search(on_done=None, on_failed=None):
+        calls.append((on_done, on_failed))
+
+    monkeypatch.setattr(p, "_do_search", fake_search)
+    monkeypatch.setattr(p, "_auto_play_identify_results", lambda generation: calls.append(generation))
+    p._on_identify_search("歌名 歌手")
+    assert p.edit_kw.text() == "歌名 歌手"
+    assert len(calls) == 1 and callable(calls[0][0])
+    calls[0][0]({})
+    assert calls[-1] == p._identify_auto_generation
