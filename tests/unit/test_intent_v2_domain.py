@@ -78,6 +78,15 @@ class TestPlayMovieRouting:
 
 
 class TestBareCommandsUnchanged:
+    def test_play_music_object_is_random_play_command(self):
+        for text in ("播放歌曲", "播放音乐"):
+            m = RuleBasedIntent.match(text)
+            assert m and m.intent_type == CommandType.MUSIC_PLAY, text
+
+    def test_continue_music_remains_resume(self):
+        m = RuleBasedIntent.match("继续放歌")
+        assert m and m.intent_type == CommandType.MUSIC_RESUME
+
     def test_bare_pause_still_music_pause(self):
         m = RuleBasedIntent.match("暂停")
         assert m and m.intent_type == CommandType.MUSIC_PAUSE

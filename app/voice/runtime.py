@@ -831,6 +831,22 @@ class VoiceRuntime:
         elif intent_type == CommandType.MUSIC_RESUME:
             self._global_resume()
 
+        elif intent_type == CommandType.MUSIC_PLAY:
+            try:
+                ok = self.command_bus.execute(Command(
+                    command_type=intent_type,
+                    params=params,
+                    source="voice",
+                ))
+            except Exception as e:
+                print(f"[Voice] {intent_type} error: {e}")
+                ok = False
+            self._enqueue_speak(
+                "已开始播放本地歌曲" if ok else
+                "本地没有可播放的歌曲，请手动选择歌曲，或直接说出歌名播放",
+                "voice_music_play",
+            )
+
         elif intent_type in (CommandType.AUTO_QUEUE_SET, CommandType.AUTO_ACCEPT_SET,
                              CommandType.AUTO_BANPICK_SET, CommandType.AUTO_COMBO_SET):
             try:

@@ -527,12 +527,12 @@ class MusicController:
 
     @_cancel_switch_on_user_action
     def play(self):
-        """播放"""
+        """播放当前队列；队列为空时从本地库随机选择一首。"""
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("play", self._current_song, 0)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
-            return
+            return False
         # 优先控制落雪
         if self.lx_connected:
             try:
@@ -543,7 +543,7 @@ class MusicController:
                         data={},
                         source="music",
                     ))
-                    return
+                    return True
             except Exception as e:
                 logger.error(f"[Music] 落雪 play 失败，回落 mpv: {e}")
                 self.lx_connected = False
@@ -557,6 +557,8 @@ class MusicController:
                 with self._lock:
                     self.queue.add_all(songs)
                     self._play_song(self.queue.next())
+                return True
+            return False
         else:
             # 检查 mpv 是否有文件加载（stop/eof 后没有文件，pause=false 不起作用）
             try:
@@ -572,11 +574,14 @@ class MusicController:
                 if current:
                     with self._lock:
                         self._play_song(current)
+                    return True
                 else:
                     song = self.queue.next()
                     if song:
                         with self._lock:
                             self._play_song(song)
+                        return True
+                    return False
             else:
                 # 恢复播放与起播同类副作用（unpause），与 pause 等持锁操作互斥。
                 with self._lock:
@@ -588,6 +593,7 @@ class MusicController:
                         data={},
                         source="music",
                     ))
+                return True
 
     @_cancel_switch_on_user_action
     def pause(self):
@@ -2139,6 +2145,11 @@ class MusicController:
             timer.daemon = True
             self._sleep_timer = timer
             timer.start()
+        self.event_bus.publish(Event(
+            event_type=EventType.MUSIC_STATE_CHANGED,
+            data={"state": "sleep_timer", "active": True, "seconds": seconds},
+            source="music",
+        ))
         return True
 
     def cancel_sleep_timer(self) -> bool:
@@ -2148,11 +2159,21 @@ class MusicController:
             if timer is None:
                 return False
             timer.cancel()
-            return True
+        self.event_bus.publish(Event(
+            event_type=EventType.MUSIC_STATE_CHANGED,
+            data={"state": "sleep_timer", "active": False, "seconds": 0},
+            source="music",
+        ))
+        return True
 
     def _sleep_timer_expired(self):
         with self._sleep_timer_lock:
             self._sleep_timer = None
+        self.event_bus.publish(Event(
+            event_type=EventType.MUSIC_STATE_CHANGED,
+            data={"state": "sleep_timer", "active": False, "seconds": 0},
+            source="music",
+        ))
         if not self._running:
             return
         try:

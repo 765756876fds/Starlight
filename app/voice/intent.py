@@ -55,7 +55,7 @@ class RuleBasedIntent:
     # 音乐控制规则
     MUSIC_RULES = [
         # 明确音乐领域的动作+对象组合：比继续堆完整句式更稳定，且不影响电影规则。
-        (r"^(播放|开始播放|放)(音乐|歌曲?|歌)$", CommandType.MUSIC_RESUME, {}),
+        (r"^(播放|开始播放|放)(音乐|歌曲?|歌)$", CommandType.MUSIC_PLAY, {}),
         (r"^(暂停|停一下|先停)(音乐|歌曲?|歌)$", CommandType.MUSIC_PAUSE, {}),
         (r"^(继续|恢复)(播放)?(音乐|歌曲?|歌)$", CommandType.MUSIC_RESUME, {}),
         (r"^(停止|停掉|关掉)(音乐|歌曲?|歌)$", CommandType.MUSIC_STOP, {}),

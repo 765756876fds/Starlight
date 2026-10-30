@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.command_bus import CommandType, get_command_bus
-from ...core.event_bus import get_event_bus
+from ...core.event_bus import EventType, get_event_bus
 from ...music.humming import HummingService
 from ...music.lyric_search import LyricIndex
 from ...music.online.events import ONLINE_ERROR, ONLINE_SEARCH_DONE
@@ -134,6 +134,7 @@ class MusicPanel(QWidget):
     _dl_signal = Signal(str, object)  # key, pct
     _dl_finish_signal = Signal(str, str)  # (key, 状态: done/fail/exists)：下载回调只 emit，UI 刷新主线程做
     _status_signal = Signal(str)          # 跨线程状态栏消息桥（换源错误等事件，禁直接 setText）
+    _sleep_timer_signal = Signal(bool, int)
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
     _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
     _speed_result = Signal(bool, float, int, str)  # 倍速后台结果：ok, rate, idx, err_msg
@@ -500,9 +501,11 @@ class MusicPanel(QWidget):
         self._search_event.connect(self._on_search_show)
         self._dl_finish_signal.connect(self._on_dl_finish)
         self._status_signal.connect(self._on_status_msg)
+        self._sleep_timer_signal.connect(self._on_sleep_timer_state)
         try:
             get_event_bus().subscribe(ONLINE_SEARCH_DONE, self._on_search_event)
             get_event_bus().subscribe(ONLINE_ERROR, self._on_error_event)
+            get_event_bus().subscribe(EventType.MUSIC_STATE_CHANGED, self._on_music_state_event)
         except Exception as e:
             print(f"[MusicPanel] 订阅候选事件失败: {e}")
 
@@ -513,6 +516,7 @@ class MusicPanel(QWidget):
             bus = get_event_bus()
             bus.unsubscribe(ONLINE_SEARCH_DONE, self._on_search_event)
             bus.unsubscribe(ONLINE_ERROR, self._on_error_event)
+            bus.unsubscribe(EventType.MUSIC_STATE_CHANGED, self._on_music_state_event)
         except Exception as e:
             print(f"[MusicPanel] 注销事件订阅失败: {e}")
         super().closeEvent(event)
@@ -823,6 +827,14 @@ class MusicPanel(QWidget):
         if self._music:
             self._music.cancel_sleep_timer()
         self.btn_sleep.setText("睡眠定时")
+
+    def _on_music_state_event(self, event):
+        data = dict(getattr(event, "data", {}) or {})
+        if data.get("state") == "sleep_timer":
+            self._sleep_timer_signal.emit(bool(data.get("active")), int(data.get("seconds") or 0))
+
+    def _on_sleep_timer_state(self, active: bool, seconds: int):
+        self.btn_sleep.setText(f"定时 {seconds // 60}分" if active and seconds else "睡眠定时")
 
     def _on_speed(self):
         """点倍速按钮 → 弹菜单选档（当前档勾选高亮），对齐电影侧交互。"""
