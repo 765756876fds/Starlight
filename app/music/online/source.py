@@ -6,6 +6,14 @@ from abc import ABC, abstractmethod
 from .models import OnlineTrack
 
 
+class SourceSearchError(Exception):
+    """可确定的搜索失败类别；unknown 不推断为网络或超时。"""
+
+    def __init__(self, category="unknown"):
+        self.category = category
+        super().__init__(category)
+
+
 class MusicSource(ABC):
     name: str = "base"
     display_name: str = "Base"

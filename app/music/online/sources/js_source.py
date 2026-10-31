@@ -9,8 +9,8 @@ import time
 import uuid
 from pathlib import Path
 
-from ..models import OnlineTrack
-from ..source import MusicSource
+from ..models import OnlineTrack, SearchTracks
+from ..source import MusicSource, SourceSearchError
 
 
 def compare_versions(a, b):
@@ -193,6 +193,8 @@ class JSMusicSource(MusicSource):
 
     def _call(self, method: str, params: dict, timeout: float = 15.0):
         if self._proc is None:
+            if method == "search":
+                raise SourceSearchError("unavailable")
             return None
         rid = str(uuid.uuid4())
         req = {"id": rid, "method": method, "params": params}
@@ -202,17 +204,25 @@ class JSMusicSource(MusicSource):
         try:
             self._proc.stdin.write(json.dumps(req, ensure_ascii=False) + "\n")
             self._proc.stdin.flush()
-        except Exception:
+        except Exception as exc:
+            with self._lock:
+                self._pending.pop(rid, None)
+            if method == "search":
+                raise SourceSearchError("unavailable") from exc
             return None
         if not box["event"].wait(timeout):
             print(f"[JSBridge] TIMEOUT {method} {params.get('source')} 等了{timeout}s", flush=True)
             with self._lock:
                 self._pending.pop(rid, None)
             self._note_call_timeout()
+            if method == "search":
+                raise SourceSearchError("timeout")
             return None
         msg = box["result"]
         if not msg or not msg.get("ok"):
             print(f"[JSBridge] FAIL {method} {params.get('source')} resp={msg}", flush=True)
+            if method == "search":
+                raise SourceSearchError("plugin" if msg else "unknown")
             return None
         self._call_timeout_streak = 0
         return msg.get("result")
@@ -254,9 +264,7 @@ class JSMusicSource(MusicSource):
         print(f"[search_plugin] -> {source} kw={keyword} limit={limit}", flush=True)
         result = self._call("search", {"source": source, "keyword": keyword, "limit": limit})
         print(f"[search_plugin] <- {source} raw={None if result is None else len(result)}", flush=True)
-        if not result:
-            return []
-        out = self._parse_tracks(result)
+        out = self._parse_search_response(result)
         print(f"[search_plugin] parsed {len(out)} 条", flush=True)
         return out
 
@@ -527,9 +535,26 @@ class JSMusicSource(MusicSource):
         if not keyword:
             return []
         result = self._call("search", {"source": "*", "keyword": keyword, "limit": limit})
-        if not result:
-            return []
-        return self._parse_tracks(result)
+        return self._parse_search_response(result)
+
+    def _parse_search_response(self, result):
+        if result is None:
+            raise SourceSearchError("unknown")
+        errors, successful = {}, 1
+        if isinstance(result, dict):
+            errors = result.get("errors")
+            successful = result.get("successful")
+            result = result.get("tracks")
+            if not isinstance(errors, dict) or not isinstance(successful, int):
+                raise SourceSearchError("structure")
+        if not isinstance(result, list):
+            raise SourceSearchError("structure")
+        tracks = self._parse_tracks(result)
+        if len(tracks) != len(result):
+            errors = {**errors, self.name: "structure"}
+            if not tracks:
+                successful = 0
+        return SearchTracks(tracks, errors=errors, successful=successful)
 
     def get_play_url(self, track: OnlineTrack, quality: str = "high") -> dict | None:
         print(f"[getUrl] -> {track.source_name} track_id={track.track_id}", flush=True)

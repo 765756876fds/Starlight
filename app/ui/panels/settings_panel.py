@@ -853,7 +853,8 @@ class SettingsPanel(QWidget):
         if ok:
             self.lbl_plugin_status.setText(f"已重载 {n} 个插件")
         else:
-            self.lbl_plugin_status.setText(f"刷新超时，已加载 {n} 个")
+            self.lbl_plugin_status.setText(
+                f"刷新失败，当前记录 {n} 个插件；请重试并检查插件错误和 Node 状态")
         self._render_plugins()
         # 无论成功与否都通知搜索界面重新同步音源下拉（成功时列表已更新，
         # 失败时也重扫一次保证一致；下拉保留选中项，失效回退「全部」）

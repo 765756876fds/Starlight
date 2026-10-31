@@ -71,17 +71,22 @@ async function dispatch(method, params) {
       const { source, keyword, limit } = params;
       const want = source === '*' ? Array.from(sources.keys()) : [source];
       const out = [];
+      const errors = {};
+      let successful = 0;
       for (const name of want) {
         const p = sources.get(name);
         if (!p || p.type !== 'musicfree') continue;
         try {
           const items = await mfLoader.callSearch(p, keyword, limit || 20);
           out.push(...items);
+          successful += 1;
         } catch (e) {
+          errors[p.name] = 'plugin';
           console.error(`[bridge] search ${name} fail: ${e.message}`);
         }
       }
-      return out;
+      if (!successful && !Object.keys(errors).length) errors.js_bridge = 'unavailable';
+      return { tracks: out, errors, successful };
     }
     case 'getUrl': {
       const { source, quality, raw_item } = params;

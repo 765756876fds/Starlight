@@ -4,7 +4,7 @@ import threading
 import time
 import zlib
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -57,20 +57,26 @@ class _LyricBuildWorker(QObject):
 
 
 class _SearchWorker(QObject):
-    done = Signal(dict)
-    failed = Signal(str)
+    # object 保留 dict 子类上的本次错误信息；dict 信号会丢失附加状态。
+    done = Signal(int, object)
+    failed = Signal(int, str)
 
-    def __init__(self, music, keyword):
+    def __init__(self, music, keyword, generation):
         super().__init__()
         self._music = music
         self._kw = keyword
+        self._generation = generation
 
+    @Slot()
     def run(self):
         try:
             out = self._music.search_online(self._kw)
-            self.done.emit(out)
+            if not isinstance(out, dict):
+                self.failed.emit(self._generation, "音源未返回有效搜索结果，请重试或更换音源")
+                return
+            self.done.emit(self._generation, out)
         except Exception as e:
-            self.failed.emit(str(e))
+            self.failed.emit(self._generation, str(e))
 
 
 class _ScanWorker(QObject):
@@ -149,6 +155,8 @@ class MusicPanel(QWidget):
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
         self._identify_auto_generation = 0
         self._search_generation = 0
+        self._active_search = None
+        self._pending_search = None
         self._pending_identify_close = None
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
@@ -447,8 +455,8 @@ class MusicPanel(QWidget):
             self.slider_pos.sliderReleased.connect(self._on_seek)
             # 拖动过程实时预览目标时间（仅内存级 UI 更新，不碰 mpv IPC）
             self.slider_pos.sliderMoved.connect(self._on_seek_preview)
-            self.btn_search.clicked.connect(self._do_search)
-            self.edit_kw.returnPressed.connect(self._do_search)
+            self.btn_search.clicked.connect(self._request_search)
+            self.edit_kw.returnPressed.connect(self._request_search)
             self.list_results.itemDoubleClicked.connect(self._on_play)
             self.list_history.itemDoubleClicked.connect(self._on_history_play)
             self.btn_clear_history.clicked.connect(self._on_clear_history)
@@ -1071,33 +1079,84 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] 刷新音源列表失败: {e}")
 
-    def _do_search(self, on_done=None, on_failed=None):
+    @Slot()
+    def _request_search(self):
+        """Qt clicked(bool) 不进入业务完成回调参数。"""
+        self._do_search()
+
+    def _do_search(self, *, on_done=None, on_failed=None):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
-        # 防重入：旧搜索线程仍在运行 → 忽略本次（低频场景简单忽略即可，
-        # 覆盖运行中线程引用同样会触发 QThread: Destroyed while running）。
-        if self._thread is not None and self._thread.isRunning():
-            return
         self._search_generation += 1
-        search_generation = self._search_generation
+        request = (self._search_generation, kw, on_done, on_failed)
+        self.list_results.clear()
+        self._tracks_by_row = []
+        self.lbl_status.setText("搜索中...")
+        # finished 槽回收旧线程前不覆盖引用；最多保存最后一次待执行请求。
+        if self._thread is not None:
+            self._pending_search = request
+            return
+        self._start_search(request)
+
+    def _start_search(self, request):
+        generation, kw, _, _ = request
+        self._active_search = request
         # 搜索前同步一次音源列表（插件导入/刷新后无需重启即生效；
         # 保留选中项，失效自动回退「全部」，不影响正在播放的音乐）
         self.refresh_online_sources()
-        self.lbl_status.setText("搜索中...")
         self._thread = QThread()
-        self._worker = _SearchWorker(self._music, kw)
+        self._worker = _SearchWorker(self._music, kw, generation)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.done.connect(
-            lambda result: self._on_search_done(result, search_generation, on_done))
-        self._worker.failed.connect(
-            lambda err: self._on_search_failed(err, search_generation, on_failed))
+        self._worker.done.connect(self._on_search_worker_done, Qt.QueuedConnection)
+        self._worker.failed.connect(self._on_search_worker_failed, Qt.QueuedConnection)
         self._worker.done.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
+        self._thread.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._on_search_thread_finished, Qt.QueuedConnection)
+        self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
-    def _on_search_done(self, result: dict, search_generation=None, on_done=None):
+    @Slot(int, object)
+    def _on_search_worker_done(self, generation, result):
+        request = self._active_search
+        if (request is not None and request[0] == generation
+                and request[1] == self.edit_kw.text().strip()):
+            self._on_search_done(result, generation, request[2], request[3])
+
+    @Slot(int, str)
+    def _on_search_worker_failed(self, generation, error):
+        request = self._active_search
+        if (request is not None and request[0] == generation
+                and request[1] == self.edit_kw.text().strip()):
+            self._on_search_failed(error, generation, request[3])
+
+    @Slot()
+    def _on_search_thread_finished(self):
+        request = self._active_search
+        self._thread = None
+        self._worker = None
+        self._active_search = None
+        pending, self._pending_search = self._pending_search, None
+        if pending is not None and pending[1] == self.edit_kw.text().strip():
+            self._start_search(pending)
+        elif pending is not None or (request is not None and request[1] != self.edit_kw.text().strip()):
+            self.lbl_status.setText("关键词已更改，请点击搜索或按回车")
+
+    @staticmethod
+    def _search_error_hint(errors):
+        categories = set(errors.values())
+        if "interrupted" in categories:
+            return "音源已刷新或变更，请重试搜索"
+        if categories & {"timeout", "network_timeout"}:
+            return "请求超时，请检查网络后重试，或更换音源"
+        if any(str(category).startswith(("network", "http_")) for category in categories):
+            return "音源连接失败，请检查网络后重试，或更换音源"
+        return "请重试或更换音源；若持续失败，请在设置中检查插件和网络"
+
+    def _on_search_done(self, result: dict, search_generation=None, on_done=None,
+                        on_failed=None):
         if search_generation is not None and search_generation != self._search_generation:
             return
         self._voice_generation = None   # 手动搜索 → 重置语音候选代际
@@ -1134,14 +1193,28 @@ class MusicPanel(QWidget):
                 tracks_for_search.append(t)
                 n += 1
         self._tracks_by_row = tracks_for_search
-        self.lbl_status.setText(f"已找到 {n} 首")
+        errors = {src: error for src, error in getattr(result, "errors", {}).items()
+                  if not source_filter or src == source_filter}
+        succeeded = {src for src in getattr(result, "successful_sources", set())
+                     if not source_filter or src == source_filter}
+        if errors and not succeeded:
+            self._on_search_failed(self._search_error_hint(errors), search_generation, on_failed)
+            return
+        if errors:
+            self.lbl_status.setText(f"已找到 {n} 首；部分音源失败。{self._search_error_hint(errors)}")
+        elif hasattr(result, "successful_sources") and not succeeded:
+            self._on_search_failed("暂无可用音源，请在设置中检查插件或添加音源", search_generation, on_failed)
+            return
+        else:
+            self.lbl_status.setText(f"已找到 {n} 首" if n else "未找到歌曲，请尝试其他关键词或音源")
         if on_done is not None:
             on_done(list(tracks_for_search))
 
     def _on_search_failed(self, err: str, search_generation=None, on_failed=None):
         if search_generation is not None and search_generation != self._search_generation:
             return
-        self.lbl_status.setText(f"搜索失败: {err}")
+        hint = "" if "重试" in err else "。可重试或更换音源"
+        self.lbl_status.setText(f"搜索失败: {err}{hint}")
         if on_failed is not None:
             on_failed(err)
 

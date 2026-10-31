@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.core.logger import get_logger
 
 from .cache import OnlineCache
-from .models import OnlineTrack
-from .source import MusicSource
+from .models import OnlineTrack, SearchResults
+from .source import MusicSource, SourceSearchError
 
 logger = get_logger()
 
@@ -87,22 +87,26 @@ class OnlineSourceManager:
     def invalidate(self, name: str) -> None:
         """清除某源的搜索缓存（桥接/插件重载后调用，避免旧结果掩盖新注册表）。
 
-        只删缓存不注销源；生命周期锁内与 search_all 的版本校验+写入互斥，
-        不会让新缓存写入与清除交错。
+        推进代次但不注销源；失效前启动的搜索不得重新写回缓存。
         """
         with self._life_lock:
+            self._source_versions[name] = self._source_versions.get(name, 0) + 1
             self._cache.delete(name)
 
     def search_all(self, keyword: str, limit_per_source: int = 10
                    ) -> dict[str, list[OnlineTrack]]:
-        out: dict[str, list[OnlineTrack]] = {}
+        out = SearchResults()
         futs = {}
-        for name, src in self._sources.items():
-            cached = self._cache.get(name, keyword, limit_per_source)
-            if cached is not None:
-                out[name] = cached
-                continue
-            ver = self._source_versions.get(name, 0)
+        with self._life_lock:
+            sources = []
+            for name, src in self._sources.items():
+                cached = self._cache.get(name, keyword, limit_per_source)
+                if cached is not None:
+                    out[name] = cached
+                    out.successful_sources.add(name)
+                else:
+                    sources.append((name, src, self._source_versions.get(name, 0)))
+        for name, src, ver in sources:
             fut = self._executor.submit(self._safe_search, src, keyword,
                                         limit_per_source, ver)
             futs[fut] = (name, ver)
@@ -116,24 +120,47 @@ class OnlineSourceManager:
                     # 之前被替换导致旧结果回写污染"的竞争窗口。
                     with self._life_lock:
                         if self._source_versions.get(name) != ver:
+                            out.errors[name] = "interrupted"
                             continue
                         out[name] = tracks
-                        self._cache.set(name, keyword, limit_per_source, tracks)
+                        errors = getattr(tracks, "errors", {})
+                        if getattr(tracks, "successful", 1) > 0:
+                            out.successful_sources.add(name)
+                        if errors:
+                            out.errors[name] = next(iter(errors.values()))
+                            self._errors[name] = str(out.errors[name])
+                        else:
+                            self._errors.pop(name, None)
+                            self._cache.set(name, keyword, limit_per_source, tracks)
                 except Exception as e:
-                    self._errors[name] = str(e)
-                    out[name] = []
-        except Exception as e:
+                    with self._life_lock:
+                        if self._source_versions.get(name) != ver:
+                            out.errors[name] = "interrupted"
+                            continue
+                        self._errors[name] = str(e)
+                        out.errors[name] = getattr(
+                            e, "category", "timeout" if isinstance(e, TimeoutError) else "unknown")
+                        out[name] = []
+        except TimeoutError:
             for fut, (name, ver) in futs.items():
-                if not fut.done():
-                    out[name] = []
-                    self._errors[name] = f"timeout: {e}"
+                if name not in out:
+                    with self._life_lock:
+                        if self._source_versions.get(name) != ver:
+                            out.errors[name] = "interrupted"
+                            continue
+                        out[name] = []
+                        out.errors[name] = "timeout"
+                        self._errors[name] = "timeout"
         return out
 
     def _safe_search(self, src: MusicSource, kw: str, limit: int,
                      version: int) -> list[OnlineTrack]:
         t0 = time.monotonic()
         try:
-            return src.search(kw, limit)
+            result = src.search(kw, limit)
+            if not isinstance(result, list):
+                raise SourceSearchError("unknown" if result is None else "structure")
+            return result
         finally:
             self._latency[src.name] = time.monotonic() - t0
 
