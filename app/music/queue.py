@@ -7,9 +7,27 @@
 - 单曲循环
 - 列表循环
 """
+import logging
+import os
 import random
 import threading
+from functools import wraps
 from typing import Any
+
+
+def _queue_mutation(method):
+    @wraps(method)
+    def changed(self, *args, **kwargs):
+        result = method(self, *args, **kwargs)
+        # The operation has released the queue lock before notifying observers.
+        callback = self._on_change
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                logging.getLogger(__name__).exception("播放队列显示通知失败")
+        return result
+    return changed
 
 
 class PlayMode:
@@ -33,6 +51,12 @@ class PlayQueue:
         self._shuffle_order: list[int] = []
         self._shuffle_pos: int = -1
         self._next_up: list[int] = []  # 明确的下一首请求，后选先播；仍引用同一队列。
+        self._on_change = None
+
+    def set_change_callback(self, callback):
+        """Controller-owned notification hook; UI subscriptions stay on EventBus."""
+        with self._lock:
+            self._on_change = callback
 
     def _insert(self, song: dict[str, Any], position: int):
         """持锁插入并移动索引；保持当前曲目、历史及随机遍历对应同一歌曲。"""
@@ -43,6 +67,7 @@ class PlayQueue:
         self._next_up = [i + (i >= position) for i in self._next_up]
         self._shuffle_order = [i + (i >= position) for i in self._shuffle_order]
 
+    @_queue_mutation
     def add(self, song: dict[str, Any], position: int | None = None):
         """添加歌曲到队列"""
         with self._lock:
@@ -52,6 +77,7 @@ class PlayQueue:
                 self._queue.append(song)
             self._rebuild_shuffle()
 
+    @_queue_mutation
     def add_next(self, song: dict[str, Any]):
         """原子插到当前曲目后；跨模式优先消费一次，连续请求后选先播。"""
         with self._lock:
@@ -60,12 +86,14 @@ class PlayQueue:
             self._next_up.insert(0, position)
             # 不重洗现有随机顺序；插队项不重复进入本轮随机遍历。
 
+    @_queue_mutation
     def add_all(self, songs: list[dict[str, Any]]):
         """批量添加歌曲"""
         with self._lock:
             self._queue.extend(songs)
             self._rebuild_shuffle()
 
+    @_queue_mutation
     def remove(self, index: int):
         """移除指定位置的歌曲"""
         with self._lock:
@@ -80,6 +108,7 @@ class PlayQueue:
                 self._next_up = [i - (i > index) for i in self._next_up if i != index]
                 self._rebuild_shuffle()
 
+    @_queue_mutation
     def clear(self):
         """清空队列"""
         with self._lock:
@@ -106,6 +135,7 @@ class PlayQueue:
                 return self._queue[next_index]
             return None
 
+    @_queue_mutation
     def next(self, auto: bool = False) -> dict[str, Any] | None:
         """播放下一首，返回歌曲。auto=True=自然结束（单曲重播），False=用户手动。"""
         with self._lock:
@@ -118,6 +148,7 @@ class PlayQueue:
                 return self._queue[next_index]
             return None
 
+    @_queue_mutation
     def skip_current(self) -> dict[str, Any] | None:
         """跳过当前歌曲：顺序取下一首（REPEAT_ONE 下也不循环回当前）。
 
@@ -138,6 +169,7 @@ class PlayQueue:
             self._add_history(nxt)
             return self._queue[nxt]
 
+    @_queue_mutation
     def prev(self) -> dict[str, Any] | None:
         """播放上一首，返回歌曲"""
         with self._lock:
@@ -162,6 +194,7 @@ class PlayQueue:
 
             return None
 
+    @_queue_mutation
     def play_at(self, index: int) -> dict[str, Any] | None:
         """播放指定位置的歌曲"""
         with self._lock:
@@ -240,6 +273,7 @@ class PlayQueue:
             self._history = self._history[-100:]
             self._history_pos = len(self._history) - 1
 
+    @_queue_mutation
     def set_play_mode(self, mode: str):
         """设置播放模式"""
         with self._lock:
@@ -257,6 +291,49 @@ class PlayQueue:
         """获取整个队列"""
         with self._lock:
             return list(self._queue)
+
+    @staticmethod
+    def song_summary(song) -> dict:
+        """Display metadata only: no stream headers, plugin payloads or file reads."""
+        song = song if isinstance(song, dict) else {}
+        path = song.get("path")
+        online = (song.get("source_type") == "online" or song.get("source") == "online"
+                  or song.get("online") is True
+                  or isinstance(path, str) and path.startswith(("http://", "https://")))
+        def text(value):
+            return value.strip() if isinstance(value, str) else ""
+        return {"title": text(song.get("title")) or text(song.get("name")) or "未命名歌曲",
+                "artist": text(song.get("artist")),
+                "source_type": "online" if online else "local",
+                "source_name": text(song.get("source_name"))}
+
+    @classmethod
+    def _same_media(cls, a, b):
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False
+        if a is b:
+            return True
+        online = cls.song_summary(a)["source_type"] == "online"
+        if online != (cls.song_summary(b)["source_type"] == "online"):
+            return False
+        if online:
+            return bool(a.get("track_id") and a.get("source_name") and
+                        str(a["track_id"]) == str(b.get("track_id")) and
+                        a["source_name"] == b.get("source_name"))
+        ap, bp = a.get("path"), b.get("path")
+        return bool(isinstance(ap, str) and ap and isinstance(bp, str) and bp and
+                    os.path.normcase(os.path.normpath(ap)) == os.path.normcase(os.path.normpath(bp)))
+
+    def snapshot(self, current_song=None) -> dict:
+        """Read-only display snapshot; never calls next/get_next or touches RNG."""
+        with self._lock:
+            selected = self._current_index
+            playing = (selected if 0 <= selected < len(self._queue)
+                       and self._same_media(self._queue[selected], current_song) else None)
+            return {"mode": self._play_mode, "current_index": selected,
+                    "playing_index": playing, "next_up": list(self._next_up),
+                    "items": [dict(self.song_summary(song), index=i)
+                              for i, song in enumerate(self._queue)]}
 
     def get_current_index(self) -> int:
         """获取当前播放索引"""

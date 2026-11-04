@@ -217,6 +217,7 @@ class MusicController:
 
         # 播放历史记录器（独立模块；start() 时订阅 MUSIC_TRACK_CHANGED）
         self.history_recorder = HistoryRecorder(self.db, self.event_bus)
+        self.queue.set_change_callback(self._notify_queue_view)
         # 注册命令处理器
         self._register_commands()
 
@@ -2601,6 +2602,41 @@ class MusicController:
         """获取播放队列"""
         return self.queue.get_queue()
 
+    def _notify_queue_view(self):
+        """Lightweight invalidation on the existing state channel, no snapshot/IPC."""
+        publish = getattr(getattr(self, "event_bus", None), "publish_async", None)
+        if callable(publish):
+            try:
+                publish(Event(event_type=EventType.MUSIC_STATE_CHANGED,
+                              data={"state": "queue_changed", "entity_key": "music.queue_view"},
+                              source="music"))
+            except Exception as e:
+                logger.warning(f"[Music] 队列显示通知失败: {type(e).__name__}")
+
+    def get_queue_snapshot(self) -> dict | None:
+        """Memory-only GUI query. None means a playback operation owns the lock."""
+        if not self._lock.acquire(blocking=False):
+            return None
+        try:
+            current = self._current_song
+            snapshot = self.queue.snapshot(current)
+            snapshot["current"] = self.queue.song_summary(current) if current else None
+            if self._is_switching_track:
+                state = "loading"
+            elif not current or not self._running:
+                state = "stopped"
+            else:
+                playing = self.state_store.get(StateNamespace.MUSIC, "playing", None)
+                # Direct online playback can retain the old pause extrapolation flag;
+                # the newly confirmed playing state takes precedence in the view.
+                state = ("playing" if playing is True else
+                         "paused" if playing is False and self._paused_snapshot else
+                         "stopped" if playing is False else "unknown")
+            snapshot["state"] = state
+            return snapshot
+        finally:
+            self._lock.release()
+
     @_cancel_switch_on_user_action
     def clear_queue(self):
         """清空队列：同时停止当前播放、失效 highlight、重置轮询基线。
@@ -2918,6 +2954,8 @@ class MusicController:
         """更新状态存储"""
         for key, value in kwargs.items():
             self.state_store.set(StateNamespace.MUSIC, key, value)
+        if "playing" in kwargs or "current_song" in kwargs:
+            self._notify_queue_view()
 
     @property
     def current_playback_time(self) -> float:

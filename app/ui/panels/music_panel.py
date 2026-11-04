@@ -34,6 +34,7 @@ from ..theme.colors import Colors
 from ..theme.tokens import Tokens
 from ..widgets.icon_utils import lucide_icon
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
+from ..widgets.music_queue_dialog import MusicQueueDialog
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +145,17 @@ class MusicPanel(QWidget):
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
     _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
     _speed_result = Signal(object, float, int, str)  # 倍速三态结果：True / False / None
+    _queue_changed = Signal()
 
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
         self._music = music
+        self._queue_dialog = None
+        self._queue_retry_count = 0
+        self._queue_refresh_timer = QTimer(self)
+        self._queue_refresh_timer.setSingleShot(True)
+        self._queue_refresh_timer.timeout.connect(self._refresh_queue_view)
+        self._queue_changed.connect(self._schedule_queue_refresh, Qt.QueuedConnection)
         self._tracks_by_row = []
         self._local_songs = []
         self._thread = None
@@ -184,6 +192,11 @@ class MusicPanel(QWidget):
         root = QVBoxLayout(self)
         # 顶栏：右侧"歌词"开关（桌面歌词浮窗入口）
         top_bar = QHBoxLayout()
+        self.btn_queue = QPushButton("播放队列")
+        self.btn_queue.setProperty("class", "secondary")
+        self.btn_queue.setToolTip("查看当前歌曲、已指定的下一首和队列")
+        self.btn_queue.clicked.connect(self._show_queue)
+        top_bar.addWidget(self.btn_queue)
         top_bar.addStretch()
         self.btn_lyrics = QPushButton("歌词")
         self.btn_lyrics.setCheckable(True)
@@ -520,6 +533,9 @@ class MusicPanel(QWidget):
     def closeEvent(self, event):
         """关闭时注销事件总线订阅（防内存泄漏/幽灵回调）：
         与 __init__ 中 subscribe 的一一配对注销。"""
+        self._queue_refresh_timer.stop()
+        if self._queue_dialog is not None:
+            self._queue_dialog.close()
         try:
             bus = get_event_bus()
             bus.unsubscribe(ONLINE_SEARCH_DONE, self._on_search_event)
@@ -538,9 +554,51 @@ class MusicPanel(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        self._queue_refresh_timer.stop()
+        if self._queue_dialog is not None:
+            self._queue_dialog.hide()
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.stop()
         self._progress_polling = False
+
+    @Slot()
+    def _show_queue(self):
+        if self._queue_dialog is None:
+            self._queue_dialog = MusicQueueDialog(self)
+            self._queue_dialog.finished.connect(self._queue_refresh_timer.stop)
+        self._queue_dialog.show()
+        self._queue_dialog.raise_()
+        self._queue_dialog.activateWindow()
+        self._schedule_queue_refresh()
+
+    @Slot()
+    def _schedule_queue_refresh(self):
+        # EventBus callbacks may run on worker threads; only this queued slot touches Qt.
+        if self._queue_dialog is not None and self._queue_dialog.isVisible():
+            self._queue_retry_count = 0
+            if not self._queue_refresh_timer.isActive():
+                self._queue_refresh_timer.start(0)
+
+    @Slot()
+    def _refresh_queue_view(self):
+        if self._queue_dialog is None or not self._queue_dialog.isVisible():
+            return
+        query = getattr(self._music, "get_queue_snapshot", None)
+        try:
+            snapshot = query() if callable(query) else None
+        except Exception:
+            logger.exception("播放队列读取失败")
+            self._queue_dialog.show_pending(exhausted=True)
+            return
+        if snapshot is None:
+            # Never wait on playback IPC in the GUI. Retry briefly, only while open.
+            self._queue_retry_count += 1
+            exhausted = self._queue_retry_count >= 6 or not callable(query)
+            self._queue_dialog.show_pending(exhausted=exhausted)
+            if not exhausted:
+                self._queue_refresh_timer.start(200)
+            return
+        self._queue_dialog.set_snapshot(snapshot)
 
     # ---- 卡片网格（只改 UI 绘制，不动数据流） ----
     def _setup_card_view(self, w: QListWidget) -> MusicCardDelegate:
@@ -840,6 +898,8 @@ class MusicPanel(QWidget):
         data = dict(getattr(event, "data", {}) or {})
         if data.get("state") == "sleep_timer":
             self._sleep_timer_signal.emit(bool(data.get("active")), int(data.get("seconds") or 0))
+        else:
+            self._queue_changed.emit()
 
     def _on_sleep_timer_state(self, active: bool, seconds: int):
         self.btn_sleep.setText(f"定时 {seconds // 60}分" if active and seconds else "睡眠定时")
