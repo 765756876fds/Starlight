@@ -484,6 +484,9 @@ class MusicController:
         self._running = False
         self.cancel_sleep_timer()
         self._invalidate_highlight()
+        stop_scanner = getattr(getattr(self, "scanner", None), "stop_highlight_background", None)
+        if callable(stop_scanner) and stop_scanner() is False:
+            logger.warning("[Music] 已请求停止后台 highlight 任务，但尚未确认线程退出")
         if getattr(self, "online_manager", None) is not None:
             try:
                 self.online_manager.close()

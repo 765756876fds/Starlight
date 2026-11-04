@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,8 @@ class MusicScanner:
         # 保护 _highlight_running 的锁：start_highlight_background 的"检查→置位→起线程"
         # 必须原子化，否则两个调用方可能同时读到 False 并各起一个 worker。
         self._highlight_start_lock = threading.Lock()
+        self._highlight_thread: threading.Thread | None = None
+        self._highlight_stop = threading.Event()
 
     def scan(self, full_rescan: bool = False) -> dict[str, int]:
         """
@@ -373,6 +376,7 @@ class MusicScanner:
                 logger.debug("Highlight worker 已在运行，跳过重复启动")
                 return
             self._highlight_running = True
+            self._highlight_stop.clear()
             self._highlight_gen = getattr(self, "_highlight_gen", 0) + 1
             my_gen = self._highlight_gen
             thread = threading.Thread(
@@ -381,8 +385,33 @@ class MusicScanner:
                 name="HighlightWorker",
                 daemon=True,
             )
-            thread.start()
+            self._highlight_thread = thread
+            try:
+                thread.start()
+            except Exception:
+                self._highlight_thread = None
+                self._highlight_running = False
+                raise
             logger.info("后台Highlight计算线程已启动 (gen=%d)", my_gen)
+
+    def stop_highlight_background(self, timeout: float = 3.0) -> bool:
+        """请求停止并有界等待；False 表示检测仍未退出，不能当作清理完成。"""
+        deadline = time.monotonic() + max(0., timeout)
+        self._highlight_stop.set()
+        if not self._highlight_start_lock.acquire(timeout=max(0., deadline - time.monotonic())):
+            return False
+        try:
+            # start() 可能刚刚清除停止标志，在同一把锁内再次置位。
+            self._highlight_stop.set()
+            thread = self._highlight_thread
+        finally:
+            self._highlight_start_lock.release()
+        if thread is None:
+            return True
+        if thread is threading.current_thread():
+            return False
+        thread.join(max(0., deadline - time.monotonic()))
+        return not thread.is_alive()
 
     def _highlight_worker(self, my_gen: int = 0):
         """后台逐首计算highlight，单线程低优先级。
@@ -395,10 +424,15 @@ class MusicScanner:
           V4 失败则保留旧 pychorus 记录，不删。
         """
         try:
+            stop = getattr(self, "_highlight_stop", None)
+            if stop is not None and stop.is_set():
+                return
             current_tag = get_source_tag()  # 'local_v4_early_rise'
             all_songs = self.db.get_all_songs(limit=10000)
             pending = []
             for song in all_songs:
+                if stop is not None and stop.is_set():
+                    return
                 sid = song["id"]
                 # manual 存在即跳过（不依赖 get_highlight 的 top-1）
                 if self.db.has_manual_highlight(sid):
@@ -419,7 +453,8 @@ class MusicScanner:
 
             for song in pending:
                 # 代次检查：新 worker 已启动则旧 worker 立即退出，不再启动新检测
-                if getattr(self, "_highlight_gen", None) != my_gen:
+                if (getattr(self, "_highlight_gen", None) != my_gen
+                        or (stop is not None and stop.is_set())):
                     logger.info(f"Highlight worker gen={my_gen} 已过期，退出")
                     return
                 try:
@@ -436,7 +471,8 @@ class MusicScanner:
                         # 新 worker 在 _highlight_start_lock 内递增 gen，
                         # 这里持同一把锁检查 gen，杜绝"检查通过→新 gen→旧写入"竞态。
                         with self._highlight_start_lock:
-                            if getattr(self, "_highlight_gen", None) != my_gen:
+                            if (getattr(self, "_highlight_gen", None) != my_gen
+                                    or (stop is not None and stop.is_set())):
                                 logger.info(f"Highlight worker gen={my_gen} 提交前已过期，丢弃结果")
                                 return
                             self.db.replace_highlight_atomically(

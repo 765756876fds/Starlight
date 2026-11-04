@@ -341,11 +341,15 @@ class MusicDatabase:
 
     def get_all_songs(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
         """获取所有歌曲"""
-        cursor = self._conn.execute(
-            "SELECT * FROM music ORDER BY artist, album, track_number LIMIT ? OFFSET ?",
-            (limit, offset)
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        # fetchall 也必须在连接锁内，防止扫描线程读取期间 close() 释放 SQLite 句柄。
+        with self._lock:
+            if self._conn is None:
+                raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+            cursor = self._conn.execute(
+                "SELECT * FROM music ORDER BY artist, album, track_number LIMIT ? OFFSET ?",
+                (limit, offset)
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_artists(self) -> list[dict[str, Any]]:
         """获取所有歌手"""
