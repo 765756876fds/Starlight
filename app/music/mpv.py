@@ -4,12 +4,15 @@ mpv 控制器 - 通过 JSON IPC (Windows Named Pipe) 控制 mpv
 mpv 作为纯音频后端运行，无 GUI，不抢焦点。
 Python 通过命名管道发送 JSON 命令控制播放。
 """
+import hashlib
 import json
+import math
 import os
 import subprocess
 import threading
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 
@@ -196,10 +199,11 @@ class MpvController:
                 pass
 
     def _send_command(self, command: str, params: list[Any] | None = None,
-                       timeout: float = 3.0) -> dict[str, Any] | None:
+                       timeout: float = 3.0, *, _locked: bool = False) -> dict[str, Any] | None:
         if not self._pipe:
             raise ConnectionError("mpv IPC 未连接")
-        with self._pipe_lock:
+        # Only the checkpoint batch below already owns this non-reentrant lock.
+        with (nullcontext() if _locked else self._pipe_lock):
             self._request_id += 1
             req_id = self._request_id
             message = {"command": [command] + (params or []), "request_id": req_id}
@@ -298,6 +302,76 @@ class MpvController:
             return True
         # 收到响应但 error != "success" → MPV 明确报告失败
         return False
+
+    def write_watch_later_config(self, expected_path: str, timeout: float = 1.0) -> bool:
+        """Save the active local video's native checkpoint before unloading it.
+
+        True: IPC acknowledged and the native file contains the current position.
+        False: no eligible media (including idle/EOF/another file/zero position).
+        Errors or unconfirmed persistence raise; callers must still stop/close.
+        The single IPC budget includes waiting for the pipe lock. Other callers'
+        IPC timeout/return semantics remain unchanged.
+        """
+        if not self.video or not expected_path or not os.path.isfile(expected_path):
+            return False
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("checkpoint timeout must be positive and finite")
+        deadline = time.monotonic() + timeout
+        if not self._pipe_lock.acquire(timeout=timeout):
+            raise TimeoutError("watch-later IPC lock deadline exceeded")
+        try:
+            def rpc(command, params=None):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("watch-later IPC deadline exceeded")
+                response = self._send_command(command, params, timeout=remaining, _locked=True)
+                if response is None:
+                    raise TimeoutError("watch-later IPC response unconfirmed")
+                if not isinstance(response, dict) or response.get("error") != "success":
+                    error = response.get("error") if isinstance(response, dict) else "invalid response"
+                    raise RuntimeError(f"watch-later IPC command failed: {command}: {error}")
+                return response.get("data")
+
+            if rpc("get_property", ["idle-active"]) is not False:
+                return False
+            path = rpc("get_property", ["path"])
+            if (not isinstance(path, str) or
+                    os.path.normcase(os.path.realpath(path)) !=
+                    os.path.normcase(os.path.realpath(expected_path))):
+                return False
+            if rpc("get_property", ["eof-reached"]) is not False:
+                return False
+            position = rpc("get_property", ["time-pos"])
+            if type(position) not in (int, float) or not math.isfinite(position) or position <= 0:
+                return False
+            position_at = time.monotonic()
+            directory = rpc("get_property", ["watch-later-directory"])
+            if not isinstance(directory, str) or not directory:
+                raise RuntimeError("watch-later directory unavailable")
+            # Resolve MPV-specific ~/ and relative paths in the player, not our CWD.
+            if not os.path.isabs(directory):
+                directory = rpc("expand-path", [directory])
+                directory = rpc("normalize-path", [directory])
+            if not isinstance(directory, str) or not os.path.isabs(directory):
+                raise RuntimeError("watch-later directory could not be resolved")
+            ignore_path = rpc("get_property", ["ignore-path-in-watch-later-config"])
+            if type(ignore_path) is not bool:
+                raise RuntimeError("watch-later filename policy unavailable")
+            # MPV's configfiles.c uses uppercase MD5 of the original UTF-8 path.
+            key = os.path.basename(path) if ignore_path else path
+            name = hashlib.md5(key.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+            rpc("write-watch-later-config")
+            # MPV can acknowledge success even when its internal file write fails.
+            with open(os.path.join(directory, name), encoding="utf-8") as checkpoint:
+                starts = [line[6:] for line in checkpoint.read(65536).splitlines()
+                          if line.startswith("start=")]
+            saved = float(starts[0]) if starts else float("nan")
+            tolerance = max(1., 4 * (time.monotonic() - position_at))
+            if not math.isfinite(saved) or saved <= 0 or abs(saved - position) > tolerance:
+                raise RuntimeError("watch-later position could not be confirmed")
+            return True
+        finally:
+            self._pipe_lock.release()
 
     def seek(self, seconds: float, mode: str = "relative"):
         self._send_command("seek", [seconds, mode])

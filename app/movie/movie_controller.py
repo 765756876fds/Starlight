@@ -901,6 +901,22 @@ class MovieController:
         logger.info(f"[Movie] 切到上一集: {name}")
         return True
 
+    def _save_local_progress(self):
+        """Best-effort native checkpoint while the local media is still loaded."""
+        item = self._current
+        if not isinstance(item, dict) or not item.get("local_file"):
+            return
+        try:
+            if not self.mpv.is_running():
+                return
+            result = self.mpv.write_watch_later_config(str(item.get("first_url") or ""), timeout=1.0)
+            if result is True:
+                logger.info("[Movie] 本地电影进度已保存")
+            elif result is not False:
+                logger.error("[Movie] 本地电影进度保存未确认，继续停止/退出")
+        except Exception as e:
+            logger.error(f"[Movie] 本地电影进度保存失败，继续停止/退出: {type(e).__name__}: {e}")
+
     def stop(self):
         """停电影（幂等；_stopping 守卫防互斥循环）。
 
@@ -916,6 +932,7 @@ class MovieController:
         self._stopping = True
         try:
             if self.mpv.is_running():
+                self._save_local_progress()
                 try:
                     result = self.mpv.stop()  # True=成功 / False=错误响应 / None=未确认
                 except Exception as e:
@@ -1192,6 +1209,7 @@ class MovieController:
             except Exception:
                 pass
             self._subscribed = False
+        self._save_local_progress()
         try:
             self.mpv.stop_process()
         except Exception:
