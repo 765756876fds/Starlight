@@ -52,6 +52,7 @@ class PlayQueue:
         self._shuffle_pos: int = -1
         self._next_up: list[int] = []  # 明确的下一首请求，后选先播；仍引用同一队列。
         self._on_change = None
+        self._revision = 0  # Structural version for validating edits from a display snapshot.
 
     def set_change_callback(self, callback):
         """Controller-owned notification hook; UI subscriptions stay on EventBus."""
@@ -66,6 +67,7 @@ class PlayQueue:
         self._history = [i + (i >= position) for i in self._history]
         self._next_up = [i + (i >= position) for i in self._next_up]
         self._shuffle_order = [i + (i >= position) for i in self._shuffle_order]
+        self._revision += 1
 
     @_queue_mutation
     def add(self, song: dict[str, Any], position: int | None = None):
@@ -75,6 +77,7 @@ class PlayQueue:
                 self._insert(song, position)
             else:
                 self._queue.append(song)
+                self._revision += 1
             self._rebuild_shuffle()
 
     @_queue_mutation
@@ -91,12 +94,21 @@ class PlayQueue:
         """批量添加歌曲"""
         with self._lock:
             self._queue.extend(songs)
+            if songs:
+                self._revision += 1
             self._rebuild_shuffle()
 
     @_queue_mutation
-    def remove(self, index: int):
-        """移除指定位置的歌曲"""
+    def remove(self, index: int, *, expected_revision: int | None = None,
+               current_song=None) -> bool:
+        """Remove a queue entry. Snapshot edits must match its version and protect current."""
         with self._lock:
+            if type(index) is not int:
+                return False
+            if expected_revision is not None:
+                if (type(expected_revision) is not int or expected_revision != self._revision
+                        or index in self._protected_indices(current_song)):
+                    return False
             if 0 <= index < len(self._queue):
                 self._queue.pop(index)
                 if index < self._current_index:
@@ -106,7 +118,12 @@ class PlayQueue:
                 self._history_pos = sum(i != index for i in self._history[:self._history_pos + 1]) - 1
                 self._history = [i - (i > index) for i in self._history if i != index]
                 self._next_up = [i - (i > index) for i in self._next_up if i != index]
-                self._rebuild_shuffle()
+                # Preserve the chosen random order and consumed prefix; only remap indices.
+                self._shuffle_pos = sum(i != index for i in self._shuffle_order[:self._shuffle_pos + 1]) - 1
+                self._shuffle_order = [i - (i > index) for i in self._shuffle_order if i != index]
+                self._revision += 1
+                return True
+            return False
 
     @_queue_mutation
     def clear(self):
@@ -119,6 +136,7 @@ class PlayQueue:
             self._shuffle_order.clear()
             self._shuffle_pos = -1
             self._next_up.clear()
+            self._revision += 1
 
     def get_current(self) -> dict[str, Any] | None:
         """获取当前播放的歌曲"""
@@ -324,6 +342,16 @@ class PlayQueue:
         return bool(isinstance(ap, str) and ap and isinstance(bp, str) and bp and
                     os.path.normcase(os.path.normpath(ap)) == os.path.normcase(os.path.normpath(bp)))
 
+    def _protected_indices(self, current_song):
+        """Called while locked. Also protect an old local track during a cursor transition."""
+        if (0 <= self._current_index < len(self._queue)
+                and self._same_media(self._queue[self._current_index], current_song)):
+            return [self._current_index]  # Repeated references are separate waiting entries.
+        protected = [i for i, song in enumerate(self._queue) if song is current_song]
+        if 0 <= self._current_index < len(self._queue) and self._current_index not in protected:
+            protected.append(self._current_index)
+        return protected
+
     def snapshot(self, current_song=None) -> dict:
         """Read-only display snapshot; never calls next/get_next or touches RNG."""
         with self._lock:
@@ -331,6 +359,7 @@ class PlayQueue:
             playing = (selected if 0 <= selected < len(self._queue)
                        and self._same_media(self._queue[selected], current_song) else None)
             return {"mode": self._play_mode, "current_index": selected,
+                    "revision": self._revision, "protected_indices": self._protected_indices(current_song),
                     "playing_index": playing, "next_up": list(self._next_up),
                     "items": [dict(self.song_summary(song), index=i)
                               for i, song in enumerate(self._queue)]}

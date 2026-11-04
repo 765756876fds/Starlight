@@ -14,6 +14,7 @@ from typing import Any
 from ..core.command_bus import Command, CommandType, get_command_bus
 from ..core.event_bus import Event, EventType, get_event_bus
 from ..core.logger import get_logger
+from ..core.operation_result import OperationResult, OperationStatus
 from ..core.state_store import StateNamespace, get_state_store
 from .database import MusicDatabase
 from .history_recorder import HistoryRecorder
@@ -1011,6 +1012,49 @@ class MusicController:
         except Exception as e:
             logger.error(f"[Music] add_next error: {e}")
             return False
+
+    def add_to_queue(self, song: dict) -> OperationResult:
+        """Append without playing, cancelling a playback request or changing playlists."""
+        if not isinstance(song, dict):
+            return OperationResult(OperationStatus.FAILED, "歌曲信息无效，未添加到播放队列")
+        online = song.get("source_type") == "online"
+        valid = (bool(song.get("source_name") and song.get("track_id")) if online else
+                 isinstance(song.get("path"), str) and bool(song["path"].strip()))
+        if not valid:
+            return OperationResult(OperationStatus.FAILED, "歌曲路径或音源信息缺失，未添加到播放队列")
+        try:
+            self.queue.add(dict(song))
+        except Exception as e:
+            logger.warning(f"[Music] 添加到播放队列失败: {type(e).__name__}")
+            return OperationResult(OperationStatus.FAILED, "添加到播放队列失败，请重试")
+        message = "已添加到播放队列"
+        mode = self.queue.get_play_mode()
+        if mode == PlayMode.SHUFFLE:
+            message += "；随机模式下按随机规则选曲，不保证最后播放"
+        elif mode == PlayMode.REPEAT_ONE:
+            message += "；单曲循环仍循环当前歌曲，可手动下一首或切换播放模式"
+        return OperationResult(OperationStatus.CONFIRMED, message)
+
+    def remove_from_queue(self, index: int, revision: int) -> OperationResult:
+        """Validate a display snapshot atomically; no MPV, file or database operation."""
+        if type(index) is not int or type(revision) is not int:
+            return OperationResult(OperationStatus.FAILED, "队列信息已失效，请重新选择")
+        if not self._lock.acquire(blocking=False):
+            return OperationResult(OperationStatus.UNAVAILABLE, "正在处理播放操作，请稍后重试移出")
+        try:
+            if self._is_switching_track:
+                return OperationResult(OperationStatus.UNAVAILABLE, "正在切换歌曲，请稍后重试移出")
+            removed = self.queue.remove(index, expected_revision=revision, current_song=self._current_song)
+            if removed is True:
+                return OperationResult(OperationStatus.CONFIRMED, "已移出播放队列，文件和歌单未改变")
+            if removed is False:
+                return OperationResult(OperationStatus.FAILED, "队列已变化或该项正在播放，未移出，请重新选择")
+            return OperationResult(OperationStatus.UNKNOWN, "移出结果未确认，请查看最新队列")
+        except Exception as e:
+            logger.warning(f"[Music] 移出播放队列失败: {type(e).__name__}")
+            return OperationResult(OperationStatus.FAILED, "移出播放队列失败，请重试")
+        finally:
+            self._lock.release()
 
     def delete_local_file(self, song: dict) -> tuple:
         """删除本地文件（不可逆）：删磁盘 + 从 music 表移除（FTS 同步）+ 从歌单移除（历史保留）。

@@ -1,9 +1,9 @@
-"""Read-only queue view. Rows are display snapshots, never playback commands."""
+"""Queue display snapshots with guarded requests to remove non-current entries."""
 from html import escape
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QDialog, QLabel, QListView, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QLabel, QListView, QMenu, QPushButton, QVBoxLayout
 
 from ..theme.tokens import Tokens
 
@@ -55,8 +55,13 @@ class QueueListModel(QAbstractListModel):
 
 
 class MusicQueueDialog(QDialog):
+    remove_requested = Signal(int, int)  # underlying index, structural revision
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._revision = None
+        self._protected_indices = set()
+        self._editable = False
         self.setObjectName("musicQueueDialog")
         self.setWindowTitle("播放队列")
         self.setModal(False)
@@ -100,6 +105,14 @@ class MusicQueueDialog(QDialog):
         self.empty_label.setWordWrap(True)
         self.empty_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         layout.addWidget(self.empty_label, 1)
+        help_label = QLabel("待播歌曲右键可移出，不删除文件或歌单；当前项不可移出。")
+        help_label.setWordWrap(True)
+        help_label.setProperty("class", "secondary")
+        layout.addWidget(help_label)
+        self.action_status = QLabel("")
+        self.action_status.setTextFormat(Qt.PlainText)
+        self.action_status.setWordWrap(True)
+        layout.addWidget(self.action_status)
         close = QPushButton("关闭")
         close.clicked.connect(self.close)
         layout.addWidget(close)
@@ -111,13 +124,40 @@ class MusicQueueDialog(QDialog):
         view.setSpacing(Tokens.SPACING_XS)
         view.setLayoutMode(QListView.Batched)
         view.setEditTriggers(QListView.NoEditTriggers)
+        view.setContextMenuPolicy(Qt.CustomContextMenu)
+        view.customContextMenuRequested.connect(lambda pos, v=view: self._show_remove_menu(v, pos))
         return view
 
+    def _build_remove_menu(self, model, row_number):
+        if not self._editable or not 0 <= row_number < len(model.rows):
+            return None
+        index = model.rows[row_number]["index"]
+        if index in self._protected_indices:
+            return None
+        menu = QMenu(self)
+        action = menu.addAction("移出播放队列")
+        # Capture this exact snapshot, even if the menu stays open across a refresh.
+        action.triggered.connect(lambda _=False, i=index, r=self._revision: self.remove_requested.emit(i, r))
+        return menu
+
+    def _show_remove_menu(self, view, pos):
+        index = view.indexAt(pos)
+        if not index.isValid():
+            return
+        menu = self._build_remove_menu(view.model(), index.row())
+        if menu is not None:
+            menu.exec(view.viewport().mapToGlobal(pos))
+            menu.deleteLater()
+
     def show_pending(self, exhausted=False):
+        self._editable = False
         self.notice.setText("暂时无法读取队列，请稍后重新打开。" if exhausted
                             else "正在更新队列，列表暂保留上次读取的内容…")
 
     def set_snapshot(self, snapshot):
+        self._revision = snapshot["revision"]
+        self._protected_indices = set(snapshot["protected_indices"])
+        self._editable = snapshot["state"] != "loading"
         labels = {"sequential": "顺序播放", "shuffle": "随机播放",
                   "repeat_all": "列表循环", "repeat_one": "单曲循环"}
         mode = snapshot["mode"]
@@ -141,7 +181,7 @@ class MusicQueueDialog(QDialog):
         self.other_list.setVisible(bool(others))
         self.empty_label.setVisible(not items)
         self.empty_label.setText("当前歌曲未加入队列，暂无其他队列歌曲。" if current else
-                                 "播放队列为空。可在歌曲上右键选择“下一首播放”。")
+                                 "播放队列为空。可在歌曲上右键选择“添加到播放队列”。")
         self.other_label.setText(f"队列歌曲 · {len(others)} 首（按队列排列，含当前与已播歌曲）")
         if mode == "shuffle":
             hint = "先播放上方指定歌曲，再恢复随机播放。" if ordered else "尚未指定下一首，后续随机选择。"

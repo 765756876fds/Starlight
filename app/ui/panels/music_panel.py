@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from ...core.command_bus import CommandType, get_command_bus
 from ...core.event_bus import EventType, get_event_bus
+from ...core.operation_result import OperationResult, media_result
 from ...music.humming import HummingService
 from ...music.lyric_search import LyricIndex
 from ...music.online.events import ONLINE_ERROR, ONLINE_SEARCH_DONE
@@ -566,6 +567,7 @@ class MusicPanel(QWidget):
         if self._queue_dialog is None:
             self._queue_dialog = MusicQueueDialog(self)
             self._queue_dialog.finished.connect(self._queue_refresh_timer.stop)
+            self._queue_dialog.remove_requested.connect(self._remove_queue_item, Qt.QueuedConnection)
         self._queue_dialog.show()
         self._queue_dialog.raise_()
         self._queue_dialog.activateWindow()
@@ -599,6 +601,19 @@ class MusicPanel(QWidget):
                 self._queue_refresh_timer.start(200)
             return
         self._queue_dialog.set_snapshot(snapshot)
+
+    @Slot(int, int)
+    def _remove_queue_item(self, index, revision):
+        try:
+            result = self._music.remove_from_queue(index, revision)
+        except Exception:
+            logger.exception("移出播放队列失败")
+            result = False
+        if not isinstance(result, OperationResult):
+            result = media_result(result, label="歌曲", action="移出播放队列")
+        self._queue_dialog.action_status.setText(result.message)
+        # A stale menu is rejected by the controller; show the latest queue for retry.
+        self._schedule_queue_refresh()
 
     # ---- 卡片网格（只改 UI 绘制，不动数据流） ----
     def _setup_card_view(self, w: QListWidget) -> MusicCardDelegate:
@@ -1966,6 +1981,8 @@ class MusicPanel(QWidget):
         menu = QMenu(self)
         act_next = menu.addAction("下一首播放")
         act_next.triggered.connect(lambda: self._on_next_play(song))
+        act_append = menu.addAction("添加到播放队列")
+        act_append.triggered.connect(lambda: self._on_append_queue(song))
         sub = menu.addMenu("添加到歌单 ▸")
         self._populate_playlist_submenu(sub, song)
         if playlist_song_id is not None:
@@ -2026,6 +2043,28 @@ class MusicPanel(QWidget):
             self.lbl_status.setText("加入下一首失败，请重试")
         else:
             self.lbl_status.setText("加入下一首结果未确认")
+
+    def _on_append_queue(self, song: dict):
+        if self._music is None:
+            self.lbl_status.setText("音乐服务不可用，未添加到播放队列")
+            return
+        try:
+            data = self._song_dict_from_row(song)
+            if data["source_type"] == "local":
+                if not data["path"]:
+                    data["path"] = self._music.get_song_path(data.get("music_id") or 0)
+                if not data["path"]:
+                    self.lbl_status.setText("该歌已不可用，未添加到播放队列")
+                    return
+            else:
+                data["extra"] = song.get("extra") or {}
+            result = self._music.add_to_queue(data)
+        except Exception:
+            logger.exception("添加到播放队列失败")
+            result = False
+        if not isinstance(result, OperationResult):
+            result = media_result(result, label="歌曲", action="加入播放队列")
+        self.lbl_status.setText(result.message)
 
     def _remove_song_from_playlist(self, playlist_song_id):
         it = self.list_playlists.currentItem()
@@ -2097,6 +2136,7 @@ class MusicPanel(QWidget):
             "source_type": "online",
             "source_name": t.source_name,
             "track_id": t.track_id,
+            "extra": getattr(t, "extra", None) or {},
             "music_id": 0,
             "id": 0,
             "path": "",

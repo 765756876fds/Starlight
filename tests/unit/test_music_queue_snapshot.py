@@ -170,3 +170,212 @@ def test_real_controller_wires_queue_notifications_once(tmp_path):
         assert c.get_queue_snapshot()["next_up"] == [0]
     finally:
         c.db.close()
+
+
+# V2 edits use a structural revision, not a row number from a possibly stale view.
+@pytest.mark.parametrize("mode", MODES)
+def test_append_preserves_current_song_and_explicit_priorities(mode):
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.queue.set_play_mode(mode)
+    c.queue.add_next(song("D"))
+    c.queue.add_next(song("E"))
+    current = c._current_song
+    result = c.add_to_queue(song("B"))
+    assert result.status == OperationStatus.CONFIRMED
+    assert c._current_song is current and c.queue.get_current() is current
+    assert [c.queue.next(auto=True)["title"] for _ in range(2)] == list("ED")
+    assert c.queue.get_queue()[-1]["title"] == "B"
+    if mode == PlayMode.REPEAT_ONE:
+        assert "单曲循环" in result.message
+    if mode == PlayMode.SHUFFLE:
+        assert "随机" in result.message
+    assert c.mpv.mock_calls == []
+
+
+def test_sequential_append_consumes_in_append_order():
+    c = controller()
+    c.add_to_queue(song("B"))
+    c.add_to_queue(song("C"))
+    assert [c.queue.next(auto=True)["title"] for _ in range(2)] == list("BC")
+
+
+def test_online_append_keeps_plugin_payload_and_uses_same_queue():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    online = {"title": "在线", "source_type": "online", "source_name": "测试源",
+              "track_id": "42", "extra": {"_raw": {"id": "raw-42"}}}
+    assert c.add_to_queue(online).status == OperationStatus.CONFIRMED
+    queued = c.queue.next()
+    assert queued == online and queued is not online
+    assert queued["extra"]["_raw"]["id"] == "raw-42"
+    assert c.mpv.mock_calls == []
+
+
+@pytest.mark.parametrize("invalid", [None, {}, {"title": "无路径"},
+                                       {"source_type": "online", "title": "无来源"}])
+def test_invalid_append_does_not_change_queue(invalid):
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    before = c.queue.snapshot()
+    assert c.add_to_queue(invalid).status == OperationStatus.FAILED
+    assert c.queue.snapshot() == before
+
+
+def test_duplicate_entries_can_remove_exact_requested_occurrence():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    duplicate = song("B")
+    c.add_to_queue(duplicate)
+    c.add_to_queue(duplicate)
+    first, second = c.queue.get_queue()[1:]
+    snap = c.get_queue_snapshot()
+    assert c.remove_from_queue(2, snap["revision"]).status == OperationStatus.CONFIRMED
+    assert c.queue.get_queue()[1] is first
+    assert not any(item is second for item in c.queue.get_queue())
+    assert c.queue.get_current()["title"] == "A"
+    assert c.mpv.mock_calls == []
+
+
+@pytest.mark.parametrize("change", ["insert", "clear_replace", "remove"])
+def test_stale_snapshot_never_deletes_new_occupant_at_same_index(change):
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.add_to_queue(song("B"))
+    snap = c.get_queue_snapshot()
+    if change == "insert":
+        c.queue.add_next(song("D"))
+    elif change == "clear_replace":
+        c.queue.clear()
+        c.queue.add_all([song("X"), song("Y")])
+    else:
+        c.queue.remove(1)
+        c.queue.add(song("C"))
+    before = c.queue.snapshot()
+    assert c.remove_from_queue(1, snap["revision"]).status == OperationStatus.FAILED
+    assert c.queue.snapshot() == before
+
+
+def test_current_and_just_became_current_entries_are_protected():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.add_to_queue(song("B"))
+    snap = c.get_queue_snapshot()
+    assert c.remove_from_queue(0, snap["revision"]).status == OperationStatus.FAILED
+    c.queue.next()  # playback advanced after user opened a menu
+    c._current_song = c.queue.get_current()
+    assert c.remove_from_queue(1, snap["revision"]).status == OperationStatus.FAILED
+    assert [row["title"] for row in c.queue.get_queue()] == list("AB")
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_removing_priority_keeps_other_requests_and_current_position(mode):
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.queue.set_play_mode(mode)
+    c.queue.add_next(song("D"))
+    c.queue.add_next(song("E"))
+    snap = c.get_queue_snapshot()
+    assert c.remove_from_queue(snap["next_up"][0], snap["revision"]).status == OperationStatus.CONFIRMED
+    assert c.queue.get_current()["title"] == "A"
+    assert c.queue.next(auto=True)["title"] == "D"
+
+
+def test_remove_remaps_shuffle_cursor_without_restarting_or_reshuffling():
+    q = PlayQueue()
+    q.add_all([song(t) for t in "ABCD"])
+    q.set_play_mode(PlayMode.SHUFFLE)
+    q._shuffle_order = [2, 0, 3, 1]  # known already-chosen random order
+    assert q.next()["title"] == "C"
+    assert q.next()["title"] == "A"
+    before_rng = random.getstate()
+    snap = q.snapshot(q.get_current())
+    assert q.remove(2, expected_revision=snap["revision"]) is True  # already-played C
+    assert random.getstate() == before_rng
+    assert q.get_current()["title"] == "A"
+    assert [q.next()["title"] for _ in range(2)] == list("DB")
+    assert [q.prev()["title"] for _ in range(2)] == list("DA")
+
+
+def test_remove_before_current_remaps_position_and_preserves_song_identity():
+    c = controller()
+    c.queue.add_all([song("B"), song("C")])
+    c._current_song = c.queue.play_at(1)
+    snap = c.get_queue_snapshot()
+    c.remove_from_queue(0, snap["revision"])
+    assert c.queue.get_current_index() == 0
+    assert c.queue.get_current() is c._current_song
+    assert c.queue.next()["title"] == "C"
+
+
+def test_busy_or_loading_controller_rejects_remove_without_wait_or_side_effects():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.add_to_queue(song("B"))
+    snap = c.get_queue_snapshot()
+    with c._lock:
+        assert c.remove_from_queue(1, snap["revision"]).status == OperationStatus.UNAVAILABLE
+    c._is_switching_track = True
+    assert c.remove_from_queue(1, snap["revision"]).status == OperationStatus.UNAVAILABLE
+    assert c.queue.snapshot()["items"] == snap["items"]
+    assert c.mpv.mock_calls == []
+
+
+def test_edit_exceptions_are_failures_not_confirmation():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    with patch.object(c.queue, "add", side_effect=RuntimeError("test failure")):
+        assert c.add_to_queue(song("B")).status == OperationStatus.FAILED
+    with patch.object(c.queue, "remove", side_effect=RuntimeError("test failure")):
+        assert c.remove_from_queue(1, 0).status == OperationStatus.FAILED
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_remove_ordinary_waiting_song_preserves_mode_rules(mode):
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.queue.set_play_mode(mode)
+    c.add_to_queue(song("B"))
+    c.add_to_queue(song("C"))
+    snap = c.get_queue_snapshot()
+    assert c.remove_from_queue(1, snap["revision"]).status == OperationStatus.CONFIRMED
+    assert [row["title"] for row in c.queue.get_queue()] == list("AC")
+    assert c.queue.get_play_mode() == mode
+    if mode == PlayMode.REPEAT_ONE:
+        assert c.queue.next(auto=True)["title"] == "A"
+        assert c.queue.next()["title"] == "C"
+    elif mode != PlayMode.SHUFFLE:
+        assert c.queue.next(auto=True)["title"] == "C"
+
+
+def test_waiting_duplicate_of_current_can_be_removed_without_removing_current():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.add_to_queue(c._current_song)
+    snap = c.get_queue_snapshot()
+    assert snap["protected_indices"] == [0]
+    assert c.remove_from_queue(1, snap["revision"]).status == OperationStatus.CONFIRMED
+    assert c.queue.get_queue() == [c._current_song]
+
+
+def test_unconfirmed_queue_remove_response_remains_unknown():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    c.add_to_queue(song("B"))
+    snap = c.get_queue_snapshot()
+    with patch.object(c.queue, "remove", return_value=None):
+        assert c.remove_from_queue(1, snap["revision"]).status == OperationStatus.UNKNOWN
+
+
+def test_repeated_same_object_next_requests_can_remove_waiting_duplicate_of_current():
+    from app.core.operation_result import OperationStatus
+    c = controller()
+    shared = song("D")
+    c.queue.add_next(shared)
+    c.queue.add_next(shared)
+    c._current_song = c.queue.next()
+    snap = c.get_queue_snapshot()
+    assert snap["protected_indices"] == [1]
+    assert c.remove_from_queue(snap["next_up"][0], snap["revision"]).status == OperationStatus.CONFIRMED
+    assert c.queue.get_current() is shared
+    assert [row["title"] for row in c.queue.get_queue()] == list("AD")
