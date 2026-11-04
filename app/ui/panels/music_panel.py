@@ -1943,23 +1943,29 @@ class MusicPanel(QWidget):
     def _on_next_play(self, song: dict):
         if self._music is None:
             return
-        d = self._song_dict_from_row(song)
-        # 本地歌必须带磁盘路径才能入队播放（历史/歌单行无 path，按 music_id 补）
-        if d.get("source_type") == "local":
-            if not d.get("path"):
-                try:
-                    d["path"] = self._music.get_song_path(d.get("music_id") or 0)
-                except Exception:
-                    d["path"] = ""
-            if not d["path"]:
-                self.lbl_status.setText("该歌已不可用")
-                return
         try:
-            self._music.add_next(d)
+            d = self._song_dict_from_row(song)
+            # 本地歌必须带磁盘路径才能入队播放（历史/歌单行无 path，按 music_id 补）
+            if d.get("source_type") == "local":
+                if not d.get("path"):
+                    try:
+                        d["path"] = self._music.get_song_path(d.get("music_id") or 0)
+                    except Exception:
+                        d["path"] = ""
+                if not d["path"]:
+                    self.lbl_status.setText("该歌已不可用")
+                    return
+            result = self._music.add_next(d)
         except Exception as e:
             print(f"[MusicPanel] add_next error: {e}")
+            self.lbl_status.setText("加入下一首失败，请稍后重试")
             return
-        self.lbl_status.setText(f"已插到下一首：{song.get('title', '')}")
+        if result is True:
+            self.lbl_status.setText(f"已插到下一首：{song.get('title', '')}")
+        elif result is False:
+            self.lbl_status.setText("加入下一首失败，请重试")
+        else:
+            self.lbl_status.setText("加入下一首结果未确认")
 
     def _remove_song_from_playlist(self, playlist_song_id):
         it = self.list_playlists.currentItem()

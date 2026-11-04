@@ -257,3 +257,106 @@ def test_open_song_folder_quotes_path(qapp):
     args, kw = popen.call_args
     assert kw.get("shell") is True
     assert args[0] == 'explorer /select,"C:\\x\\a b.mp3"'
+
+
+@pytest.fixture
+def next_play_view(qapp):
+    """Own the panel and its independent volume popup through Qt teardown."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from app.ui.panels.music_panel import MusicPanel
+    music = FakeMusic()
+    panel = MusicPanel(music=music)
+    yield panel, music
+    panel._progress_polling = False
+    panel._timer.stop()
+    thread = getattr(panel, "_progress_thread", None)
+    if thread is not None:
+        thread.join(timeout=1.)
+    popup = panel.btn_volume._popover
+    popup.removeEventFilter(panel.btn_volume)
+    popup.close()
+    popup.deleteLater()
+    panel.close()
+    panel.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qapp.processEvents()
+
+
+@pytest.mark.parametrize("result,message", [
+    (True, "已插到下一首：D"),
+    (False, "加入下一首失败，请重试"),
+    (None, "加入下一首结果未确认"),
+    (1, "加入下一首结果未确认"),
+    ({"error": "success"}, "加入下一首结果未确认"),
+])
+def test_next_play_feedback_requires_explicit_business_success(next_play_view, result, message):
+    panel, music = next_play_view
+    music.add_next = MagicMock(return_value=result)
+    panel._on_next_play({"title": "D", "source_type": "online", "track_id": "D"})
+    music.add_next.assert_called_once()
+    assert panel.lbl_status.text() == message
+
+
+def test_next_play_exception_replaces_stale_success_with_failure(next_play_view):
+    panel, music = next_play_view
+    panel.lbl_status.setText("已插到下一首：旧歌")
+    music.add_next = MagicMock(side_effect=RuntimeError("isolated failure"))
+    panel._on_next_play({"title": "D", "source_type": "online"})
+    assert panel.lbl_status.text() == "加入下一首失败，请稍后重试"
+    music.add_next.assert_called_once()
+
+
+def test_next_play_invalid_metadata_does_not_escape_qt_slot(next_play_view):
+    panel, music = next_play_view
+    music.add_next = MagicMock(return_value=True)
+    panel._on_next_play({"title": "D", "source_type": "local", "music_id": "invalid"})
+    music.add_next.assert_not_called()
+    assert panel.lbl_status.text() == "加入下一首失败，请稍后重试"
+
+
+def test_next_play_menu_signal_inserts_only_once(next_play_view, qapp):
+    panel, music = next_play_view
+    music.add_next = MagicMock(return_value=True)
+    menu = panel._build_song_menu({"title": "D", "source_type": "online", "track_id": "D"})
+    action = next(a for a in menu.actions() if a.text() == "下一首播放")
+    action.trigger()
+    qapp.processEvents()
+    music.add_next.assert_called_once()
+    assert panel.lbl_status.text() == "已插到下一首：D"
+
+
+def test_next_play_request_and_current_song_survive_page_switch(next_play_view, qapp):
+    from PySide6.QtWidgets import QTabWidget, QWidget
+    from app.music.controller import MusicController
+    from app.music.queue import PlayMode, PlayQueue
+    panel, music = next_play_view
+    controller = MusicController.__new__(MusicController)
+    controller.queue = PlayQueue()
+    controller.queue.add_all([{"title": s} for s in "ABC"])
+    controller.queue.play_at(0)
+    controller.queue.set_play_mode(PlayMode.SHUFFLE)
+    music.add_next = controller.add_next
+    music.get_current_song = controller.queue.get_current
+    music.get_play_mode = controller.queue.get_play_mode
+    panel._on_next_play({"title": "D", "source_type": "online", "track_id": "D"})
+    outer = QTabWidget()
+    outer.addTab(panel, "音乐")
+    outer.addTab(QWidget(), "其他")
+    outer.show()
+    qapp.processEvents()
+    try:
+        outer.setCurrentIndex(1)
+        qapp.processEvents()
+        outer.setCurrentIndex(0)
+        panel.tabs.setCurrentIndex(1)
+        panel.tabs.setCurrentIndex(0)
+        qapp.processEvents()
+        assert panel._music is music
+        assert controller.queue.get_current()["title"] == "A"
+        assert controller.queue.next()["title"] == "D"
+        assert controller.queue.size() == 4
+    finally:
+        outer.removeTab(0)
+        panel.setParent(None)
+        outer.close()
+        outer.deleteLater()

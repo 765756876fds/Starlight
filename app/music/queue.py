@@ -32,15 +32,33 @@ class PlayQueue:
         self._lock = threading.Lock()
         self._shuffle_order: list[int] = []
         self._shuffle_pos: int = -1
+        self._next_up: list[int] = []  # 明确的下一首请求，后选先播；仍引用同一队列。
+
+    def _insert(self, song: dict[str, Any], position: int):
+        """持锁插入并移动索引；保持当前曲目、历史及随机遍历对应同一歌曲。"""
+        self._queue.insert(position, song)
+        if self._current_index >= position:
+            self._current_index += 1
+        self._history = [i + (i >= position) for i in self._history]
+        self._next_up = [i + (i >= position) for i in self._next_up]
+        self._shuffle_order = [i + (i >= position) for i in self._shuffle_order]
 
     def add(self, song: dict[str, Any], position: int | None = None):
         """添加歌曲到队列"""
         with self._lock:
             if position is not None and 0 <= position <= len(self._queue):
-                self._queue.insert(position, song)
+                self._insert(song, position)
             else:
                 self._queue.append(song)
             self._rebuild_shuffle()
+
+    def add_next(self, song: dict[str, Any]):
+        """原子插到当前曲目后；跨模式优先消费一次，连续请求后选先播。"""
+        with self._lock:
+            position = self._current_index + 1
+            self._insert(song, position)
+            self._next_up.insert(0, position)
+            # 不重洗现有随机顺序；插队项不重复进入本轮随机遍历。
 
     def add_all(self, songs: list[dict[str, Any]]):
         """批量添加歌曲"""
@@ -57,6 +75,9 @@ class PlayQueue:
                     self._current_index -= 1
                 elif index == self._current_index:
                     self._current_index = -1
+                self._history_pos = sum(i != index for i in self._history[:self._history_pos + 1]) - 1
+                self._history = [i - (i > index) for i in self._history if i != index]
+                self._next_up = [i - (i > index) for i in self._next_up if i != index]
                 self._rebuild_shuffle()
 
     def clear(self):
@@ -68,6 +89,7 @@ class PlayQueue:
             self._history_pos = -1
             self._shuffle_order.clear()
             self._shuffle_pos = -1
+            self._next_up.clear()
 
     def get_current(self) -> dict[str, Any] | None:
         """获取当前播放的歌曲"""
@@ -89,6 +111,8 @@ class PlayQueue:
         with self._lock:
             next_index = self._get_next_index(auto=auto)
             if next_index is not None:
+                if next_index in self._next_up:
+                    self._next_up.remove(next_index)
                 self._current_index = next_index
                 self._add_history(next_index)
                 return self._queue[next_index]
@@ -102,12 +126,14 @@ class PlayQueue:
         with self._lock:
             if not self._queue:
                 return None
-            nxt = self._current_index + 1
+            nxt = self._next_up[0] if self._next_up else self._current_index + 1
             if nxt >= len(self._queue):
                 if self._play_mode == PlayMode.REPEAT_ALL:
                     nxt = 0
                 else:
                     return None
+            if nxt in self._next_up:
+                self._next_up.remove(nxt)
             self._current_index = nxt
             self._add_history(nxt)
             return self._queue[nxt]
@@ -140,6 +166,8 @@ class PlayQueue:
         """播放指定位置的歌曲"""
         with self._lock:
             if 0 <= index < len(self._queue):
+                if index in self._next_up:
+                    self._next_up.remove(index)
                 self._current_index = index
                 self._add_history(index)
                 return self._queue[index]
@@ -149,6 +177,9 @@ class PlayQueue:
         """计算下一首的索引。auto=True=自然结束（单曲重播当前），False=用户手动。"""
         if not self._queue:
             return None
+
+        if self._next_up:
+            return self._next_up[0]
 
         if self._play_mode == PlayMode.REPEAT_ONE and auto:
             return max(self._current_index, 0)
@@ -178,7 +209,9 @@ class PlayQueue:
     def _get_shuffle_next(self) -> int | None:
         """随机播放的下一首"""
         if not self._shuffle_order:
-            return None
+            self._rebuild_shuffle()
+            if not self._shuffle_order:
+                return None
 
         self._shuffle_pos += 1
         if self._shuffle_pos >= len(self._shuffle_order):
@@ -190,7 +223,8 @@ class PlayQueue:
 
     def _rebuild_shuffle(self):
         """重建随机播放顺序"""
-        self._shuffle_order = list(range(len(self._queue)))
+        pending = set(self._next_up)
+        self._shuffle_order = [i for i in range(len(self._queue)) if i not in pending]
         random.shuffle(self._shuffle_order)
         self._shuffle_pos = -1
 

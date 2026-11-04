@@ -1003,10 +1003,9 @@ class MusicController:
         return ""
 
     def add_next(self, song: dict) -> bool:
-        """下一首播放：插到当前播放位置之后（无播放时插队首）。返回是否成功。"""
+        """下一首播放：跨模式优先，连续请求后选先播；无播放时插队首。"""
         try:
-            pos = self.queue.get_current_index() + 1
-            self.queue.add(song, position=pos)
+            self.queue.add_next(song)
             return True
         except Exception as e:
             logger.error(f"[Music] add_next error: {e}")

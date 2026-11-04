@@ -18,16 +18,15 @@ def _make_controller():
 
 def test_add_next_success():
     c = _make_controller()
-    c.queue.get_current_index.return_value = 0
-    c.queue.add.return_value = None
+    c.queue.add_next.return_value = None
     song = {"title": "测试"}
     assert c.add_next(song) is True
-    c.queue.add.assert_called_once_with(song, position=1)
+    c.queue.add_next.assert_called_once_with(song)
 
 
 def test_add_next_failure():
     c = _make_controller()
-    c.queue.get_current_index.side_effect = RuntimeError("boom")
+    c.queue.add_next.side_effect = RuntimeError("boom")
     assert c.add_next({"title": "x"}) is False
 
 
@@ -88,8 +87,7 @@ def test_play_playlist_enqueues_in_order():
 
 def test_add_next_queue_add_raises():
     c = _make_controller()
-    c.queue.get_current_index.return_value = 0
-    c.queue.add.side_effect = RuntimeError("queue full")
+    c.queue.add_next.side_effect = RuntimeError("queue full")
     assert c.add_next({"title": "x"}) is False
 
 
@@ -97,8 +95,7 @@ def test_cmd_add_next_propagates_failure():
     c = _make_controller()
     c.online_manager = MagicMock()
     c.online_manager.search.return_value = [{"title": "七里香"}]
-    c.queue.get_current_index.return_value = 0
-    c.queue.add.side_effect = RuntimeError("boom")
+    c.queue.add_next.side_effect = RuntimeError("boom")
     cmd = Command(command_type="music.add_next", params={"query": "七里香"})
     assert c._cmd_add_next(cmd) is False
 
@@ -109,8 +106,7 @@ def test_cmd_play_playlist_fails_on_enqueue_error():
     songs = [{"music_id": 1, "title": "A"}, {"music_id": 2, "title": "B"}]
     c.get_playlist_songs = MagicMock(return_value=songs)
     c.play_playlist_item = MagicMock(return_value=True)
-    c.queue.get_current_index.return_value = 0
-    c.queue.add.side_effect = RuntimeError("queue full")
+    c.queue.add_next.side_effect = RuntimeError("queue full")
     cmd = Command(command_type="music.play_playlist", params={"name": "工作"})
     assert c._cmd_play_playlist(cmd) is False
 
