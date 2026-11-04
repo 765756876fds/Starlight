@@ -16,12 +16,14 @@ EpisodeSidebar（S4，同 owned 模式）右缘选集。
 NOACTIVATE 方案 S2 实测桌面不显示，已整体弃用）。
 mpv 崩溃恢复（S8）：窗口 _tick 轮询检测。
 """
-from PySide6.QtCore import QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
 
 import threading
+import os
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSlider,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -555,6 +558,7 @@ class VideoPlayerWindow(QWidget):
 
     # 停播信号（close / 播完 / mpv 异常自愈失败时发，面板清 embed 状态）
     stopped = Signal()
+    _subtitle_finished = Signal(int, object)
 
     def __init__(self, controller, title="电影播放"):
         super().__init__(None)
@@ -576,6 +580,10 @@ class VideoPlayerWindow(QWidget):
         self._current_index = 0          # S6：当前集索引（下一集定位）
         # S8：mpv 崩溃自愈状态（恢复中 tick 只轮询恢复结果，不走正常进度刷新）
         self._recovering = False
+        self._subtitle_busy = False
+        self._subtitle_request = 0
+        self._subtitle_menu = None
+        self._subtitle_finished.connect(self._on_subtitle_finished, Qt.QueuedConnection)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -620,6 +628,7 @@ class VideoPlayerWindow(QWidget):
 
     def play(self, item, index=None):
         """注入容器 winId → 控制器播放 → 接管轮询/overlay/侧栏。"""
+        self._invalidate_subtitle_menu()
         self._movie.set_embed_wid(self.container.native_id())
         ok = self._movie.play(item, index=index)
         if ok:
@@ -658,6 +667,7 @@ class VideoPlayerWindow(QWidget):
         窗口负责接管轮询/overlay 呈现。"""
         if not self._movie.is_playing():
             return
+        self._invalidate_subtitle_menu()
         self._playing = True
         self._apply_mpv_mouse_passthrough()   # S3：mpv 子窗口鼠标穿透（幂等）
         self._show_overlay()              # S3：浮现 + 启动 3s 隐藏计时
@@ -678,8 +688,105 @@ class VideoPlayerWindow(QWidget):
         self.play(self._current_item, index=self._current_index + 1)
 
     def request_subtitle(self):
-        """字幕按钮：弹 Assrt 字幕对话框（复用面板 _SubtitleDialog——搜索框
-        预填当前片名 + 结果列表双击加载，发指令给 controller）。"""
+        """IPC 查询放在后台；菜单和反馈只在 GUI 线程创建/更新。"""
+        self._start_subtitle_task("menu", self._movie.subtitle_state)
+
+    def _start_subtitle_task(self, kind, operation):
+        if self._subtitle_busy:
+            return
+        self._subtitle_busy = True
+        self.overlay.btn_subtitle.setEnabled(False)
+        self._subtitle_request += 1
+        request = self._subtitle_request
+        finished = self._subtitle_finished
+
+        def run():
+            try:
+                result = operation()
+            except Exception as e:
+                print(f"[播放窗口] 字幕操作异常: {type(e).__name__}")
+                result = None if kind == "menu" else (False, "字幕操作失败，请稍后重试")
+            try:
+                finished.emit(request, (kind, result))
+            except RuntimeError:
+                pass  # Qt owner 已销毁：不再触碰窗口。
+
+        threading.Thread(target=run, name="MovieSubtitle", daemon=True).start()
+
+    @Slot(int, object)
+    def _on_subtitle_finished(self, request, payload):
+        self._subtitle_busy = False
+        self.overlay.btn_subtitle.setEnabled(True)
+        if request != self._subtitle_request:
+            return
+        kind, result = payload
+        if kind == "menu":
+            menu = self._build_subtitle_menu(result)
+            self._hide_timer.stop()
+            menu.popup(self.overlay.btn_subtitle.mapToGlobal(self.overlay.btn_subtitle.rect().topLeft()))
+        else:
+            ok, message = result
+            if ok and kind == "load":
+                message = f"字幕已加载：{os.path.basename(message)}"
+            self._subtitle_feedback(message)
+
+    def _build_subtitle_menu(self, state):
+        if self._subtitle_menu is not None:
+            self._subtitle_menu.close()
+            self._subtitle_menu.deleteLater()
+        menu = QMenu(self.overlay)
+        self._subtitle_menu = menu
+        menu.setStyleSheet("QMenu{background:#20232a;color:#eee;border:1px solid #555;}"
+                          "QMenu::item{padding:7px 18px;}QMenu::item:selected{background:#3a506b;}")
+        media = state["media"] if state else None
+        local = menu.addAction("加载本地字幕…")
+        local.setEnabled(state is not None)
+        local.triggered.connect(lambda: self._choose_local_subtitle(media))
+        online = menu.addAction("搜索在线字幕（Assrt）…")
+        online.triggered.connect(self._request_assrt_subtitle)
+        menu.addSeparator()
+        visible = menu.addAction("显示字幕")
+        visible.setCheckable(True)
+        visible.setChecked(bool(state and state["visible"]))
+        visible.setEnabled(state is not None)
+        visible.triggered.connect(lambda checked: self._start_subtitle_task(
+            "control", lambda: self._movie.set_subtitle_visible(checked, expected_media=media)))
+        tracks = state["tracks"] if state else []
+        if not tracks:
+            empty = menu.addAction("当前没有字幕" if state else "视频尚未就绪或字幕状态不可用")
+            empty.setEnabled(False)
+        for track in tracks:
+            sid = track["id"]
+            name = track.get("title") or os.path.basename(track.get("external-filename") or "") or f"字幕 {sid}"
+            if track.get("lang"):
+                name += f" [{track['lang']}]"
+            action = menu.addAction(name.replace("&", "&&"))
+            action.setCheckable(True)
+            action.setChecked(state["sid"] == sid)
+            action.triggered.connect(lambda checked=False, sid=sid: self._start_subtitle_task(
+                "control", lambda: self._movie.select_subtitle(sid, expected_media=media)))
+        menu.aboutToHide.connect(lambda: self._hide_timer.start(_OVERLAY_HIDE_DELAY_MS)
+                                 if self._playing else None)
+        return menu
+
+    def _choose_local_subtitle(self, media):
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "加载本地字幕", "", "字幕文件 (*.srt *.ass *.ssa *.vtt);;所有文件 (*)")
+        if filename:
+            self._start_subtitle_task("load", lambda: self._movie.load_local_subtitle(
+                filename, expected_media=media))
+
+    def _subtitle_feedback(self, message):
+        QToolTip.showText(self.overlay.btn_subtitle.mapToGlobal(
+            self.overlay.btn_subtitle.rect().topLeft()), message, self, self.rect(), 5000)
+
+    def _invalidate_subtitle_menu(self):
+        self._subtitle_request += 1
+        if self._subtitle_menu is not None:
+            self._subtitle_menu.close()
+
+    def _request_assrt_subtitle(self):
+        """保留原有 Assrt 对话框及其下载链路。"""
         try:
             from app.ui.panels.movie_panel import _SubtitleDialog
             kw = (self._current_item or {}).get("vod_name") or ""
@@ -887,6 +994,7 @@ class VideoPlayerWindow(QWidget):
 
     def _on_stopped(self):
         """停播（播完/停止/异常）：停轮询 + 隐藏 overlay/侧栏 + 通知面板。"""
+        self._invalidate_subtitle_menu()
         self._playing = False
         self._timer.stop()
         self._hide_timer.stop()
@@ -974,7 +1082,7 @@ class VideoPlayerWindow(QWidget):
     def _on_hide_timeout(self):
         """3s 静止 → 隐藏控制条 + 指针（B站：指针与控制条同步隐）；
         hover（正在操作）不隐藏。"""
-        if self._overlay_hover:
+        if self._overlay_hover or (self._subtitle_menu is not None and self._subtitle_menu.isVisible()):
             return
         self.overlay.hide()
         self.setCursor(Qt.BlankCursor)      # 窗口模式也隐指针（S3 修）

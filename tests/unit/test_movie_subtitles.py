@@ -209,10 +209,21 @@ def test_load_subtitle_full_chain(tmp_path):
     """detail → 下载 ZIP → 解压 → 落盘 → sub_add → sid 强制选中。"""
     ctrl = _make_ctrl(tmp_path)
     ctrl.mpv.is_running.return_value = True
-    ctrl.mpv.get_track_list.return_value = [
-        {"id": 1, "type": "video"},
-        {"id": 2, "type": "sub", "external": True, "selected": False},
-    ]
+    props = {"path": "movie.mp4", "sub-visibility": True, "sid": False,
+             "track-list": [{"id": 1, "type": "video"}]}
+    ctrl.mpv.get_property.side_effect = lambda name, **kw: props.get(name)
+
+    def add(path):
+        props["track-list"].append({"id": 2, "type": "sub", "external": True,
+                                    "external-filename": path, "selected": False})
+        return {"error": "success"}
+
+    def select(sid):
+        props["sid"] = sid
+        return {"error": "success"}
+
+    ctrl.mpv.sub_add.side_effect = add
+    ctrl.mpv.set_sid.side_effect = select
     zip_data = _make_zip([("流浪地球2.srt", b"1\n00:00:01,000 --> 00:00:02,000\nhi")])
     detail_body = '{"status":0,"sub":{"subs":[{"url":"http://file0.assrt.net/dl/1.zip"}]}}'
     with patch("app.movie.movie_controller.requests.get") as g:

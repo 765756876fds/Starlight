@@ -382,11 +382,11 @@ class MpvController:
     def sub_add(self, path_or_url: str, title: str = ""):
         """加载外部字幕（本地路径或 http URL）。必须在 loadfile 之后调用
         （idle 无文件态 sub-add 报 error running command——已实测）。"""
-        params = [path_or_url]
+        # cached 在 MPV 内部按文件名复用已发现的轨道，覆盖自动发现与追加的竞态。
+        params = [path_or_url, "cached"]
         if title:
-            params.append("select")
             params.append(title)
-        self._send_command("sub-add", params, timeout=5.0)
+        return self._send_command("sub-add", params, timeout=5.0)
 
     def get_track_list(self) -> list:
         """实时 track-list（找字幕轨 id 用）。"""
@@ -400,7 +400,7 @@ class MpvController:
 
     def set_sid(self, sid: int):
         """强制选中指定字幕轨（sub-add 后 selected 可能 False——已实测，必须显式选）。"""
-        self.set_property("sid", int(sid))
+        return self.set_property("sid", int(sid))
 
     def on_property_change(self, prop: str, callback: Callable[[Any], None]):
         self._property_watchers[prop] = callback

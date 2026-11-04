@@ -173,6 +173,8 @@ class MovieController:
         self._pending_history = None
         self._history_recorded_gen = None
         self._sub_searched = set()
+        self._subtitle_lock = threading.RLock()
+        self._pending_local_subtitle = None
         # 崩溃自愈状态（对齐音乐链 _try_restart_mpv：防重入 + 3 次/5 分钟上限）
         self._recover_lock = threading.Lock()
         self._recover_pending = False   # 一次恢复进行中（防重入）
@@ -491,6 +493,7 @@ class MovieController:
         self._pending_history = (dict(item), str(url))
         self._history_recorded_gen = None
         self._write_state(playing=True, paused=False)
+        self._pending_local_subtitle = None
         if item.get("local_file"):
             self._load_local_subtitle(str(url))
         return True
@@ -572,15 +575,144 @@ class MovieController:
 
     def _load_local_subtitle(self, video_path: str) -> str | None:
         subtitle = self._local_subtitle(video_path)
-        if not subtitle:
-            return None
+        # loadfile 的成功响应仅表示接收请求，不能向尚未切走的旧媒体添加字幕。
+        self._pending_local_subtitle = ((self._playback_gen, video_path, subtitle)
+                                        if subtitle else None)
+        return subtitle
+
+    def _apply_pending_local_subtitle(self):
+        pending = getattr(self, "_pending_local_subtitle", None)
+        if not pending:
+            return
+        gen, video, subtitle = pending
+        if gen != self._playback_gen or not (self._current or {}).get("local_file"):
+            self._pending_local_subtitle = None
+            return
+        state = self.subtitle_state()
+        if state is None or self._subtitle_path_key(state["media"]) != self._subtitle_path_key(video):
+            return
+        self._pending_local_subtitle = None  # 每次播放仅尝试一次；失败只记日志。
+        if self._find_subtitle(state["tracks"], subtitle):
+            return  # 保留 MPV 的语言选择和其他字幕，不再次追加/抢选。
+        ok, message = self.load_local_subtitle(
+            subtitle, expected_media=state["media"], enable=state["visible"])
+        if not ok:
+            logger.warning(f"[Movie] local subtitle load unconfirmed: {message}")
+
+    @staticmethod
+    def _subtitle_path_key(path):
+        return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+    @classmethod
+    def _find_subtitle(cls, tracks, path):
+        key = cls._subtitle_path_key(path)
+        return next((t for t in tracks if t.get("external-filename")
+                     and cls._subtitle_path_key(t["external-filename"]) == key), None)
+
+    def subtitle_state(self):
+        """现查当前媒体与字幕；None 表示不可确认，绝不使用旧轨道缓存。"""
         try:
-            self.mpv.sub_add(subtitle)
-            logger.info("[Movie] local subtitle loaded: %s", os.path.basename(subtitle))
-            return subtitle
+            if not self.mpv.is_running():
+                return None
+            media = self.mpv.get_property("path", timeout=.5)
+            tracks = self.mpv.get_property("track-list", timeout=.5)
+            visible = self.mpv.get_property("sub-visibility", timeout=.5)
+            sid = self.mpv.get_property("sid", timeout=.5)
+            if (not isinstance(media, str) or not media or not isinstance(tracks, list)
+                    or not any(isinstance(t, dict) and t.get("type") in ("video", "audio") for t in tracks)
+                    or not isinstance(visible, bool) or sid is None
+                    or self.mpv.get_property("path", timeout=.5) != media):
+                return None
+            return {"media": media, "visible": visible, "sid": sid,
+                    "tracks": [dict(t) for t in tracks if isinstance(t, dict)
+                               and t.get("type") == "sub" and type(t.get("id")) is int]}
         except Exception as e:
-            logger.warning("[Movie] local subtitle load failed: %s", type(e).__name__)
+            logger.warning(f"[Movie] subtitle state unavailable: {type(e).__name__}")
             return None
+
+    @staticmethod
+    def _subtitle_response_ok(response):
+        return isinstance(response, dict) and response.get("error") == "success"
+
+    def load_local_subtitle(self, path, expected_media=None, *, enable=True):
+        """加载/复用实际文件，返回 (确认成功, 路径或简短失败原因)。"""
+        try:
+            filename = str(Path(path).resolve())
+            if not Path(filename).is_file():
+                return False, "字幕文件不存在或不是文件，请重新选择"
+            with open(filename, "rb") as f:
+                f.read(1)  # 只检查可读性；格式/解码交给 MPV。
+            with self._subtitle_lock:
+                state = self.subtitle_state()
+                if state is None:
+                    return False, "请等待视频加载完成后再加载字幕"
+                media = expected_media if expected_media is not None else state["media"]
+                if state["media"] != media:
+                    return False, "视频已切换，请重新打开字幕菜单"
+                track = self._find_subtitle(state["tracks"], filename)
+                if track is None:
+                    response = self.mpv.sub_add(filename)
+                    if response is None:
+                        return False, "播放器未确认字幕加载结果，请检查字幕轨道"
+                    if not self._subtitle_response_ok(response):
+                        return False, "字幕加载失败，请检查文件格式或选择其他字幕"
+                    state = self.subtitle_state()
+                    if state is None or state["media"] != media:
+                        return False, "字幕结果未确认，视频可能已经切换"
+                    track = self._find_subtitle(state["tracks"], filename)
+                    if track is None:
+                        return False, "未检测到有效字幕轨道，请检查字幕文件"
+                if not enable:
+                    return True, filename  # 自动加载尊重用户已经关闭字幕的选择。
+                ok, message = self.select_subtitle(track["id"], expected_media=media)
+                return (True, filename) if ok else (False, message)
+        except Exception as e:
+            logger.warning(f"[Movie] local subtitle load failed: {type(e).__name__}")
+            return False, "字幕无法读取或播放器无响应，请重新选择或稍后重试"
+
+    def select_subtitle(self, sid, expected_media=None):
+        try:
+            with self._subtitle_lock:
+                state = self.subtitle_state()
+                if state is None or (expected_media is not None and state["media"] != expected_media):
+                    return False, "当前视频状态已变化，请重新打开字幕菜单"
+                if type(sid) is not int or not any(t["id"] == sid for t in state["tracks"]):
+                    return False, "该字幕轨道已不可用，请重新选择"
+                if state["sid"] != sid and not self._subtitle_response_ok(self.mpv.set_sid(sid)):
+                    return False, "播放器未确认字幕轨道切换"
+                if not state["visible"] and not self._subtitle_response_ok(
+                        self.mpv.set_property("sub-visibility", True)):
+                    return False, "播放器未确认字幕开启"
+                actual = self.subtitle_state()
+                if actual and actual["media"] == state["media"] and actual["sid"] == sid and actual["visible"]:
+                    return True, "字幕已开启"
+                return False, "字幕状态未确认，请重新打开字幕菜单检查"
+        except Exception as e:
+            logger.warning(f"[Movie] subtitle selection failed: {type(e).__name__}")
+            return False, "字幕切换失败，请稍后重试"
+
+    def set_subtitle_visible(self, visible, expected_media=None):
+        try:
+            with self._subtitle_lock:
+                state = self.subtitle_state()
+                if state is None or (expected_media is not None and state["media"] != expected_media):
+                    return False, "当前视频状态已变化，请重新打开字幕菜单"
+                if visible:
+                    if not state["tracks"]:
+                        return False, "当前没有字幕，请先加载本地字幕"
+                    selected = next((t["id"] for t in state["tracks"] if t["id"] == state["sid"]),
+                                    state["tracks"][0]["id"])
+                    return self.select_subtitle(selected, expected_media=state["media"])
+                if state["visible"] and not self._subtitle_response_ok(
+                        self.mpv.set_property("sub-visibility", False)):
+                    return False, "播放器未确认字幕关闭"
+                actual = self.subtitle_state()
+                if actual and actual["media"] == state["media"] and actual["visible"] is False:
+                    return True, "字幕已关闭"
+                return False, "字幕关闭结果未确认，请稍后检查"
+        except Exception as e:
+            logger.warning(f"[Movie] subtitle visibility failed: {type(e).__name__}")
+            return False, "字幕状态调整失败，请稍后重试"
 
     def _record_history_if_started(self, now_idle):
         if now_idle is not False or not self._pending_history:
@@ -652,6 +784,7 @@ class MovieController:
     def tick(self):
         """供面板轮询调用（500ms）：检测 mpv idle 上升沿 → 播完自动下一集。
         手动 stop（_current=None）/ 开关关 → 不连播；末集播完 → 停（不循环）。"""
+        self._apply_pending_local_subtitle()
         # 外部 URL 模式：播完 idle 上升沿 → 写 playing=False，不连播。
         # 缓冲期保护：loadfile 成功 ≠ 媒体已播放，先观察到 idle=False 才认可"正在播"。
         if getattr(self, "_external_url_mode", False):
@@ -1156,9 +1289,7 @@ class MovieController:
                 return False, f"字幕写入失败: {e}"
             if not self.mpv.is_running():
                 return False, "播放器未运行，字幕已保存（下次播放时可用）"
-            self.mpv.sub_add(out_path)
-            self._force_select_sub()
-            return True, out_path
+            return self.load_local_subtitle(out_path)
         except Exception as e:
             logger.error(f"[Movie] 字幕加载失败: {e}")
             return False, f"字幕加载失败: {e}"
