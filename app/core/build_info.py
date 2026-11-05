@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from app.version import get_version
 
 
 def create_manifest(root):
@@ -16,8 +17,8 @@ def create_manifest(root):
     head = git("rev-parse", "HEAD").decode().strip()
     # Hash product inputs only: never credentials, databases, logs or backups.
     paths = git("ls-files", "-z", "--cached", "--others", "--exclude-standard",
-                "app", "scripts", "main.py", "requirements*.txt").decode().split("\0")
-    paths = sorted(set(p for p in paths if p.endswith((".py", ".spec", ".ps1", ".bat", ".iss", ".txt"))
+                "app", "scripts", "main.py", "requirements*.txt", "VERSION").decode().split("\0")
+    paths = sorted(set(p for p in paths if (p == "VERSION" or p.endswith((".py", ".spec", ".ps1", ".bat", ".iss", ".txt")))
                        and "__pycache__" not in p and "node_modules" not in p))
     digest = hashlib.sha256()
     for path in paths:
@@ -28,10 +29,10 @@ def create_manifest(root):
             digest.update(file.read_bytes())
     # Installer outputs under scripts/ do not make product sources dirty.
     changes = git("status", "--porcelain=v1", "-z", "--untracked-files=all", "--",
-                  "app", "scripts", "main.py", "requirements*.txt").decode().split("\0")
+                  "app", "scripts", "main.py", "requirements*.txt", "VERSION").decode().split("\0")
     dirty = any(entry[3:] in paths for entry in changes if len(entry) > 3)
     now = datetime.now(timezone.utc)
-    return {"schema_version": 1, "source_head": head, "source_dirty": dirty,
+    return {"schema_version": 1, "app_version": get_version(root), "source_head": head, "source_dirty": dirty,
             "source_sha256": digest.hexdigest(),
             "built_at_utc": now.isoformat(),
             "build_id": now.strftime("%Y%m%dT%H%M%SZ") + "-" + digest.hexdigest()[:12]}
@@ -39,20 +40,20 @@ def create_manifest(root):
 
 def load_build_info():
     if not getattr(sys, "frozen", False):
-        return {"mode": "source", "build_id": "开发运行（未冻结）"}
+        return {"mode": "source", "app_version": get_version(), "build_id": "开发运行（未冻结）"}
     path = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "build_info.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or data.get("schema_version") != 1:
             raise ValueError("invalid build manifest")
-        return {**data, "mode": "frozen"}
+        return {**data, "app_version": data.get("app_version", get_version()), "mode": "frozen"}
     except (OSError, ValueError):
-        return {"mode": "frozen", "build_id": "构建信息缺失或损坏，请检查安装版本"}
+        return {"mode": "frozen", "app_version": get_version(), "build_id": "构建信息缺失或损坏，请检查安装版本"}
 
 
 def describe_build():
     info = load_build_info()
-    lines = [f"构建：{info['build_id']}"]
+    lines = [f"版本：{info['app_version']}", f"构建：{info['build_id']}"]
     if info.get("source_head"):
         lines.extend([f"源码提交：{info['source_head']}",
                       f"包含未提交修改：{'是' if info.get('source_dirty') else '否'}",

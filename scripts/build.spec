@@ -65,6 +65,7 @@ hiddenimports = [
 
 datas = [
     (manifest_path, '.'),
+    (P('VERSION'), '.'),
     # UI 主题（dark.qss + icons/*.svg）：applier.py 用 __file__ 相对定位，
     # 打包态命中 _internal/app/ui/theme/ —— 缺失则新电脑 UI 崩溃（QSS 加载失败）
     (P('app/ui/theme'), 'app/ui/theme'),

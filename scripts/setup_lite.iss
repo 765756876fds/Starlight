@@ -2,7 +2,7 @@
 ; 源 = build.ps1 产物（项目根 dist\Starlight，不含 1.2G ASR 模型；模型首次运行自动下载）
 ; 相对路径解释为相对脚本目录（scripts/），用 "..\" 回退到项目根。
 #define MyAppName "星芒"
-#define MyAppVersion "0.1.0"
+#include "version.iss"
 #define MyAppExeName "Starlight.exe"
 #define SourceDir "..\dist\Starlight"
 
@@ -10,6 +10,10 @@
 AppId={{B7E3F2A1-4C5D-4E6F-8A9B-0D1E2F3A4B5C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppNumericVersion}
+VersionInfoProductVersion={#MyAppNumericVersion}
+VersionInfoTextVersion={#MyAppVersion}
+VersionInfoProductTextVersion={#MyAppVersion}
 AppPublisher=星芒
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}

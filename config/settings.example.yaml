@@ -4,7 +4,6 @@
 
 app:
   name: Starlight
-  version: 0.1.0
   log_level: INFO
   data_dir: ./data
   log_dir: ./logs

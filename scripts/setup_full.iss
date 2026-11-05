@@ -4,7 +4,7 @@
 ; 注意：Inno Setup 把脚本内相对路径（SourceDir/Source/SetupIconFile）解释为
 ; 相对脚本所在目录（scripts/），故统一用 "..\" 回退到项目根。
 #define MyAppName "星芒"
-#define MyAppVersion "0.1.0"
+#include "version.iss"
 #define MyAppExeName "Starlight.exe"
 #ifndef SourceDir
 #define SourceDir "..\dist\staging\Starlight"
@@ -18,6 +18,10 @@
 AppId={{C8E4F3B2-5D6E-4F70-9BAC-1E2F304A5C6D}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppNumericVersion}
+VersionInfoProductVersion={#MyAppNumericVersion}
+VersionInfoTextVersion={#MyAppVersion}
+VersionInfoProductTextVersion={#MyAppVersion}
 AppPublisher=星芒
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}

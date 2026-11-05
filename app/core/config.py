@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+from app.version import get_version
 
 from app.core.path_resolve import (
     PROJECT_ROOT,
@@ -38,7 +39,7 @@ def _default_config() -> dict[str, Any]:
     return {
         "app": {
             "name": "Starlight",
-            "version": "0.1.0",
+            "version": get_version(),
             "log_level": "INFO",
             "data_dir": data_dir,
             "log_dir": logs_dir,
@@ -251,6 +252,10 @@ class Config:
         获取配置值，支持点号分隔的嵌套键
         例如: config.get("music.mpv_path")
         """
+        # Old personal settings may still contain a version. It is product
+        # metadata, not a user preference; do not rewrite the settings file.
+        if key == "app.version":
+            return get_version()
         keys = key.split(".")
         value = self._data
         for k in keys:
