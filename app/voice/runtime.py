@@ -22,6 +22,8 @@ from .asr import ASRManager
 from .intent import Intent, IntentRouter, RuleBasedIntent
 from .registry import parameter_issue
 from .text import normalize_text
+from ..core.notifications import (get_notification_center, current_operation_id,
+                                  operation_scope, action_title, notify)
 
 
 def fold_duplicated_text(text: str) -> str:
@@ -111,6 +113,8 @@ class VoiceRuntime:
         # 麦克风
         self._audio_stream = None
         self._mic_thread: threading.Thread | None = None
+        self._mic_stop = threading.Event()
+        self._mic_on = False
 
         # 采集/识别解耦（场景 6/25）：
         # 采集线程（voice-mic）只读麦克风 + VAD → 语音段入有界队列；
@@ -124,6 +128,9 @@ class VoiceRuntime:
         self._feedback_lock = threading.RLock()
         self._voice_request_generation = 0
         self._recent_audio = {}
+        # 仅保留内存中的最近一次交互，不保存录音或写入用户配置。
+        self._activity = {}
+        self._activity_speech = None
 
         # 打断旁路队列（Side-channel）：TTS 播放期间采集的段（is_interrupt=True）
         # 绝不进主 ASR 队列，只进这里；offer_latest 语义（满丢旧塞新，最新打断意图优先）。
@@ -208,6 +215,7 @@ class VoiceRuntime:
             self._recent_audio.clear()
             self.intent_router.clear_context()
         self._listening = False
+        self._mic_stop.set()
 
         # 排空主队列 + put sentinel：让识别线程处理完当前段后退出。
         # 采集线程可能仍在并发 put（stop 后新段落在 sentinel 之后）→
@@ -242,6 +250,7 @@ class VoiceRuntime:
 
     def _start_microphone(self):
         """启动麦克风采集线程"""
+        self._mic_stop.clear()
         self._mic_thread = threading.Thread(
             target=self._mic_loop, daemon=True, name="voice-mic"
         )
@@ -249,9 +258,21 @@ class VoiceRuntime:
 
     def _stop_microphone(self):
         """停止麦克风采集"""
+        self._mic_stop.set()
         self._listening = False
 
     def _mic_loop(self):
+        """设备失败后恢复开关状态；不在后台无限重试失效设备。"""
+        try:
+            self._capture_microphone()
+        except Exception as exc:
+            print(f"[Voice] 麦克风不可用: {type(exc).__name__}")
+            self._record_input_failure("麦克风不可用，请检查设备连接及 Windows 麦克风权限，再重新开启语音")
+        finally:
+            self._listening = False
+            self._mic_on = False
+
+    def _capture_microphone(self):
         """麦克风采集循环"""
         try:
             import pyaudio
@@ -261,11 +282,11 @@ class VoiceRuntime:
             print(f"[Voice] 当前 Python: {_sys.executable}")
             print(f"[Voice] 请确认用项目 .venv 启动（.venv\\Scripts\\python.exe main.py），"
                   f"并执行: .venv\\Scripts\\pip install -r requirements.txt")
-            return
+            raise
 
-        audio = pyaudio.PyAudio()
         sample_rate = int(self.asr_config.get("sample_rate", 16000))
         chunk_size = 1024
+        audio = pyaudio.PyAudio()
 
         try:
             stream = audio.open(
@@ -277,9 +298,14 @@ class VoiceRuntime:
             )
         except Exception as e:
             print(f"[Voice] 麦克风打开失败: {e}")
-            return
+            audio.terminate()
+            raise
 
-        self._listening = True
+        self._listening = not self._mic_stop.is_set()
+        if self._listening:
+            notice_id = notify("麦克风已就绪", "现在可以说出语音指令", source="microphone",
+                               dedup_key="microphone-ready")
+            get_notification_center().focus(notice_id)
         print("[Voice] 麦克风已启动，正在监听...")
 
         # 简单的 VAD：基于音量阈值
@@ -331,11 +357,16 @@ class VoiceRuntime:
 
             except Exception as e:
                 print(f"[Voice] 麦克风读取异常: {e}")
-                time.sleep(0.1)
+                self._record_input_failure("麦克风读取中断，请检查设备后重新开启语音")
+                break
 
-        stream.stop_stream()
-        stream.close()
-        audio.terminate()
+        try:
+            stream.stop_stream()
+        finally:
+            try:
+                stream.close()
+            finally:
+                audio.terminate()
         self._listening = False
 
     def _enqueue_speech(self, audio_data: bytes, sample_rate: int,
@@ -391,10 +422,24 @@ class VoiceRuntime:
                 break
             if not self._running or self._asr_generation != my_gen:
                 break
+            # Avoid a second pending notification for an already accepted
+            # audio segment, using the existing two-second dedup window.
+            if seg[0]:
+                signature = (seg[1], hashlib.sha256(seg[0]).digest())
+                with self._feedback_lock:
+                    accepted_at = self._recent_audio.get(signature)
+                if accepted_at is not None and time.monotonic() - accepted_at < 2.0:
+                    continue
             try:
-                self._process_speech(*seg)
+                center = get_notification_center()
+                operation_id = center.post("正在识别你的话", source="voice", phase="recognizing")
+                with operation_scope(operation_id):
+                    self._process_speech(*seg)
             except Exception as e:
                 print(f"[Voice] 识别线程异常: {e}")
+                if self._running and self._asr_generation == my_gen:
+                    with operation_scope(operation_id):
+                        self._record_input_failure("语音处理未完成，请重试；持续失败时请在设置 → 诊断中检查识别服务")
         print(f"[Voice] 识别线程 gen={my_gen} 退出")
 
     def _speech_gate(self):
@@ -515,8 +560,11 @@ class VoiceRuntime:
         _t_asr = time.monotonic()
         if generation != self._asr_generation or (running and not self._running):
             print("[Voice] stale ASR result ignored")
+            get_notification_center().update(current_operation_id(), title="本次识别已结束",
+                                             status="warning", phase="done")
             return
         if not text or not text.strip():
+            self._record_input_failure("没有识别到清晰语音，请靠近麦克风并说完整的一条指令")
             return
         if audio_data:
             signature = (sample_rate, hashlib.sha256(audio_data).digest())
@@ -530,6 +578,8 @@ class VoiceRuntime:
         # 轻量去重：ASR 重复拼接（播放声污染场景）→ 只保留一段
         original_text = text
         text = fold_duplicated_text(text)
+        get_notification_center().update(current_operation_id(), title=text,
+                                         heard=original_text, phase="recognized")
 
         print(f"[Voice] 识别: {text}")
 
@@ -612,25 +662,81 @@ class VoiceRuntime:
             print(f"[Voice] _real_paused exception: {e!r}")
             return None
 
+    def _record_input_failure(self, message):
+        with self._feedback_lock:
+            self._activity = {"heard": "", "intent": "", "feedback": message,
+                              "speech_status": "none"}
+            self._activity_speech = None
+        microphone = message.startswith("麦克风")
+        center = get_notification_center()
+        if current_operation_id() and not microphone:
+            center.update(current_operation_id(), title="没有听清楚，请再说一次", message=message,
+                          status="warning", phase="done")
+        else:
+            operation_id = center.post("麦克风暂时不可用" if microphone else "没有听清楚，请再说一次",
+                                       message, status="failed" if microphone else "warning",
+                                       source="microphone" if microphone else "voice", phase="done",
+                                       dedup_key="microphone-unavailable" if microphone else "voice-input-failed")
+            if microphone:
+                center.focus(operation_id)
+
+    def get_activity(self) -> dict[str, str]:
+        """供 GUI 读取的副本；执行反馈不依赖 TTS 是否可用。"""
+        with self._feedback_lock:
+            snapshot = dict(getattr(self, "_activity", {}))
+            item = getattr(self, "_activity_speech", None)
+            if item is not None:
+                snapshot["speech_status"] = item.status
+            return snapshot
+
     def _enqueue_speak(self, text: str, category: str = "voice"):
+        # 即使没有播报服务，用户仍能在界面看到真实的执行反馈。
+        if not hasattr(self, "_feedback_lock"):
+            self._feedback_lock = threading.RLock()
+        with self._feedback_lock:
+            generation = getattr(self, "_voice_request_generation", None)
+            self._activity = dict(getattr(self, "_activity", {}),
+                                  feedback=text, speech_status="unavailable")
+            self._activity_speech = None
+        operation_id = current_operation_id()
+        if operation_id:
+            get_notification_center().update(operation_id, message=text)
         try:
             sq = self.speech_queue_provider() if self.speech_queue_provider else None
             if sq is None:
+                if operation_id:
+                    get_notification_center().update(operation_id, speech_status="unavailable")
                 return
             from app.speech.speech_queue import SpeechItem, PRIORITY_B
             import time as _t
-            generation = getattr(self, "_voice_request_generation", None)
             guard = (lambda: self._request_is_current(generation)) if generation is not None else None
-            sq.enqueue(SpeechItem(text=text, priority=PRIORITY_B,
-                                  expire_at=_t.time() + 30.0,
-                                  category=category, interruptible=True, is_current=guard))
+            item = SpeechItem(text=text, priority=PRIORITY_B,
+                              expire_at=_t.time() + 30.0,
+                              category=category, interruptible=True, is_current=guard)
+            accepted = sq.enqueue(item)
+            with self._feedback_lock:
+                if generation == getattr(self, "_voice_request_generation", None):
+                    if accepted is True:
+                        self._activity_speech = item
+                        self._activity["speech_status"] = item.status
+                    else:
+                        self._activity["speech_status"] = "rejected" if accepted is False else "unknown"
+                        get_notification_center().update(operation_id, speech_status="rejected")
         except Exception as e:
             print(f"[Voice] _enqueue_speak failed: {e}")
+            if operation_id:
+                get_notification_center().update(operation_id, speech_status="failed")
+
+        # This message explains the result, but never proves business success.
+        # Success is recorded separately from real handler/player confirmation.
+        if operation_id:
+            get_notification_center().update(operation_id, message=text)
 
     def _global_pause(self):
         """V2-2：裸"暂停"→ 暂停所有实际在播的媒体，实时 IPC 确认后写快照。"""
         self._global_pause_snapshot = {}
         msgs = []
+        outcomes = []
         # 音乐：用实时 IPC 判断是否在播
         music_paused_now = self._real_paused(getattr(self, "music_mpv_provider", None))
         if music_paused_now is False:  # pause=False = 正在播放
@@ -639,6 +745,7 @@ class VoiceRuntime:
                                                 params={}, source="voice"))
                 import time as _t; _t.sleep(0.2)
                 paused = self._real_paused(getattr(self, "music_mpv_provider", None))
+                outcomes.append("success" if paused is True else "failed" if paused is False else "warning")
                 if paused is True:
                     try:
                         mc = self.music_controller_provider() if self.music_controller_provider else None
@@ -656,6 +763,7 @@ class VoiceRuntime:
                     msgs.append("音乐暂停状态无法确认")
             except Exception as e:
                 print(f"[Voice] 全局暂停音乐失败: {e}")
+                outcomes.append("failed")
                 msgs.append("音乐暂停失败")
         # 电影：用实时 IPC 判断是否在播（state_store 仅辅助）
         mv_paused_now = self._real_paused(getattr(self, "movie_mpv_provider", None))
@@ -665,6 +773,7 @@ class VoiceRuntime:
                                                  params={}, source="voice"))
                 import time as _t; _t.sleep(0.2)
                 paused = self._real_paused(getattr(self, "movie_mpv_provider", None))
+                outcomes.append("success" if paused is True else "failed" if paused is False else "warning")
                 if paused is True:
                     try:
                         mv = self.movie_controller_provider() if self.movie_controller_provider else None
@@ -682,17 +791,22 @@ class VoiceRuntime:
                     msgs.append("电影暂停状态无法确认")
             except Exception as e:
                 print(f"[Voice] 全局暂停电影失败: {e}")
+                outcomes.append("failed")
                 msgs.append("电影暂停失败")
         if not msgs:
             msgs.append("没有正在播放的媒体")
+        notify("，".join(msgs), status="success" if outcomes and all(s == "success" for s in outcomes)
+               else "failed" if outcomes and all(s == "failed" for s in outcomes) else "warning")
         self._enqueue_speak("，".join(msgs), "voice_global_pause")
 
     def _global_resume(self):
         """V2-2：裸"继续"→ 只恢复本次全局暂停确认过的媒体。"""
         if not self._global_pause_snapshot:
+            notify("暂时没有可继续播放的内容", "请先选择一首歌曲或一部电影", status="warning")
             self._enqueue_speak("当前没有可恢复的歌曲，请说出歌名，或先选择一首歌曲", "voice_global_resume")
             return
         msgs = []
+        outcomes = []
         movie_attempted = False
         music_attempted = False
         for domain in ("movie", "music"):
@@ -740,6 +854,7 @@ class VoiceRuntime:
         import time as _t; _t.sleep(0.2)
         if music_attempted:
             music_paused_now = self._real_paused(getattr(self, "music_mpv_provider", None))
+            outcomes.append("success" if music_paused_now is False else "failed" if music_paused_now is True else "warning")
             if music_paused_now is False:
                 msgs.append("音乐已恢复")
             elif music_paused_now is True:
@@ -759,6 +874,7 @@ class VoiceRuntime:
         else:
             if movie_attempted:
                 movie_paused_now = self._real_paused(getattr(self, "movie_mpv_provider", None))
+                outcomes.append("success" if movie_paused_now is False else "failed" if movie_paused_now is True else "warning")
                 if movie_paused_now is False:
                     msgs.append("电影已恢复")
                 elif movie_paused_now is True:
@@ -766,6 +882,8 @@ class VoiceRuntime:
                 else:
                     msgs.append("电影状态无法确认")
         self._global_pause_snapshot = {}
+        notify("，".join(msgs) or "暂时无法确认播放状态",
+               status="success" if outcomes and all(s == "success" for s in outcomes) else "warning")
         self._enqueue_speak("，".join(msgs), "voice_global_resume")
 
     def _stop_tts_now(self):
@@ -813,6 +931,8 @@ class VoiceRuntime:
                 outcome = media_result(None, label="音乐", action=action)
         except Exception:
             outcome = media_result(False, label="音乐", action=action)
+        notify(outcome.message, status="success" if outcome.status is OperationStatus.CONFIRMED
+               else "failed" if outcome.status is OperationStatus.FAILED else "warning")
         self._enqueue_speak(outcome.message, "voice_music_control")
 
     def _async_feedback(self, command_type, generation):
@@ -821,6 +941,7 @@ class VoiceRuntime:
         """
         completion_lock = threading.Lock()
         delivered = False
+        notification_id = current_operation_id()
         def completed(value, error):
             nonlocal delivered
             with completion_lock:
@@ -844,7 +965,10 @@ class VoiceRuntime:
             with self._feedback_lock:
                 if self._voice_request_generation != generation:
                     return
-                self._enqueue_speak(outcome.message, "voice_search_result")
+                with operation_scope(notification_id):
+                    notify(outcome.message, status="warning" if outcome.status is OperationStatus.ACCEPTED
+                           else "failed" if outcome.status is OperationStatus.FAILED else "warning")
+                    self._enqueue_speak(outcome.message, "voice_search_result")
         return completed
 
     def _request_is_current(self, generation):
@@ -869,6 +993,33 @@ class VoiceRuntime:
             self._enqueue_speak("操作未成功，请检查播放器状态", "voice_control")
 
     def _execute_intent(self, intent: Intent, original_text: str):
+        """One interaction id across execution, asynchronous results and speech."""
+        center = get_notification_center()
+        operation_id = current_operation_id()
+        if not operation_id:
+            operation_id = center.post("已听到你的指令", heard=original_text,
+                                       source="voice", phase="recognized")
+        if intent.intent_type == "system.unknown":
+            center.update(operation_id, title="没有理解这条指令", status="warning", phase="done",
+                          advice="请说得更具体一些，例如“音乐暂停”或“电影暂停”")
+        else:
+            center.update(operation_id, title="正在" + action_title(intent.intent_type),
+                          heard=original_text, phase="running")
+        with operation_scope(operation_id):
+            try:
+                return VoiceRuntime._execute_intent_body(self, intent, original_text)
+            except Exception:
+                notify("操作没有完成", "请重试，持续失败时请查看设置中的诊断结果", status="failed")
+                raise
+            finally:
+                record = center.get(operation_id)
+                asynchronous = intent.intent_type in (CommandType.MUSIC_SEARCH_PLAY,
+                    CommandType.MOVIE_SEARCH_PLAY, CommandType.MUSIC_RESCAN, CommandType.PLAYER_QUERY)
+                if record and record.status == "processing" and not asynchronous:
+                    center.update(operation_id, title="操作已发送，结果尚未确认",
+                                  status="warning", phase="done")
+
+    def _execute_intent_body(self, intent: Intent, original_text: str):
         """执行意图对应的命令"""
         intent_type = intent.intent_type
         params = intent.params
@@ -881,17 +1032,23 @@ class VoiceRuntime:
             if intent_type != "system.unknown":
                 self._voice_request_generation += 1
             request_generation = self._voice_request_generation
+            self._activity = {"heard": original_text, "intent": intent_type,
+                              "feedback": "", "speech_status": "none"}
+            self._activity_speech = None
         issue = parameter_issue(intent_type, params)
         if issue is not None:
+            notify("还需要一点信息", issue.message, status="warning")
             category = "voice_music_speed" if intent_type == CommandType.MUSIC_SET_SPEED else (
                 "voice_music_timer" if intent_type == CommandType.MUSIC_SLEEP_TIMER_SET else "voice_parameter")
             self._enqueue_speak(issue.message, category)
             return
 
         if intent_type == "system.clarify":
+            notify("请补充这次操作", params.get("message", "请一次说一个操作"), status="warning")
             self._enqueue_speak(params.get("message", "请一次说一个操作"), "voice_parameter")
             return
         if intent_type == "system.context_cancel":
+            notify("已取消这次设置")
             self._enqueue_speak("已取消这次设置", "voice_parameter")
             return
 
@@ -1022,6 +1179,13 @@ class VoiceRuntime:
             except Exception as e:
                 print(f"[Voice] {intent_type} error: {e}")
                 ok = False
+            if intent_type in (CommandType.MOVIE_PAUSE, CommandType.MOVIE_RESUME):
+                paused = intent_type == CommandType.MOVIE_PAUSE
+                actual = self._real_paused(getattr(self, "movie_mpv_provider", None))
+                result = False if ok is False else (actual is paused if actual is not None else None)
+                outcome = media_result(result, label="电影", action="暂停" if paused else "继续")
+                notify(outcome.message, status="success" if outcome.status is OperationStatus.CONFIRMED
+                       else "failed" if outcome.status is OperationStatus.FAILED else "warning")
             if ok is False:
                 self._enqueue_speak("电影操作未成功", "voice_movie_control")
             elif intent_type == CommandType.MOVIE_STOP and ok is True:
@@ -1283,8 +1447,17 @@ class VoiceRuntime:
             self._mic_on = False
             print("[Voice] 麦克风已关闭")
         else:
-            self._start_microphone()
+            if self._mic_thread is not None and self._mic_thread.is_alive():
+                self._record_input_failure("麦克风正在释放，请稍后重新开启语音")
+                return False
+            # 在启动线程前设置，避免后台失败先清零后又被 GUI 误设为开启。
             self._mic_on = True
+            try:
+                self._start_microphone()
+            except Exception:
+                self._mic_on = False
+                self._record_input_failure("麦克风启动失败，请检查设备后重试")
+                return False
             print("[Voice] 麦克风已开启")
         return self._mic_on
 

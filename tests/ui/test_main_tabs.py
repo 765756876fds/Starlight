@@ -26,7 +26,7 @@ def test_main_tabs_groups_game_pages_without_rebuilding_them():
     top_tabs = tabs_root.layout().itemAt(0).widget()
     assert top_tabs.count() == 5
     assert [top_tabs.tabText(i) for i in range(top_tabs.count())] == [
-        "游戏", "音乐", "电影", "控制台", "设置"
+        "游戏", "音乐", "电影", "通知中心", "设置"
     ]
     game = top_tabs.widget(0)
     assert game.tabs.count() == 3

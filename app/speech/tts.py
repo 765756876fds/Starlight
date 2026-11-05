@@ -15,11 +15,13 @@ TTS 语音输出 - 可追踪、可停止、不阻塞
     PLAYING → STOPPING → IDLE
 """
 import asyncio
+import logging
 import os
 import subprocess
 import threading
 import time
 import uuid
+from ..core.notifications import current_operation_id, get_notification_center, notify, operation_scope
 from enum import Enum
 from typing import Any
 
@@ -27,6 +29,8 @@ from app.core.config import resolve_mpv_path
 from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 from ..core.event_bus import Event, EventType, get_event_bus
+
+logger = logging.getLogger(__name__)
 
 
 class TTSState(Enum):
@@ -59,6 +63,8 @@ class TTSController:
     - 可停止当前播放
     - 不阻塞 EventBus
     """
+
+    EDGE_TIMEOUT_SECONDS = 10.0
 
     def __init__(self, config: dict[str, Any]):
         self.config = config
@@ -111,6 +117,9 @@ class TTSController:
 
         # generation 计数器，防止旧线程继续执行
         self._generation = 0
+        self._notification_context = threading.local()
+        self._last_failure_notification_id = ""
+        self._last_failure: tuple[int, str] | None = None
 
         self._running = False
 
@@ -200,32 +209,39 @@ class TTSController:
         - 普通优先级：停止当前，再播放新的（V1 简化，不做队列）
         """
         if not self.enabled or not text:
-            return
+            return False
 
         if not self._running:
-            return
+            return False
 
         # 如果正在播放，先停止
         if self.is_playing():
             self.stop_playback()
 
         # 递增 generation，让旧线程失效
-        self._generation += 1
-        my_generation = self._generation
-
-        # 清除停止标志，允许新播放
-        self._stop_flag.clear()
-        # 重置 finished 标记，允许新播放发布 finished
-        self._finished_published = False
+        with self._lock:
+            self._generation += 1
+            my_generation = self._generation
+            self._notification_id = current_operation_id()
+            notification_id = self._notification_id
+            self._stop_flag.clear()
+            self._finished_published = False
+            # 入队方必须立即看到 busy，不能抢在线程开始前消费下一条。
+            self._set_state(TTSState.GENERATING)
 
         # 提交到后台线程执行（不阻塞调用方）
+        def run_speech():
+            self._notification_context.generation = my_generation
+            with operation_scope(notification_id):
+                self._speak_thread(text, my_generation)
+
         thread = threading.Thread(
-            target=self._speak_thread,
-            args=(text, my_generation),
+            target=run_speech,
             daemon=True,
             name="tts-speak",
         )
         thread.start()
+        return True
 
     def _speak_thread(self, text: str, generation: int):
         """后台线程：生成音频并播放"""
@@ -234,12 +250,16 @@ class TTSController:
             return
 
         with self._lock:
-            if self._state in (TTSState.GENERATING, TTSState.PLAYING):
+            if generation != self._generation or self._stop_flag.is_set():
                 return
             self._set_state(TTSState.GENERATING)
 
         # Step 1: 生成音频
-        output_file = self._generate_audio(text)
+        try:
+            output_file = self._generate_audio(text)
+        except Exception as e:
+            logger.warning("tts_generation_failed engine=%s type=%s", self.engine, type(e).__name__)
+            output_file = None
 
         # 检查是否已经被新的 speak 取代
         if generation != self._generation:
@@ -303,6 +323,9 @@ class TTSController:
         self._cleanup_file(output_file)
         self._current_file = None
 
+        if self._state == TTSState.FAILED:
+            return
+
         # 检查是否被停止（如果是 stop 触发的，状态已经被 stop_playback 设置为 IDLE）
         if not self._stop_flag.is_set():
             # _finished_published 加锁保护（与 tts-stop 异步收尾线程互斥）
@@ -362,16 +385,18 @@ class TTSController:
                     rate=self.rate,
                     volume=self.volume_pct,
                 )
-                await communicate.save(output_file)
+                await asyncio.wait_for(communicate.save(output_file),
+                                       timeout=self.EDGE_TIMEOUT_SECONDS)
 
             # Edge TTS 403（微软端点限流/风控）：等 1s→3s 重试 2 次，最多多等 4 秒；
             # 非 403 异常直接放弃（保持现有降级），不阻塞太久
-            for attempt, wait in ((1, 0), (2, 1), (3, 3)):
+            for attempt, wait in ((1, 1), (2, 3), (3, 0)):
+                future = None
                 try:
                     # 在我们的事件循环中运行
-                    if self._event_loop:
+                    if self._event_loop and self._event_loop.is_running():
                         future = asyncio.run_coroutine_threadsafe(_gen(), self._event_loop)
-                        future.result(timeout=10)  # 10 秒超时
+                        future.result(timeout=self.EDGE_TIMEOUT_SECONDS + 1.0)
                     else:
                         # 兜底：直接在当前线程运行
                         asyncio.run(_gen())
@@ -381,13 +406,21 @@ class TTSController:
                         return output_file
                     else:
                         print("[TTS] 生成的音频文件无效")
+                        self._cleanup_file(output_file)
                         return None
                 except Exception as e:
-                    if ("403" in str(e) or "Invalid response status" in str(e)) and attempt < 3:
+                    if future is not None:
+                        future.cancel()  # 超时任务不能继续占连接或延迟写入旧音频。
+                    status = getattr(e, "status", None)
+                    status = status if type(status) is int else None
+                    logger.warning("tts_generation_failed engine=edge type=%s status=%s attempt=%d",
+                                   type(e).__name__, status, attempt)
+                    is_403 = status == 403 or (status is None and str(e).lstrip().startswith("403"))
+                    if is_403 and attempt < 3:
                         print(f"[TTS] Edge TTS 生成失败（HTTP 403，第 {attempt} 次），等待 {wait} 秒重试")
                         time.sleep(wait)
                         continue
-                    print(f"[TTS] Edge TTS 生成失败: {e}")
+                    print(f"[TTS] Edge TTS 生成失败: {type(e).__name__}")
                     # 3 次全失败：清理残留文件（避免失败一次留一个垃圾）
                     try:
                         if os.path.exists(output_file):
@@ -399,7 +432,8 @@ class TTSController:
             return None
 
         except Exception as e:
-            print(f"[TTS] Edge TTS 生成失败: {e}")
+            logger.warning("tts_generation_failed engine=edge type=%s", type(e).__name__)
+            print(f"[TTS] Edge TTS 生成失败: {type(e).__name__}")
             return None
 
     def _generate_qwen_audio(self, text: str) -> str | None:
@@ -525,15 +559,26 @@ class TTSController:
 
     def _wait_for_playback(self):
         """等待播放完成（阻塞在后台线程）"""
-        if not self._play_process:
-            return
-
+        process = self._play_process
+        generation = self._generation
+        error = None
         try:
             # 等待进程结束，最多 60 秒
-            self._play_process.wait(timeout=60)
+            code = process.wait(timeout=60) if process is not None else None
+            if code is None and process is not None:
+                code = process.poll()
+            if code != 0:
+                error = TTSError.PLAYBACK_FAILED.value
         except subprocess.TimeoutExpired:
             print("[TTS] 播放超时，强制停止")
-            self.stop_playback()
+            self._terminate_process(process)
+            error = TTSError.PLAYBACK_TIMEOUT.value
+        except Exception as e:
+            logger.warning("tts_playback_failed type=%s", type(e).__name__)
+            error = TTSError.PLAYBACK_FAILED.value
+        if error and generation == self._generation and not self._stop_flag.is_set():
+            self._set_state(TTSState.FAILED)
+            self._publish_event("speech.failed", {"error": error})
 
     def stop_playback(self):
         """停止当前播放（非阻塞，瞬间返回）。
@@ -630,6 +675,11 @@ class TTSController:
         with self._lock:
             return self._state
 
+    def get_last_failure(self) -> tuple[int, str] | None:
+        """保留最近失败，避免 UI 轮询错过下一条播报前的短暂 FAILED 状态。"""
+        with self._lock:
+            return self._last_failure
+
     def set_enabled(self, enabled: bool):
         """设置是否启用"""
         self.enabled = enabled
@@ -648,6 +698,22 @@ class TTSController:
 
     def _publish_event(self, event_type: str, data: dict[str, Any]):
         """发布事件"""
+        if event_type == "speech.failed":
+            generation = getattr(self._notification_context, "generation", self._generation)
+            operation_id = current_operation_id()
+            logger.warning("tts_failed engine=%s stage=%s generation=%d",
+                           self.engine, data.get("error"), generation)
+            message = ("语音播报失败：合成未完成，请检查网络与语音配置；操作结果请以界面状态为准"
+                       if data.get("error") == "generation_failed" else
+                       "语音播报失败：播放未完成，请检查音频设备与播放器；操作结果请以界面状态为准")
+            with self._lock:
+                self._last_failure = (generation, message)
+                self._last_failure_notification_id = operation_id
+            if operation_id:
+                get_notification_center().update(operation_id, speech_status="failed")
+            else:
+                notify("语音播报未成功", "请检查网络、语音配置及播放设备", status="warning",
+                       source="speech", dedup_key="tts-failed")
         try:
             self.event_bus.publish(Event(
                 event_type=event_type,

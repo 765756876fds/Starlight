@@ -19,6 +19,9 @@ except Exception:  # pragma: no cover
 
 # name -> Lucide body（viewBox 24x24）
 _LUCIDE = {
+    "check": '<path d="m5 12 4 4L19 6"/>',
+    "circle-alert": '<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+    "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
     "play": '<path d="m6 3 14 9-14 9V3z"/>',
     "pause": '<line x1="9" x2="9" y1="4" y2="20"/><line x1="15" x2="15" y1="4" y2="20"/>',
     "square": '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>',

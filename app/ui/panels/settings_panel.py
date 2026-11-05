@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import threading
+from ...core.notifications import notify
 import time
 import urllib.error
 import urllib.request
@@ -852,9 +853,12 @@ class SettingsPanel(QWidget):
             return
         if ok:
             self.lbl_plugin_status.setText(f"已重载 {n} 个插件")
+            notify("音源刷新完成", f"已重新加载 {n} 个插件，音源列表已更新", source="music")
         else:
             self.lbl_plugin_status.setText(
                 f"刷新失败，当前记录 {n} 个插件；请重试并检查插件错误和 Node 状态")
+            notify("音源刷新未完成", "请重试，检查插件是否可用；持续失败时查看设置中的诊断结果",
+                   status="failed", source="music")
         self._render_plugins()
         # 无论成功与否都通知搜索界面重新同步音源下拉（成功时列表已更新，
         # 失败时也重扫一次保证一致；下拉保留选中项，失效回退「全部」）

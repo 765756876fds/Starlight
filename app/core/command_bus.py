@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+from .notifications import current_operation_id, operation_scope, command_result
 
 
 @dataclass
@@ -26,6 +27,7 @@ class Command:
     source: str = ""  # 命令来源（voice, ui, system）
     require_confirmation: bool = False  # 是否需要确认
     is_current: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    notification_id: str = field(default_factory=current_operation_id, repr=False, compare=False)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.params.get(key, default)
@@ -192,15 +194,23 @@ class CommandBus:
 
         if handler is None:
             print(f"[CommandBus] 未注册的命令: {command.command_type}")
+            if command.notification_id:
+                with operation_scope(command.notification_id):
+                    command_result(command.command_type, error=LookupError())
             return None
 
         # 执行
         try:
             if command.is_current is not None and not command.is_current():
                 return None
-            return handler(command)
+            with operation_scope(command.notification_id):
+                value = handler(command)
+                command_result(command.command_type, value)
+                return value
         except Exception as e:
             print(f"[CommandBus] 命令执行异常 {command.command_type}: {e}")
+            with operation_scope(command.notification_id):
+                command_result(command.command_type, error=e)
             raise
 
     def execute_async(self, command: Command, on_done=None):

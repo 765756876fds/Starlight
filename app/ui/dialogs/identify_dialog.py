@@ -10,6 +10,7 @@ import os
 import logging
 import tempfile
 import threading
+from ...core.notifications import get_notification_center, notify, operation_scope
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton
@@ -46,6 +47,7 @@ class _IdentifyWorker(QObject):
             self.cancelled.emit()
             return
         except Exception as e:  # 故障隔离：任何异常 → failed，不崩
+            logger.exception("identify_capture_or_match_failed type=%s", type(e).__name__)
             self.failed.emit(str(e))
             return
         self.done.emit(result)
@@ -115,6 +117,7 @@ class IdentifyDialog(GlassDialog):
         self._current_wav = None
         self._online_thread = None
         self._online_cancelled = False
+        self._notification_id = ""
 
         root = self.body_layout
         self.lbl_title = QLabel("选择声音来源后，点击“开始识曲”")
@@ -187,6 +190,8 @@ class IdentifyDialog(GlassDialog):
 
     # ------------------------------------------------------------------ 录音/识别
     def _begin_record(self):
+        self._notification_id = get_notification_center().post(
+            "正在采集识曲片段", "请播放清晰的歌曲片段", source="identify")
         if self._on_begin:
             self._on_begin()
         self._busy = True
@@ -248,6 +253,7 @@ class IdentifyDialog(GlassDialog):
         artist = result.get("artist") or ""
         conf = result.get("confidence")
         name = f"{title} - {artist}" if artist else title
+        notify("识别到：" + name, "已在本地曲库中找到匹配", operation_id=getattr(self, "_notification_id", ""))
         self.lbl_title.setText(f"匹配到：{name}")
         source_name = "麦克风" if result.get("source", self._source) == "microphone" else "系统声音"
         details = f"来源：{source_name}"
@@ -281,6 +287,7 @@ class IdentifyDialog(GlassDialog):
             self._online_thread.finished.connect(self._cleanup_wav)
             self._online_thread.start()
             logger.info("online_identify_started")
+            get_notification_center().update(self._notification_id, title="正在在线识曲")
             self.lbl_title.setText("正在在线识曲…")
             self.lbl_status.setText("已同意发送短音频，正在等待识别结果")
         except Exception as exc:
@@ -297,6 +304,7 @@ class IdentifyDialog(GlassDialog):
             self._cleanup_wav()
             self.lbl_title.setText("在线识曲已取消")
             self.lbl_status.setText("已取消在线识曲，不会使用返回结果")
+            notify("已取消在线识曲", status="warning", operation_id=getattr(self, "_notification_id", ""))
             return
         self._busy = False
         self.btn_cancel.setEnabled(False)
@@ -312,15 +320,19 @@ class IdentifyDialog(GlassDialog):
             }
             self.lbl_title.setText("识曲")
             self.lbl_status.setText(messages.get(result.status, result.detail or "在线识曲失败"))
+            notify("在线识曲未完成", self.lbl_status.text(), status="failed",
+                   operation_id=getattr(self, "_notification_id", ""), advice="请播放清晰片段，检查网络后重试")
             return
         self._cleanup_wav()
         result_data = {"title": result.title, "artist": result.artist,
                        "source": "shazamio", "track_id": result.track_id, "url": result.url}
         self._result = result_data
         self.lbl_title.setText(f"在线识别到：{result.title} - {result.artist}")
+        notify(f"识别到：{result.title} - {result.artist}", operation_id=getattr(self, "_notification_id", ""))
         if self._on_search:
             try:
-                self._on_search(f"{result.title} {result.artist}")
+                with operation_scope(self._notification_id):
+                    self._on_search(f"{result.title} {result.artist}")
                 self.lbl_status.setText("已识别，正在搜索可用音源；不会自动播放")
             except Exception as exc:
                 self.lbl_status.setText(f"歌曲已识别，但在线音源搜索失败：{exc}")
@@ -346,6 +358,8 @@ class IdentifyDialog(GlassDialog):
         self._cleanup_wav()
         self.lbl_title.setText("识曲")
         self.lbl_status.setText(f"识别失败：{msg}")
+        notify("识曲没有完成", "本次声音采集或识别没有完成", status="failed", operation_id=getattr(self, "_notification_id", ""),
+               advice="请检查声音来源及录音权限，再试一次")
 
     @Slot()
     def _on_cancelled(self):
@@ -358,6 +372,7 @@ class IdentifyDialog(GlassDialog):
         self._cleanup_wav()
         self.lbl_title.setText("识曲已取消")
         self.lbl_status.setText("已取消识曲，音频设备已释放，可以重新开始")
+        notify("已取消识曲", status="warning", operation_id=getattr(self, "_notification_id", ""))
 
     # ------------------------------------------------------------------ 首次建库
     def _show_build(self):

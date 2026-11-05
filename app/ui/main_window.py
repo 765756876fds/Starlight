@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._tabs)
         self._stack.setCurrentIndex(self._stack.count() - 1)
         self._status = StatusBar(self._services)
+        self._status.notification_requested.connect(self._show_notifications)
         self.setStatusBar(self._status)
         self._overlay_model = None
         self._overlay_window = None
@@ -187,6 +188,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         print("[UI] switched")
+
+    def _show_notifications(self):
+        tabs = getattr(self, "_tabs", None)
+        if tabs is not None and hasattr(tabs, "show_notifications"):
+            tabs.show_notifications()
 
     def _build_account_history(self):
         try:

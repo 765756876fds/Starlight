@@ -20,6 +20,7 @@ from PySide6.QtCore import QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
 
 import threading
+from ...core.notifications import notify
 import os
 from PySide6.QtWidgets import (
     QApplication,
@@ -729,6 +730,9 @@ class VideoPlayerWindow(QWidget):
             if ok and kind == "load":
                 message = f"字幕已加载：{os.path.basename(message)}"
             self._subtitle_feedback(message)
+            notify("字幕已加载" if ok and kind == "load" else "字幕设置已更新" if ok else "字幕操作没有完成",
+                   message, status="success" if ok is True else "failed", source="movie",
+                   advice="请检查字幕文件是否有效，视频是否仍在播放" if not ok else "")
 
     def _build_subtitle_menu(self, state):
         if self._subtitle_menu is not None:

@@ -60,6 +60,7 @@ class MainTabs(QWidget):
         layout.setSpacing(Tokens.SPACING_SM)
 
         tabs = QTabWidget()
+        self.tabs = tabs
         self._panels = {}
 
         def _add(make, title, attr=None):
@@ -99,7 +100,7 @@ class MainTabs(QWidget):
         # _add(lambda: CooldownPanel(cooldown_manager), "计时器")  # 隐藏计时器tab
         _add(lambda: MusicPanel(music), "音乐", "music")
         _add(lambda: MoviePanel(movie=None, music=self._music, speech_queue=speech_queue), "电影", "movie")
-        _add(lambda: ConsolePanel(), "控制台", "console")
+        _add(lambda: ConsolePanel(), "通知中心", "console")
         _add(lambda: SettingsPanel(
                 music=music, tts=tts, combo_manager=combo_manager,
                 equip_toggle=equip_toggle, overlay_toggle=overlay_toggle,
@@ -112,6 +113,11 @@ class MainTabs(QWidget):
         # 应用持久化的刷新间隔到各面板 timer（settings.yaml ui.refresh_interval 原为死配置）
         self._apply_refresh_interval(int(load_ui_prefs().get("ui_refresh_interval", 500)))
         print("[UI] MainTabs 完成")
+
+    def show_notifications(self):
+        panel = self._panels.get("console")
+        if panel is not None:
+            self.tabs.setCurrentWidget(panel)
 
     def _apply_refresh_interval(self, ms: int) -> None:
         """把刷新间隔应用到各面板的 _timer（只改间隔，不动其他）。"""

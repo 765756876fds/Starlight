@@ -14,11 +14,13 @@ SpeechQueue - 语音优先级队列
 - 实际播放（TTSController 负责）
 """
 import heapq
+import logging
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from ..core.notifications import current_operation_id, operation_scope, get_notification_center
 
 # 优先级常量
 PRIORITY_S = 0
@@ -26,6 +28,7 @@ PRIORITY_A = 1
 PRIORITY_B = 2
 
 MAX_QUEUE_SIZE = 10
+logger = logging.getLogger(__name__)
 
 
 @dataclass(order=False)
@@ -46,6 +49,7 @@ class SpeechItem:
     # 内部状态
     status: str = "pending"  # pending / playing / cancelled / finished / expired
     is_current: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    notification_id: str = field(default_factory=current_operation_id, repr=False, compare=False)
 
 
 class SpeechQueue:
@@ -165,7 +169,13 @@ class SpeechQueue:
             # 通知 worker
             self._condition.notify()
 
+        self._notify_item(item)
         return True
+
+    def _notify_item(self, item):
+        if item.notification_id:
+            status = "disabled" if item.status == "failed" and getattr(self.tts, "enabled", None) is False else item.status
+            get_notification_center().update(item.notification_id, speech_status=status)
 
     def _check_interrupt_needed(self, new_item: SpeechItem):
         """检查新事件是否需要打断当前播放（在锁内调用）"""
@@ -193,18 +203,25 @@ class SpeechQueue:
     def clear_pending(self):
         """清空 pending 队列，不停止当前播放"""
         with self._lock:
+            cancelled = [item for _, _, item in self._pending]
             # 清空 pending，解除对应 dedup
             for _, _, item in self._pending:
+                item.status = "cancelled"
                 if item.event_id and item.event_id in self._seen_event_ids:
                     self._seen_event_ids.remove(item.event_id)
             self._pending.clear()
+        for item in cancelled:
+            self._notify_item(item)
 
     def stop_current(self):
         """停止当前播放，pending 不受影响"""
         # 标记当前为 cancelled
         with self._lock:
+            item = self._current
             if self._current:
                 self._current.status = "cancelled"
+        if item is not None:
+            self._notify_item(item)
 
         # 调用 TTS 停止（不在锁内）
         self.tts.stop_playback()
@@ -267,6 +284,7 @@ class SpeechQueue:
 
         # 取出最高优先级且未过期的 item
         item = None
+        expired = []
         with self._lock:
             while self._pending:
                 priority, seq, candidate = heapq.heappop(self._pending)
@@ -274,6 +292,7 @@ class SpeechQueue:
                 # 检查过期
                 if time.time() >= candidate.expire_at:
                     candidate.status = "expired"
+                    expired.append(candidate)
                     # 解除 dedup
                     if candidate.event_id and candidate.event_id in self._seen_event_ids:
                         self._seen_event_ids.remove(candidate.event_id)
@@ -284,11 +303,15 @@ class SpeechQueue:
 
             if item is None:
                 self._current = None
-                return
+            else:
+                # 设置为当前
+                item.status = "playing"
+                self._current = item
 
-            # 设置为当前
-            item.status = "playing"
-            self._current = item
+        for candidate in expired:
+            self._notify_item(candidate)
+        if item is None:
+            return
 
         # Check request freshness outside the queue lock: voice request guards
         # have their own lock and enqueue() can run while holding it.
@@ -302,19 +325,33 @@ class SpeechQueue:
                 if self._current is item:
                     self._current = None
                 self._seen_event_ids.discard(item.event_id)
+            self._notify_item(item)
             return
 
         # 播放（不在锁内）
-        self.tts.speak(item.text)
-
-        # 等待播放完成，期间定期检查是否有更高优先级打断
-        self._wait_for_playback_with_interrupt_check(item)
-
-        # 播放完成
-        with self._lock:
-            if self._current is item:
-                self._current = None
-            item.status = "finished"
+        self._notify_item(item)
+        try:
+            with operation_scope(item.notification_id):
+                accepted = self.tts.speak(item.text)
+            if accepted is False:
+                item.status = "failed"
+            else:
+                self._wait_for_playback_with_interrupt_check(item)
+                if item.status == "playing":
+                    get_state = getattr(self.tts, "get_state", None)
+                    state = get_state() if callable(get_state) else None
+                    item.status = "failed" if getattr(state, "value", None) == "failed" else "finished"
+            if item.status == "failed":
+                logger.warning("speech_item_failed id=%s category=%s", item.id, item.category)
+        except Exception as e:
+            item.status = "failed"
+            logger.warning("speech_item_failed id=%s category=%s type=%s",
+                           item.id, item.category, type(e).__name__)
+        finally:
+            self._notify_item(item)
+            with self._lock:
+                if self._current is item:
+                    self._current = None
 
     def _wait_for_playback_with_interrupt_check(self, item: SpeechItem):
         """
@@ -323,6 +360,17 @@ class SpeechQueue:
         while True:
             # 等待 100ms
             time.sleep(0.1)
+
+            try:
+                current = item.is_current is None or item.is_current() is True
+            except Exception:
+                current = False
+            if not current or not self._running:
+                item.status = "cancelled"
+                break
+            if time.time() >= item.expire_at:
+                item.status = "expired"
+                break
 
             # 检查是否被打断
             with self._lock:

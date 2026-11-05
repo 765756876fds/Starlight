@@ -1,6 +1,7 @@
 """音乐面板（本地 + 在线）。"""
 import logging
 import threading
+from ...core.notifications import notify, get_notification_center, current_operation_id
 import time
 import zlib
 
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from ...core.command_bus import CommandType, get_command_bus
 from ...core.event_bus import EventType, get_event_bus
-from ...core.operation_result import OperationResult, media_result
+from ...core.operation_result import OperationResult, OperationStatus, media_result
 from ...music.humming import HummingService
 from ...music.lyric_search import LyricIndex
 from ...music.online.events import ONLINE_ERROR, ONLINE_SEARCH_DONE
@@ -78,6 +79,7 @@ class _SearchWorker(QObject):
                 return
             self.done.emit(self._generation, out)
         except Exception as e:
+            logger.exception("music_search_failed type=%s", type(e).__name__)
             self.failed.emit(self._generation, str(e))
 
 
@@ -612,6 +614,9 @@ class MusicPanel(QWidget):
         if not isinstance(result, OperationResult):
             result = media_result(result, label="歌曲", action="移出播放队列")
         self._queue_dialog.action_status.setText(result.message)
+        notify("已移出播放队列" if result.status is OperationStatus.CONFIRMED else "歌曲移出结果",
+               result.message, status="success" if result.status is OperationStatus.CONFIRMED else
+               "failed" if result.status is OperationStatus.FAILED else "warning", source="music")
         # A stale menu is rejected by the controller; show the latest queue for retry.
         self._schedule_queue_refresh()
 
@@ -1164,6 +1169,18 @@ class MusicPanel(QWidget):
         if not kw or self._music is None:
             return
         self._search_generation += 1
+        center = get_notification_center()
+        notice_ids = getattr(self, "_search_notice_ids", {})
+        for previous in notice_ids.values():
+            old = center.get(previous)
+            if old and old.status == "processing":
+                center.update(previous, title="已改为新的搜索", status="warning", phase="done")
+        operation_id = current_operation_id()
+        if operation_id:
+            center.update(operation_id, title="正在搜索可用音源", phase="running")
+        else:
+            operation_id = center.post("正在搜索歌曲", f"搜索：{kw}", source="music")
+        self._search_notice_ids = {self._search_generation: operation_id}
         request = (self._search_generation, kw, on_done, on_failed)
         self.list_results.clear()
         self._tracks_by_row = []
@@ -1282,6 +1299,11 @@ class MusicPanel(QWidget):
             return
         else:
             self.lbl_status.setText(f"已找到 {n} 首" if n else "未找到歌曲，请尝试其他关键词或音源")
+        notice_id = getattr(self, "_search_notice_ids", {}).get(search_generation)
+        if notice_id:
+            notify(f"已找到 {n} 首歌曲" if n else "没有找到歌曲", self.lbl_status.text(),
+                   operation_id=notice_id, status="warning" if errors or not n else "success",
+                   advice="可换一个关键词或音源重试" if errors or not n else "")
         if on_done is not None:
             on_done(list(tracks_for_search))
 
@@ -1290,6 +1312,10 @@ class MusicPanel(QWidget):
             return
         hint = "" if "重试" in err else "。可重试或更换音源"
         self.lbl_status.setText(f"搜索失败: {err}{hint}")
+        notice_id = getattr(self, "_search_notice_ids", {}).get(search_generation)
+        if notice_id:
+            notify("歌曲搜索未完成", "音源没有返回可用结果", status="failed",
+                   operation_id=notice_id, advice="请检查网络，重试或换一个音源")
         if on_failed is not None:
             on_failed(err)
 
@@ -2036,6 +2062,7 @@ class MusicPanel(QWidget):
         except Exception as e:
             print(f"[MusicPanel] add_next error: {e}")
             self.lbl_status.setText("加入下一首失败，请稍后重试")
+            notify("未能设为下一首播放", "请重试或重新选择歌曲", status="failed", source="music")
             return
         if result is True:
             self.lbl_status.setText(f"已插到下一首：{song.get('title', '')}")
@@ -2043,10 +2070,14 @@ class MusicPanel(QWidget):
             self.lbl_status.setText("加入下一首失败，请重试")
         else:
             self.lbl_status.setText("加入下一首结果未确认")
+        notify("已设为下一首播放" if result is True else "下一首设置结果",
+               self.lbl_status.text(), status="success" if result is True else
+               "failed" if result is False else "warning", source="music")
 
     def _on_append_queue(self, song: dict):
         if self._music is None:
             self.lbl_status.setText("音乐服务不可用，未添加到播放队列")
+            notify("未能添加到播放队列", "音乐功能尚未就绪，请稍后再试", status="failed", source="music")
             return
         try:
             data = self._song_dict_from_row(song)
@@ -2055,6 +2086,7 @@ class MusicPanel(QWidget):
                     data["path"] = self._music.get_song_path(data.get("music_id") or 0)
                 if not data["path"]:
                     self.lbl_status.setText("该歌已不可用，未添加到播放队列")
+                    notify("未能添加到播放队列", "歌曲文件已不可用，请重新选择歌曲", status="failed", source="music")
                     return
             else:
                 data["extra"] = song.get("extra") or {}
@@ -2065,6 +2097,9 @@ class MusicPanel(QWidget):
         if not isinstance(result, OperationResult):
             result = media_result(result, label="歌曲", action="加入播放队列")
         self.lbl_status.setText(result.message)
+        notify("已添加到播放队列" if result.status is OperationStatus.CONFIRMED else "歌曲入队结果",
+               result.message, status="success" if result.status is OperationStatus.CONFIRMED else
+               "failed" if result.status is OperationStatus.FAILED else "warning", source="music")
 
     def _remove_song_from_playlist(self, playlist_song_id):
         it = self.list_playlists.currentItem()
