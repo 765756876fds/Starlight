@@ -78,16 +78,25 @@ class SingleInstance(QObject):
             socket = self._server.nextPendingConnection()
             self._sockets.append(socket)
             socket.readyRead.connect(lambda s=socket: self._read_socket(s))
+            socket.disconnected.connect(lambda s=socket: self._release_socket(s))
+            # readyRead is not replayed for data received before the connection.
+            if socket.bytesAvailable():
+                self._read_socket(socket)
+            if socket.state() == QLocalSocket.UnconnectedState:
+                self._release_socket(socket)
 
     def _read_socket(self, socket):
-        if b"WAKE" in bytes(socket.readAll()):
-            logger.info("[SingleInstance] wake received name=%s", self.server_name)
-            self.wake_requested.emit()
-        socket.disconnectFromServer()
+        # Keep incomplete WAKE\n frames in Qt's buffer for the next readyRead.
+        while socket.canReadLine():
+            if b"WAKE" in bytes(socket.readLine()):
+                logger.info("[SingleInstance] wake received name=%s", self.server_name)
+                self.wake_requested.emit()
+
+    def _release_socket(self, socket):
         try:
             self._sockets.remove(socket)
         except ValueError:
-            pass
+            return
 
     def close(self):
         if self._server is not None:
