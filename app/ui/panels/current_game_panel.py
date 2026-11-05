@@ -55,7 +55,7 @@ class PlayerCard(QFrame):
                 border-radius: 6px;
                 padding: 6px;
                 margin: 2px;
-                background: rgba(30, 30, 50, 0.8);
+                background: rgba({Tokens.BG_BASE_RGB}, 0.8);
             }}
         """)
         layout = QVBoxLayout(self)
@@ -64,7 +64,7 @@ class PlayerCard(QFrame):
 
         self.row1 = QHBoxLayout()
         self.lbl_name = QLabel("玩家名")
-        self.lbl_name.setStyleSheet(f"font-weight: bold; color: white; font-size: {_FONT_SZ}px;")
+        self.lbl_name.setStyleSheet(f"font-weight: bold; color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
         self.lbl_streak = QLabel("")
         self.lbl_streak.setStyleSheet(f"font-size: {_FONT_SZ_STREAK}px;")
         self.row1.addWidget(self.lbl_name, 1)
@@ -87,7 +87,7 @@ class PlayerCard(QFrame):
         # 默认样式在 __init__ 落地并预填缓存，update_data 每帧不再无条件重设（Qt 底层
         # 每次 setStyleSheet 都会触发样式解析与重绘，是界面闪烁的最后一块拼图）。
         self._style_cache = {}
-        self._name_base_qss = f"font-weight: bold; color: white; font-size: {_FONT_SZ}px;"
+        self._name_base_qss = f"font-weight: bold; color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;"
         self._streak_base_qss = f"font-size: {_FONT_SZ_STREAK}px; font-weight: bold;"
         self._line2_base_qss = f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;"
         self._recent_base_qss = f"color: {Colors.TEXT_SECONDARY}; font-size: {_FONT_SZ}px;"
@@ -101,7 +101,7 @@ class PlayerCard(QFrame):
     def _apply_style(self, widget, qss):
         """仅当样式串与上次不同才 setStyleSheet，杜绝每帧无条件重绘。"""
         key = (id(widget), qss)
-        if self._style_cache.get(key) != qss:
+        if self._style_cache.get(key) != qss or widget.styleSheet() != qss:
             widget.setStyleSheet(qss)
             self._style_cache[key] = qss
 
@@ -113,7 +113,7 @@ class PlayerCard(QFrame):
             self.lbl_name.setText(name_text)
         # 名字颜色：整卡换称号色后恢复白；只有颜色变化才 setStyleSheet
         self._apply_style(self.lbl_name,
-                          f"font-weight: bold; color: {title_color or 'white'}; font-size: {_FONT_SZ}px;")
+                          f"font-weight: bold; color: {title_color or Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
 
         if streak_text:
             if self.lbl_streak.text() != streak_text:
@@ -137,7 +137,7 @@ class PlayerCard(QFrame):
             self._apply_style(self.lbl_line2,
                               f"color: {line2_color}; font-size: {_FONT_SZ}px; font-weight: bold;")
         else:
-            self._apply_style(self.lbl_line2, self._line2_base_qss)
+            self._apply_style(self.lbl_line2, f"color: {Colors.TEXT_PRIMARY}; font-size: {_FONT_SZ}px;")
 
         recent_text = f"最近: {recent_top}" if recent_top else "最近: -"
         if self.lbl_recent.text() != recent_text:
@@ -164,14 +164,14 @@ class PlayerCard(QFrame):
                 self.lbl_current.setText("本局: -")
 
         # 整卡换色：命中称号 → 边框随称号色；无称号 → 己方蓝/敌方红。样式串不变则跳过
-        border_c = title_color or self._border_default
+        border_c = title_color or (Colors.ACCENT if self.is_ally else Colors.DANGER)
         card_qss = f"""
             PlayerCard {{
                 border: 1px solid {border_c};
                 border-radius: 6px;
                 padding: 6px;
                 margin: 2px;
-                background: rgba(30, 30, 50, 0.8);
+                background: rgba({Tokens.BG_BASE_RGB}, 0.8);
             }}
         """
         self._apply_style(self, card_qss)
@@ -654,9 +654,14 @@ class CurrentGamePanel(QWidget):
                 card.hide()
             return
 
+        # 标题时钟独立更新，不受玩家卡片差分渲染的 5s 兜底刷新限制。
+        title = f"当前对局  时间 {_fmt_game_time(game_time)}  玩家 {len(session.players)}"
+        if self.lbl_title.text() != title:
+            self.lbl_title.setText(title)
+
         # 差分渲染：身份/实时/情报状态与上一帧完全一致时跳过全量重绘（防闪烁）。
         # 覆盖：名字、英雄 ID、KDA/位置/等级、history 就绪、intel（绝活/称号）就绪；
-        # 标题时间按 5s 粒度纳入，避免加载初期标题时间冻结。
+        # 卡片保留 5s 兜底刷新，顶部时间在指纹判断前单独更新。
         render_key = tuple(
             (
                 getattr(p, "puuid", "") or "",
@@ -713,8 +718,6 @@ class CurrentGamePanel(QWidget):
             getattr(session, "phase", "") in ("InProgress", "GameStart")
             and (time.time() - getattr(session, "started_at", time.time())) < 15
         )
-        n = len(session.players)
-        self.lbl_title.setText(f"当前对局  时间 {_fmt_game_time(game_time)}  玩家 {n}")
 
         # 冻结更新：整帧渲染期间禁止中间态重绘（Qt 防闪烁标准做法），
         # 全部卡片 setText/QSS 完成后一次性 update，保证一帧呈现最终状态

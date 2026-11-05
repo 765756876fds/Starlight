@@ -274,12 +274,14 @@ def test_dialog_cancelled_can_start_again(tmp_path, monkeypatch):
     assert dlg.btn_start.isEnabled()
 
 
-def test_dialog_empty_library_prompts_without_auto_build(tmp_path, monkeypatch):
+def test_dialog_empty_library_starts_capture_without_auto_build(tmp_path, monkeypatch):
     dlg = _make_dialog(tmp_path, monkeypatch, has_library=False)
     dlg.start()
     assert dlg._busy is False
     dlg.begin()
-    assert "请先点击" in dlg.lbl_status.text()
+    assert dlg._busy is True
+    assert dlg._local_available is False
+    assert dlg._build_thread is None
 
 
 def test_dialog_index_button_explicitly_starts_build(tmp_path, monkeypatch):
@@ -416,7 +418,8 @@ def test_panel_identify_button_opens_dialog(monkeypatch):
         p.btn_identify.click()
         assert p._identify_dialog is not None
         assert p._identify_dialog.isVisible()
-        assert p._identify_dialog.lbl_status.text() == "准备就绪"
+        assert "发送本次短音频" in p._identify_dialog.lbl_status.text()
+        assert not p._identify_dialog.is_busy()  # 打开窗口不采集、不上传。
     finally:
         p._identify_dialog.hide()
         from app.core.command_bus import get_command_bus
@@ -622,13 +625,10 @@ def test_identify_window_stays_open_before_matching_playback():
 
 def test_panel_search_generation_rejects_late_result_and_snapshots_candidates():
     from app.ui.panels.music_panel import MusicPanel
+    from app.music.online.models import OnlineTrack
 
-    class Track:
-        def __init__(self, title):
-            self.title = title
-            self.artist = "歌手"
-            self.source_name = "测试源"
-            self.track_id = title
+    def Track(title):
+        return OnlineTrack(source_name="测试源", track_id=title, title=title, artist="歌手")
 
     p = MusicPanel(music=None)
     p._search_generation = 2

@@ -1056,6 +1056,25 @@ class MusicController:
         finally:
             self._lock.release()
 
+    def move_queue_entry(self, entry_id: str, before_id: str | None, revision: int) -> OperationResult:
+        """Reorder waiting metadata only; never start, stop or seek the player."""
+        if not self._lock.acquire(blocking=False):
+            return OperationResult(OperationStatus.UNAVAILABLE, "正在处理播放，请稍后重试排序")
+        try:
+            if self._is_switching_track:
+                return OperationResult(OperationStatus.UNAVAILABLE, "正在切歌，请稍后再调整顺序")
+            if self.queue.get_play_mode() == PlayMode.SHUFFLE:
+                return OperationResult(OperationStatus.UNAVAILABLE, "随机模式由随机规则选曲；切换为顺序或列表循环后可拖动排序")
+            ok = self.queue.move_waiting(entry_id, before_id, revision, self._current_song)
+            if ok is True:
+                return OperationResult(OperationStatus.CONFIRMED, "待播顺序已调整，指定的下一首仍优先播放")
+            return OperationResult(OperationStatus.FAILED, "队列已变化或该项受保护，请在最新列表中重新拖动")
+        except Exception:
+            logger.exception("queue_move_failed")
+            return OperationResult(OperationStatus.FAILED, "顺序没有调整，请重试")
+        finally:
+            self._lock.release()
+
     def delete_local_file(self, song: dict) -> tuple:
         """删除本地文件（不可逆）：删磁盘 + 从 music 表移除（FTS 同步）+ 从歌单移除（历史保留）。
         返回 (ok, err_msg)。"""
@@ -1852,6 +1871,15 @@ class MusicController:
         if self.online_manager is None:
             return []
         return self.online_manager.list_sources()
+
+    def discovery_sources(self):
+        return self.online_manager.discovery_sources() if self.online_manager else []
+
+    def browse_online(self, source, operation, **params):
+        from .online.source import SourceSearchError
+        if not self.online_manager:
+            raise SourceSearchError("unavailable")
+        return self.online_manager.browse(source, operation, **params)
 
     def get_top_lists(self) -> dict:
         """各源榜单分组（源自报能力）：{源或插件名: [分组]}。失败 → {} 不抛。"""
@@ -2849,10 +2877,13 @@ class MusicController:
                 "queue_pos": self.queue.current_index
                     if hasattr(self.queue, "current_index") else -1,
             })
-            logger.info("[Music] auto_next: 已确认 idle，执行 next()")
+            logger.info(f"[Music] auto_next: 已确认 idle，执行 next() mode={self.queue.get_play_mode()} "
+                        f"queue_size={self.queue.size()} index={self.queue.get_current_index()}")
             try:
                 self.next()
-                logger.info("[Music] auto_next: next() 完成")
+                logger.info(f"[Music] auto_next: next() 完成 mode={self.queue.get_play_mode()} "
+                            f"queue_size={self.queue.size()} index={self.queue.get_current_index()} "
+                            f"has_current_song={getattr(self, '_current_song', None) is not None}")
             except Exception as e:
                 logger.info(f"[Music] auto_next: next() 异常: {e!r}")
 

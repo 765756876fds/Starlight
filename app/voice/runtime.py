@@ -33,7 +33,13 @@ def fold_duplicated_text(text: str) -> str:
     Different commands stay intact for the parser's ambiguity check.
     """
     import re
-    parts = [p.strip() for p in re.findall(r"[^。！？；]+[。！？；]?", text)]
+    # 不拆开引用/括号边界，否则丢掉闭引号后可能把引用误当命令。
+    if re.search(r'''["“”‘’「」『』]|(?<![A-Za-z])'|'(?![A-Za-z])''', text):
+        return text
+    # 带书名号/括号的媒体标题保持原断句方式，不从标题内部的逗号切开。
+    pattern = (r"[^。！？；]+[。！？；]?" if re.search(r"[()（）\[\]{}《》【】]", text)
+               else r"[^，,。！？；]+[，,。！？；]?")
+    parts = [p.strip() for p in re.findall(pattern, text)]
     if len(parts) <= 1:
         return text
 

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyledItemDelegate,
+    QStackedWidget,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -101,8 +102,8 @@ class _ScanWorker(QObject):
 
 
 class _RankListsWorker(QObject):
-    """后台拉全插件榜单分组（bridge 串行遍历各插件，可能数秒，不能卡 UI）。"""
-    done = Signal(dict)
+    """Read plugin chart groups in the background, preserving partial errors."""
+    done = Signal(object)
     failed = Signal(str)
 
     def __init__(self, music):
@@ -111,7 +112,7 @@ class _RankListsWorker(QObject):
 
     def run(self):
         try:
-            self.done.emit(self._music.get_top_lists() or {})
+            self.done.emit(self._music.get_top_lists())
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -130,7 +131,10 @@ class _RankDetailWorker(QObject):
     def run(self):
         try:
             r = self._music.get_top_list_detail(self._source, self._list_id)
-            self.done.emit(r or {"tracks": [], "is_end": True})
+            if not isinstance(r, dict) or not isinstance(r.get("tracks"), list):
+                self.failed.emit("榜单曲目尚未确认，请重试或换一个音源")
+                return
+            self.done.emit(r)
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -184,6 +188,8 @@ class MusicPanel(QWidget):
         # 最新请求补偿：线程运行中来了新请求 → 记待处理（覆盖旧），旧线程 done/failed 后自动补加载
         self._pending_rank_lists = False
         self._pending_rank_detail = None   # {source, list_id, title} 或 None
+        self._rank_detail_serial = 0
+        self._rank_active_serial = -1
         # 桌面歌词浮窗（首次点开关才创建；显式隐藏不销毁）
         self._lyrics_window = None
         # 哼唱识曲：语音命令跨线程桥 + 复用弹窗单例 + 服务（首次点按钮才建）
@@ -223,8 +229,12 @@ class MusicPanel(QWidget):
         self.btn_view_toggle.setToolTip("切换 网格卡片 / 平铺列表（作用于全部歌曲列表）")
         self.btn_view_toggle.clicked.connect(self._toggle_view_mode)
         top_bar.addWidget(self.btn_view_toggle)
-        root.addLayout(top_bar)
         tabs = self.tabs = QTabWidget()
+        self.music_tools = QWidget()
+        top_bar.setContentsMargins(0, 0, 0, 0)
+        top_bar.setSpacing(4)
+        self.music_tools.setLayout(top_bar)
+        tabs.setCornerWidget(self.music_tools, Qt.TopRightCorner)
         root.addWidget(tabs, 1)  # Tab 区占满上方剩余空间，下方留给全局播放控制栏
         tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -378,16 +388,45 @@ class MusicPanel(QWidget):
         self.btn_search.setProperty("class", "primary")
         self.cb_source = QComboBox()
         self.cb_source.addItem("全部", userData=None)
-        search_row.addWidget(self.edit_kw)
+        self.cb_source.setToolTip("搜索音源范围；不会改变正在播放的歌曲")
+        self.cb_search_filter = QComboBox()
+        self.cb_search_filter.addItems(["全部版本", "现场标记", "翻唱标记"])
+        self.cb_search_filter.setToolTip("只按标题中明确的现场/Live、翻唱/Cover标记筛选，不推测原唱")
+        self.cb_search_filter.currentIndexChanged.connect(self._apply_online_filter)
+        self.btn_discovery_home = QPushButton("发现首页")
+        self.btn_discovery_home.clicked.connect(self._show_discovery_home)
+        search_row.addWidget(self.edit_kw, 1)
         search_row.addWidget(self.cb_source)
+        search_row.addWidget(self.cb_search_filter)
         search_row.addWidget(self.btn_search)
+        search_row.addWidget(self.btn_discovery_home)
         ol.addLayout(search_row)
+        self._results_requested = False
+        self._last_online_result = None
+        self.online_stack = QStackedWidget()
+        from ..widgets.music_discovery import MusicDiscovery
+        self.discovery = MusicDiscovery(music, online)
+        self.discovery.navigate.connect(tabs.setCurrentIndex)
+        self.discovery.tracks_ready.connect(self._show_discovered_tracks)
+        self.discovery.history_chosen.connect(self._play_discovery_history)
+        self.discovery.playlist_chosen.connect(self._open_discovery_playlist)
+        self.online_stack.addWidget(self.discovery)
+        self.results_page = QWidget()
+        results_layout = QVBoxLayout(self.results_page)
+        results_layout.setContentsMargins(0, 0, 0, 0)
         self.list_results = QListWidget()
         self._dl_results = self._setup_card_view(self.list_results)
-        ol.addWidget(self.list_results)
+        results_layout.addWidget(self.list_results, 1)
         self.lbl_status = QLabel("输入关键词开始搜索")
-        ol.addWidget(self.lbl_status)
-        tabs.addTab(online, "在线")
+        results_layout.addWidget(self.lbl_status)
+        self.btn_discovery_more = QPushButton("加载更多曲目")
+        self.btn_discovery_more.hide()
+        self.btn_discovery_more.clicked.connect(self.discovery._more)
+        self.discovery.paging_changed.connect(self.btn_discovery_more.setVisible)
+        results_layout.addWidget(self.btn_discovery_more)
+        self.online_stack.addWidget(self.results_page)
+        ol.addWidget(self.online_stack, 1)
+        tabs.addTab(online, "发现音乐")
 
         # ---- 历史 Tab ----
         history = QWidget()
@@ -537,6 +576,8 @@ class MusicPanel(QWidget):
         """关闭时注销事件总线订阅（防内存泄漏/幽灵回调）：
         与 __init__ 中 subscribe 的一一配对注销。"""
         self._queue_refresh_timer.stop()
+        if hasattr(self, "discovery"):
+            self.discovery.shutdown()
         if self._queue_dialog is not None:
             self._queue_dialog.close()
         try:
@@ -570,6 +611,7 @@ class MusicPanel(QWidget):
             self._queue_dialog = MusicQueueDialog(self)
             self._queue_dialog.finished.connect(self._queue_refresh_timer.stop)
             self._queue_dialog.remove_requested.connect(self._remove_queue_item, Qt.QueuedConnection)
+            self._queue_dialog.move_requested.connect(self._move_queue_item, Qt.QueuedConnection)
         self._queue_dialog.show()
         self._queue_dialog.raise_()
         self._queue_dialog.activateWindow()
@@ -632,6 +674,20 @@ class MusicPanel(QWidget):
         d = MusicCardDelegate(w)
         w.setItemDelegate(d)
         return d
+
+    @Slot(str, object, int)
+    def _move_queue_item(self, entry_id, before_id, revision):
+        try:
+            result = self._music.move_queue_entry(entry_id, before_id, revision)
+        except Exception:
+            logger.exception("queue_sort_failed")
+            result = False
+        if not isinstance(result, OperationResult):
+            result = media_result(result, label="队列", action="调整顺序")
+        self._queue_dialog.action_status.setText(result.message)
+        notify("待播顺序已调整" if result.status is OperationStatus.CONFIRMED else "队列排序未完成",
+               result.message, status="success" if result.status is OperationStatus.CONFIRMED else "warning")
+        self._schedule_queue_refresh()
 
     def _toggle_view_mode(self, grid_on: bool):
         """列表/网格 全局切换：网格 = 卡片 Delegate；列表 = 默认文本 delegate。"""
@@ -1133,7 +1189,7 @@ class MusicPanel(QWidget):
             print(f"[MusicPanel] 音量写回配置失败: {e!r}")
 
     # ---- 在线 ----
-    def refresh_online_sources(self) -> None:
+    def refresh_online_sources(self, *, include_discovery=True) -> None:
         """刷新在线音源下拉（插件/自定义源变化后由外部调用）。
 
         重建「全部」+ 当前注册源列表；保留用户当前选中项，若已失效则回退「全部」。
@@ -1156,6 +1212,8 @@ class MusicPanel(QWidget):
                         self.cb_source.setCurrentIndex(idx)
             finally:
                 self.cb_source.blockSignals(False)
+            if include_discovery and hasattr(self, "discovery"):
+                self.discovery.refresh_sources()
         except Exception as e:
             print(f"[MusicPanel] 刷新音源列表失败: {e}")
 
@@ -1168,6 +1226,11 @@ class MusicPanel(QWidget):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
+        self._results_requested = True
+        self.online_stack.setCurrentWidget(self.results_page)
+        self.cb_search_filter.setEnabled(True)
+        self.btn_discovery_more.hide()
+        self.discovery._task.invalidate()
         self._search_generation += 1
         center = get_notification_center()
         notice_ids = getattr(self, "_search_notice_ids", {})
@@ -1196,7 +1259,9 @@ class MusicPanel(QWidget):
         self._active_search = request
         # 搜索前同步一次音源列表（插件导入/刷新后无需重启即生效；
         # 保留选中项，失效自动回退「全部」，不影响正在播放的音乐）
-        self.refresh_online_sources()
+        # Search only needs the source selector. Do not restart a visible
+        # recommendation read every time the user searches for a song.
+        self.refresh_online_sources(include_discovery=False)
         self._thread = QThread()
         self._worker = _SearchWorker(self._music, kw, generation)
         self._worker.moveToThread(self._thread)
@@ -1251,6 +1316,9 @@ class MusicPanel(QWidget):
                         on_failed=None):
         if search_generation is not None and search_generation != self._search_generation:
             return
+        self._last_online_result = result
+        if getattr(self, "_results_requested", False):
+            self.online_stack.setCurrentWidget(self.results_page)
         self._voice_generation = None   # 手动搜索 → 重置语音候选代际
         self.list_results.clear()
         tracks_for_search = []
@@ -1260,10 +1328,14 @@ class MusicPanel(QWidget):
             if source_filter and src != source_filter:
                 continue
             for t in tracks:
+                version_filter = self.cb_search_filter.currentIndex() if hasattr(self, "cb_search_filter") else 0
+                markers = ("现场", "live") if version_filter == 1 else ("翻唱", "cover")
+                if version_filter and not any(mark in t.title.casefold() for mark in markers):
+                    continue
                 # 显示具体插件源名（t.source_name = 插件 platform，如"酷我音乐"），
                 # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
                 item = QListWidgetItem(f"[{t.source_name}] {t.title} - {t.artist}")
-                sub = f"{t.artist} · {t.source_name}" if t.artist else (t.source_name or "")
+                sub = " · ".join(str(value) for value in (t.artist, t.album, t.source_name) if value)
                 # 登记在线封面 → 历史/歌单缺字段时补全
                 if self._music is not None and hasattr(self._music, "remember_cover"):
                     try:
@@ -1277,6 +1349,7 @@ class MusicPanel(QWidget):
                 item.setData(Qt.UserRole, self._card_data({
                     "title": t.title,
                     "artist": t.artist,
+                    "album": t.album,
                     "source_name": t.source_name,
                     "track_id": t.track_id,
                     "cover_url": getattr(t, "cover_url", None) or None,
@@ -1337,6 +1410,11 @@ class MusicPanel(QWidget):
             if self._voice_generation is not None and gen <= self._voice_generation:
                 return
             self._voice_generation = gen
+            self._results_requested = True
+            self._last_online_result = None
+            if hasattr(self, "online_stack"):
+                self.online_stack.setCurrentWidget(self.results_page)
+                self.cb_search_filter.setEnabled(False)
             try:
                 if hasattr(self, "tabs"):
                     self.tabs.setCurrentIndex(1)
@@ -1373,6 +1451,45 @@ class MusicPanel(QWidget):
             self._refresh_playlists()
         elif index == 4:
             self._load_top_lists()
+
+    def _show_discovered_tracks(self, tracks, title):
+        self._results_requested = True
+        self.cb_search_filter.setEnabled(True)
+        self.cb_search_filter.blockSignals(True)
+        self.cb_search_filter.setCurrentIndex(0)
+        self.cb_search_filter.blockSignals(False)
+        self._search_generation += 1
+        self._pending_search = None
+        # Discovery results carry the actual plugin name, not a merged search key.
+        self.cb_source.setCurrentIndex(0)
+        grouped = {}
+        for track in tracks:
+            grouped.setdefault(track.source_name, []).append(track)
+        self._on_search_done(grouped)
+        self.lbl_status.setText(f"{title} · {len(tracks)} 首；双击播放，右键可加入队列或歌单")
+
+    def _show_discovery_home(self):
+        self._results_requested = False
+        self.online_stack.setCurrentWidget(self.discovery)
+        self.discovery.show_view("home")
+        self.btn_discovery_more.hide()
+
+    def _apply_online_filter(self, *_):
+        if self._last_online_result is not None:
+            self._on_search_done(self._last_online_result)
+
+    def _play_discovery_history(self, row):
+        item = QListWidgetItem()
+        item.setData(Qt.UserRole, row)
+        self._on_history_play(item)
+
+    def _open_discovery_playlist(self, row):
+        self.tabs.setCurrentIndex(3)
+        for index in range(self.list_playlists.count()):
+            item = self.list_playlists.item(index)
+            if item.data(Qt.UserRole).get("id") == row.get("id"):
+                self.list_playlists.setCurrentItem(item)
+                break
 
     def _on_toggle_lyrics(self, checked: bool):
         """桌面歌词开关：开 → 创建浮窗并显示；关 → 隐藏（保留状态可再开）。"""
@@ -1492,21 +1609,21 @@ class MusicPanel(QWidget):
             self.tabs.setCurrentIndex(1)
 
     def _on_identify_play(self, result):
-        """识别成功 → 按指纹 filepath 回本地库 → play_song（失败静默提示）。"""
+        """识别成功 → 本地曲库 → play_song；保留旧接口的未知结果。"""
         music = self._music
         if music is None:
-            return
+            return False
         filepath = (result or {}).get("filepath") or ""
         if not filepath:
-            return
+            return False
         try:
             song = music.db.get_song_by_path(filepath)
             if not song:
-                print(f"[Identify] 指纹命中但本地库无该歌: {filepath}")
-                return
-            music.play_song(song)
+                return False
+            return music.play_song(song)
         except Exception as e:
-            print(f"[Identify] 播放失败: {e}")
+            print(f"[Identify] 播放失败: {type(e).__name__}")
+            return False
 
     def _refresh_history(self):
         """渲染播放历史（最近在前）。"""
@@ -1743,6 +1860,8 @@ class MusicPanel(QWidget):
             self._pending_rank_lists = True
             return
         self._pending_rank_lists = False
+        self._rank_detail_serial += 1
+        self._pending_rank_detail = None
         self.lbl_rank_status.setText("加载榜单中…")
         self._rank_groups = {}
         self.list_rank_sources.clear()
@@ -1758,11 +1877,14 @@ class MusicPanel(QWidget):
             self._rank_worker.failed.connect(self._on_rank_lists_failed)
             self._rank_worker.done.connect(self._rank_thread.quit)
             self._rank_worker.failed.connect(self._rank_thread.quit)
+            self._rank_thread.finished.connect(self._resume_rank_lists)
             self._rank_thread.start()
         except Exception as e:
             self.lbl_rank_status.setText(f"榜单加载失败: {e}")
 
     def _on_rank_lists_done(self, groups: dict):
+        if self._pending_rank_lists:
+            return
         self._rank_groups = groups or {}
         plugins = list(self._rank_groups.keys())
         self.list_rank_sources.clear()
@@ -1777,23 +1899,34 @@ class MusicPanel(QWidget):
             self.lbl_rank_status.setText("暂无平台提供榜单（插件无榜单能力或加载失败）")
         else:
             self.list_rank_sources.setCurrentRow(0)
-        # 最新请求补偿：运行期间又有切 tab → 自动补拉一轮。
-        # QTimer.singleShot(0) 延后一拍：旧 _rank_thread 的 quit 此刻可能仍在排队
-        # （isRunning 仍 True），直接重入会被防重入守卫吞掉——排队到线程彻底退出后执行。
+        errors = getattr(groups, "errors", {})
+        if errors:
+            text = (f"已加载 {len(plugins)} 个平台，部分音源未完成；可重试或更换音源" if plugins else
+                    "榜单未能加载，请检查网络、重试或更换音源")
+            self.lbl_rank_status.setText(text)
+            notify("音乐榜单部分可用" if plugins else "音乐榜单未完成", text,
+                   source="music", status="warning" if plugins else "failed")
+        elif plugins:
+            notify("音乐榜单已加载", f"{len(plugins)} 个平台提供真实榜单，可选择查看", source="music")
+        # A pending refresh resumes only from QThread.finished, after quit.
+
+    @Slot()
+    def _resume_rank_lists(self):
         if self._pending_rank_lists:
             self._pending_rank_lists = False
-            QTimer.singleShot(0, self._load_top_lists)
+            self._load_top_lists()
 
     def _on_rank_lists_failed(self, err: str):
-        self.lbl_rank_status.setText(f"榜单加载失败: {err}")
-        if self._pending_rank_lists:
-            self._pending_rank_lists = False
-            QTimer.singleShot(0, self._load_top_lists)
+        if not self._pending_rank_lists:
+            self.lbl_rank_status.setText("榜单加载未完成，请重试或更换音源。")
+            notify("音乐榜单未完成", self.lbl_rank_status.text(), source="music", status="failed")
 
     def _on_rank_source_selected(self, current, previous):
         """平台选中变化 → 下方榜单列表（该平台全部分组的榜单）。"""
         if current is None:
             return
+        self._rank_detail_serial += 1
+        self._pending_rank_detail = None
         plugin = current.data(Qt.UserRole)
         groups = self._rank_groups.get(plugin) or []
         self.list_rank_lists.clear()
@@ -1828,6 +1961,7 @@ class MusicPanel(QWidget):
     def _load_rank_detail(self, source: str, list_id: str, title: str):
         if self._music is None:
             return
+        self._rank_detail_serial += 1
         # 防重入：上一轮详情线程仍在运行 → 记最新请求（覆盖旧的），
         # 旧线程 done/failed 后自动补加载。绝不覆盖运行中线程引用（崩溃修复）。
         if self._rank_detail_thread is not None and self._rank_detail_thread.isRunning():
@@ -1835,6 +1969,7 @@ class MusicPanel(QWidget):
             self.lbl_rank_status.setText(f"加载「{title}」…")
             return
         self._pending_rank_detail = None
+        self._rank_active_serial = self._rank_detail_serial
         self.lbl_rank_status.setText(f"加载「{title}」…")
         self.list_rank_songs.clear()
         self._rank_tracks = []
@@ -1847,11 +1982,14 @@ class MusicPanel(QWidget):
             self._rank_detail_worker.failed.connect(self._on_rank_detail_failed)
             self._rank_detail_worker.done.connect(self._rank_detail_thread.quit)
             self._rank_detail_worker.failed.connect(self._rank_detail_thread.quit)
+            self._rank_detail_thread.finished.connect(self._resume_rank_detail)
             self._rank_detail_thread.start()
         except Exception as e:
             self.lbl_rank_status.setText(f"榜单详情加载失败: {e}")
 
     def _on_rank_detail_done(self, payload: dict):
+        if self._rank_active_serial != self._rank_detail_serial:
+            return
         tracks = (payload or {}).get("tracks") or []
         self._rank_tracks = tracks
         if self._music is not None:
@@ -1881,25 +2019,24 @@ class MusicPanel(QWidget):
                 "cover_url": getattr(t, "cover_url", None) or None,
                 "extra": t.extra,
                 "duration_seconds": t.duration_seconds,
-            }, t.artist, f"net:{t.track_id}" if t.track_id else None))
+                "album": t.album,
+            }, " · ".join(v for v in (t.artist, t.album, t.source_name) if v), f"net:{t.track_id}" if t.track_id else None))
             self.list_rank_songs.addItem(item)
         n = len(tracks)
         self.lbl_rank_status.setText(f"共 {n} 首，双击播放" if n else "榜单无歌曲")
-        # 最新请求补偿：加载期间用户又点了其他榜单 → 自动加载最新的。
-        # singleShot(0) 延后一拍，避免旧详情线程尚未彻底 quit 时重入被吞。
+        # A newer selection resumes from QThread.finished, never a zero-delay poll.
+
+    @Slot()
+    def _resume_rank_detail(self):
         if self._pending_rank_detail:
             req = self._pending_rank_detail
             self._pending_rank_detail = None
-            QTimer.singleShot(0, lambda: self._load_rank_detail(
-                req["source"], req["list_id"], req["title"]))
+            self._load_rank_detail(req["source"], req["list_id"], req["title"])
 
     def _on_rank_detail_failed(self, err: str):
-        self.lbl_rank_status.setText(f"榜单详情加载失败: {err}")
-        if self._pending_rank_detail:
-            req = self._pending_rank_detail
-            self._pending_rank_detail = None
-            QTimer.singleShot(0, lambda: self._load_rank_detail(
-                req["source"], req["list_id"], req["title"]))
+        if self._rank_active_serial == self._rank_detail_serial:
+            self.lbl_rank_status.setText("榜单详情未完成，请重新选择或换一个音源。")
+            notify("榜单曲目未完成", self.lbl_rank_status.text(), source="music", status="failed")
 
     def _on_rank_song_play(self, item: QListWidgetItem):
         data = item.data(Qt.UserRole)

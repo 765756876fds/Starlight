@@ -374,6 +374,11 @@ class CooldownManager:
     # ----- CommandBus handlers -----
     def handle_start(self, command) -> CooldownReminder | None:
         p = getattr(command, "params", command) or {}
+        champion = p.get("champion")
+        if champion and self._champions.get_by_name(champion) is None:
+            # ASR 的未知英雄不能作为新的写入目标；不猜别名、不回退其他英雄。
+            self._on_event("cooldown.unknown_champion", {"reason": "unresolved_champion"})
+            return None
         ah = 0.0
         ssh = 0.0
         level = 0
@@ -461,11 +466,27 @@ class CooldownManager:
 
     def handle_cancel(self, command) -> bool:
         p = getattr(command, "params", command) or {}
-        # 按 champion 名取消
         champ_name = p.get("champion")
+        champ = self._champions.get_by_name(champ_name) if champ_name else None
+        # 与创建时使用同一英雄目录；未知/缺失名称不能退化为取消全部。
+        if champ is None:
+            return False
+        skill = p.get("skill") or p.get("spell")
+        if skill:
+            slot = _normalize_slot(skill)
+            if slot in ("Q", "W", "E", "R"):
+                skill = _SLOT_ZH[slot]
+            else:
+                spell = self._spells.get_by_name(skill)
+                if spell is None:
+                    return False
+                skill = spell.name_zh
+        side = p.get("side")
         with self._lock:
             candidates = [r.id for r in self._reminders.values()
-                          if (not champ_name) or (r.champion_name == champ_name)]
+                          if r.champion_id == champ.cid
+                          and (not skill or r.skill == skill)
+                          and (not side or r.side == side)]
         n = 0
         for rid in candidates:
             if self.cancel(rid):
@@ -476,7 +497,13 @@ class CooldownManager:
         return self.cancel_all()
 
     def handle_list(self, command=None) -> list[dict]:
-        return [self._payload(r) for r in self.list_active()]
+        # 查询不触发 tick/播报，也不改变 list_active 的动态修正语义。
+        with self._lock:
+            now = self._game_time
+            return [self._payload(r) for r in self._reminders.values()
+                    if r.status in (ReminderStatus.ACTIVE.value,
+                                    ReminderStatus.REMINDED.value)
+                    and r.ready_at > now]
 
     # ----- internals -----
     def _fire_remind(self, rem: CooldownReminder) -> None:

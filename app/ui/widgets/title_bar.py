@@ -1,5 +1,5 @@
 """Glass 自定义顶栏（无边框主窗口用）：标题 + 最小化 + 关闭 + 拖动。"""
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal, Slot
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ..theme.colors import Colors
@@ -36,6 +36,16 @@ class GlassTitleBar(QWidget):
         layout.addWidget(self.lbl_title)
         layout.addStretch(1)
 
+        from ..theme.manager import get_theme_manager
+        self._theme_manager = get_theme_manager()
+        self.btn_theme = QPushButton()
+        self.btn_theme.setObjectName("btn_theme")
+        self.btn_theme.setFixedSize(80, 26)
+        self.btn_theme.clicked.connect(lambda _checked=False: self._theme_manager.toggle())
+        self._theme_manager.theme_changed.connect(self._sync_theme)
+        self._sync_theme(self._theme_manager.mode)
+        layout.addWidget(self.btn_theme)
+
         self.btn_min = QPushButton()
         self.btn_min.setObjectName("btn_min")
         self.btn_min.setIcon(lucide_icon("minus", 14, Colors.TEXT_SECONDARY))
@@ -52,6 +62,14 @@ class GlassTitleBar(QWidget):
 
         self.btn_min.clicked.connect(self._on_minimize)
         self.btn_close.clicked.connect(self._on_close)
+
+    @Slot(str)
+    def _sync_theme(self, mode):
+        target = "日间" if mode == "dark" else "夜间"
+        self.btn_theme.setText(target)
+        self.btn_theme.setIcon(lucide_icon("sun" if mode == "dark" else "moon", 14, Colors.TEXT_SECONDARY))
+        self.btn_theme.setToolTip(f"切换到{target}主题")
+        self.btn_theme.setAccessibleName(f"切换到{target}主题")
 
     # ---- 窗口控制 ----
     def _window(self) -> QWidget:

@@ -21,6 +21,7 @@ from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
 
 import threading
 from ...core.notifications import notify
+from ..theme.tokens import Tokens
 import os
 from PySide6.QtWidgets import (
     QApplication,
@@ -80,6 +81,7 @@ class VideoContainer(QWidget):
         self.setAttribute(Qt.WA_NativeWindow)
         self.setAttribute(Qt.WA_DontCreateNativeAncestors)
         self.setStyleSheet("background:#000;")
+        self.setProperty("themeIndependent", True)  # The actual movie canvas stays black.
         self._win_id = None
         self._window = parent              # 播放窗口（转发鼠标活动）
         self.setMouseTracking(True)        # 无按键移动也收 mouseMoveEvent
@@ -163,14 +165,14 @@ class ControlOverlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(
             "background:transparent;"
-            " color:#eee; font-size:12px;"
-            " QPushButton{background:transparent;border:none;color:#ddd;"
+            f" color:{Tokens.TEXT_PRIMARY}; font-size:12px;"
+            f" QPushButton{{background:transparent;border:none;color:{Tokens.TEXT_PRIMARY};"
             " border-radius:4px;}"
-            " QPushButton:hover{background:rgba(255,255,255,0.15);color:#fff;}"
-            " QSlider::groove:horizontal{height:3px;background:rgba(255,255,255,0.35);}"
-            " QSlider::sub-page:horizontal{background:rgba(250,180,70,0.9);}"
+            f" QPushButton:hover{{background:{Tokens.BG_HOVER};color:{Tokens.TEXT_PRIMARY};}}"
+            f" QSlider::groove:horizontal{{height:3px;background:{Tokens.BORDER_LIGHT};}}"
+            f" QSlider::sub-page:horizontal{{background:{Tokens.ACCENT};}}"
             " QSlider::handle:horizontal{width:10px;margin:-4px 0;"
-            " background:#fff;border-radius:5px;}")
+            f" background:{Tokens.ACCENT_HOVER};border-radius:5px;}}")
         self._speed_idx = 2          # 1.0x 默认档
         self._paused = False
         self._muted = False
@@ -290,9 +292,10 @@ class ControlOverlay(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         grad = QLinearGradient(0, self.height(), 0, 0)
-        grad.setColorAt(0.0, QColor(24, 24, 24, 235))
-        grad.setColorAt(0.5, QColor(24, 24, 24, 170))
-        grad.setColorAt(1.0, QColor(24, 24, 24, 0))
+        background = QColor(Tokens.OVERLAY_BACKGROUND)
+        for position, alpha in ((0.0, 245), (0.5, 215), (1.0, 0)):
+            background.setAlpha(alpha)
+            grad.setColorAt(position, background)
         painter.fillRect(self.rect(), grad)
         painter.end()
 
@@ -474,8 +477,8 @@ class EpisodeSidebar(QWidget):
         self.setAttribute(Qt.WA_NativeWindow)
         self.setFixedWidth(_SIDEBAR_W)
         self.setStyleSheet(
-            "background:rgba(24,24,24,225); border:1px solid #555;"
-            " color:#eee; font-size:12px;")
+            f"background:{Tokens.CARD}; border:1px solid {Tokens.BORDER};"
+            f" color:{Tokens.TEXT_PRIMARY}; font-size:12px;")
         self._episodes = []          # [(name, url), ...]
         self._current = 0
 
@@ -483,7 +486,7 @@ class EpisodeSidebar(QWidget):
         self._list.setStyleSheet(
             "QListWidget{background:transparent;border:none;}"
             "QListWidget::item{padding:6px 10px;}"
-            "QListWidget::item:selected{background:#3a6ea5;color:#fff;}")
+            f"QListWidget::item:selected{{background:{Tokens.BG_ACTIVE};color:{Tokens.TEXT_PRIMARY};}}")
         self._list.itemClicked.connect(self._on_click)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -595,7 +598,7 @@ class VideoPlayerWindow(QWidget):
         self._recover_label = QLabel(self)
         self._recover_label.setAlignment(Qt.AlignCenter)
         self._recover_label.setStyleSheet(
-            "color:#e8e8e8;font-size:16px;background:rgba(20,20,20,150);"
+            f"color:{Tokens.TEXT_PRIMARY};font-size:16px;background:{Tokens.CARD};"
             "border-radius:8px;padding:10px 18px;")
         self._recover_label.hide()
 
@@ -740,8 +743,8 @@ class VideoPlayerWindow(QWidget):
             self._subtitle_menu.deleteLater()
         menu = QMenu(self.overlay)
         self._subtitle_menu = menu
-        menu.setStyleSheet("QMenu{background:#20232a;color:#eee;border:1px solid #555;}"
-                          "QMenu::item{padding:7px 18px;}QMenu::item:selected{background:#3a506b;}")
+        menu.setStyleSheet(f"QMenu{{background:{Tokens.BG_ELEVATED};color:{Tokens.TEXT_PRIMARY};border:1px solid {Tokens.BORDER};}}"
+                          f"QMenu::item{{padding:7px 18px;}}QMenu::item:selected{{background:{Tokens.BG_ACTIVE};}}")
         media = state["media"] if state else None
         local = menu.addAction("加载本地字幕…")
         local.setEnabled(state is not None)

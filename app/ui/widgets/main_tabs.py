@@ -78,7 +78,9 @@ class MainTabs(QWidget):
             lcu = (services_dict or {}).get("lcu")
             lcu_get = lcu.get if lcu and hasattr(lcu, "get") else None
             lcu_post = lcu.post if lcu and hasattr(lcu, "post") else None
-            return CurrentGamePanel(snapshot_provider, lcu_get=lcu_get, lcu_post=lcu_post, ongoing_service=ongoing_service)
+            from ..panels.game_workbench import GameWorkbench
+            panel = CurrentGamePanel(snapshot_provider, lcu_get=lcu_get, lcu_post=lcu_post, ongoing_service=ongoing_service)
+            return GameWorkbench(panel, cooldown_manager, lcu)
         game_pages = []
         def _add_game(make, title, attr):
             try:
@@ -92,6 +94,10 @@ class MainTabs(QWidget):
                 game_pages.append((page, title))
 
         _add_game(_make_current_game, "当前对局", "current")
+        workbench = self._panels.get("current")
+        if hasattr(workbench, "panel"):
+            self._panels["workbench"] = workbench
+            self._panels["current"] = workbench.panel
         _add_game(lambda: AutomationPanel(automation_service, lcu=(services_dict or {}).get("lcu"), combo_manager=combo_manager), "自动化", "automation")
         _add_game(lambda: OngoingPanel(ongoing_service, account_history_service=_build_acct(ongoing_service, services_dict)), "对局信息", "ongoing")
         game_panel = GamePanel(game_pages)

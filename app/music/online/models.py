@@ -32,3 +32,10 @@ class SearchResults(dict):
         super().__init__()
         self.errors = {}
         self.successful_sources = set()
+
+
+class CatalogResults(dict):
+    """Discovery groups plus failures belonging to this request."""
+    def __init__(self):
+        super().__init__()
+        self.errors = {}

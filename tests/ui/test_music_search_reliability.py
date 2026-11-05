@@ -17,6 +17,9 @@ from app.ui.panels.settings_panel import SettingsPanel
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
+    # Match main.py: initialize the application style before business widgets.
+    from app.ui.theme.manager import get_theme_manager
+    get_theme_manager(app)
     yield app
 
 

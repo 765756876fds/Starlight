@@ -27,6 +27,8 @@ SETTINGS_PATH = os.path.join(_ROOT, "config", "settings.yaml")
 ALL_EXTENSIONS = ["mp3", "flac", "wav", "m4a", "ogg", "ape"]
 
 DEFAULT_PREFS = {
+    "theme": "dark",             # 夜间默认；日间/夜间共用同一套 UI
+    "movie_library_dirs": [],    # Only folders explicitly selected by the user.
     "combo_window_gate": True,   # 仅 LoL 前台时触发（持久化）
     "equip_notify": True,        # 敌方装备语音提醒（持久化）
     "ui_refresh_interval": 500,  # 界面刷新间隔 ms
@@ -97,13 +99,26 @@ def load_ui_prefs() -> dict:
             merged["movie_content_filter"] = DEFAULT_PREFS["movie_content_filter"]
         if merged["movie_content_tag_filter"] not in _MOVIE_TAG_FILTERS:
             merged["movie_content_tag_filter"] = DEFAULT_PREFS["movie_content_tag_filter"]
+        if merged["theme"] not in ("dark", "light"):
+            merged["theme"] = DEFAULT_PREFS["theme"]
+        paths = merged["movie_library_dirs"]
+        merged["movie_library_dirs"] = [p for p in paths if isinstance(p, str) and p.strip()] if isinstance(paths, list) else []
         return merged
 
 
 def save_ui_prefs(prefs: dict) -> bool:
     with _LOCK:
-        cur = load_ui_prefs()
+        # Preserve fields owned by other panels or future versions.
+        cur = _read_json(UI_PREFS_PATH, {})
+        cur = cur if isinstance(cur, dict) else {}
+        cur.update(load_ui_prefs())
         cur.update({k: v for k, v in prefs.items() if k in DEFAULT_PREFS})
+        if cur["theme"] not in ("dark", "light"):
+            return False
+        try:
+            os.makedirs(os.path.dirname(UI_PREFS_PATH), exist_ok=True)
+        except OSError:
+            return False
         return _write_json(UI_PREFS_PATH, cur)
 
 

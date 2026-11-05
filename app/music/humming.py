@@ -177,15 +177,19 @@ class HummingService:
             "candidate_count": len(result.matches),
         }
 
-    def record_and_identify(self, wav_path: str, source: str = "microphone", cancel_event=None) -> dict[str, object] | None:
-        """按来源一次性采集 → 临时 wav → 本地识别。供后台线程调用。"""
-        t0 = time.perf_counter()
+    def capture_audio(self, wav_path: str, source: str = "microphone", cancel_event=None) -> None:
+        """采集一次音频；在线识曲不要求先有本地指纹。仅在后台线程调用。"""
         if source == "microphone":
             MicrophoneCapture(seconds=self.record_seconds).capture(wav_path, cancel_event)
         elif source == "system":
             SystemLoopbackCapture(seconds=self.record_seconds).capture(wav_path, cancel_event)
         else:
             raise HummingError(f"不支持的识曲输入来源: {source}")
+
+    def record_and_identify(self, wav_path: str, source: str = "microphone", cancel_event=None) -> dict[str, object] | None:
+        """按来源一次性采集 → 临时 wav → 本地识别。供后台线程调用。"""
+        t0 = time.perf_counter()
+        self.capture_audio(wav_path, source=source, cancel_event=cancel_event)
         result = self.identify_file(wav_path)
         elapsed = time.perf_counter() - t0
         if result is not None:

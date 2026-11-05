@@ -11,9 +11,9 @@ class VoiceIsland(QPushButton):
     open_notifications = Signal()
     COLLAPSE_MS = 5000
 
-    def __init__(self, parent=None, theme="dark"):
+    def __init__(self, parent=None, theme=None):
         super().__init__(parent)
-        self.colors = notification_style(theme)
+        self._theme_override = theme
         self._record_key = None
         self._title = ""
         self._note = ""
@@ -35,6 +35,10 @@ class VoiceIsland(QPushButton):
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.collapse)
+
+    @property
+    def colors(self):
+        return notification_style(self._theme_override)
 
     def _get_expansion(self):
         return self._expanded

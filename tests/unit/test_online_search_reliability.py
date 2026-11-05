@@ -222,6 +222,7 @@ const code = fs.readFileSync(process.argv[1], 'utf8');
 const scenario = process.argv[2];
 let handler;
 const loader = {
+  capabilities() { return {}; },
   load(fp) { return { name: fp.includes('bad') ? 'bad' : 'good', type:'musicfree' }; },
   async callSearch(p) { if (p.name === 'bad') throw Error('fixture parse error'); return []; }
 };

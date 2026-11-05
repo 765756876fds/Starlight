@@ -52,7 +52,9 @@ def test_snapshot_copies_only_display_metadata():
     q.add({"title": "在线歌", "artist": "歌手", "source_type": "online",
            "source_name": "音源", "track_id": "1", "extra": {"headers": {"secret": "value"}}})
     snapshot = q.snapshot()
-    assert set(snapshot["items"][0]) == {"title", "artist", "source_type", "source_name", "index"}
+    assert set(snapshot["items"][0]) == {"title", "artist", "source_type", "source_name", "index", "entry_id"}
+    assert isinstance(snapshot["items"][0]["entry_id"], str)
+    assert snapshot["items"][0]["entry_id"] == q.snapshot()["items"][0]["entry_id"]
     snapshot["items"][0]["title"] = "changed"
     snapshot["next_up"].append(42)
     assert q.snapshot()["items"][0]["title"] == "在线歌"

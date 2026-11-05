@@ -4,12 +4,13 @@
     from app.ui.widgets.icon_utils import lucide_icon
     btn.setIcon(lucide_icon("play", size=20, color=Tokens.TEXT_PRIMARY))
 
-图标为线性描边风格（stroke），播放三角为填充（fill）；颜色在生成时固化，
-disabled 态由 QIcon 自动灰色化。SVG path 数据来自 Lucide（ISC 许可，
+图标为线性描边风格（stroke），播放三角为填充（fill）；语义色由主题管理器统一更新，
+显式的非主题色保持不变。SVG path 数据来自 Lucide（ISC 许可，
 https://lucide.dev）。
 """
 from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
+from ..theme.colors import PALETTES, palette_for
 
 try:  # PySide6 完整安装含 QtSvg；缺失时降级为文字图标，不影响布局
     from PySide6.QtSvg import QSvgRenderer
@@ -19,6 +20,8 @@ except Exception:  # pragma: no cover
 
 # name -> Lucide body（viewBox 24x24）
 _LUCIDE = {
+    "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
+    "moon": '<path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/>',
     "check": '<path d="m5 12 4 4L19 6"/>',
     "circle-alert": '<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
     "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
@@ -95,28 +98,82 @@ _FALLBACK_CHAR = {
 }
 
 
-def lucide_icon(name: str, size: int = 20, color: str = "#e0e0e8",
+def lucide_icon(name: str, size: int = 20, color: str | None = None,
                 stroke_width: float = 2.0) -> QIcon:
     """生成指定颜色/尺寸的线性图标 QIcon（线程无关，主线程调用）。"""
-    if not _SVG_OK:  # pragma: no cover
-        return _fallback_icon(name, size, color)
     body = _LUCIDE.get(name)
     if body is None:  # pragma: no cover
         body = _LUCIDE["music"]
-    fill = "currentColor" if name == "play" else "none"
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
-        f'viewBox="0 0 24 24" fill="{fill}" stroke="currentColor" '
-        f'stroke-width="{stroke_width}" stroke-linecap="round" '
-        f'stroke-linejoin="round">{body}</svg>'
-    ).replace("currentColor", color)
-    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    renderer.render(p)
-    p.end()
-    return QIcon(pm)
+    return semantic_svg_icon(body, color=color, fill=name == "play", stroke_width=stroke_width)
+
+
+_ICON_CACHE = {}
+_ICON_SPECS = {}
+
+
+def _render_icon(spec):
+    """Use Qt's native pixmap engine, with no Python virtual-engine lifetime."""
+    body, role, explicit, fill, stroke_width = spec
+    color = getattr(palette_for(), role) if role else explicit
+    key = (spec, color)
+    if key not in _ICON_CACHE:
+        if not _SVG_OK:  # pragma: no cover
+            icon = _fallback_icon("music", 24, color)
+        else:
+            svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+                   f'fill="{color if fill else "none"}" stroke="{color}" '
+                   f'stroke-width="{stroke_width}" stroke-linecap="round" '
+                   f'stroke-linejoin="round">{body}</svg>')
+            renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+            icon = QIcon()
+            for size in (16, 20, 24, 32, 40, 48, 64, 128):
+                pm = QPixmap(size, size)
+                pm.fill(Qt.transparent)
+                painter = QPainter(pm)
+                renderer.render(painter)
+                painter.end()
+                icon.addPixmap(pm)
+        _ICON_CACHE[key] = icon
+        _ICON_SPECS[icon.cacheKey()] = spec
+    return _ICON_CACHE[key]
+
+
+def semantic_svg_icon(body, color=None, fill=False, stroke_width=2.0):
+    role = "primary_text" if color is None else None
+    for palette in (palette_for(), PALETTES["dark"]):
+        if role is None:
+            role = next((name for name, value in vars(palette).items()
+                         if value.lower() == str(color).lower()), None)
+    return _render_icon((body, role, color, fill, stroke_width))
+
+
+def refresh_widget_icons(widget):
+    """Recolor icons already held by Qt copies, preserving explicit artwork."""
+    from PySide6.QtWidgets import QAbstractButton, QComboBox, QTabBar
+    from PySide6.QtGui import QAction
+
+    def refreshed(icon):
+        spec = _ICON_SPECS.get(icon.cacheKey())
+        return _render_icon(spec) if spec else icon
+
+    def apply(icon, setter):
+        if not icon.isNull():
+            new_icon = refreshed(icon)
+            if new_icon.cacheKey() != icon.cacheKey():
+                setter(new_icon)
+
+    if isinstance(widget, QAbstractButton):
+        apply(widget.icon(), widget.setIcon)
+    if isinstance(widget, QComboBox):
+        for index in range(widget.count()):
+            apply(widget.itemIcon(index), lambda icon, i=index: widget.setItemIcon(i, icon))
+    if isinstance(widget, QTabBar):
+        for index in range(widget.count()):
+            apply(widget.tabIcon(index), lambda icon, i=index: widget.setTabIcon(i, icon))
+    for action in set(widget.actions() + widget.findChildren(QAction, options=Qt.FindDirectChildrenOnly)):
+        apply(action.icon(), action.setIcon)
+    if widget.isWindow():
+        apply(widget.windowIcon(), widget.setWindowIcon)
 
 
 def _fallback_icon(name: str, size: int, color: str) -> QIcon:  # pragma: no cover

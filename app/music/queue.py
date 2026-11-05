@@ -11,6 +11,7 @@ import logging
 import os
 import random
 import threading
+import uuid
 from functools import wraps
 from typing import Any
 
@@ -53,6 +54,7 @@ class PlayQueue:
         self._next_up: list[int] = []  # 明确的下一首请求，后选先播；仍引用同一队列。
         self._on_change = None
         self._revision = 0  # Structural version for validating edits from a display snapshot.
+        self._entry_ids: list[str] = []  # Identity belongs to an occurrence, not the media file.
 
     def set_change_callback(self, callback):
         """Controller-owned notification hook; UI subscriptions stay on EventBus."""
@@ -62,6 +64,7 @@ class PlayQueue:
     def _insert(self, song: dict[str, Any], position: int):
         """持锁插入并移动索引；保持当前曲目、历史及随机遍历对应同一歌曲。"""
         self._queue.insert(position, song)
+        self._entry_ids.insert(position, uuid.uuid4().hex)
         if self._current_index >= position:
             self._current_index += 1
         self._history = [i + (i >= position) for i in self._history]
@@ -77,6 +80,7 @@ class PlayQueue:
                 self._insert(song, position)
             else:
                 self._queue.append(song)
+                self._entry_ids.append(uuid.uuid4().hex)
                 self._revision += 1
             self._rebuild_shuffle()
 
@@ -94,6 +98,7 @@ class PlayQueue:
         """批量添加歌曲"""
         with self._lock:
             self._queue.extend(songs)
+            self._entry_ids.extend(uuid.uuid4().hex for _ in songs)
             if songs:
                 self._revision += 1
             self._rebuild_shuffle()
@@ -111,6 +116,7 @@ class PlayQueue:
                     return False
             if 0 <= index < len(self._queue):
                 self._queue.pop(index)
+                self._entry_ids.pop(index)
                 if index < self._current_index:
                     self._current_index -= 1
                 elif index == self._current_index:
@@ -130,6 +136,7 @@ class PlayQueue:
         """清空队列"""
         with self._lock:
             self._queue.clear()
+            self._entry_ids.clear()
             self._current_index = -1
             self._history.clear()
             self._history_pos = -1
@@ -137,6 +144,42 @@ class PlayQueue:
             self._shuffle_pos = -1
             self._next_up.clear()
             self._revision += 1
+
+    @_queue_mutation
+    def move_waiting(self, entry_id: str, before_id: str | None, revision: int,
+                     current_song=None) -> bool:
+        """Move one waiting occurrence, preserving cursor, priorities and history."""
+        with self._lock:
+            if (type(revision) is not int or revision != self._revision
+                    or self._play_mode == PlayMode.SHUFFLE
+                    or not isinstance(entry_id, str) or entry_id not in self._entry_ids):
+                return False
+            old = self._entry_ids.index(entry_id)
+            protected = set(self._protected_indices(current_song)) | set(self._next_up)
+            if old in protected or old <= self._current_index:
+                return False
+            if before_id is None:
+                target = len(self._queue)
+            elif isinstance(before_id, str) and before_id in self._entry_ids:
+                target = self._entry_ids.index(before_id)
+                if target in protected or target <= self._current_index:
+                    return False
+            else:
+                return False
+            order = list(range(len(self._queue)))
+            order.remove(old)
+            order.insert(target - (old < target), old)
+            if order == list(range(len(self._queue))):
+                return True
+            remap = {old_index: new_index for new_index, old_index in enumerate(order)}
+            self._queue = [self._queue[i] for i in order]
+            self._entry_ids = [self._entry_ids[i] for i in order]
+            self._current_index = remap.get(self._current_index, self._current_index)
+            self._history = [remap[i] for i in self._history]
+            self._next_up = [remap[i] for i in self._next_up]
+            self._shuffle_order = [remap[i] for i in self._shuffle_order]
+            self._revision += 1
+            return True
 
     def get_current(self) -> dict[str, Any] | None:
         """获取当前播放的歌曲"""
@@ -361,7 +404,7 @@ class PlayQueue:
             return {"mode": self._play_mode, "current_index": selected,
                     "revision": self._revision, "protected_indices": self._protected_indices(current_song),
                     "playing_index": playing, "next_up": list(self._next_up),
-                    "items": [dict(self.song_summary(song), index=i)
+                    "items": [dict(self.song_summary(song), index=i, entry_id=self._entry_ids[i])
                               for i, song in enumerate(self._queue)]}
 
     def get_current_index(self) -> int:

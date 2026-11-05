@@ -25,6 +25,31 @@ from app.ui.panels.movie_panel import MoviePanel
 import requests
 
 
+@pytest.fixture(autouse=True)
+def release_owned_panels(monkeypatch):
+    """Dispose only this test's panels, timers and workers before the next test."""
+    from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+    from shiboken6 import isValid
+    created = []
+    original = MoviePanel.__init__
+    def record(panel, *args, **kwargs):
+        original(panel, *args, **kwargs)
+        created.append(panel)
+    monkeypatch.setattr(MoviePanel, "__init__", record)
+    yield
+    for panel in created:
+        if not isValid(panel):
+            continue
+        for timer in panel.findChildren(QTimer):
+            timer.stop()
+        panel._on_app_quit()
+        panel.close()
+        panel.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    _app.processEvents()
+    assert all(not isValid(panel) for panel in created)
+
+
 # ---------- 豆瓣模块 ----------
 
 def _resp(status=200, payload=None, exc=None):

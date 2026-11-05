@@ -34,7 +34,7 @@ def build_glass_qss() -> str:
 QWidget {{
     background-color: {T.BG_BASE};
     color: {T.TEXT_PRIMARY};
-    font-family: "{T.FONT_FAMILY}";
+    font-family: {T.FONT_FAMILY};
     font-size: {T.FONT_SIZE_BODY}px;
 }}
 QMainWindow {{ background: transparent; }}
@@ -76,12 +76,12 @@ QPushButton:disabled {{
 QPushButton[class="primary"] {{
     background-color: {T.ACCENT};
     border-color: {T.ACCENT};
-    color: #ffffff;
+    color: {T.ON_ACCENT};
     font-weight: 600;
 }}
 QPushButton[class="primary"]:hover {{ background-color: {T.ACCENT_HOVER}; border-color: {T.ACCENT_HOVER}; }}
 QPushButton[class="primary"]:pressed {{ background-color: {T.ACCENT_PRESSED}; padding-top: 9px; padding-bottom: 7px; }}
-QPushButton[class="primary"]:focus {{ border-color: #ffffff; }}
+QPushButton[class="primary"]:focus {{ border-color: {T.ON_ACCENT}; }}
 QPushButton[class="primary"]:disabled {{
     background-color: rgba({T.ACCENT_RGB}, 120);
     border-color: transparent;
@@ -96,7 +96,7 @@ QPushButton#btn_toggle {{
 }}
 QPushButton#btn_toggle:hover {{ background-color: {T.ACCENT_HOVER}; border-color: {T.ACCENT_HOVER}; }}
 QPushButton#btn_toggle:pressed {{ background-color: {T.ACCENT_PRESSED}; padding: 0; }}
-QPushButton#btn_toggle:focus {{ border: 1px solid #ffffff; }}
+QPushButton#btn_toggle:focus {{ border: 1px solid {T.ON_ACCENT}; }}
 QPushButton#btn_prev, QPushButton#btn_next, QPushButton#btn_stop {{
     min-width: {T.BTN_SUB}px; min-height: {T.BTN_SUB}px;
     border-radius: {int(T.BTN_SUB / 2)}px; padding: 0;
@@ -125,9 +125,9 @@ QWidget#combo_step_card {{
 QPushButton#btn_delete_champion {{
     background-color: rgba({_rgb(T.DANGER)}, 42);
     border: 1px solid rgba({_rgb(T.DANGER)}, 70);
-    color: #f87171; font-weight: 600;
+    color: {T.DANGER}; font-weight: 600;
 }}
-QPushButton#btn_delete_champion:hover {{ background-color: rgba({_rgb(T.DANGER)}, 80); color: #fecaca; }}
+QPushButton#btn_delete_champion:hover {{ background-color: rgba({_rgb(T.DANGER)}, 80); color: {T.DANGER}; }}
 QPushButton#btn_delete_champion:pressed {{ background-color: rgba({_rgb(T.DANGER)}, 110); }}
 
 /* 输入 */
@@ -137,7 +137,7 @@ QLineEdit, QTextEdit, QPlainTextEdit {{
     border: 1px solid rgba({T.BORDER_RGB}, 210);
     border-radius: {T.RADIUS}px;
     padding: 6px 10px;
-    selection-background-color: {T.ACCENT}; selection-color: #ffffff;
+    selection-background-color: {T.ACCENT}; selection-color: {T.ON_ACCENT};
 }}
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
     border-color: {T.ACCENT};
@@ -163,7 +163,7 @@ QComboBox::down-arrow {{
 QComboBox QAbstractItemView {{
     background-color: rgba({T.CARD_RGB}, 240); color: {T.TEXT_PRIMARY};
     border: 1px solid rgba({T.BORDER_RGB}, 210); border-radius: {T.RADIUS_SMALL}px;
-    selection-background-color: {T.ACCENT}; selection-color: #ffffff; outline: none;
+    selection-background-color: {T.ACCENT}; selection-color: {T.ON_ACCENT}; outline: none;
 }}
 
 /* 数字微调：隐藏原生上下按钮，输入框走 Glass 圆角样式 */
@@ -283,14 +283,14 @@ QSlider::add-page:horizontal {{
     background: transparent;              /* 未走过：完全透明，露出深色底槽 */
 }}
 QSlider::handle:horizontal {{
-    background: #ffffff;                   /* 纯白圆点（仅 12px 圆点） */
+    background: {T.SLIDER_HANDLE};                   /* 纯白圆点（仅 12px 圆点） */
     width: 12px; height: 12px; margin: -4px 0; border-radius: 6px;
 }}
 QSlider::handle:horizontal:hover {{
-    background: #e0e0e0; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
+    background: {T.SLIDER_HANDLE_HOVER}; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
 }}
 QSlider:focus::handle {{
-    background: #ffffff;
+    background: {T.SLIDER_HANDLE};
 }}
 
 /* GroupBox */
@@ -315,7 +315,7 @@ QMenu {{
     border: 1px solid rgba({T.BORDER_RGB}, 210); border-radius: {T.RADIUS}px; padding: 6px;
 }}
 QMenu::item {{ padding: 8px 24px 8px 12px; border-radius: {T.RADIUS_SMALL}px; }}
-QMenu::item:selected {{ background-color: {T.NAV_PILL}; color: #ffffff; }}
+QMenu::item:selected {{ background-color: {T.NAV_PILL}; color: {T.TEXT_PRIMARY}; }}
 QMenu::separator {{ height: 1px; background: rgba({T.BORDER_RGB}, 210); margin: 4px 8px; }}
 
 /* ---- Glass 专属（主窗口外壳） ---- */
@@ -340,7 +340,7 @@ QWidget#GlassDialogShell {{
     padding: 4px 10px; min-height: 0; font-size: {T.FONT_SIZE_BODY}px; color: {T.TEXT_SECONDARY};
 }}
 #GlassTitleBar QPushButton:hover {{ background-color: rgba({T.BG_HOVER_RGB}, 200); color: {T.TEXT_PRIMARY}; }}
-#GlassTitleBar QPushButton#btn_close:hover {{ background-color: {T.DANGER}; color: #ffffff; }}
+#GlassTitleBar QPushButton#btn_close:hover {{ background-color: {T.DANGER}; color: {T.ON_ACCENT}; }}
 QPushButton[class="btn-gear"] {{
     background: rgba({T.BG_HOVER_RGB}, 130); border: 1px solid rgba({T.BORDER_RGB}, 180);
     border-radius: 8px; padding: 0; min-height: 0; min-width: 0;
@@ -349,11 +349,11 @@ QPushButton[class="btn-gear"]:hover {{ background: rgba({T.BG_HOVER_RGB}, 210); 
 QPushButton[class="btn-gear"]:pressed {{ background: rgba({T.ACCENT_RGB}, 90); border-color: {T.ACCENT}; }}
 QPushButton[class="btn-gear"]:focus {{ border-color: rgba({T.ACCENT_RGB}, 180); }}
 QPushButton[class="danger"] {{
-    background-color: rgba({_rgb(T.DANGER)}, 90); color: #fecaca;
+    background-color: rgba({_rgb(T.DANGER)}, 90); color: {T.DANGER};
     border: 1px solid {T.DANGER}; border-radius: {T.RADIUS}px;
     padding: 6px 14px;
 }}
-QPushButton[class="danger"]:hover {{ background-color: {T.DANGER}; color: #ffffff; }}
+QPushButton[class="danger"]:hover {{ background-color: {T.DANGER}; color: {T.ON_ACCENT}; }}
 QPushButton[class="danger"]:pressed {{ background-color: rgba({_rgb(T.DANGER)}, 70); }}
 """
 
@@ -365,8 +365,8 @@ def _rgb(hex_color: str) -> str:
 
 
 def apply_dark_theme(app: QApplication) -> None:
-    """旧 dark 主题（历史文件，保留兼容；正常路径会被 Glass 覆盖）。"""
-    app.setStyleSheet(_load_qss("dark.qss"))
+    """Compatibility entry point; honor the saved theme, including at startup."""
+    apply_glass_theme(app)
 
 
 def apply_glass_theme(app: QApplication) -> None:
@@ -376,8 +376,7 @@ def apply_glass_theme(app: QApplication) -> None:
     QSS background（只画 sub-page，导致未走过区露出原生亮白/全蓝混淆），
     Fusion 对样式表子元素支持完整，保证「左亮蓝 / 右半透明深灰 / 白点」分层可靠。
     """
-    try:
-        app.setStyle("Fusion")
-    except Exception:
-        pass
-    app.setStyleSheet(build_glass_qss())
+    from .manager import get_theme_manager
+    manager = get_theme_manager(app)
+    if app.styleSheet() != build_glass_qss():
+        manager.set_theme(manager.mode, persist=False, force=True)

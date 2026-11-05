@@ -32,7 +32,11 @@ def wait_for(predicate, timeout=3):
 
 @pytest.fixture(scope="module")
 def qapp():
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
+    # Match main.py: avoid first changing the Qt style after disposed test views.
+    from app.ui.theme.manager import get_theme_manager
+    get_theme_manager(app)
+    return app
 
 
 @pytest.fixture

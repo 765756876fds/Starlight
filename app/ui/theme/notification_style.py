@@ -1,6 +1,7 @@
 """Shared semantic palette for notifications and the voice capsule."""
 from dataclasses import dataclass
 from .tokens import Tokens
+from .colors import palette_for
 
 
 @dataclass(frozen=True)
@@ -19,13 +20,11 @@ class NotificationStyle:
         return getattr(self, status, self.warning)
 
 
-def notification_style(theme="dark"):
-    if theme == "light":
-        return NotificationStyle("#f5f7fb", "#ffffff", "#dce2ea", "#172033",
-                                 "#526078", "#137847", "#946000", "#bd303f", "#2469c8")
-    return NotificationStyle(Tokens.BG_BASE, Tokens.BG_ELEVATED, Tokens.BORDER,
-                             Tokens.TEXT_PRIMARY, Tokens.TEXT_SECONDARY,
-                             Tokens.SUCCESS, Tokens.WARNING, Tokens.DANGER, Tokens.ACCENT)
+def notification_style(theme=None):
+    colors = palette_for(theme)
+    return NotificationStyle(colors.panel_background, colors.elevated_background, colors.border,
+                             colors.primary_text, colors.secondary_text, colors.success,
+                             colors.warning, colors.error, colors.accent)
 
 
 STATUS_LABELS = {"processing": "处理中", "success": "已完成", "warning": "提醒", "failed": "未完成"}

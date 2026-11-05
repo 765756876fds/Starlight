@@ -31,18 +31,24 @@ class _IdentifyWorker(QObject):
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, service, wav_path, source, cancel_event):
+    def __init__(self, service, wav_path, source, cancel_event, skip_local=False):
         super().__init__()
         self._service = service
         self._wav_path = wav_path
         self._source = source
         self._cancel_event = cancel_event
+        self._skip_local = skip_local
 
     @Slot()
     def run(self):
         try:
-            result = self._service.record_and_identify(
-                self._wav_path, source=self._source, cancel_event=self._cancel_event)
+            if self._skip_local:
+                self._service.capture_audio(
+                    self._wav_path, source=self._source, cancel_event=self._cancel_event)
+                result = None  # 复用本地未命中后的在线识曲路径。
+            else:
+                result = self._service.record_and_identify(
+                    self._wav_path, source=self._source, cancel_event=self._cancel_event)
         except CaptureCancelled:
             self.cancelled.emit()
             return
@@ -117,6 +123,7 @@ class IdentifyDialog(GlassDialog):
         self._current_wav = None
         self._online_thread = None
         self._online_cancelled = False
+        self._local_available = True
         self._notification_id = ""
 
         root = self.body_layout
@@ -148,12 +155,13 @@ class IdentifyDialog(GlassDialog):
         self.btn_play.clicked.connect(self._on_play_clicked)
         action_row.addWidget(self.btn_play)
         root.addLayout(action_row)
-        self.btn_index = QPushButton("建立/更新指纹库")
+        self.btn_index = QPushButton("建立/更新本地指纹库（可选）")
+        self.btn_index.setToolTip("用于识别自己的本地曲库；在线识曲无需先建库")
         self.btn_index.clicked.connect(self._on_index_clicked)
         root.addWidget(self.btn_index)
         row = QHBoxLayout()
         self.btn_retry = QPushButton("重新识别")
-        self.btn_retry.clicked.connect(self.start)
+        self.btn_retry.clicked.connect(self.begin)
         row.addWidget(self.btn_retry)
         self.btn_close = QPushButton("关闭")
         self.btn_close.clicked.connect(self._on_close_clicked)
@@ -172,17 +180,15 @@ class IdentifyDialog(GlassDialog):
         self._on_source_changed(self.source_combo.currentIndex())
 
     def begin(self):
-        """用户明确点击后才检查指纹库并开始采集。"""
-        if self._busy or (self._identify_thread is not None and self._identify_thread.isRunning()):
+        """用户明确点击后采集；没有本地指纹时直接走在线识曲。"""
+        if self._busy or any(thread is not None and thread.isRunning()
+                             for thread in (self._identify_thread, self._online_thread)):
             return
         try:
-            if not self._service.has_library():
-                self.lbl_title.setText("本地指纹库为空")
-                self.lbl_status.setText("请先点击“建立/更新指纹库”，完成后再开始识曲")
-                return
-        except Exception as e:
-            self.lbl_status.setText(f"指纹库不可用：{e}")
-            return
+            self._local_available = bool(self._service.has_library())
+        except Exception as exc:
+            self._local_available = False
+            logger.warning("identify local_library_unavailable type=%s", type(exc).__name__)
         self._begin_record()
 
     def is_busy(self) -> bool:
@@ -190,6 +196,13 @@ class IdentifyDialog(GlassDialog):
 
     # ------------------------------------------------------------------ 录音/识别
     def _begin_record(self):
+        try:
+            fd, wav_path = tempfile.mkstemp(prefix="starlight-identify-", suffix=".wav")
+            os.close(fd)
+        except OSError:
+            self.lbl_status.setText("无法创建临时音频文件，请检查临时目录空间和权限后重试")
+            return
+        self._current_wav = wav_path
         self._notification_id = get_notification_center().post(
             "正在采集识曲片段", "请播放清晰的歌曲片段", source="identify")
         if self._on_begin:
@@ -209,14 +222,13 @@ class IdentifyDialog(GlassDialog):
         self.btn_start.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.source_combo.setEnabled(False)
-        wav_path = os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav")
-        self._current_wav = wav_path
         self._start_identify_worker(wav_path, self._source, self._cancel_event)
 
     def _start_identify_worker(self, wav_path, source="microphone", cancel_event=None):
         self._identify_thread = QThread()
         self._identify_worker = _IdentifyWorker(
-            self._service, wav_path, source, cancel_event or threading.Event())
+            self._service, wav_path, source, cancel_event or threading.Event(),
+            skip_local=not self._local_available)
         self._identify_worker.moveToThread(self._identify_thread)
         self._identify_thread.started.connect(self._identify_worker.run)
         self._identify_worker.done.connect(self._on_done)
@@ -284,7 +296,8 @@ class IdentifyDialog(GlassDialog):
             self._online_thread.started.connect(self._online_worker.run)
             self._online_worker.done.connect(self._on_online_done)
             self._online_worker.done.connect(self._online_thread.quit)
-            self._online_thread.finished.connect(self._cleanup_wav)
+            # done 在 GUI 线程处理并清理本次文件；finished 可能晚于下一次
+            # 采集开始，不能让它再次清理 self._current_wav。
             self._online_thread.start()
             logger.info("online_identify_started")
             get_notification_center().update(self._notification_id, title="正在在线识曲")
@@ -333,7 +346,7 @@ class IdentifyDialog(GlassDialog):
             try:
                 with operation_scope(self._notification_id):
                     self._on_search(f"{result.title} {result.artist}")
-                self.lbl_status.setText("已识别，正在搜索可用音源；不会自动播放")
+                self.lbl_status.setText("已识别，正在搜索可播放音源；播放结果请查看音乐页面")
             except Exception as exc:
                 self.lbl_status.setText(f"歌曲已识别，但在线音源搜索失败：{exc}")
         else:
@@ -346,6 +359,7 @@ class IdentifyDialog(GlassDialog):
                 self.lbl_title.setText("准备采集电脑系统声音")
             else:
                 self.lbl_title.setText("准备采集麦克风环境音")
+            self.lbl_status.setText("本地未匹配或未建库时，会向在线识曲服务发送本次短音频；无需先建库")
 
     @Slot(str)
     def _on_failed(self, msg):
@@ -448,15 +462,24 @@ class IdentifyDialog(GlassDialog):
     def _on_play_clicked(self):
         if self._on_play and self._result:
             try:
-                self._on_play(self._result)
-            except Exception as e:
-                print(f"[Identify] 播放回调失败: {e}")
+                result = self._on_play(self._result)
+                if result is True:
+                    self.lbl_status.setText("播放请求已确认，请查看音乐页面")
+                elif result is False:
+                    self.lbl_status.setText("未能播放该歌曲，请检查文件是否仍在曲库中及播放器是否可用")
+                else:
+                    self.lbl_status.setText("已请求播放，但尚未确认结果；请查看音乐页面")
+            except Exception as exc:
+                logger.warning("identify playback_failed type=%s", type(exc).__name__)
+                self.lbl_status.setText("未能播放该歌曲，请在音乐页面重试")
 
     def _on_close_clicked(self):
         self.hide()
 
     def _cleanup_wav(self):
-        path = self._current_wav or os.path.join(tempfile.gettempdir(), f"humming_{os.getpid()}.wav")
+        path = self._current_wav
+        if not path:
+            return
         try:
             os.remove(path)
         except OSError:

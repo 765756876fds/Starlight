@@ -800,13 +800,18 @@ class MovieController:
                 self._write_state(playing=False, paused=False)
             self._last_idle = now_idle
             return
-        if self._current is None or not self._auto_next:
+        if self._current is None:
             self._last_idle = self.mpv.get_idle_active()
             return
         if not self.mpv.is_running():
             return
         now_idle = self.mpv.get_idle_active()
         self._record_history_if_started(now_idle)
+        # Watching history is independent of automatic episode advancement.
+        # A user who disables auto-next still needs the existing resume entry.
+        if not self._auto_next:
+            self._last_idle = now_idle
+            return
         # IPC 静默检测：None = 进程活但 IPC 无响应
         if now_idle is None:
             self._ipc_fail_streak += 1

@@ -256,8 +256,11 @@ class OnlineSourceManager:
         返回 {源名或插件名: [分组]}——js_bridge 内部按插件名分组返回；
         自定义源若实现 get_top_lists 同样聚合。失败记录 _errors 不抛。
         """
-        out: dict[str, list] = {}
-        for name, src in self._sources.items():
+        from .models import CatalogResults
+        out = CatalogResults()
+        with self._life_lock:
+            sources = list(self._sources.items())
+        for name, src in sources:
             fn = getattr(src, "get_top_lists", None)
             if not callable(fn):
                 continue
@@ -265,8 +268,10 @@ class OnlineSourceManager:
                 r = fn()
                 if r:
                     out.update(r)
+                out.errors.update(getattr(r, "errors", {}))
             except Exception as e:
                 self._errors[name] = str(e)
+                out.errors[name] = getattr(e, "category", "unknown")
         return out
 
     def get_top_list_detail(self, source: str, list_id: str,
@@ -286,6 +291,26 @@ class OnlineSourceManager:
             except Exception as e:
                 self._errors[name] = str(e)
         return None
+
+    def discovery_sources(self):
+        """Read bridge metadata, without making a network request in the GUI."""
+        out = []
+        with self._life_lock:
+            sources = list(self._sources.values())
+        for src in sources:
+            getter = getattr(src, "list_plugins", None)
+            if callable(getter):
+                out.extend(p for p in getter() if p.get("status") == "ok" and p.get("capabilities"))
+        return out
+
+    def browse(self, source, operation, **params):
+        with self._life_lock:
+            sources = list(self._sources.values())
+        for src in sources:
+            getter = getattr(src, "list_plugins", None)
+            if callable(getter) and any(p.get("name") == source for p in getter()):
+                return src.browse(source, operation, **params)
+        raise SourceSearchError("unavailable")
 
     def status(self) -> dict:
         return {

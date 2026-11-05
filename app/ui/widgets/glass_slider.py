@@ -40,7 +40,8 @@ class GlassSlider(QSlider):
         lo, hi = self.minimum(), self.maximum()
         span = max(1, hi - lo)
         ratio = max(0.0, min(1.0, (self.value() - lo) / span))
-        groove_color = QColor(255, 255, 255, 38)      # 底槽：半透明白（叠深色底=暗灰细线）
+        groove_color = QColor(Tokens.TEXT_SECONDARY)
+        groove_color.setAlpha(65)
         accent = QColor(Tokens.ACCENT)
         p.setPen(Qt.NoPen)
         if self.orientation() == Qt.Horizontal:
@@ -61,7 +62,7 @@ class GlassSlider(QSlider):
                 p.drawRoundedRect(QRectF(gx, gy + gh - fh, gw, fh), 2, 2)
             cx, cy = r.center().x(), gy + gh - gh * ratio
         d = 14 if self.underMouse() else 12
-        p.setBrush(QColor("#ffffff"))
+        p.setBrush(QColor(Tokens.SLIDER_HANDLE))
         p.drawEllipse(QPointF(cx, cy), d / 2, d / 2)
         p.end()
 
@@ -142,8 +143,10 @@ class VolumePopover(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setPen(QPen(QColor(255, 255, 255, 60), 1))
-        p.setBrush(QColor(42, 42, 62, 230))     # rgba(42,42,62,0.9) 玻璃底
+        p.setPen(QPen(QColor(Tokens.BORDER_LIGHT), 1))
+        background = QColor(Tokens.BG_ELEVATED)
+        background.setAlpha(240)
+        p.setBrush(background)
         p.drawRoundedRect(rect, 12, 12)
         p.end()
 

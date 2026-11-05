@@ -63,6 +63,9 @@ function load(filePath) {
     getLyric: mod.getLyric,
     getTopLists: mod.getTopLists,
     getTopListDetail: mod.getTopListDetail,
+    getRecommendSheetTags: mod.getRecommendSheetTags,
+    getRecommendSheetsByTag: mod.getRecommendSheetsByTag,
+    getMusicSheetInfo: mod.getMusicSheetInfo,
     raw: mod,
   };
 }
@@ -146,7 +149,7 @@ function normalizeMusicItem(sourceName, item) {
     track_id: String(item.id || item.songmid || item.hash || item.rid || ''),
     title,
     artist: artists,
-    album: item.album || '',
+    album: item.album && typeof item.album === 'object' ? (item.album.title || item.album.name || '') : (item.album || ''),
     duration_seconds,
     cover_url: item.image || item.artwork || item.cover || item.coverImg || '',
     extra: { _raw: item },
@@ -199,7 +202,8 @@ async function callGetLyric(plugin, rawItem) {
 async function callGetTopLists(plugin) {
   if (typeof plugin.getTopLists !== 'function') return null;
   const result = await plugin.getTopLists();
-  const groups = Array.isArray(result) ? result : [];
+  if (!Array.isArray(result)) throw new Error('Invalid chart directory response');
+  const groups = result;
   const out = [];
   for (const g of groups) {
     const lists = Array.isArray(g && g.data) ? g.data.map((it) => ({
@@ -215,15 +219,70 @@ async function callGetTopLists(plugin) {
 // 榜单详情：MusicFree 标准 getTopListDetail(top, page) → {musicList, isEnd}。
 // musicItem 与搜索条目同构 → 复用 callSearch 的规范化形状，Python 侧直接 _parse_tracks。
 async function callGetTopListDetail(plugin, topListItem, page) {
-  if (typeof plugin.getTopListDetail !== 'function') return null;
+  if (typeof plugin.getTopListDetail !== 'function') throw new Error('Chart details unavailable');
   const top = topListItem || { id: '' };
   const result = await plugin.getTopListDetail(top, page || 1);
-  if (!result) return null;
-  const items = (result && result.musicList) || (Array.isArray(result) ? result : []);
+  const items = result && (Array.isArray(result) ? result : result.musicList);
+  if (!Array.isArray(items)) throw new Error('Invalid chart tracks response');
   return {
     is_end: !!(result && result.isEnd),
     tracks: items.map((item) => normalizeMusicItem(plugin.name, item)),
   };
 }
 
-module.exports = { load, loadFromSource, fetchText, fetchUpdateMeta, callSearch, callGetUrl, callGetLyric, callGetTopLists, callGetTopListDetail };
+function capabilities(plugin) {
+  const mod = plugin.raw || {};
+  return {
+    charts: typeof mod.getTopLists === 'function' && typeof mod.getTopListDetail === 'function',
+    sheets: typeof mod.getRecommendSheetsByTag === 'function' && typeof mod.getMusicSheetInfo === 'function',
+    album: typeof mod.getAlbumInfo === 'function',
+    artist: typeof mod.getArtistWorks === 'function',
+  };
+}
+
+async function browse(plugin, operation, params) {
+  const caps = capabilities(plugin);
+  const owner = plugin.raw || plugin;
+  if (operation === 'tags' && caps.sheets) {
+    const result = typeof plugin.getRecommendSheetTags === 'function'
+      ? await plugin.getRecommendSheetTags.call(owner) : {};
+    if (!result || typeof result !== 'object') throw new Error('Invalid category response');
+    const tags = [...(result.pinned || []).flatMap(tag => tag.data || [tag]),
+      ...(result.data || []).flatMap(group => group.data || [])];
+    // Browse explicit public categories; do not automatically invoke an opaque
+    // personalized/default recommendation path with a plugin's embedded account.
+    return { tags: tags.filter(tag => tag && tag.id != null && String(tag.id).trim() !== '') };
+  }
+  if (operation === 'sheets' && caps.sheets) {
+    const result = await plugin.getRecommendSheetsByTag.call(owner, params.tag || {id: '', title: '推荐'}, params.page || 1);
+    if (!result || !Array.isArray(result.data)) throw new Error('Invalid playlist response');
+    return { data: result.data, is_end: result.isEnd !== false };
+  }
+  if (operation === 'sheet' && caps.sheets) {
+    const result = await plugin.getMusicSheetInfo.call(owner, params.item, params.page || 1);
+    if (!result || !Array.isArray(result.musicList)) throw new Error('Invalid playlist tracks');
+    return { tracks: result.musicList.map(item => normalizeMusicItem(plugin.name, item)), is_end: result.isEnd !== false };
+  }
+  if (operation === 'artists') {
+    const kind = params.kind === 'album' ? 'album' : 'artist';
+    if (!caps[kind] || typeof owner.search !== 'function' || !String(params.keyword || '').trim()) {
+      throw new Error('This plugin does not support this catalogue search');
+    }
+    const result = await owner.search.call(owner, String(params.keyword).trim(), params.page || 1, kind);
+    if (!result || !Array.isArray(result.data)) throw new Error('Invalid artist/album search response');
+    return { data: result.data, is_end: result.isEnd !== false };
+  }
+  if (operation === 'artist_tracks' || operation === 'album_tracks') {
+    const kind = operation === 'album_tracks' ? 'album' : 'artist';
+    if (!caps[kind] || !params.item) throw new Error('Catalogue details unavailable');
+    const read = kind === 'album' ? owner.getAlbumInfo : owner.getArtistWorks;
+    const result = await read.call(owner, params.item, params.page || 1, 'music');
+    const items = result && (result.musicList || result.data);
+    if (!Array.isArray(items)) throw new Error('Invalid catalogue tracks response');
+    return { tracks: items.map(item => normalizeMusicItem(plugin.name, item)), is_end: result.isEnd !== false };
+  }
+  throw new Error('This plugin does not provide the requested discovery feature');
+}
+
+module.exports = { load, loadFromSource, fetchText, fetchUpdateMeta, callSearch, callGetUrl, callGetLyric,
+  callGetTopLists, callGetTopListDetail, capabilities, browse };

@@ -13,9 +13,13 @@
 """
 import os
 import zlib
+import logging
+import time
+from collections import OrderedDict, deque
 
 from PySide6.QtCore import (
     QObject,
+    QCoreApplication,
     QPointF,
     QPropertyAnimation,
     QRectF,
@@ -43,6 +47,8 @@ from PySide6.QtWidgets import QAbstractItemView, QStyle, QStyledItemDelegate
 
 from ..theme import motion
 from ..theme.tokens import Tokens
+
+logger = logging.getLogger(__name__)
 
 # ID3 封面读取（模块级预热：避免在后台 worker 线程首次 import 拖慢）
 try:
@@ -149,10 +155,20 @@ class _CoverLoader(QObject):
     """
 
     loaded = Signal(str)   # key：封面已就绪（或失败），可重绘
+    MAX_COVERS = 256
+    MAX_COVER_EDGE = 512
+    MAX_NETWORK_REQUESTS = 8
+    SUCCESS_TTL = 86400
+    FAILURE_TTL = 30
 
     def __init__(self):
         super().__init__()
-        self._covers = {}            # key -> QPixmap | None（失败）
+        self._covers = OrderedDict()  # key -> QPixmap | None（失败）
+        self._expires = {}
+        self._clock = time.monotonic
+        self._network_queue = deque()
+        self._network_active = set()
+        self._closed = False
         self._pending = set()
         self._pending_count = 0
         self._views = {}             # id(view) -> view（微光 tick 重绘范围）
@@ -162,6 +178,9 @@ class _CoverLoader(QObject):
         self._pool = QThreadPool.globalInstance()
         self._bridge = _LocalBridge(self)
         self._bridge.local_done.connect(self._on_local_done)
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.close)
 
     # ---- 微光时钟 ----
     def register_view(self, view) -> None:
@@ -194,29 +213,74 @@ class _CoverLoader(QObject):
 
     def get(self, key: str):
         """返回缓存 QPixmap；None 表示未知（未请求或已失败）。"""
+        self._expire(key)
+        if key in self._covers:
+            self._covers.move_to_end(key)
         return self._covers.get(key)
 
     def failed(self, key: str) -> bool:
-        """该 key 已尝试过且失败（画占位即可，勿再请求）。"""
+        """短暂冷却内画占位；到期后，下次显示/刷新可再次请求。"""
+        self._expire(key)
         return key in self._covers and self._covers[key] is None
+
+    def _expire(self, key):
+        if key in self._expires and self._clock() >= self._expires[key]:
+            self._expires.pop(key, None)
+            self._covers.pop(key, None)
+
+    def _cache_cover(self, key, pixmap):
+        if pixmap is not None and max(pixmap.width(), pixmap.height()) > self.MAX_COVER_EDGE:
+            pixmap = pixmap.scaled(self.MAX_COVER_EDGE, self.MAX_COVER_EDGE,
+                                   Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._covers[key] = pixmap
+        self._covers.move_to_end(key)
+        if key.startswith("net:"):
+            self._expires[key] = self._clock() + (self.SUCCESS_TTL if pixmap is not None else self.FAILURE_TTL)
+        while len(self._covers) > self.MAX_COVERS:
+            old, _ = self._covers.popitem(last=False)
+            self._expires.pop(old, None)
 
     def request(self, key: str) -> None:
         """登记异步加载（paint 中调用安全：仅 dict/set 操作 + 入队）。"""
-        if key is None or key in self._covers or key in self._pending:
+        if self._closed or key is None:
+            return
+        self._expire(key)
+        if key in self._covers or key in self._pending:
             return
         self._pending.add(key)
         self._pending_count += 1
         if self._pending_count == 1:
             self._start_shimmer()
         if key.startswith("net:"):
-            url = key[4:]
-            req = QNetworkRequest(QUrl(url))
-            req.setTransferTimeout(8000)
-            reply = self._qnam.get(req)
-            reply.setProperty("cover_key", key)
+            self._network_queue.append(key)
+            self._start_network_requests()
         else:
             path = key.removeprefix("local:")
             self._pool.start(_LocalCoverTask(key, path, self._bridge))
+
+    def _start_network_requests(self):
+        while not self._closed and self._network_queue and len(self._network_active) < self.MAX_NETWORK_REQUESTS:
+            key = self._network_queue.popleft()
+            self._network_active.add(key)
+            req = QNetworkRequest(QUrl(key[4:]))
+            req.setTransferTimeout(8000)
+            req.setAttribute(QNetworkRequest.RedirectPolicyAttribute, QNetworkRequest.NoLessSafeRedirectPolicy.value)
+            reply = self._qnam.get(req)
+            reply.setProperty("cover_key", key)
+
+    def close(self):
+        """Only cancel this loader's work, including jobs not started yet."""
+        if self._closed:
+            return
+        self._closed = True
+        self._network_queue.clear()
+        self._network_active.clear()
+        self._pending.clear()
+        if self._pending_count:
+            self._pending_count = 0
+            self._stop_shimmer()
+        for reply in self._qnam.findChildren(QNetworkReply):
+            reply.abort()
 
     def _finish_key(self, key: str) -> None:
         if key in self._pending:
@@ -227,25 +291,42 @@ class _CoverLoader(QObject):
 
     # ---- 主线程回调 ----
     def _on_local_done(self, key: str, img: QImage):
+        if self._closed:
+            return
         self._finish_key(key)
-        self._covers[key] = QPixmap.fromImage(img) if not img.isNull() else None
+        self._cache_cover(key, QPixmap.fromImage(img) if not img.isNull() else None)
         self.loaded.emit(key)
 
     def _on_net_finished(self, reply):
         key = reply.property("cover_key")
         reply.deleteLater()
-        if not key:
+        if not key or self._closed:
             return
+        self._network_active.discard(key)
         self._finish_key(key)
+        pixmap, category = None, "network"
         try:
             if reply.error() == QNetworkReply.NetworkError.NoError:
                 data = bytes(reply.readAll())
                 img = QImage.fromData(data)
-                self._covers[key] = QPixmap.fromImage(img) if not img.isNull() else None
-            else:
-                self._covers[key] = None
+                pixmap = QPixmap.fromImage(img) if not img.isNull() else None
+                category = "decode" if pixmap is None else "success"
+            elif reply.attribute(QNetworkRequest.HttpStatusCodeAttribute):
+                category = "http"
+            elif reply.error() == QNetworkReply.NetworkError.HostNotFoundError:
+                category = "dns"
+            elif reply.error() == QNetworkReply.NetworkError.SslHandshakeFailedError:
+                category = "tls"
+            elif reply.error() in (QNetworkReply.NetworkError.TimeoutError, QNetworkReply.NetworkError.OperationCanceledError):
+                category = "timeout_or_cancelled"
         except Exception:
-            self._covers[key] = None
+            category = "decode"
+        self._cache_cover(key, pixmap)
+        if pixmap is None:
+            logger.warning("cover_load_failed host=%s category=%s http=%s qt_error=%s",
+                           reply.url().host(), category,
+                           reply.attribute(QNetworkRequest.HttpStatusCodeAttribute), reply.error().value)
+        self._start_network_requests()
         self.loaded.emit(key)
 
 

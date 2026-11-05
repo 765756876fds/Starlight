@@ -18,6 +18,40 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def release_owned_panels(qapp, monkeypatch):
+    """Do not leave panels/independent volume windows for later theme tests."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from shiboken6 import isValid
+    from app.ui.panels.music_panel import MusicPanel
+    created = []
+    original = MusicPanel.__init__
+    def record(panel, *args, **kwargs):
+        original(panel, *args, **kwargs)
+        created.append(panel)
+    monkeypatch.setattr(MusicPanel, "__init__", record)
+    yield
+    for panel in created:
+        if not isValid(panel):
+            continue  # next_play_view already owns and deletes its panel.
+        panel._progress_polling = False
+        panel._timer.stop()
+        thread = getattr(panel, "_progress_thread", None)
+        if thread is not None:
+            thread.join(timeout=1.)
+            assert not thread.is_alive()
+        popup = panel.btn_volume._popover
+        if popup is not None and isValid(popup):
+            popup.removeEventFilter(panel.btn_volume)
+            popup.close()
+            popup.deleteLater()
+        panel.close()
+        panel.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    qapp.processEvents()
+    assert all(not isValid(panel) for panel in created)
+
+
 class FakeMusic:
     """面板所需最小 controller 接口（含歌单）。"""
 

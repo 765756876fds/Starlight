@@ -40,10 +40,6 @@ CHAMPIONS_JSON = str(lol_data_dir() / "champions.json")
 PINNED_IDS = [64, 412]
 
 # Delegate 配色（QColor 不支持 rgba() 字符串，由 hex 拆出 alpha）
-_NAV_PILL_Q = QColor(Colors.ACCENT)
-_NAV_PILL_Q.setAlpha(61)          # Tokens.NAV_PILL 等价色
-_ACCENT_Q = QColor(Colors.ACCENT)
-_BG_ELEVATED_Q = QColor(Colors.BG_ELEVATED)
 
 
 class _HeroListDelegate(QStyledItemDelegate):
@@ -57,18 +53,21 @@ class _HeroListDelegate(QStyledItemDelegate):
         self.initStyleOption(opt, index)
         rect = opt.rect
         painter.save()
+        nav_pill = QColor(Colors.ACCENT)
+        nav_pill.setAlpha(61)
+        accent = QColor(Colors.ACCENT)
         selected = bool(opt.state & QStyle.State_Selected)
         hover = bool(opt.state & QStyle.State_MouseOver)
         focus = bool(opt.state & QStyle.State_HasFocus)
         if selected:
-            painter.fillRect(rect, _NAV_PILL_Q)
+            painter.fillRect(rect, nav_pill)
             painter.fillRect(rect.left(), rect.top(), 3, rect.height(),
-                             _ACCENT_Q)
+                             accent)
         elif hover:
-            painter.fillRect(rect, _BG_ELEVATED_Q)
+            painter.fillRect(rect, QColor(Colors.BG_ELEVATED))
         if opt.text:
             painter.setFont(opt.font)
-            painter.setPen(_ACCENT_Q if selected else QColor(Tokens.TEXT_PRIMARY))
+            painter.setPen(accent if selected else QColor(Tokens.TEXT_PRIMARY))
             fm = QFontMetrics(opt.font)
             elided = fm.elidedText(opt.text, Qt.ElideRight, rect.width() - 20)
             painter.drawText(rect.adjusted(10, 0, -10, 0),

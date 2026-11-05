@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal, QSignalBlocker, Slot
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -541,6 +541,7 @@ class SettingsPanel(QWidget):
 
         row_color = QHBoxLayout()
         self.btn_lyrics_color = QPushButton()
+        self.btn_lyrics_color.setProperty("themeIndependent", True)
         self.btn_lyrics_color.setFixedSize(28, 22)
         self.btn_lyrics_color.setToolTip("点击选择歌词颜色（当前行）")
         self.btn_lyrics_color.clicked.connect(self._on_lyrics_color)
@@ -1317,6 +1318,7 @@ class SettingsPanel(QWidget):
         # 立即生效（TTSController setter 按引擎路由，下次生成即用新值）
         if self._tts is not None:
             try:
+                self._tts.engine = engine
                 self._tts.set_voice(voice)
                 self._tts.set_rate(rate)
                 self._tts.set_volume(volume)
@@ -1449,6 +1451,25 @@ class SettingsPanel(QWidget):
         lay = QVBoxLayout(box)
         lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
+        from ..theme.manager import get_theme_manager
+        self._theme_manager = get_theme_manager()
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("外观主题："))
+        self.cmb_theme = QComboBox()
+        self.cmb_theme.setObjectName("themeSelector")
+        self.cmb_theme.addItem("夜间 · 深色", "dark")
+        self.cmb_theme.addItem("日间 · 浅色", "light")
+        self._sync_theme(self._theme_manager.mode)
+        self.cmb_theme.currentIndexChanged.connect(self._select_theme)
+        self._theme_manager.theme_changed.connect(self._sync_theme)
+        theme_row.addWidget(self.cmb_theme)
+        theme_row.addStretch()
+        lay.addLayout(theme_row)
+        self.lbl_theme_status = QLabel("切换后立即生效，下次启动继续使用。")
+        self.lbl_theme_status.setProperty("class", "secondary")
+        self.lbl_theme_status.setWordWrap(True)
+        lay.addWidget(self.lbl_theme_status)
+
         self.btn_overlay = ToggleButton("显示游戏内 Overlay", self._overlay_enabled)
         self.btn_overlay.setMinimumWidth(180)
         self.btn_overlay.toggled_state.connect(self._on_overlay_toggle)
@@ -1468,6 +1489,15 @@ class SettingsPanel(QWidget):
         root.addWidget(box)
 
         self.spin_refresh.valueChanged.connect(self._handle_refresh_changed)
+
+    @Slot(str)
+    def _sync_theme(self, mode):
+        with QSignalBlocker(self.cmb_theme):
+            self.cmb_theme.setCurrentIndex(self.cmb_theme.findData(mode))
+
+    def _select_theme(self, index):
+        self._theme_manager.set_theme(self.cmb_theme.itemData(index))
+        self.lbl_theme_status.setText(self._theme_manager.last_error or "主题已切换，下次启动继续使用。")
 
     def _on_overlay_toggle(self, on: bool) -> None:
         if self._overlay_toggle is not None:
@@ -1493,6 +1523,9 @@ class SettingsPanel(QWidget):
         if ret != QMessageBox.Yes:
             return
         reset_ui_prefs()
+        manager = getattr(self, "_theme_manager", None)
+        if manager is not None:
+            manager.set_theme("dark", persist=False)
         reset_music_dirs()
         save_settings_yaml({"tts": {
             "engine": "qwen",
@@ -1515,6 +1548,7 @@ class SettingsPanel(QWidget):
             self._on_refresh_changed(int(prefs.get("ui_refresh_interval", 500)))
         if self._tts is not None:
             try:
+                self._tts.engine = "qwen"
                 self._tts.set_voice(_QWEN_DEFAULT_VOICE)
                 self._tts.set_rate(1.0)
                 self._tts.set_volume(50)

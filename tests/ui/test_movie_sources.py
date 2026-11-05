@@ -355,14 +355,14 @@ def _panel(mgr=None):
 def test_panel_source_button_and_label():
     p = _panel()
     assert p.btn_source.text() == "源"
-    assert p.lbl_source.text() == "当前源：量子资源"
+    assert p.lbl_source.text() == "播放片源：量子资源"
 
 
 def test_panel_refresh_source_label():
     p = _panel()
     p._movie._source_manager._active = "非凡资源"
     p._refresh_source_label()
-    assert p.lbl_source.text() == "当前源：非凡资源"
+    assert p.lbl_source.text() == "播放片源：非凡资源"
 
 
 def test_panel_open_source_dialog():

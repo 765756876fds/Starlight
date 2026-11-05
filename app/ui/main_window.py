@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
         self._shell_layout = QVBoxLayout(self._shell)
         self._shell_layout.setContentsMargins(0, 0, 0, 0)
         self._shell_layout.setSpacing(0)
-        self._title_bar = GlassTitleBar("LoL Music Agent")
+        self._title_bar = GlassTitleBar("星芒 Starlight")
         self._title_bar.close_clicked.connect(self._on_title_close)
         self._shell_layout.addWidget(self._title_bar)
 
@@ -235,8 +235,11 @@ class MainWindow(QMainWindow):
             r = Tokens.WINDOW_RADIUS
             path = QPainterPath()
             path.addRoundedRect(rect, r, r)
-        painter.setPen(QColor(74, 158, 255, 60))  # 高光细边
-        bg = QColor(30, 30, 46, int(255 * Tokens.GLASS_BG_ALPHA))
+        border = QColor(Tokens.ACCENT)
+        border.setAlpha(60)
+        painter.setPen(border)
+        bg = QColor(Tokens.BG_BASE)
+        bg.setAlpha(int(255 * Tokens.GLASS_BG_ALPHA))
         painter.fillPath(path, bg)
         painter.drawPath(path)
         super().paintEvent(event)

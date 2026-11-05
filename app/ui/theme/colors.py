@@ -1,30 +1,79 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ThemePalette:
+    window_background: str
+    panel_background: str
+    elevated_background: str
+    hover_background: str
+    active_background: str
+    primary_text: str
+    secondary_text: str
+    disabled_text: str
+    border: str
+    border_light: str
+    accent: str
+    accent_hover: str
+    accent_pressed: str
+    success: str
+    warning: str
+    warning_light: str
+    error: str
+    info: str
+    overlay_background: str
+
+
+PALETTES = {
+    "dark": ThemePalette(
+        "#16161e", "#1e1e2e", "#2a2a3e", "#33334a", "#3e3e5c",
+        "#e0e0e8", "#a8a8c0", "#5a5a72", "#3a3a4e", "#4a4a62",
+        "#4a9eff", "#5eaaff", "#3a8eef", "#4ade80", "#f59e0b",
+        "#ffcc80", "#ef4444", "#06b6d4", "#222232"),
+    "light": ThemePalette(
+        "#f3f0ea", "#eeece7", "#faf8f4", "#e3e7ec", "#d7e3f1",
+        "#242c38", "#536174", "#89929f", "#c9cdd3", "#b2bac6",
+        "#2468b8", "#1d5ca7", "#184b8b", "#187346", "#8f5c08",
+        "#79500b", "#b53643", "#176d85", "#f4f1eb"),
+}
+
+# Existing widgets keep importing Colors; these aliases now follow one palette.
+COLOR_ROLES = {
+    "BG_DEEPEST": "window_background", "BG_BASE": "panel_background",
+    "BG_ELEVATED": "elevated_background", "BG_HOVER": "hover_background",
+    "BG_ACTIVE": "active_background", "TEXT_PRIMARY": "primary_text",
+    "TEXT_SECONDARY": "secondary_text", "TEXT_DISABLED": "disabled_text",
+    "BORDER": "border", "BORDER_LIGHT": "border_light", "ACCENT": "accent",
+    "ACCENT_HOVER": "accent_hover", "ACCENT_PRESSED": "accent_pressed",
+    "SUCCESS": "success", "WARNING": "warning", "WARNING_LIGHT": "warning_light",
+    "DANGER": "error", "INFO": "info", "TEAM_ALLY": "accent", "TEAM_ENEMY": "error",
+    "OVERLAY_BACKGROUND": "overlay_background",
+}
+_current_theme = "dark"
+
+
+def current_theme():
+    return _current_theme
+
+
+def palette_for(theme=None):
+    return PALETTES.get(theme or _current_theme, PALETTES["dark"])
+
+
+def set_color_theme(theme):
+    global _current_theme
+    if theme not in PALETTES:
+        raise ValueError("Unknown theme")
+    _current_theme = theme
+    palette = PALETTES[theme]
+    for alias, role in COLOR_ROLES.items():
+        setattr(Colors, alias, getattr(palette, role))
+
+
 class Colors:
-    # 深色板（WCAG AA 核算，线性化相对亮度 L）：
-    #   TEXT_PRIMARY   #e0e0e8  L≈0.746
-    #   TEXT_SECONDARY #a8a8c0  L≈0.401
-    #   TEXT_DISABLED  #5a5a72  L≈0.107（仅限 disabled 控件，AA 豁免）
-    #   BG_BASE        #1e1e2e  L≈0.013
-    #   BG_ELEVATED    #2a2a3e  L≈0.025
-    # 对比度：primary on elevated ≈ 10.6:1；secondary on elevated ≈ 6.0:1；
-    #         primary on base ≈ 5.1:1；secondary on base ≈ 7.2:1 —— 均 ≥ 4.5:1。
-    # 层级由字号/字重承担（14 正文 vs 12 辅助），颜色保持高对比、拒绝暗灰。
-    BG_DEEPEST = "#16161e"
-    BG_BASE = "#1e1e2e"
-    BG_ELEVATED = "#2a2a3e"
-    BG_HOVER = "#33334a"
-    BG_ACTIVE = "#3e3e5c"
-    BORDER = "#3a3a4e"
-    BORDER_LIGHT = "#4a4a62"
-    TEXT_PRIMARY = "#e0e0e8"
-    TEXT_SECONDARY = "#a8a8c0"
-    TEXT_DISABLED = "#5a5a72"
-    ACCENT = "#4a9eff"
-    ACCENT_HOVER = "#5eaaff"
-    ACCENT_PRESSED = "#3a8eef"
-    SUCCESS = "#4ade80"
-    WARNING = "#f59e0b"
-    WARNING_LIGHT = "#ffcc80"
-    DANGER = "#ef4444"
-    INFO = "#06b6d4"
-    TEAM_ALLY = "#4a9eff"
-    TEAM_ENEMY = "#ef4444"
+    """Compatibility aliases, populated exclusively from the semantic palette."""
+    ON_ACCENT = "#ffffff"
+    MEDIA_BACKGROUND = "#000000"  # Media pixels keep their own colors.
+
+
+set_color_theme("dark")

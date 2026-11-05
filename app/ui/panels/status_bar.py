@@ -15,9 +15,6 @@ from ...core.notifications import get_notification_center, notify
 from ..widgets.notification_stream import NotificationStream
 from ..widgets.voice_island import VoiceIsland
 
-_OK = "#4ade80"      # 绿亮（已连接）
-_BAD = "#ef4444"     # 红暗（异常）
-_IDLE = Colors.TEXT_SECONDARY   # 待机（次色，WCAG 达标）
 
 
 class StatusBar(QStatusBar):
@@ -84,7 +81,7 @@ class StatusBar(QStatusBar):
     # ---- 图标 + 状态色渲染 ----
     @staticmethod
     def _update_state(lbl: QLabel, icon_name: str, ok: bool, label: str):
-        color = _OK if ok else _BAD
+        color = Tokens.SUCCESS if ok else Tokens.DANGER
         icon = lucide_icon(icon_name, 14, color)
         lbl.setPixmap(icon.pixmap(14, 14))
         lbl.setText(f" {label}")
@@ -98,7 +95,7 @@ class StatusBar(QStatusBar):
         self._update_state(self.lbl_lcu, "link", lcu_ok,
                            "游戏已连接" if lcu_ok else "等待游戏客户端")
         if not lcu_ok:
-            self.lbl_lcu.setStyleSheet(f"color: {_IDLE};")
+            self.lbl_lcu.setStyleSheet(f"color: {Tokens.TEXT_SECONDARY};")
         self.lbl_lcu.setToolTip("英雄联盟客户端连接状态；未启动游戏不影响音乐和电影")
         if lcu is not None and lcu_ok != self._last_lcu_connected:
             if lcu_ok or self._last_lcu_connected is not None:
@@ -189,5 +186,5 @@ class StatusBar(QStatusBar):
     def _render_mic_btn(self, on: bool):
         self.btn_mic.setText("语音开" if on else "语音关")
         self.btn_mic.setIcon(lucide_icon("mic" if on else "mic-off",
-                                          14, _OK if on else _IDLE))
+                                          14, Tokens.SUCCESS if on else Tokens.TEXT_SECONDARY))
         self.btn_mic.setToolTip("语音识别开关（点击切换）")

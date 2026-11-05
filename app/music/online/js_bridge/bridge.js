@@ -16,6 +16,26 @@ process.on('uncaughtException', (e) => {
 
 const sources = new Map(); // name -> plugin object
 
+// Bound discovery reads independently. This cannot cancel plugin HTTP requests;
+// it only prevents one stalled plugin from hiding other completed catalogues.
+async function readCatalogue(read, timeoutMs = 8000) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(read),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('Catalogue request timed out');
+          error.catalogueTimeout = true;
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function scanDir(dir, isLx) {
   if (!dir) return [];
   dir = path.resolve(dir);
@@ -115,26 +135,38 @@ async function dispatch(method, params) {
       // 插件自报榜单能力：能提供的返回分组，不能的跳过（不硬编码哪个平台能做）。
       const seen = new Set();
       const out = [];
-      for (const p of sources.values()) {
-        if (seen.has(p)) continue;
+      const errors = {};
+      const plugins = Array.from(sources.values()).filter(p => {
+        if (seen.has(p)) return false;
         seen.add(p);
-        if (p.type !== 'musicfree' || typeof p.getTopLists !== 'function') continue;
+        return p.type === 'musicfree' && typeof p.getTopLists === 'function';
+      });
+      const results = await Promise.all(plugins.map(async p => {
         try {
-          const groups = await mfLoader.callGetTopLists(p);
-          if (groups && groups.length) out.push({ source: p.name, groups });
+          const groups = await readCatalogue(() => mfLoader.callGetTopLists(p));
+          return { source: p.name, groups };
         } catch (e) {
+          errors[p.name] = e.catalogueTimeout ? 'timeout' : 'plugin';
           console.error(`[bridge] getTopLists ${p.name} fail: ${e.message}`);
+          return null;
         }
+      }));
+      for (const result of results) {
+        if (result && result.groups && result.groups.length) out.push(result);
       }
-      return out;
+      return { groups: out, errors };
+    }
+    case 'browse': {
+      const plugin = sources.get(params.source);
+      if (!plugin || plugin.type !== 'musicfree') throw new Error('Discovery source unavailable');
+      return await mfLoader.browse(plugin, params.operation, params);
     }
     case 'getTopListDetail': {
       const { source, list_id, page } = params;
       const p = sources.get(source);
       if (!p) throw new Error(`unknown source ${source}`);
       if (p.type !== 'musicfree') throw new Error(`source ${source} not musicfree`);
-      const r = await mfLoader.callGetTopListDetail(p, { id: list_id }, page || 1);
-      return r || { is_end: true, tracks: [] };
+      return await mfLoader.callGetTopListDetail(p, { id: list_id }, page || 1);
     }
     case 'checkUpdates': {
       // 遍历 MusicFree 插件（按对象去重，忽略别名 key）→ 拉更新源取远端版本
@@ -163,7 +195,8 @@ async function dispatch(method, params) {
   for (const p of sources.values()) {
     if (seen.has(p)) continue;
     seen.add(p);
-    plugins.push({ name: p.name, type: p.type, status: 'ok', file: p.filePath });
+    plugins.push({ name: p.name, type: p.type, status: 'ok', file: p.filePath,
+      capabilities: p.type === 'musicfree' ? mfLoader.capabilities(p) : {} });
   }
   for (const f of failures) plugins.push(f);
   // ready event

@@ -143,9 +143,9 @@ class _LineChart(QWidget):
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QColor, QPainter, QPen
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(24,24,28))
+        p.fillRect(self.rect(), QColor(Tokens.BG_ELEVATED))
         if not self._pts:
-            p.setPen(QColor("#888")); p.drawText(self.rect(), Qt.AlignCenter, "暂无数据"); p.end(); return
+            p.setPen(QColor(Tokens.TEXT_SECONDARY)); p.drawText(self.rect(), Qt.AlignCenter, "暂无数据"); p.end(); return
         ts = [x[0] for x in self._pts if x[1] is not None]
         vs = [x[1] for x in self._pts if x[1] is not None]
         if not ts:
@@ -167,7 +167,7 @@ class _LineChart(QWidget):
             pt = (int(x), int(y))
             if prev: p.drawLine(prev[0], prev[1], pt[0], pt[1])
             prev = pt
-        p.setPen(QColor("#aaa"))
+        p.setPen(QColor(Tokens.TEXT_SECONDARY))
         p.drawText(4, 12, f"{v0:.0f} ~ {v1:.0f}")
         p.end()
 
@@ -377,7 +377,7 @@ def _match_row(m, svc=None) -> QPushButton:
     d = m.deaths if m.deaths is not None else "-"
     a = m.assists if m.assists is not None else "-"
     btn = QPushButton(f"{win}  {dt}  {m.queue_type or ''}  {_zh(m.champion_name or '?')}  {k}/{d}/{a}")
-    btn.setStyleSheet("text-align:left; border:none; padding:2px; color:#ddd;")
+    btn.setStyleSheet(f"text-align:left; border:none; padding:2px; color:{Tokens.TEXT_PRIMARY};")
     btn.setFlat(True)
     btn.clicked.connect(lambda: _show_detail(m, svc))
     return btn

@@ -68,3 +68,54 @@ def test_recovered_tts_still_shows_the_previous_failure(monkeypatch, notices):
         assert len(notices.history()) == 1
     finally:
         bar.close()
+
+
+def make_tts(tmp_path, monkeypatch, engine):
+    from app.speech.tts import TTSController
+    monkeypatch.setattr("app.speech.tts.get_event_bus", lambda: Mock())
+    return TTSController({"engine": engine, "output_dir": str(tmp_path)})
+
+
+@pytest.mark.parametrize("initial,target,voice_id", [
+    ("qwen", "edge", "zh-CN-XiaoxiaoNeural"),
+    ("edge", "qwen", "longanlingxin_v3.1"),
+])
+def test_engine_selection_updates_live_backend_before_voice_setters(tmp_path, monkeypatch, initial, target, voice_id):
+    from PySide6.QtWidgets import QComboBox
+    from app.ui.panels import settings_panel as module
+    app = QApplication.instance() or QApplication([])
+    tts = make_tts(tmp_path, monkeypatch, initial)
+    previous_voice = tts.qwen_voice if target == "edge" else tts.voice
+    combo = QComboBox()
+    combo.addItem(initial, initial)
+    combo.addItem(target, target)
+    save = Mock()
+    monkeypatch.setattr(module, "save_settings_yaml", save)
+    panel = SimpleNamespace(cmb_engine=combo, _tts=tts,
+                            _current_voice_id=lambda: voice_id,
+                            _rate_slider=SimpleNamespace(value=lambda: 0),
+                            _vol_slider=SimpleNamespace(value=lambda: 50),
+                            lbl_rate=Mock(), lbl_vol=Mock())
+    combo.currentIndexChanged.connect(lambda *_: module.SettingsPanel._on_tts_change(panel))
+    combo.setCurrentIndex(1)
+    assert save.call_args.args[0]["tts"]["engine"] == target
+    assert tts.engine == target
+    assert (tts.voice if target == "edge" else tts.qwen_voice) == voice_id
+    assert (tts.qwen_voice if target == "edge" else tts.voice) == previous_voice
+
+
+def test_reset_defaults_applies_the_saved_tts_engine(tmp_path, monkeypatch):
+    from app.ui.panels import settings_panel as module
+    tts = make_tts(tmp_path, monkeypatch, "edge")
+    for name in ("reset_ui_prefs", "reset_music_dirs", "save_settings_yaml"):
+        monkeypatch.setattr(module, name, Mock())
+    monkeypatch.setattr(module, "load_music_dirs", lambda: [])
+    monkeypatch.setattr(module, "load_ui_prefs", lambda: {})
+    monkeypatch.setattr(module.QMessageBox, "question", lambda *a, **k: module.QMessageBox.Yes)
+    panel = SimpleNamespace(_tts=tts, _render_dirs=Mock(), _load_tts_values=Mock(),
+                            btn_gate=Mock(), btn_equip=Mock(), btn_overlay=Mock(),
+                            spin_refresh=Mock(), _overlay_toggle=None, _on_refresh_changed=None)
+    module.SettingsPanel._on_reset_defaults(panel)
+    assert tts.engine == "qwen"
+    assert tts.qwen_voice == module._QWEN_DEFAULT_VOICE
+    assert tts.voice == "zh-CN-XiaoxiaoNeural"

@@ -193,7 +193,7 @@ class JSMusicSource(MusicSource):
 
     def _call(self, method: str, params: dict, timeout: float = 15.0):
         if self._proc is None:
-            if method == "search":
+            if method in ("search", "browse", "getTopLists"):
                 raise SourceSearchError("unavailable")
             return None
         rid = str(uuid.uuid4())
@@ -207,7 +207,7 @@ class JSMusicSource(MusicSource):
         except Exception as exc:
             with self._lock:
                 self._pending.pop(rid, None)
-            if method == "search":
+            if method in ("search", "browse", "getTopLists"):
                 raise SourceSearchError("unavailable") from exc
             return None
         if not box["event"].wait(timeout):
@@ -215,13 +215,13 @@ class JSMusicSource(MusicSource):
             with self._lock:
                 self._pending.pop(rid, None)
             self._note_call_timeout()
-            if method == "search":
+            if method in ("search", "browse", "getTopLists"):
                 raise SourceSearchError("timeout")
             return None
         msg = box["result"]
         if not msg or not msg.get("ok"):
             print(f"[JSBridge] FAIL {method} {params.get('source')} resp={msg}", flush=True)
-            if method == "search":
+            if method in ("search", "browse", "getTopLists"):
                 raise SourceSearchError("plugin" if msg else "unknown")
             return None
         self._call_timeout_streak = 0
@@ -257,6 +257,14 @@ class JSMusicSource(MusicSource):
         except Exception:
             return True   # _plugins 元素异常时放行（bridge 仍能按名路由）
 
+    def browse(self, source, operation, **params):
+        result = self._call("browse", {"source": source, "operation": operation, **params}, timeout=15.0)
+        if not isinstance(result, dict):
+            raise SourceSearchError("unknown")
+        if "tracks" in result:
+            result = dict(result, tracks=self._parse_tracks(result["tracks"]))
+        return result
+
     def search_plugin(self, source: str, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         """只搜指定插件（测试按钮用，不经 manager 遍历回退）。"""
         if not keyword or not source:
@@ -277,9 +285,13 @@ class JSMusicSource(MusicSource):
         一个插件可能贡献多个分组（如酷我官方/华语/欧美），UI 展平展示。
         """
         result = self._call("getTopLists", {}, timeout=20.0)
-        if not result:
-            return {}
-        out: dict = {}
+        from ..models import CatalogResults
+        if result is None:
+            raise SourceSearchError("unknown")
+        out = CatalogResults()
+        if isinstance(result, dict):
+            out.errors.update(result.get("errors") or {})
+            result = result.get("groups") or []
         for r in result:
             src = r.get("source")
             groups = r.get("groups") or []

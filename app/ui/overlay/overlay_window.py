@@ -13,7 +13,7 @@ import os
 import sys
 
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -212,6 +212,7 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setObjectName("lolOverlay")
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
@@ -231,6 +232,16 @@ class OverlayWindow(QWidget):
         self._place_default()
         self._apply_ws_ex_layered()
         self.hide()
+
+    def paintEvent(self, event):
+        # Translucent native windows do not reliably paint QSS backgrounds.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        background = QColor(Tokens.OVERLAY_BACKGROUND)
+        background.setAlpha(230)
+        painter.setBrush(background)
+        painter.setPen(QPen(QColor(Tokens.BORDER), 1))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
 
     def hideEvent(self, event):
         """隐藏时不停止刷新定时器——_refresh 内部由 _sync_visibility 控制显隐；
@@ -330,8 +341,8 @@ class OverlayWindow(QWidget):
             txt = fmt_remaining(sk.remaining)
             w.setStyleSheet(f"""
                 QFrame {{
-                    background-color: rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},200);
-                    border: 1px solid rgba(255,255,255,0.3);
+                    background-color: rgba({Tokens.CARD_RGB},235);
+                    border: 1px solid {color};
                     border-radius: 4px;
                 }}
             """)
@@ -339,22 +350,22 @@ class OverlayWindow(QWidget):
             layout.setContentsMargins(0, 0, 0, 0)
             lbl = QLabel(txt)
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("color: black; background: transparent; border: none; font-weight: bold;")
+            lbl.setStyleSheet(f"color: {Colors.WARNING}; background: transparent; border: none; font-weight: bold;")
             lbl.setFont(QFont("Microsoft YaHei", max(6, int(7 * self._scale)), QFont.Bold))
             layout.addWidget(lbl)
         else:
-            w.setStyleSheet("""
-                QFrame {
-                    background-color: rgba(76, 175, 80, 150);
-                    border: 1px solid rgba(255,255,255,0.2);
+            w.setStyleSheet(f"""
+                QFrame {{
+                    background-color: rgba({Tokens.SUCCESS_RGB}, 40);
+                    border: 1px solid {Colors.SUCCESS};
                     border-radius: 4px;
-                }
+                }}
             """)
             layout = QVBoxLayout(w)
             layout.setContentsMargins(0, 0, 0, 0)
             lbl = QLabel(letter)
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("color: white; background: transparent; border: none; font-weight: bold;")
+            lbl.setStyleSheet(f"color: {Colors.SUCCESS}; background: transparent; border: none; font-weight: bold;")
             lbl.setFont(QFont("Microsoft YaHei", max(8, int(10 * self._scale)), QFont.Bold))
             layout.addWidget(lbl)
         

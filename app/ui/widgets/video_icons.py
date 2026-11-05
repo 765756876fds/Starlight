@@ -61,9 +61,11 @@ def _render(name: str, size: int = 20, color: str = "#ddd") -> QPixmap:
     return pm
 
 
-def icon(name: str, color: str = "#ddd") -> QIcon:
+def icon(name: str, color: str | None = None) -> QIcon:
     """线性图标 QIcon（带缓存；hover 高亮 = 换亮色版本）。"""
-    key = (name, color)
+    from ..theme.colors import current_theme
+    key = (name, color, current_theme())
     if key not in _CACHE:
-        _CACHE[key] = QIcon(_render(name, color=color))
+        from .icon_utils import semantic_svg_icon
+        _CACHE[key] = semantic_svg_icon(_ICONS[name], color=color)
     return _CACHE[key]

@@ -13,6 +13,8 @@ import pytest
 pytestmark = pytest.mark.ui
 
 
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QListWidget
 
 _app = QApplication.instance() or QApplication([])
@@ -27,6 +29,42 @@ from app.ui.panels.movie_panel import (
     _strip_html,
     MoviePanel,
 )
+
+
+@pytest.fixture(autouse=True)
+def release_owned_panels(monkeypatch):
+    """Initialize like the app and dispose only panels created by this test."""
+    from app.ui.theme.manager import get_theme_manager
+    from shiboken6 import isValid
+    get_theme_manager(_app)
+    created = []
+    original = MoviePanel.__init__
+
+    def record(panel, *args, **kwargs):
+        original(panel, *args, **kwargs)
+        created.append(panel)
+
+    monkeypatch.setattr(MoviePanel, "__init__", record)
+    yield
+    for panel in created:
+        if not isValid(panel):
+            continue
+        for timer in panel.findChildren(QTimer):
+            timer.stop()
+        panel._on_app_quit()
+        panel.close()
+        panel.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    _app.processEvents()
+    assert all(not isValid(panel) for panel in created)
+
+
+def _wait(predicate):
+    for _ in range(100):
+        if predicate():
+            return
+        QTest.qWait(10)
+    assert predicate(), "movie search did not finish within one second"
 
 
 # ---------- mpv 画质参数（video 分支加、音乐分支不加） ----------
@@ -169,9 +207,21 @@ def test_poster_placeholder_not_null():
 class _FakeMovie:
     def __init__(self):
         self.play_calls = []
+        self.search_calls = []
+        self.search_items = []
 
     def search(self, kw):
+        self.search_calls.append(kw)
+        return list(self.search_items)
+
+    def embed_enabled(self):
+        return False
+
+    def get_history(self):
         return []
+
+    def close(self):
+        pass
 
     def is_playing(self):
         return False
@@ -215,11 +265,19 @@ def _panel():
 
 
 def test_panel_default_poster_mode():
-    p, _ = _panel()
+    p, movie = _panel()
     assert p._poster_mode is True
-    assert p.stack_results.currentWidget() is p.list_posters
+    assert p.stack_results.currentWidget() is p.movie_home
     assert p.btn_view.isChecked() is True
     assert p.btn_view.text() == "海报"
+    # The home is the initial page; an actual search opens poster results.
+    p.show()
+    p.edit_kw.setText("流浪地球")
+    QTest.mouseClick(p.btn_search, Qt.LeftButton)
+    _wait(lambda: not p._film_search._running)
+    assert movie.search_calls == ["流浪地球"]
+    assert p.stack_results.currentWidget() is p.list_posters
+    assert not movie.play_calls
 
 
 def test_panel_toggle_view():
@@ -234,9 +292,15 @@ def test_panel_toggle_view():
 
 
 def test_panel_posters_rendered_with_placeholder_and_tooltip():
-    p, _ = _panel()
+    p, movie = _panel()
+    movie.search_items = list(_ITEMS)
     with patch.object(p, "_start_poster_jobs") as m_jobs:
-        p._on_search_done(list(_ITEMS))
+        p.show()
+        p.edit_kw.setText("流浪地球")
+        QTest.keyClick(p.edit_kw, Qt.Key_Return)
+        _wait(lambda: not p._film_search._running)
+        assert movie.search_calls == ["流浪地球"]
+        assert not movie.play_calls
         assert p.list_results.count() == 2
         assert p.list_posters.count() == 2
         assert p.stack_results.currentWidget() is p.list_posters

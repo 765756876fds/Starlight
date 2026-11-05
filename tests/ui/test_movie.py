@@ -334,7 +334,7 @@ def test_panel_search_empty(qapp):
     try:
         panel._on_search_done([])
         assert panel.list_results.count() == 0
-        assert panel.lbl_status.text() == "无结果"
+        assert panel.lbl_status.text() == "没有找到匹配影片，请换个片名或切换片源后重试。"
     finally:
         panel._timer.stop()
 

@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.logger import get_logger
+from app.core.notifications import notify
 from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 
 from ...movie import douban_rank
@@ -75,9 +76,9 @@ def _strip_html(text):
 def _make_poster_placeholder(name):
     """灰底占位图（下载失败/无海报时显示片名）。"""
     pix = QPixmap(*_POSTER_SIZE)
-    pix.fill(QColor(60, 62, 70))
+    pix.fill(QColor(Tokens.BG_ELEVATED))
     p = QPainter(pix)
-    p.setPen(QColor(210, 210, 210))
+    p.setPen(QColor(Tokens.TEXT_SECONDARY))
     p.setFont(QFont("Microsoft YaHei", 11))
     p.drawText(pix.rect(), Qt.AlignCenter | Qt.TextWordWrap, (name or "无海报")[:12])
     p.end()
@@ -142,9 +143,9 @@ class _RankItemDelegate(QStyledItemDelegate):
             return
         painter.save()
         if option.state & QStyle.State_Selected:
-            painter.fillRect(option.rect, QColor(60, 64, 74))
+            painter.fillRect(option.rect, QColor(Tokens.BG_ACTIVE))
         elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(option.rect, QColor(46, 49, 58))
+            painter.fillRect(option.rect, QColor(Tokens.BG_ELEVATED))
         # 海报（icon 已缩略+圆角；AlignCenter 保比例）
         icon = index.data(Qt.DecorationRole)
         img = QRect(option.rect.left() + self._PAD, option.rect.top() + self._TOP,
@@ -158,7 +159,7 @@ class _RankItemDelegate(QStyledItemDelegate):
         painter.setFont(f1)
         el = QFontMetrics(f1).elidedText(title, Qt.ElideRight,
                                          option.rect.width() - 12)
-        painter.setPen(QColor(235, 235, 235))
+        painter.setPen(QColor(Tokens.TEXT_PRIMARY))
         painter.drawText(QRect(option.rect.left() + 6,
                                option.rect.top() + option.rect.height() - self._TITLE_H - self._RATE_H,
                                option.rect.width() - 12, self._TITLE_H),
@@ -168,7 +169,7 @@ class _RankItemDelegate(QStyledItemDelegate):
         if rate:
             f2 = QFont("Microsoft YaHei", 9)
             painter.setFont(f2)
-            painter.setPen(QColor(250, 180, 60))
+            painter.setPen(QColor(Tokens.WARNING))
             painter.drawText(QRect(option.rect.left() + 6,
                                    option.rect.top() + option.rect.height() - self._RATE_H,
                                    option.rect.width() - 12, self._RATE_H),
@@ -221,9 +222,9 @@ class _PosterWallDelegate(QStyledItemDelegate):
         rect = option.rect
         # hover/选中：微弱背景（不抢海报视觉）
         if option.state & QStyle.State_Selected:
-            painter.fillRect(rect, QColor(60, 64, 74))
+            painter.fillRect(rect, QColor(Tokens.BG_ACTIVE))
         elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(rect, QColor(46, 49, 58))
+            painter.fillRect(rect, QColor(Tokens.BG_ELEVATED))
         # 海报（圆角 8 裁剪，居中）
         pw, ph = self._POSTER
         px = rect.left() + (rect.width() - pw) // 2
@@ -529,6 +530,9 @@ class MoviePanel(QWidget):
         self._parse_failed.connect(self._on_parse_failed)
         self._thread = None
         self._worker = None
+        from ..widgets.latest_task import LatestTask
+        self._film_search = LatestTask(self)
+        self._film_search.completed.connect(self._film_search_finished)
         self._items_by_row = []
         # 榜单 QThread：同一时刻只持一个引用，运行中绝不覆盖（QThread 崩溃教训）
         self._rank_thread = None
@@ -582,6 +586,17 @@ class MoviePanel(QWidget):
         self.btn_movie_history = QPushButton("播放历史")
         self.btn_movie_history.setToolTip("查看并重新播放最近观看的电影")
         search_row.addWidget(self.btn_movie_history)
+        self.btn_home = QPushButton("电影首页")
+        self.btn_home.clicked.connect(self._show_movie_home)
+        search_row.addWidget(self.btn_home)
+        self.btn_more = QPushButton("更多")
+        more_menu = QMenu(self.btn_more)
+        for title, button in (("更多片单", self.btn_rank), ("播放历史", self.btn_movie_history),
+                              ("片源管理", self.btn_source), ("现有链接工具", self.btn_parse_link)):
+            more_menu.addAction(title).triggered.connect(button.click)
+            button.hide()
+        self.btn_more.setMenu(more_menu)
+        search_row.addWidget(self.btn_more)
         root.addLayout(search_row)
 
         # 状态行：搜索状态 + 当前源
@@ -660,7 +675,14 @@ class MoviePanel(QWidget):
         self.stack_results.addWidget(self.page_rank)
         root.addWidget(self.stack_results, 1)
         self._poster_mode = True
-        self.stack_results.setCurrentWidget(self.list_posters)  # 默认海报墙
+        from ..widgets.movie_home import MovieHome
+        self.movie_home = MovieHome(self._movie, self)
+        self.movie_home.play_local.connect(self._play_library_entry)
+        self.movie_home.play_history.connect(self._play_movie_history_row)
+        self.movie_home.show_history.connect(self._show_movie_history)
+        self.movie_home.find_work.connect(self._find_discovery_work)
+        self.stack_results.addWidget(self.movie_home)
+        self.stack_results.setCurrentWidget(self.movie_home)
 
         # 当前播放
         self.lbl_now = QLabel("未播放")
@@ -833,6 +855,8 @@ class MoviePanel(QWidget):
             self._embed_playing = False
 
     def _on_app_quit(self):
+        self._film_search.cancel()
+        self.movie_home.shutdown()
         try:
             # 退出清理（QThread 崩溃修复）：先 cancel（循环快速停）→ 对仍运行的
             # 线程统一 quit() + requestInterruption()（请求中断）→ 统一 wait(2000) 有界等待。
@@ -864,25 +888,63 @@ class MoviePanel(QWidget):
     # ---- 搜索 ----
 
     def _do_search(self):
-        # 防重入：搜索线程仍在运行则忽略本次（QThread 同一时刻只持一个引用）
-        if self._thread is not None and self._thread.isRunning():
-            return
         kw = self.edit_kw.text().strip()
         if not kw:
             self.lbl_status.setText("请输入片名")
             return
-        self.lbl_status.setText("搜索中...")
-        self._thread = QThread()
-        self._worker = _SearchWorker(self._movie, kw)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.done.connect(self._on_search_done)
-        self._worker.failed.connect(self._on_search_failed)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.failed.connect(self._thread.quit)
-        self._thread.start()
+        self.lbl_status.setText("正在搜索；可继续输入新的片名…")
+        self.stack_results.setCurrentWidget(self.list_posters if self._poster_mode else self.list_results)
+        self.list_results.clear()
+        self.list_posters.clear()
+        self._items_by_row = []
+        self._film_search.submit(kw, lambda: self._movie.search(kw))
+
+    def _film_search_finished(self, keyword, result, error):
+        source_error = getattr(self._movie, "last_search_error", "")
+        if error or not isinstance(result, list) or (not result and isinstance(source_error, str) and source_error
+                                                    and not self._sources_had_no_matches(source_error)):
+            self.lbl_status.setText("尚无可用播放片源，请在“更多 → 片源管理”检查设置，或使用官方观看入口。" if source_error == "无可用源"
+                                    else "搜索未完成，请检查网络或更换片源后重试。")
+            notify("影片搜索未完成", self.lbl_status.text(), status="failed", source="movie")
+            return
+        self._on_search_done(result)
+        candidates = any(it.get("first_url") or it.get("play_url") for it in result)
+        notify("影片搜索已完成" if candidates else "暂未找到可播放片源" if result else "没有找到匹配影片",
+               f"“{keyword}”找到 {len(result)} 个结果；片源可用性及播放权限需另行确认。" if candidates else self.lbl_status.text(),
+               source="movie", status="success" if candidates else "warning")
+
+    @staticmethod
+    def _sources_had_no_matches(error):
+        # Legacy controller reports each successfully searched empty source in
+        # this exact format. Mixed failures must remain failures, not empties.
+        return isinstance(error, str) and bool(error) and all(part.endswith(": 无结果") for part in error.split("；"))
+
+    def _show_movie_home(self):
+        self._film_search.invalidate()
+        self.stack_results.setCurrentWidget(self.movie_home)
+        self.movie_home.show_category("all")
+        self.movie_home.refresh_local()
+
+    def _play_library_entry(self, entry):
+        path = str(entry.get("path") or "")
+        if not path or not os.path.isfile(path):
+            self.lbl_status.setText("影片暂不可访问，请检查磁盘连接或刷新电影库。")
+            notify("本地影片无法打开", self.lbl_status.text(), source="movie", status="failed")
+            return
+        self._play_item({"vod_name": entry.get("title") or os.path.basename(path),
+                         "first_url": path, "local_file": True}, index=None)
+
+    def _find_discovery_work(self, work):
+        if not isinstance(work, dict) or not isinstance(work.get("title"), str):
+            return
+        title = work["title"].strip()
+        if not title:
+            return
+        self.edit_kw.setText(title)
+        self._do_search()
 
     def _do_clear(self):
+        self._film_search.invalidate()
         self.edit_kw.clear()
         self.list_results.clear()
         self.list_posters.clear()
@@ -925,7 +987,11 @@ class MoviePanel(QWidget):
         n = len(self._filtered_content_results(result))
         if n == 0:
             err = getattr(self._movie, "last_search_error", "") or ""
-            self.lbl_status.setText(f"搜索失败: {err}" if err else "无结果")
+            self.lbl_status.setText("当前筛选下没有匹配影片，请选择“全部”或调整筛选。" if result else
+                                    "搜索未完成，请更换片源后重试。" if err and not self._sources_had_no_matches(err) else
+                                    "没有找到匹配影片，请换个片名或切换片源后重试。")
+        elif not any(it.get("first_url") or it.get("play_url") for it in self._filtered_content_results(result)):
+            self.lbl_status.setText(f"找到 {n} 条影片信息，但片源没有提供播放地址，请更换片源后重试。")
         else:
             src = getattr(self._movie, "last_search_source", None)
             active = self._current_source_name()
@@ -1331,9 +1397,9 @@ class MoviePanel(QWidget):
         """状态栏显示当前源名；读不到时显示“未选择”。"""
         try:
             name = self._current_source_name()
-            self.lbl_source.setText(f"当前源：{name}" if name else "当前源：未选择")
+            self.lbl_source.setText(f"播放片源：{name}" if name else "播放片源：未选择")
         except Exception:
-            self.lbl_source.setText("当前源：未选择")
+            self.lbl_source.setText("播放片源：未选择")
 
     def _on_source_manage(self):
         """"源"按钮 → 源管理对话框（增删/测源/设当前；变更后刷新状态栏）。"""

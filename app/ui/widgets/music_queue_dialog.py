@@ -1,7 +1,8 @@
 """Queue display snapshots with guarded requests to remove non-current entries."""
 from html import escape
+import json
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt, Signal
+from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt, Signal, QMimeData
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QDialog, QLabel, QListView, QMenu, QPushButton, QVBoxLayout
 
@@ -9,11 +10,57 @@ from ..theme.tokens import Tokens
 
 
 class QueueListModel(QAbstractListModel):
+    move_requested = Signal(str, object, int)
+    rejected = Signal(str)
+    MIME = "application/x-starlight-queue-entry"
+
     def __init__(self, numbered=False, parent=None):
         super().__init__(parent)
         self.rows = []
         self.current_index = None
         self.numbered = numbered
+        self.revision = None
+        self.movable_ids = set()
+
+    def flags(self, index):
+        flags = super().flags(index)
+        if not index.isValid():
+            return flags | Qt.ItemIsDropEnabled if self.movable_ids else flags
+        if self.rows[index.row()].get("entry_id") in self.movable_ids:
+            flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
+        return flags
+
+    def supportedDropActions(self):
+        return Qt.MoveAction
+
+    def mimeTypes(self):
+        return [self.MIME]
+
+    def mimeData(self, indexes):
+        data = QMimeData()
+        if len(indexes) == 1 and indexes[0].isValid():
+            entry_id = self.rows[indexes[0].row()].get("entry_id")
+            if entry_id in self.movable_ids:
+                data.setData(self.MIME, json.dumps({"entry_id": entry_id, "revision": self.revision}).encode())
+        return data
+
+    def dropMimeData(self, data, action, row, column, parent):
+        if action != Qt.MoveAction or not data.hasFormat(self.MIME):
+            return False
+        try:
+            payload = json.loads(bytes(data.data(self.MIME)))
+            entry_id, revision = payload["entry_id"], payload["revision"]
+            if revision != self.revision or entry_id not in self.movable_ids:
+                self.rejected.emit("队列已变化或该歌曲受保护，请重新拖动")
+                return False
+            target_row = parent.row() if row < 0 and parent.isValid() else row
+            before = self.rows[target_row].get("entry_id") if 0 <= target_row < len(self.rows) else None
+            if before is not None and before not in self.movable_ids:
+                return False
+            self.move_requested.emit(entry_id, before, revision)
+            return True  # Only a request: the business snapshot confirms the new order.
+        except (KeyError, TypeError, ValueError):
+            return False
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -56,6 +103,7 @@ class QueueListModel(QAbstractListModel):
 
 class MusicQueueDialog(QDialog):
     remove_requested = Signal(int, int)  # underlying index, structural revision
+    move_requested = Signal(str, object, int)  # stable occurrence, before occurrence, revision
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -100,6 +148,10 @@ class MusicQueueDialog(QDialog):
         layout.addWidget(self.other_label)
         self.other_model = QueueListModel(parent=self)
         self.other_list = self._list(self.other_model)
+        self.other_list.setDragDropMode(QListView.DragDrop)
+        self.other_list.setDefaultDropAction(Qt.MoveAction)
+        self.other_list.setDropIndicatorShown(True)
+        self.other_model.move_requested.connect(self.move_requested)
         layout.addWidget(self.other_list, 1)
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
@@ -112,6 +164,7 @@ class MusicQueueDialog(QDialog):
         self.action_status = QLabel("")
         self.action_status.setTextFormat(Qt.PlainText)
         self.action_status.setWordWrap(True)
+        self.other_model.rejected.connect(self.action_status.setText)
         layout.addWidget(self.action_status)
         close = QPushButton("关闭")
         close.clicked.connect(self.close)
@@ -151,6 +204,9 @@ class MusicQueueDialog(QDialog):
 
     def show_pending(self, exhausted=False):
         self._editable = False
+        self.other_model.movable_ids = set()
+        self.other_list.setDragEnabled(False)
+        self.other_list.setAcceptDrops(False)
         self.notice.setText("暂时无法读取队列，请稍后重新打开。" if exhausted
                             else "正在更新队列，列表暂保留上次读取的内容…")
 
@@ -161,6 +217,18 @@ class MusicQueueDialog(QDialog):
         labels = {"sequential": "顺序播放", "shuffle": "随机播放",
                   "repeat_all": "列表循环", "repeat_one": "单曲循环"}
         mode = snapshot["mode"]
+        pending = set(snapshot["next_up"])
+        self.other_model.revision = self._revision
+        self.other_model.movable_ids = {
+            row["entry_id"] for row in snapshot["items"]
+            if self._editable and mode != "shuffle" and row.get("entry_id")
+            and row["index"] > snapshot["current_index"]
+            and row["index"] not in pending | self._protected_indices
+        }
+        self.other_list.setDragEnabled(bool(self.other_model.movable_ids))
+        self.other_list.setAcceptDrops(bool(self.other_model.movable_ids))
+        self.other_list.setToolTip("随机模式下不提供排序；指定下一首仍优先。" if mode == "shuffle" else
+                                   "可拖动普通待播歌曲；当前歌曲和指定下一首受保护。")
         self.mode_label.setText("播放模式：" + labels.get(mode, "待确认"))
         current = snapshot["current"]
         state = {"playing": "正在播放", "paused": "已暂停", "loading": "正在切换",

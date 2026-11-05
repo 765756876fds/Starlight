@@ -233,6 +233,19 @@ class MpvController:
                 except json.JSONDecodeError:
                     continue
                 if "event" in msg:
+                    if msg.get("event") == "end-file":
+                        # Diagnostic only: retain polling/callback behavior and
+                        # never include the media URL, path or raw IPC payload.
+                        from ..core.logger import get_logger
+                        reason = msg.get("reason")
+                        if reason not in ("eof", "stop", "quit", "error", "redirect"):
+                            reason = "unknown"
+                        entry = msg.get("playlist_entry_id")
+                        entry = entry if type(entry) is int else None
+                        try:
+                            get_logger().info(f"[mpv] end-file reason={reason} entry_id={entry}")
+                        except OSError:
+                            pass  # A diagnostic write must not consume the IPC response.
                     continue
                 if msg.get("request_id") == req_id:
                     resp = msg

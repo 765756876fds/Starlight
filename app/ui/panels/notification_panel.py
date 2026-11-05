@@ -49,9 +49,13 @@ class NotificationListModel(QAbstractListModel):
 
 
 class NotificationDelegate(QStyledItemDelegate):
-    def __init__(self, parent=None, theme="dark"):
+    def __init__(self, parent=None, theme=None):
         super().__init__(parent)
-        self.style = notification_style(theme)
+        self._theme_override = theme
+
+    @property
+    def style(self):
+        return notification_style(self._theme_override)
 
     def sizeHint(self, option, index):
         item = index.data(Qt.UserRole)

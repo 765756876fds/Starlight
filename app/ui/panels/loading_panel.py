@@ -81,15 +81,15 @@ class LoadingPanel(QWidget):
         dot, lbl = self._labels[key]
         if status == "loading":
             dot.setText("◐")
-            dot.setStyleSheet("color: #f59e0b;")
+            dot.setStyleSheet(f"color: {Colors.WARNING};")
             lbl.setText("加载中...")
         elif status == "ok":
             dot.setText("●")
-            dot.setStyleSheet("color: #4ade80;")
+            dot.setStyleSheet(f"color: {Colors.SUCCESS};")
             lbl.setText("完成")
         elif status == "fail":
             dot.setText("●")
-            dot.setStyleSheet("color: #ef4444;")
+            dot.setStyleSheet(f"color: {Colors.DANGER};")
             lbl.setText("失败")
         elif status == "disabled":
             dot.setText("○")

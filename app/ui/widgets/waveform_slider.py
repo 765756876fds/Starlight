@@ -109,7 +109,9 @@ class WaveformSlider(QSlider):
             if played:
                 p.setBrush(QColor(Colors.ACCENT_HOVER))
             else:
-                p.setBrush(QColor(255, 255, 255, 34))
+                color = QColor(Tokens.WAVEFORM_COLOR)
+                color.setAlpha(Tokens.WAVEFORM_ALPHA)
+                p.setBrush(color)
             p.drawRoundedRect(QRectF(x, wave_bottom - h, bar_w, h),
                               bar_w / 2, bar_w / 2)
 
@@ -118,7 +120,7 @@ class WaveformSlider(QSlider):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(Colors.ACCENT))
         p.drawEllipse(QRectF(hx - 8, cx - 8, 16, 16))
-        p.setBrush(QColor(255, 255, 255))
+        p.setBrush(QColor(Tokens.SLIDER_HANDLE))
         p.drawEllipse(QRectF(hx - 5.5, cx - 5.5, 11, 11))
 
         # ⑤ 阴影微光（可忽略渲染开销：一次径向渐变）
