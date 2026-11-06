@@ -148,7 +148,7 @@ class MusicDiscovery(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if not self._started:
+        if not self._started or self._sources_dirty:
             self._started = True
             self._source_changed()
             self._refresh_local()
@@ -158,6 +158,10 @@ class MusicDiscovery(QWidget):
             task.cancel()
 
     def refresh_sources(self):
+        # Metadata refresh invalidates the old read, even if its worker is still running.
+        # Keep catalogue freshness separate from the page's deferred UI refresh.
+        self._sources_dirty = True
+        self._catalog_dirty = True
         self._task.invalidate()
         self._catalog_task.invalidate()
         self._catalog = None
@@ -220,6 +224,7 @@ class MusicDiscovery(QWidget):
             self._refresh_local()
 
     def _source_changed(self, *_):
+        self._sources_dirty = False
         self._task.invalidate()
         self._last_request = None
         self._sheet = None
@@ -421,6 +426,8 @@ class MusicDiscovery(QWidget):
         self.sections["featured"].set_rows(rows[6:12], music_card, "选择“歌单”可浏览其他分类。")
 
     def _ensure_catalog(self, force=False):
+        # Queue one replacement after invalidation; ordinary navigation still shares the read.
+        force = force or self._catalog_dirty
         getter = getattr(self.music, "get_top_lists", None)
         if not callable(getter):
             self._render_charts()
@@ -432,6 +439,7 @@ class MusicDiscovery(QWidget):
             self._render_charts()
             return
         self._catalog_error = None
+        self._catalog_dirty = False
         self._catalog_task.submit("charts", getter)
         self._render_charts()
 

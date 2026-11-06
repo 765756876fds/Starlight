@@ -587,6 +587,7 @@ class MoviePanel(QWidget):
         self.btn_movie_history.setToolTip("查看并重新播放最近观看的电影")
         search_row.addWidget(self.btn_movie_history)
         self.btn_home = QPushButton("电影首页")
+        self._return_to_movie_browse = False
         self.btn_home.clicked.connect(self._show_movie_home)
         search_row.addWidget(self.btn_home)
         self.btn_more = QPushButton("更多")
@@ -892,6 +893,8 @@ class MoviePanel(QWidget):
         if not kw:
             self.lbl_status.setText("请输入片名")
             return
+        self._return_to_movie_browse = False
+        self.btn_home.setText("电影首页")
         self.lbl_status.setText("正在搜索；可继续输入新的片名…")
         self.stack_results.setCurrentWidget(self.list_posters if self._poster_mode else self.list_results)
         self.list_results.clear()
@@ -922,8 +925,14 @@ class MoviePanel(QWidget):
     def _show_movie_home(self):
         self._film_search.invalidate()
         self.stack_results.setCurrentWidget(self.movie_home)
-        self.movie_home.show_category("all")
-        self.movie_home.refresh_local()
+        if not self._return_to_movie_browse:
+            self.movie_home.show_category("all")
+            self.movie_home.refresh_local()
+            self.lbl_status.setText("已返回电影首页")
+        else:
+            self.lbl_status.setText("已返回刚才的浏览位置")
+        self._return_to_movie_browse = False
+        self.btn_home.setText("电影首页")
 
     def _play_library_entry(self, entry):
         path = str(entry.get("path") or "")
@@ -942,6 +951,8 @@ class MoviePanel(QWidget):
             return
         self.edit_kw.setText(title)
         self._do_search()
+        self._return_to_movie_browse = True
+        self.btn_home.setText("返回发现" if self.movie_home._view == "all" else "返回分类")
 
     def _do_clear(self):
         self._film_search.invalidate()
