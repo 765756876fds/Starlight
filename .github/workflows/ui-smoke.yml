@@ -8,6 +8,7 @@ on:
       - 'tests/ui/**'
       - 'tests/conftest.py'
       - 'tests/unit/test_ci_ui_runner.py'
+      - 'tests/unit/test_ci_ui_reports.py'
       - 'scripts/ci/**'
       - 'requirements*.txt'
       - 'ruff.toml'
@@ -52,23 +53,30 @@ jobs:
         run: |
           $report = "$env:RUNNER_TEMP/starlight-ui/harness"
           New-Item -ItemType Directory -Force -Path $report | Out-Null
-          python -m ruff check --no-cache scripts/ci tests/unit/test_ci_ui_runner.py 2>&1 | Tee-Object -FilePath "$report/pytest.log"
+          python -m ruff check --no-cache scripts/ci tests/unit/test_ci_ui_runner.py tests/unit/test_ci_ui_reports.py 2>&1 | Tee-Object -FilePath "$report/pytest.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m pytest tests/unit/test_ci_ui_runner.py -o addopts="" -p no:cacheprovider -q --basetemp="$env:RUNNER_TEMP/starlight-ui-harness-tmp" --junitxml="$report/junit.xml" 2>&1 | Tee-Object -FilePath "$report/pytest.log" -Append
+          python -m pytest tests/unit/test_ci_ui_runner.py tests/unit/test_ci_ui_reports.py -o addopts="" -p no:cacheprovider -q --basetemp="$env:RUNNER_TEMP/starlight-ui-harness-tmp" --junitxml="$report/junit.xml" 2>&1 | Tee-Object -FilePath "$report/pytest.log" -Append
           exit $LASTEXITCODE
       - name: Run selected Qt groups in fresh processes
         shell: pwsh
         run: |
           python -B -X faulthandler scripts/ci/run_ui_smoke.py --output-dir "$env:RUNNER_TEMP/starlight-ui"
           exit $LASTEXITCODE
-      - name: Upload only test reports on failure
-        if: failure()
+      - name: Summarize and export minimal test reports
+        if: always()
+        shell: pwsh
+        run: |
+          python -B scripts/ci/report_ui_smoke.py --input-dir "$env:RUNNER_TEMP/starlight-ui" --output-dir "$env:RUNNER_TEMP/starlight-ui-reports"
+          exit $LASTEXITCODE
+      - name: Upload minimal test reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ui-smoke-failure-reports
+          name: ui-smoke-reports
           retention-days: 7
           if-no-files-found: warn
           path: |
-            ${{ runner.temp }}/starlight-ui/*/pytest.log
-            ${{ runner.temp }}/starlight-ui/*/junit.xml
-            ${{ runner.temp }}/starlight-ui/*/result.json
+            ${{ runner.temp }}/starlight-ui-reports/summary.md
+            ${{ runner.temp }}/starlight-ui-reports/*/summary.log
+            ${{ runner.temp }}/starlight-ui-reports/*/junit.xml
+            ${{ runner.temp }}/starlight-ui-reports/*/result.json

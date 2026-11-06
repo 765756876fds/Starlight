@@ -152,11 +152,15 @@ def test_workflow_keeps_ui_separate_and_artifacts_narrow():
     assert "needs" not in job and job["runs-on"] == "windows-latest"
     assert job["permissions"] == {"contents": "read"}
     upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
-    assert upload["if"] == "failure()"
+    assert upload["if"] == "always()"
     paths = upload["with"]["path"].splitlines()
     assert paths == [
-        "${{ runner.temp }}/starlight-ui/*/pytest.log",
-        "${{ runner.temp }}/starlight-ui/*/junit.xml",
-        "${{ runner.temp }}/starlight-ui/*/result.json",
+        "${{ runner.temp }}/starlight-ui-reports/summary.md",
+        "${{ runner.temp }}/starlight-ui-reports/*/summary.log",
+        "${{ runner.temp }}/starlight-ui-reports/*/junit.xml",
+        "${{ runner.temp }}/starlight-ui-reports/*/result.json",
     ]
+    summary = next(s for s in job["steps"] if 'report_ui_smoke.py' in s.get('run', ''))
+    assert summary['if'] == 'always()'
+    assert 'pytest.log' not in upload['with']['path']
     assert workflow["on"]["push"]["paths"] == workflow["on"]["pull_request"]["paths"]
