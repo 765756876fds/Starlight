@@ -73,7 +73,7 @@ class _HeroListDelegate(QStyledItemDelegate):
             painter.drawText(rect.adjusted(10, 0, -10, 0),
                              Qt.AlignVCenter | Qt.AlignLeft, elided)
         if focus and selected:
-            painter.setPen(_ACCENT_Q)
+            painter.setPen(accent)
             painter.drawRect(rect.adjusted(0, 0, -1, -1))
         painter.restore()
 

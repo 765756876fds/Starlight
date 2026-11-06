@@ -88,8 +88,8 @@ try:
         ],
     )
 except Exception as e:
-    # 此时 stdout 已被 TeeStream 接管，此 print 会落进 print-{date}.log 自证
-    logger.error(f"[LogInit] basicConfig 失败: {e}")
+    # 应用 Logger 尚未初始化，复用标准库日志，避免错误处理再次依赖文件初始化。
+    logging.getLogger(__name__).error(f"[LogInit] basicConfig 失败: {e}")
 
 from app.core.config import get_config
 from app.core.event_bus import get_event_bus, Event, EventType

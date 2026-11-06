@@ -251,3 +251,23 @@ Ruff 0.17.4仅开发工具：无配置首次2321条/390文件，新显式E4/E7/E
 许可证核查未替用户选LICENSE：mutagen GPL、Qt/LGPL等需核对发行方式；AudioFP/pychorus、模型/构建、图标插画来源待补，Lucide注释MIT/ISC不一致已记录。README尚无可复用产品截图，仅交付六类展示与隐私方案，不上传私人界面或虚构榜单截图。不commit/push/build，不碰VPN和用户数据。详见[本轮报告](../工程质量升级验收_20261106.md)。
 
 收尾发现根目录txt忽略规则会隐藏requirements-dev.txt，.gitignore仅增加该文件精确例外，未放开用户日志/配置。
+
+
+## 2026-11-06 工程质量第二阶段：两个条件分支已修复
+
+确认HeroListDelegate焦点且选中分支的_ACCENT_Q确实未定义，改为复用同次绘制中由Colors.ACCENT创建的accent；不新增常量、不改主题/其他绘制分支。main.py的应用logger是在日志初始化之后才赋值，错误处理会先遇到NameError；仅将该分支改为logging.getLogger(__name__).error，不提前创建文件Logger，正常配置及后续get_logger单例保持原样。
+
+新增12项真实调用回归：8项Qt绘制矩阵覆盖日夜主题、选中/焦点组合、实际描边颜色和QPainter状态恢复；4项隔离子进程导入真实main.py副本，覆盖makedirs、滚动FileHandler、basicConfig失败与正常日志落盘。只注入子进程内I/O故障，未启动应用服务、游戏或键盘hook。最终同测试对照修复前5 failed/7 passed，修复后12 passed；第一次修复后曾有2项采样点断言失败，实际像素探针确认Qt矩形右边界后修正坐标，保留强调色断言与全部首败日志。
+
+本轮最终定向回归96 passed、0 failed、0 skipped、0 warnings，退出0，包含新增12项，不与单独验证重复累计；未发现实际原生异常，compileall通过。Ruff新文件0诊断；main.py历史33→32、combo_panel.py历史2→1，均只消除对应F821，其他诊断不扩散整改。
+
+只读复核UI工作流：windows-latest/Python3.11/offscreen，4组110项、单组120秒/Job15分钟，仅失败上传pytest.log/JUnit/result.json，保留7天，contents只读。工作流、执行器、21项工具测试、原unit工作流均未修改；上一阶段三轮是本地隔离结果，本轮无GitHub执行或远端通过结论。
+
+许可证待决清单继续保留：自有代码许可由用户决定，mutagen GPL及Qt/LGPL需核对发行策略，AudioFP/pychorus、模型/原生构建和图标插画的来源/授权仍待补，Lucide声明冲突待单独处理；没有添加MIT/Apache/GPL或宣布授权完成。原有未提交成果、数据库/备份/安装包/转储保留，不commit/push/build，不碰VPN。外部证据starlight-quality-phase2-*保留基线、首败、像素探针、JUnit、Ruff比较和本轮增量diff；完成后停止。
+
+
+## 2026-11-06 自主协议下的工程质量归档批次
+
+用户长期授权经审阅的精确commit/push/CI，并补充增量上下文、分层测试及完成即停止规则；本批只交付两项目标：已验证的条件分支修复归档、独立UI smoke首次远端验证。协作规范只记录新的授权/额度规则，不带入其他未审阅历史变更。
+
+候选源码和测试与上轮验收哈希一致；从HEAD构造不含其他历史补丁的候选副本，补测新增条件回归及CI工具共33 passed、0 failed、0 skipped、0 warnings，退出0。复用既有96项回归及独立UI组本地三轮证据，不重跑全套。原unit工作流不改；GC/影音等其他历史修改不混入。本次最终提交SHA、unit/UI远端结果以实际交付记录为准，不提前填写成功。VPN暂停、许可证待决、用户数据保护及不构建安装包等边界保持。
