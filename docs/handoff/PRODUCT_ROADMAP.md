@@ -174,3 +174,12 @@ Ruff 0.17.4仅开发工具：无配置首次2321条/390文件，新显式E4/E7/E
 新17项修改前13 failed/4 passed，修复后17 passed；100/125/150%独立进程各17通过。相关验证去重397 passed、8 failed、0 skipped、0 warnings；8项旧歌词断言在原始HEAD同组同样失败（两者均104 passed/8 failed），没有跳过或修改歌词来绿化。最终新17+电影51共68通过，单元125通过，原CI四组本地实际命令110通过。新文件Ruff零违规，源码既有6项诊断前后不变。审计和完整证据见docs/音乐电影体验精修验收_20261106.md及项目外starlight-media-polish-*目录。
 
 临时CI新组120秒、子进程取证50秒、125%首轮截图90秒超时均留证；阶段取证/串行截图后来通过但根因未确认，不能宣称超时已解决。故未扩充CI分组，执行/报告脚本与两个工作流保持原样，新17项只算本地覆盖。三档双主题、660/1000逻辑宽度截图已检查，素材均为隔离测试数据，不是实网/实机验收。旧歌词测试契约和启动超时只记录，不增加第三项施工；音乐曲目返回列表便利性暂缓。原20个tracked、39未跟踪文件及文档原文保留；按最终实际远端核对与CI回执收口，不打包、不清理，完成后停止。
+
+
+## 2026-11-06 LoL技能计时悬浮窗透明背景恢复
+
+- 用户明确要求恢复既有基础功能；不启动LoL主动研发。Git历史确认c5cd641cea21c7b58cf4adc61914ffa6cb3a7e8b新增根窗口paintEvent，以230/255透明度铺满圆角背景；此前同一窗口已启用WA_TranslucentBackground且没有这层绘制。离屏像素对照：修改前日/夜背景alpha=230，恢复历史无底板绘制后均为0。
+- 仅删除根窗口背景绘制及其专用QPen导入；原图标/倒计时绘制、置顶/无焦点属性、Windows分层属性、拖动/点击、100ms刷新及计时模型保持原样。更新旧主题测试的背景契约为真正透明，保留位置、尺寸、模型和定时器断言；新增13项真实Qt像素/前景/信号/窗口属性测试。
+- 新测试修改前6 failed/7 passed，修改后13 passed；125%与150%独立进程各13 passed（重复缩放验证不累计为新增测试）。仅本轮三文件叠加HEAD的干净候选45 passed。相关六文件回归修改前后均146 passed/2 failed：test_glass_theme中的test_minimize_and_close_slots、test_boot_timeout_forces_switch为既有失败，保留首次日志及对照，不修改、不跳过。无skip/warning或原生崩溃记录。新13与既有148去重为159 passed/2项基线失败，45项和DPI复核不重复累计。
+- 实际命令由项目外qt_entry.py先创建QApplication和ThemeManager，再调用pytest；参数为-o addopts= -p no:cacheprovider --basetemp <外部临时目录> --junitxml <外部报告> -q。定向tests/ui/test_overlay_transparency.py；回归tests/ui/{test_theme_switching,test_overlay_incremental,test_glass_theme}.py及tests/unit/{test_overlay,test_theme_palette,test_single_instance}.py；干净候选仅运行前三文件中theme_switching、overlay_incremental与新增transparency。编译及git diff --check通过；新测试和源码Ruff零违规，旧theme_switching的1项F401修改前后相同。完整命令、JUnit、首败和历史差异保留于项目外starlight-overlay-alpha-*目录。
+- 未改LCU、技能计时、提醒、主题/GC实现、其他模块或系统设置，无新依赖/常驻任务。离屏alpha、可见倒计时和真实点击信号不等于游戏内DWM验收；用户只需在实际游戏中确认背景透出画面、图标数字清楚并可按原方式点击/拖动。旧Qt原生异常不能据此宣称永久消失。

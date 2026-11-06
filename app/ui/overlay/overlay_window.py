@@ -13,7 +13,7 @@ import os
 import sys
 
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -232,16 +232,6 @@ class OverlayWindow(QWidget):
         self._place_default()
         self._apply_ws_ex_layered()
         self.hide()
-
-    def paintEvent(self, event):
-        # Translucent native windows do not reliably paint QSS backgrounds.
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        background = QColor(Tokens.OVERLAY_BACKGROUND)
-        background.setAlpha(230)
-        painter.setBrush(background)
-        painter.setPen(QPen(QColor(Tokens.BORDER), 1))
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
 
     def hideEvent(self, event):
         """隐藏时不停止刷新定时器——_refresh 内部由 _sync_visibility 控制显隐；

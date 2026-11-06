@@ -142,14 +142,14 @@ def test_movie_canvas_stays_black_and_subtitle_menu_recolors_without_playback(th
     window.hide()
 
 
-def test_game_overlay_recolors_without_resetting_model_or_refresh_timer(theme):
+def test_game_overlay_stays_transparent_without_resetting_model_or_refresh_timer(theme):
     from app.ui.overlay.overlay_window import OverlayWindow
     model = SimpleNamespace(get_rows=lambda: [])
     overlay = OverlayWindow(model)
     timer = overlay._timer
     before = (overlay.pos(), overlay.size(), timer.interval(), overlay._model)
     theme.set_theme("light", persist=False)
-    assert overlay.grab().toImage().pixelColor(20, 20).name() == PALETTES["light"].overlay_background
+    assert overlay.grab().toImage().pixelColor(20, 20).alpha() == 0
     assert (overlay.pos(), overlay.size(), timer.interval(), overlay._model) == before
     overlay._timer.stop()
     overlay.close()
