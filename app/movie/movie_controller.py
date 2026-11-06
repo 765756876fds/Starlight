@@ -6,7 +6,6 @@
 - mpv 独立实例（video=True 出视频窗口，taskkill=False 不杀音乐实例）。
 - 剧集选集 + 自动连播（idle 上升沿检测）+ Assrt 字幕（搜索/下载/解压/加载）。
 """
-import json
 import os
 import re
 import shutil
@@ -28,6 +27,12 @@ from ..core.logger import get_logger
 from ..core.path_resolve import PROJECT_ROOT
 from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
+from .cms_parser import (
+    episode_eps,
+    first_play_url as first_play_url,
+    parse_cms_response as parse_cms_response,
+    split_play_url as split_play_url,
+)
 from .source_manager import MovieSourceManager, _SingleSourceManager
 from .history import MovieHistory
 
@@ -45,54 +50,6 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 _FAKE_SUB_MARKERS = (b"pan.baidu.com", b"\xe7\x99\xbe\xe5\xba\xa6\xe7\xbd\x91\xe7\x9b\x98")
 # 真字幕内容标记
 _REAL_SUB_MARKERS = (b"-->", b"[Script Info]")
-
-
-def parse_cms_response(text):
-    """苹果 CMS 响应解析。
-
-    已知坑：接口 Content-Type 常标 text/html 但 body 实际是合法 JSON
-    （如 360zyzz 的 /api.php/provide/vod/...）。因此解析必须按 body 首字符
-    判断（{ 或 [），不能按 Content-Type。非 JSON body 返回 {}。
-    """
-    s = (text or "").lstrip()
-    if not s or s[0] not in "{[":
-        return {}
-    try:
-        return json.loads(s)
-    except Exception:
-        return {}
-
-
-def split_play_url(vod_play_url):
-    """拆分苹果 CMS 的 vod_play_url。
-
-    格式：名字$URL#名字2$URL2（# 分集、$ 分名与 URL）。
-    返回 [(name, url), ...]；无有效段时返回 []。
-    """
-    out = []
-    for seg in str(vod_play_url or "").split("#"):
-        seg = seg.strip()
-        if not seg or "$" not in seg:
-            continue
-        name, _, url = seg.partition("$")
-        if not url.strip():
-            continue
-        out.append((name.strip(), url.strip()))
-    return out
-
-
-def first_play_url(vod_play_url):
-    """取第一条 (name, url)；无则 None。"""
-    parts = split_play_url(vod_play_url)
-    return parts[0] if parts else None
-
-
-def episode_eps(item):
-    """取 item 的分集列表（非 dict / 无 play_url → 空列表）——episodes
-    与 is_multi_episode 共用，消重复取数逻辑。"""
-    if not isinstance(item, dict):
-        return []
-    return split_play_url(item.get("play_url") or "")
 
 
 def _mpv_buffer_args(config) -> list:
