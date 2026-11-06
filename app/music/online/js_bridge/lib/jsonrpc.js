@@ -13,6 +13,7 @@ function startRpc(handler) {
     let req;
     try { req = JSON.parse(line); }
     catch (e) { return; }
+    if (!req || typeof req !== 'object' || Array.isArray(req) || typeof req.id !== 'string') return;
     const id = req.id;
     try {
       const result = await handler(req.method, req.params || {});

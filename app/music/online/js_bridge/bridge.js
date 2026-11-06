@@ -14,6 +14,8 @@ process.on('uncaughtException', (e) => {
   console.error('[bridge] uncaughtException:', (e && e.message) || e);
 });
 
+// Keep plugin console output off the NDJSON protocol stream.
+console.log = console.info = console.debug = console.error.bind(console);
 const sources = new Map(); // name -> plugin object
 
 // Bound discovery reads independently. This cannot cancel plugin HTTP requests;
@@ -89,21 +91,23 @@ async function dispatch(method, params) {
       return Array.from(sources.keys());
     case 'search': {
       const { source, keyword, limit } = params;
-      const want = source === '*' ? Array.from(sources.keys()) : [source];
+      const plugins = [...new Set(source === '*' ? sources.values() : [sources.get(source)])]
+        .filter(p => p && p.type === 'musicfree');
       const out = [];
       const errors = {};
       let successful = 0;
-      for (const name of want) {
-        const p = sources.get(name);
-        if (!p || p.type !== 'musicfree') continue;
+      const results = await Promise.all(plugins.map(async p => {
         try {
-          const items = await mfLoader.callSearch(p, keyword, limit || 20);
-          out.push(...items);
-          successful += 1;
+          const items = await readCatalogue(() => mfLoader.callSearch(p, keyword, limit || 20));
+          return items;
         } catch (e) {
-          errors[p.name] = 'plugin';
-          console.error(`[bridge] search ${name} fail: ${e.message}`);
+          errors[p.name] = e.catalogueTimeout ? 'timeout' : 'plugin';
+          console.error(`[bridge] search failed source=${p.name} type=${errors[p.name]}`);
+          return null;
         }
+      }));
+      for (const items of results) {
+        if (items !== null) { out.push(...items); successful += 1; }
       }
       if (!successful && !Object.keys(errors).length) errors.js_bridge = 'unavailable';
       return { tracks: out, errors, successful };

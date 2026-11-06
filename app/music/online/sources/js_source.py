@@ -57,6 +57,7 @@ class JSMusicSource(MusicSource):
     _auto_reloading = False
     _auto_reload_gave_up = False
     _closed = False
+    _write_lock = threading.RLock()
 
     def __init__(self, mf_dir: str, lx_dir: str, bridge_dir: str | None = None,
                  user_variables: dict | None = None):
@@ -68,6 +69,7 @@ class JSMusicSource(MusicSource):
         )
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        self._write_lock = threading.RLock()
         self._pending: dict = {}
         self._sources: list[str] = []
         self._plugins: list[dict] = []   # [{name, type, status, error?}]
@@ -150,18 +152,23 @@ class JSMusicSource(MusicSource):
             print(f"[JSBridge] 启动失败: {e}")
             self._proc = None
             return
-        threading.Thread(target=self._read_loop, daemon=True).start()
-        threading.Thread(target=self._err_loop, daemon=True).start()
+        self._reader_threads = [
+            threading.Thread(target=self._read_loop, args=(self._proc,), daemon=True),
+            threading.Thread(target=self._err_loop, args=(self._proc,), daemon=True),
+        ]
+        for thread in self._reader_threads:
+            thread.start()
 
-    def _err_loop(self) -> None:
-        if not self._proc or not self._proc.stderr:
+    def _err_loop(self, proc=None) -> None:
+        proc = proc if proc is not None else self._proc
+        if not proc or not proc.stderr:
             return
-        for line in self._proc.stderr:
+        for line in proc.stderr:
             print(f"[JSBridge] {line.rstrip()}", flush=True)
 
-    def _read_loop(self) -> None:
-        assert self._proc and self._proc.stdout
-        proc = self._proc
+    def _read_loop(self, proc=None) -> None:
+        proc = proc if proc is not None else self._proc
+        assert proc and proc.stdout
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -170,11 +177,17 @@ class JSMusicSource(MusicSource):
                 msg = json.loads(line)
             except Exception:
                 continue
+            if not isinstance(msg, dict) or self._proc is not proc:
+                continue
             rid = msg.get("id")
+            if not isinstance(rid, str):
+                continue
             if rid == "_ready":
-                self._sources = msg.get("sources", [])
-                self._plugins = msg.get("plugins", [])
-                self._ready.set()
+                with self._lock:
+                    if self._proc is proc and not self._closed:
+                        self._sources = msg.get("sources", [])
+                        self._plugins = msg.get("plugins", [])
+                        self._ready.set()
                 continue
             with self._lock:
                 box = self._pending.pop(rid, None)
@@ -187,29 +200,37 @@ class JSMusicSource(MusicSource):
         # 身份，会误触发 reload()，与手动 reload 并发竞态 → 刚启动的新进程被
         # 反复杀掉（表现为「刷新后立即搜索搜不到、重启后才恢复」，已复现确认）。
         # 旧进程 EOF 时 self._proc 已指向新进程（或为 None），身份不匹配 → 跳过。
-        if self._proc is proc:
-            print("[JSBridge] bridge 进程退出，尝试自动恢复")
-            self._maybe_auto_reload("node-exit")
+        with self._write_lock:
+            if self._proc is proc:
+                with self._lock:
+                    stale = list(self._pending.values())
+                    self._pending.clear()
+                for box in stale:
+                    box["event"].set()
+                print("[JSBridge] bridge 进程退出，尝试自动恢复")
+                self._maybe_auto_reload("node-exit")
 
     def _call(self, method: str, params: dict, timeout: float = 15.0):
-        if self._proc is None:
-            if method in ("search", "browse", "getTopLists"):
-                raise SourceSearchError("unavailable")
-            return None
-        rid = str(uuid.uuid4())
-        req = {"id": rid, "method": method, "params": params}
-        with self._lock:
-            box = {"event": threading.Event(), "result": None}
-            self._pending[rid] = box
-        try:
-            self._proc.stdin.write(json.dumps(req, ensure_ascii=False) + "\n")
-            self._proc.stdin.flush()
-        except Exception as exc:
+        with self._write_lock:
+            proc = self._proc
+            if proc is None or self._closed:
+                if method in ("search", "browse", "getTopLists"):
+                    raise SourceSearchError("unavailable")
+                return None
+            rid = str(uuid.uuid4())
+            req = {"id": rid, "method": method, "params": params}
             with self._lock:
-                self._pending.pop(rid, None)
-            if method in ("search", "browse", "getTopLists"):
-                raise SourceSearchError("unavailable") from exc
-            return None
+                box = {"event": threading.Event(), "result": None}
+                self._pending[rid] = box
+            try:
+                proc.stdin.write(json.dumps(req, ensure_ascii=False) + "\n")
+                proc.stdin.flush()
+            except Exception as exc:
+                with self._lock:
+                    self._pending.pop(rid, None)
+                if method in ("search", "browse", "getTopLists"):
+                    raise SourceSearchError("unavailable") from exc
+                return None
         if not box["event"].wait(timeout):
             print(f"[JSBridge] TIMEOUT {method} {params.get('source')} 等了{timeout}s", flush=True)
             with self._lock:
@@ -231,7 +252,7 @@ class JSMusicSource(MusicSource):
     def available(self) -> bool:
         """bridge 实际可用：node 进程存活且 ready 已就绪（构造成功 ≠ 可用）。"""
         try:
-            return self._proc is not None and self._ready.is_set()
+            return self._proc is not None and self._proc.poll() is None and self._ready.is_set()
         except Exception:
             return False
 
@@ -474,39 +495,45 @@ class JSMusicSource(MusicSource):
           set event，避免调用方傻等 15s 超时（reload 会短暂中断搜索，预期行为）。
         - 调用方应防抖（低频操作，连续点击只跑一次）。
         """
-        with self._lock:
-            stale = list(self._pending.values())
-            self._pending.clear()
-        for box in stale:
-            box["result"] = None
-            box["event"].set()
+        with self._write_lock:
+            if self._closed:
+                return False
+            with self._lock:
+                stale = list(self._pending.values())
+                self._pending.clear()
+            for box in stale:
+                box["result"] = None
+                box["event"].set()
 
-        # 先摘引用再终止：被替换的旧进程在 EOF 时不再被当作「当前进程」，
-        # _read_loop 的守卫（self._proc is proc）会跳过自动恢复 —— 否则旧进程
-        # 在 terminate 后立即 EOF，而此时 self._proc 仍指向它（置空发生在 2s
-        # wait 之后），会误触发 reload() 与本次 reload 并发竞态 → 新进程被反复
-        # 杀掉（「刷新后搜索失效、重启才恢复」的根因，已实测复现）。
-        proc = self._proc
-        self._proc = None
-        if proc:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-            try:
-                proc.wait(timeout=2.0)
-            except Exception:
+            # 先摘引用再终止：被替换的旧进程在 EOF 时不再被当作「当前进程」，
+            # _read_loop 的守卫（self._proc is proc）会跳过自动恢复 —— 否则旧进程
+            # 在 terminate 后立即 EOF，而此时 self._proc 仍指向它（置空发生在 2s
+            # wait 之后），会误触发 reload() 与本次 reload 并发竞态 → 新进程被反复
+            # 杀掉（「刷新后搜索失效、重启才恢复」的根因，已实测复现）。
+            proc = self._proc
+            self._proc = None
+            if proc:
                 try:
-                    proc.kill()
+                    proc.terminate()
                 except Exception:
                     pass
+                try:
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=2.0)
+                    except Exception:
+                        pass
 
-        self._sources = []
-        self._plugins = []
-        self._ready.clear()
-        self._start_bridge()
-        ok = self._ready.wait(timeout=8.0)
-        return ok and self._proc is not None
+            if proc:
+                self._release_streams(proc)
+            self._sources = []
+            self._plugins = []
+            self._ready.clear()
+            self._start_bridge()
+            ok = self._ready.wait(timeout=8.0)
+            return ok and self._proc is not None
 
     def _note_call_timeout(self):
         """RPC 超时计数：连续 3 次超时（≈45s 无响应）→ 触发自动 reload 探测。
@@ -519,29 +546,31 @@ class JSMusicSource(MusicSource):
     def _maybe_auto_reload(self, reason: str):
         """自动恢复：node 退出（EOF 快速路径）或连续超时（卡死慢路径）→ reload 一次。
         上限 3 次/5 分钟；超过 → 放弃自动重启（_auto_reload_gave_up）。"""
-        if self._closed:
-            return
-        if self._auto_reloading:
-            return
-        now = time.time()
-        if now - self._auto_reload_window_ts > 300:
-            self._auto_reload_window_ts = now
-            self._auto_reload_count = 0
-        if self._auto_reload_count >= 3:
-            if not self._auto_reload_gave_up:
-                self._auto_reload_gave_up = True
-                print(f"[JSBridge] 自动恢复失败 {self._auto_reload_count} 次，放弃自动重启（可手动 reload）")
-            return
-        self._auto_reloading = True
-        try:
-            ok = self.reload()
-            print(f"[JSBridge] 自动恢复({reason}) {'成功' if ok else '失败'}")
-            if ok:
-                self._auto_reload_gave_up = False
-        except Exception as e:
-            print(f"[JSBridge] 自动恢复异常: {e!r}")
-        finally:
-            self._auto_reloading = False
+        with self._write_lock:
+            if self._closed:
+                return
+            if self._auto_reloading:
+                return
+            now = time.time()
+            if now - self._auto_reload_window_ts > 300:
+                self._auto_reload_window_ts = now
+                self._auto_reload_count = 0
+            if self._auto_reload_count >= 3:
+                if not self._auto_reload_gave_up:
+                    self._auto_reload_gave_up = True
+                    print(f"[JSBridge] 自动恢复失败 {self._auto_reload_count} 次，放弃自动重启（可手动 reload）")
+                return
+            self._auto_reload_count += 1
+            self._auto_reloading = True
+            try:
+                ok = self.reload()
+                print(f"[JSBridge] 自动恢复({reason}) {'成功' if ok else '失败'}")
+                if ok:
+                    self._auto_reload_gave_up = False
+            except Exception as e:
+                print(f"[JSBridge] 自动恢复异常: {e!r}")
+            finally:
+                self._auto_reloading = False
 
     def search(self, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         if not keyword:
@@ -596,23 +625,46 @@ class JSMusicSource(MusicSource):
             return None
         return r.get("lyric")
 
+    def _release_streams(self, proc):
+        """Bounded drain of the existing two readers; no new worker is created."""
+        readers = getattr(self, "_reader_threads", ())
+        for thread in readers:
+            if thread is not threading.current_thread():
+                thread.join(timeout=.2)
+        if any(t.is_alive() and t is not threading.current_thread() for t in readers):
+            return
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(proc, name, None)
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+
     def close(self) -> None:
         """有界回收 node 子进程：terminate → wait(2s) → kill。幂等。"""
-        self._closed = True
-        proc = self._proc
-        self._proc = None
-        if proc is None:
-            return
-        try:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2.0)
-                except Exception:
+        with self._write_lock:
+            with self._lock:
+                stale = list(self._pending.values())
+                self._pending.clear()
+            for box in stale:
+                box["event"].set()
+            self._closed = True
+            proc = self._proc
+            self._proc = None
+            if proc is None:
+                return
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
                     try:
-                        proc.kill()
                         proc.wait(timeout=2.0)
                     except Exception:
-                        pass
-        except Exception:
-            pass
+                        try:
+                            proc.kill()
+                            proc.wait(timeout=2.0)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            self._release_streams(proc)

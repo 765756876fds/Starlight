@@ -223,3 +223,9 @@ git diff --cached --check
 - 新增VERSION=0.1.1.dev1和Python读取入口；配置兼容不重写个人设置；构建指纹与冻结数据、Inno模板读取同源版本。README重写、CHANGELOG和成果审查补齐，历史私人机器路径脱敏。
 - 本地完整单元2593 passed/9 skipped/1 warning；版本打包37 passed包含其中。Qt首轮408 passed/1 failed，旧测试Track无album，改用OnlineTrack保留旧结果和快照断言；补测曾发生0xc0000374，有限详细诊断128 passed。合并最终测试条目去重436 passed，不抹去原生首败。真实隔离MPV集成4 passed（生成媒体、null输出，非设备验收）。
 - 测试日志/JUnit/命令/退出码/首败与发布清单保留在外部starlight-release-archive-x3scmhre；不写入仓库。Windows CI和远端同步结果由最终提交SHA交付报告记录，不预写成功。
+
+
+## 2026-11-06 音乐搜索桥接可靠性
+
+已修复串行全源搜索/别名重复/单插件挂起、JSON结构导致reader退出、进程代次与写入/刷新竞态、关闭等待及重启预算未计数。19项新增隔离Node用例，最终194 passed/0 failed/0 skipped/0 warnings，收尾19项与总数重叠不累计；首败保留。真实外网音源及Windows退出仍待自然使用，Promise超时不代表取消已发HTTP。海报/Qt安全快照/播放队列不改，不查系统网络，不commit/push/build。
+详见[本轮验收](../音乐搜索桥接可靠性验收_20261106.md)。

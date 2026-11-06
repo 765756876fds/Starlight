@@ -4,6 +4,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 import threading
+from types import SimpleNamespace
 
 from app.music.online.sources.js_source import JSMusicSource
 
@@ -30,7 +31,7 @@ class TestJsAvailable:
 
     def test_true_when_proc_and_ready(self):
         """进程存活且 ready 已就绪 → available=True。"""
-        src = _make_js(proc=object(), ready=True)
+        src = _make_js(proc=SimpleNamespace(poll=lambda: None), ready=True)
         assert src.available is True
 
     def test_false_on_internal_error(self):

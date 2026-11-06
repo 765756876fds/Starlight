@@ -228,7 +228,7 @@ const loader = {
 };
 const fakeFs = {existsSync:()=>true, readdirSync:()=>scenario==='unavailable'?[]:
   scenario==='empty'?['good.js']:scenario==='failed'?['bad.js']:['bad.js','good.js']};
-const ctx = {require:n=>n==='fs'?fakeFs:n==='path'?require('path'):
+const ctx = {setTimeout, clearTimeout, require:n=>n==='fs'?fakeFs:n==='path'?require('path'):
   n.includes('jsonrpc')?{startRpc:h=>{handler=h;}}:loader,
   process:{env:{MF_PLUGIN_DIR:'/virtual'},on(){},stdout:{write(){}}}, console:{error(){}}};
 vm.runInNewContext(code, ctx);
