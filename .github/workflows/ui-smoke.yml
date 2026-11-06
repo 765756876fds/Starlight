@@ -1,0 +1,74 @@
+name: Windows UI smoke
+
+on:
+  push:
+    branches: [a0-cleanup, main]
+    paths: &ui-paths
+      - 'app/**'
+      - 'tests/ui/**'
+      - 'tests/conftest.py'
+      - 'tests/unit/test_ci_ui_runner.py'
+      - 'scripts/ci/**'
+      - 'requirements*.txt'
+      - 'ruff.toml'
+      - '.github/workflows/ui-smoke.yml'
+  pull_request:
+    branches: [a0-cleanup, main]
+    paths: *ui-paths
+  workflow_dispatch:
+
+concurrency:
+  group: windows-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui:
+    name: Windows offscreen UI (selected groups)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install test and development dependencies
+        shell: pwsh
+        run: |
+          python -m pip install pytest -r requirements.txt -r requirements-dev.txt
+      - name: Check new CI helpers
+        shell: pwsh
+        run: |
+          $report = "$env:RUNNER_TEMP/starlight-ui/harness"
+          New-Item -ItemType Directory -Force -Path $report | Out-Null
+          python -m ruff check --no-cache scripts/ci tests/unit/test_ci_ui_runner.py 2>&1 | Tee-Object -FilePath "$report/pytest.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest tests/unit/test_ci_ui_runner.py -o addopts="" -p no:cacheprovider -q --basetemp="$env:RUNNER_TEMP/starlight-ui-harness-tmp" --junitxml="$report/junit.xml" 2>&1 | Tee-Object -FilePath "$report/pytest.log" -Append
+          exit $LASTEXITCODE
+      - name: Run selected Qt groups in fresh processes
+        shell: pwsh
+        run: |
+          python -B -X faulthandler scripts/ci/run_ui_smoke.py --output-dir "$env:RUNNER_TEMP/starlight-ui"
+          exit $LASTEXITCODE
+      - name: Upload only test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-smoke-failure-reports
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/starlight-ui/*/pytest.log
+            ${{ runner.temp }}/starlight-ui/*/junit.xml
+            ${{ runner.temp }}/starlight-ui/*/result.json

@@ -1,0 +1,2 @@
+# Development tooling only; do not include in the application runtime bundle.
+ruff==0.17.4

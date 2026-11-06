@@ -150,6 +150,7 @@ data/music/
 /bg_asr.py
 # 根目录日志/输出
 /*.txt
+!/requirements-dev.txt
 /*.log
 /*.png
 /run_*.log
