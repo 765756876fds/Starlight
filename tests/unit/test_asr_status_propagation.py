@@ -244,11 +244,48 @@ def test_asr_manager_unload_all_idempotent():
     assert mgr.engines == []
 
 
-def test_js_source_close_idempotent_and_bounded():
-    """JSMusicSource.close() 幂等：terminate→wait→kill，重复调用不崩。"""
+@pytest.fixture
+def js_source(tmp_path, monkeypatch):
+    """Use production initialization, isolating only Node process startup."""
     from app.music.online.sources.js_source import JSMusicSource
-    # 不真正构造（会 spawn node），只测 close 路径
-    src = JSMusicSource.__new__(JSMusicSource)
+
+    def ready_without_process(source):
+        source._ready.set()
+
+    monkeypatch.setattr(JSMusicSource, "_start_bridge", ready_without_process)
+    source = JSMusicSource(str(tmp_path / "musicfree"), str(tmp_path / "lx"))
+    yield source
+    source.close()
+
+
+def test_js_source_fixture_matches_production_constructor_state(js_source, tmp_path):
+    """A new constructor field must also exist on the fixture; no Node is spawned."""
+    from app.music.online.sources.js_source import JSMusicSource
+
+    with patch("app.music.online.sources.js_source.subprocess.Popen") as spawn:
+        reference = JSMusicSource(str(tmp_path / "reference-mf"), str(tmp_path / "reference-lx"))
+        try:
+            assert vars(js_source).keys() == vars(reference).keys()
+            for name, value in vars(reference).items():
+                assert type(vars(js_source)[name]) is type(value), name
+            for name in ("_lock", "_write_lock", "_pending", "_sources", "_plugins", "_ready"):
+                assert getattr(js_source, name) is not getattr(reference, name), name
+            assert js_source._proc is None and js_source._pending == {}
+            assert js_source._sources == [] and js_source._plugins == []
+            assert js_source._ready.is_set()
+            assert js_source._lock.acquire(blocking=False)
+            js_source._lock.release()
+            with js_source._write_lock:
+                with js_source._write_lock:
+                    assert js_source._pending == {}
+        finally:
+            reference.close()
+        spawn.assert_not_called()
+
+
+def test_js_source_close_idempotent_and_bounded(js_source):
+    """JSMusicSource.close() 幂等：terminate→wait→kill，重复调用不崩。"""
+    src = js_source
     src._proc = None
     src._closed = False
     src.close()  # None proc 不崩
@@ -333,11 +370,10 @@ def test_legacy_asr_external_not_reaped():
     assert app._asr_legacy_proc is None
 
 
-def test_js_source_close_terminate_then_wait_then_kill():
+def test_js_source_close_terminate_then_wait_then_kill(js_source):
     """close()：terminate 后 wait 超时 → kill → 再 wait。"""
     import subprocess as _sp
-    from app.music.online.sources.js_source import JSMusicSource
-    src = JSMusicSource.__new__(JSMusicSource)
+    src = js_source
     fake = MagicMock()
     fake.poll.return_value = None
     fake.wait.side_effect = [_sp.TimeoutExpired("node", 2), None]  # 第一次超时，第二次成功
@@ -348,10 +384,9 @@ def test_js_source_close_terminate_then_wait_then_kill():
     fake.kill.assert_called_once()
 
 
-def test_js_source_close_proc_already_exited_no_terminate():
+def test_js_source_close_proc_already_exited_no_terminate(js_source):
     """进程已退出 → 不调 terminate/kill。"""
-    from app.music.online.sources.js_source import JSMusicSource
-    src = JSMusicSource.__new__(JSMusicSource)
+    src = js_source
     fake = MagicMock()
     fake.poll.return_value = 0
     src._proc = fake
@@ -360,10 +395,9 @@ def test_js_source_close_proc_already_exited_no_terminate():
     fake.kill.assert_not_called()
 
 
-def test_js_source_close_idempotent():
+def test_js_source_close_idempotent(js_source):
     """重复 close() 不崩，第二次 _proc=None 直接返回。"""
-    from app.music.online.sources.js_source import JSMusicSource
-    src = JSMusicSource.__new__(JSMusicSource)
+    src = js_source
     src._proc = None
     src.close()
     src.close()

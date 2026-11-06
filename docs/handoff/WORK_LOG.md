@@ -229,3 +229,12 @@ git diff --cached --check
 
 已修复串行全源搜索/别名重复/单插件挂起、JSON结构导致reader退出、进程代次与写入/刷新竞态、关闭等待及重启预算未计数。19项新增隔离Node用例，最终194 passed/0 failed/0 skipped/0 warnings，收尾19项与总数重叠不累计；首败保留。真实外网音源及Windows退出仍待自然使用，Promise超时不代表取消已发HTTP。海报/Qt安全快照/播放队列不改，不查系统网络，不commit/push/build。
 详见[本轮验收](../音乐搜索桥接可靠性验收_20261106.md)。
+
+
+## 2026-11-06 ASR测试替身初始化与CI收尾
+
+07585a467294ae41abc2de905ddac96201a367d6的首次Windows CI（42165707510）为2608 passed、4 failed、9 skipped、1 warning，无原生异常标记。四项关闭测试绕过JSMusicSource构造函数，缺少_lock和_pending；本轮在独立候选树复现4 failed。
+
+仅维护test_asr_status_propagation.py：改用真实构造函数，隔离_start_bridge并完成ready，不启动Node；fixture收尾执行真实close。原有测试和业务断言全部保留，新增一项对照真实构造实例的字段、类型、独立状态与锁能力测试，避免手写替身字段再次漂移。音乐桥接生产代码、VERSION及其他历史成果未修改。
+
+候选树运行6份ASR测试及6份音乐桥接/搜索回归：139 passed、0 failed、1 skipped、0 warnings，退出0。原四项及新增测试均包含其中，不重复累计。跳过为既有真实插件文件断言，隔离目录未复制用户插件。compileall及diff检查结果、精确提交和新SHA的Windows CI以本轮实际验证记录/最终报告为准；保留首次失败，不预写新CI成功。
