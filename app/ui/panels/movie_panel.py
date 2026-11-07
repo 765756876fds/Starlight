@@ -9,7 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-from PySide6.QtCore import QObject, QRect, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, QRect, QSize, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -507,6 +507,7 @@ class MoviePanel(QWidget):
     # QTimer.singleShot 从工作线程排队会永不执行（无事件循环，根因）；经信号
     # QueuedConnection 投递到本窗口所在线程（主线程）后再延后接管。
     _voice_attach_requested = Signal()
+    _voice_playback_ready = Signal(object)
     # 语音反馈跨线程桥：语音 worker 线程 → 本信号（QueuedConnection）→ 主线程槽
     _voice_msg_signal = Signal(str)
     # 链接解析结果转发（worker 在子线程 emit → Python callable 槽默认 Direct 同线程执行，
@@ -520,11 +521,13 @@ class MoviePanel(QWidget):
         # P1：语音搜电影结果 → 状态栏（controller 构造自注册 MOVIE_* 命令，回调在面板侧）
         try:
             self._movie._voice_feedback = self._on_voice_feedback
+            self._movie._voice_playback_ready = self._voice_playback_ready.emit
             if speech_queue is not None:
                 self._movie._speech_queue = speech_queue
         except Exception:
             pass
         self._voice_attach_requested.connect(self._on_voice_attach_requested)
+        self._voice_playback_ready.connect(self._on_voice_playback_ready, Qt.QueuedConnection)
         self._voice_msg_signal.connect(self._on_voice_msg)
         self._parse_done.connect(self._on_parse_done)
         self._parse_failed.connect(self._on_parse_failed)
@@ -1365,6 +1368,15 @@ class MoviePanel(QWidget):
     def _on_voice_msg(self, msg):
         """主线程槽：语音反馈实际刷新状态栏（仅主线程允许直接碰 QWidget）。"""
         self.lbl_status.setText(str(msg))
+
+    @Slot(object)
+    def _on_voice_playback_ready(self, is_current):
+        """Confirmed voice load -> GUI thread, without matching feedback text."""
+        if callable(is_current) and not is_current():
+            return
+        if not self._movie.embed_enabled() or not self._movie.is_playing():
+            return
+        self._do_embed_attach()
 
     def _on_voice_attach_requested(self):
         """主线程收到语音接管请求：懒建窗口 + 延后一拍执行接管（同手动 _do_embed_play）。"""

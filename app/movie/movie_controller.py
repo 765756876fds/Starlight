@@ -79,6 +79,8 @@ class MovieController:
         self._config = config or get_config()
         # P1：语音搜电影结果 → UI 反馈回调（MoviePanel 注入；None 时只 print 兜底）
         self._voice_feedback = voice_feedback
+        # Presentation callback, separate from user-facing feedback/TTS text.
+        self._voice_playback_ready = None
         # SpeechQueue 引用（main wiring 注入）：_notify_voice 时同时 TTS 播报，
         # 避免"请说电影名字"只刷状态栏不发声。
         self._speech_queue = speech_queue
@@ -188,6 +190,13 @@ class MovieController:
             ok = self.play(item) if index is None else self.play(item, index=index)
             if ok is False:
                 notify("电影加载未成功，请尝试其他片源")
+            elif ok is True and current():
+                ready = getattr(self, "_voice_playback_ready", None)
+                if callable(ready):
+                    try:
+                        ready(getattr(command, "is_current", None))
+                    except Exception as e:
+                        logger.error("[Movie] 语音播放窗口显示请求失败: %s", e)
             return ok
 
         if not current():

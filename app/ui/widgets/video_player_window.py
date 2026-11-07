@@ -660,11 +660,10 @@ class VideoPlayerWindow(QWidget):
         return ok
 
     def show_for_playback(self):
-        """显示播放窗口；若被最小化，先恢复为正常窗口。"""
+        """显示播放窗口，恢复最小化但保留全屏／最大化选择。"""
         if self.isMinimized():
-            self.showNormal()
-        else:
-            self.show()
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.show()
 
     def attach_current(self):
         """外部已开始播放（语音路径：controller.play 已用注入的 winId 起 mpv），
