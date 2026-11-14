@@ -189,6 +189,8 @@ _ACTIONS = {
     "music.volume_set": "调整音乐音量", "music.volume_up": "调大音乐音量",
     "music.volume_down": "调小音乐音量", "music.identify": "打开识曲",
     "movie.search_play": "搜索并播放电影", "movie.pause": "暂停电影",
+    "movie.recommend": "为你推荐影视", "movie.continue_watching": "查找续播记录",
+    "player.context": "控制当前播放内容",
     "movie.resume": "继续电影", "movie.stop": "停止电影",
     "cooldown.start": "创建技能计时", "cooldown.cancel": "取消技能计时",
     "cooldown.cancel_all": "取消全部技能计时", "cooldown.list": "查询技能计时",

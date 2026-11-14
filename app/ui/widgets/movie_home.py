@@ -1,5 +1,6 @@
 """Bounded home previews and on-demand categories inside the movie tab."""
 from datetime import datetime
+from copy import deepcopy
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -27,7 +28,13 @@ def film_card(row):
     if progress:
         minutes, seconds = divmod(int(progress), 60)
         subtitle = f"续播 {minutes}:{seconds:02d}"
-    caption = " / ".join(f"{s['platform_name']}{' ' + s['board'] if s.get('board') else ''} #{s['rank']}" for s in sources)
+    caption = " / ".join(str(s.get("platform_name") or "观看记录")
+        + (" " + str(s["board"]) if s.get("board") else "")
+        + (f" #{s['rank']}" if type(s.get("rank")) is int else "") for s in sources)
+    if type(row.get("score")) in (int, float) and row.get("score_source"):
+        subtitle = " · ".join(v for v in (subtitle, f"{row['score_source']} {row['score']:g}分") if v)
+    if row.get("recommendation_reason"):
+        caption = row["recommendation_reason"] + (" · " + caption if caption else "")
     if not sources:
         caption = "本地影片" if row.get("available", True) else "文件暂不可访问"
     return dict(title=row.get("title", "未命名"), subtitle=subtitle, caption=caption,
@@ -39,12 +46,15 @@ class MovieHome(QWidget):
     play_history = Signal(dict)
     find_work = Signal(dict)
     show_history = Signal()
+    resume_recommendation = Signal(dict)
 
     def __init__(self, movie, parent=None, library=None, discovery=None):
         super().__init__(parent)
         self.movie = movie
+        self._closed = False
         self.library = library or MovieLibrary(USER_DATA_DIR / "data/movie/library.json")
-        self.catalog = discovery or MovieDiscovery(USER_DATA_DIR / "data/movie/public_ranks.json")
+        service = getattr(movie, "recommendations", None)
+        self.catalog = discovery or (service.discovery if service is not None else None) or MovieDiscovery(USER_DATA_DIR / "data/movie/public_ranks.json")
         self._entries = list(self.library.entries)
         self._continuing = []
         self._selected_work = None
@@ -55,6 +65,10 @@ class MovieHome(QWidget):
         self._requested = None
         self._local_task = LatestTask(self)
         self._board_task = LatestTask(self)
+        self._recommendation_task = LatestTask(self)
+        self._preference_task = LatestTask(self)
+        self._recommendation_task.completed.connect(self._recommendations_loaded)
+        self._preference_task.completed.connect(self._preference_saved)
         self._local_task.completed.connect(self._local_loaded)
         self._board_task.completed.connect(self._boards_loaded_result)
         root = QVBoxLayout(self)
@@ -98,10 +112,29 @@ class MovieHome(QWidget):
         refresh.clicked.connect(lambda: self.refresh_boards(force=True))
         intro.addWidget(refresh)
         home_layout.addLayout(intro)
+        recommendation_head = QHBoxLayout()
+        self.recommendation_kind = QComboBox()
+        for key in ("movie", "tv", "anime"):
+            self.recommendation_kind.addItem(CATEGORIES[key], key)
+        self.recommend_button = QPushButton("为我推荐")
+        self.recommend_button.clicked.connect(self.request_recommendations)
+        self.continue_show_button = QPushButton("继续上次剧集")
+        self.continue_show_button.clicked.connect(lambda: self.request_recommendations(resume=True))
+        recommendation_head.addWidget(self.recommendation_kind)
+        recommendation_head.addWidget(self.recommend_button)
+        recommendation_head.addWidget(self.continue_show_button)
+        recommendation_head.addStretch()
+        home_layout.addLayout(recommendation_head)
+        self.recommendation_section = ContentSection("猜你喜欢", self, portrait=True, action="换一批")
+        self.recommendation_section.all_button.clicked.connect(self.request_recommendations)
+        self.recommendation_section.cards.itemClicked.connect(self._select_work)
+        self.recommendation_section.cards.itemDoubleClicked.connect(self._activate_recommendation)
+        self.recommendation_section.set_rows([], film_card, "点击为我推荐：参考实际观看偏好和可用热榜，不会自动播放。")
+        home_layout.addWidget(self.recommendation_section)
         self.continue_section = ContentSection("继续观看", self, portrait=True)
         self.continue_section.all_button.clicked.connect(lambda: self.show_category("continue"))
         self.continue_list = self.continue_section.cards
-        self.continue_list.itemDoubleClicked.connect(lambda item: self.play_history.emit(item.data(Qt.UserRole)))
+        self.continue_list.itemDoubleClicked.connect(self._activate_continue)
         self.continue_hint = self.continue_section.hint
         home_layout.addWidget(self.continue_section)
         self.recent_section = ContentSection("最近添加", self, portrait=True)
@@ -180,6 +213,12 @@ class MovieHome(QWidget):
         self.watch_button = QPushButton("官方观看")
         self.watch_button.clicked.connect(lambda: self.open_official())
         detail_layout.addWidget(self.watch_button)
+        self.like_button = QPushButton("喜欢这部")
+        self.reduce_button = QPushButton("不感兴趣")
+        self.like_button.clicked.connect(lambda: self.remember_selected(True))
+        self.reduce_button.clicked.connect(lambda: self.remember_selected(False))
+        detail_layout.addWidget(self.like_button)
+        detail_layout.addWidget(self.reduce_button)
         root.addWidget(self.detail)
         self.detail.hide()
         self._render_local()
@@ -191,12 +230,22 @@ class MovieHome(QWidget):
             self.refresh_boards()
 
     def shutdown(self):
+        self._closed = True
+        self._recommendation_task.cancel()
+        self._preference_task.cancel()
+        service = getattr(self.movie, "recommendations", None)
+        if service is not None:
+            service.cancel()
         self._local_task.cancel()
         self._board_task.cancel()
 
     def show_category(self, kind):
         if kind not in (*CATEGORIES, "local", "recent", "continue"):
             return
+        self._recommendation_task.invalidate()
+        service = getattr(self.movie, "recommendations", None)
+        if service is not None:
+            service.cancel()
         self._board_task.invalidate()
         self._requested = None
         self._view = kind
@@ -228,6 +277,79 @@ class MovieHome(QWidget):
         else:
             self.refresh_boards()
 
+    def request_recommendations(self, _checked=False, *, resume=False):
+        service = getattr(self.movie, "recommendations", None)
+        if service is None:
+            self.recommendation_section.hint.setText("电影推荐尚未就绪，请稍后再试")
+            return
+        kind = self.recommendation_kind.currentData()
+        if resume and kind == "movie":
+            kind = "tv"
+        self.recommendation_section.hint.setText("正在查找续播记录…" if resume else "正在参考偏好和公开榜单选片…")
+        self.recommendation_section.hint.show()
+        read = service.continuing if resume else service.recommend
+        service.cancel()
+        self._recommendation_task.submit((kind, resume), lambda: read(kind))
+
+    def _recommendations_loaded(self, key, result, error):
+        if error or not isinstance(result, tuple):
+            self.recommendation_section.hint.setText("推荐暂时未完成，请重试；本地影片和播放历史仍可使用")
+            return
+        batch, current = result
+        if current():
+            self.present_recommendations(batch)
+            if batch.action == "resume" and len(batch.rows) == 1:
+                self.resume_recommendation.emit(batch.rows[0])
+
+    def present_recommendations(self, batch):
+        if self._closed:
+            return
+        self._selected_work = None
+        self.detail.hide()
+        self._view = "all"
+        self.nav_buttons["all"].setChecked(True)
+        self.pages.setCurrentWidget(self.home)
+        index = self.recommendation_kind.findData(batch.kind)
+        if index >= 0:
+            self.recommendation_kind.setCurrentIndex(index)
+        self.recommendation_section.title.setText("继续观看" if batch.action == "resume" else "猜你喜欢 · " + CATEGORIES.get(batch.kind, "影视"))
+        self.recommendation_section.set_rows(batch.rows, film_card, batch.message)
+        self.recommendation_section.hint.setText(batch.message)
+        self.recommendation_section.hint.show()
+
+    def _activate_recommendation(self, item):
+        row = item.data(Qt.UserRole)
+        if isinstance(row, dict) and row.get("_resume_item"):
+            self.resume_recommendation.emit(row)
+        elif isinstance(row, dict) and row.get("_history_row"):
+            self.play_history.emit(row["_history_row"])
+        else:
+            self._activate_discovery_item(item)
+
+    def _activate_continue(self, item):
+        row = item.data(Qt.UserRole)
+        if isinstance(row, dict) and row.get("_resume_item"):
+            self.resume_recommendation.emit(row)
+        else:
+            self.play_history.emit(row)
+
+    def remember_selected(self, positive):
+        row = deepcopy(self._selected_work)
+        service = getattr(self.movie, "recommendations", None)
+        if not row or service is None:
+            return
+        self.like_button.setEnabled(False)
+        self.reduce_button.setEnabled(False)
+        self.recommendation_section.hint.setText("正在保存偏好…")
+        self._preference_task.submit(positive, lambda: service.feedback(row, positive))
+
+    def _preference_saved(self, positive, result, error):
+        self.like_button.setEnabled(True)
+        self.reduce_button.setEnabled(True)
+        message = ("已记住你的喜好" if positive else "后续推荐将避开这部作品") if result is True and not error else "偏好未能保存，请检查数据目录后重试"
+        self.recommendation_section.hint.setText(message)
+        notify(message, source="movie", status="success" if result is True and not error else "failed")
+
     def add_folder(self):
         path = QFileDialog.getExistingDirectory(self, "选择影片文件夹")
         if not path:
@@ -249,7 +371,13 @@ class MovieHome(QWidget):
         def read():
             result = self.library.scan(directories) if scan else {"entries": list(self.library.entries), "issues": []}
             history = self.movie.get_history() if self.movie is not None else []
-            return dict(result, continuing=MovieLibrary.continuing(history if isinstance(history, list) else [], watch))
+            legacy = MovieLibrary.continuing(history if isinstance(history, list) else [], watch)
+            service = getattr(self.movie, "recommendations", None)
+            remembered = [r for kind in ("movie", "tv", "anime") for r in service.resume_rows(kind)] if service is not None else []
+            paths = {r["_resume_item"].get("first_url") for r in remembered}
+            continuing = remembered + [r for r in legacy if r.get("replay_value") not in paths]
+            continuing.sort(key=lambda r: r.get("updated", r.get("played_at", 0)), reverse=True)
+            return dict(result, continuing=continuing)
         self._local_task.submit("scan" if scan else "read", read)
 
     def _local_loaded(self, key, result, error):
@@ -269,7 +397,7 @@ class MovieHome(QWidget):
                    source="movie", status="warning" if result.get("issues") else "success")
 
     def _render_local(self):
-        self.continue_section.set_rows(self._continuing[:3], film_card, "暂无续播记录，正常关闭本地影片后会保留进度。")
+        self.continue_section.set_rows(self._continuing[:3], film_card, "暂无续播记录；有可靠进度的影片或剧集会出现在这里。")
         available = [r for r in self._entries if r.get("available", True)]
         self.recent_section.set_rows(sorted(available, key=lambda r: r.get("added_at", 0), reverse=True)[:6], film_card,
                                      "还没有本地影片，点击下方添加文件夹即可。")
@@ -404,18 +532,20 @@ class MovieHome(QWidget):
         if not row:
             return
         data = film_card(row)
-        ranks = "；".join(f"{s['platform_name']}{' ' + s['board'] if s.get('board') else ''}：第 {s['rank']} 名" for s in row.get("sources", []))
+        ranks = "；".join(str(s.get("platform_name") or "观看记录")
+            + (" " + str(s["board"]) if s.get("board") else "")
+            + (f"：第 {s['rank']} 名" if type(s.get("rank")) is int else "") for s in row.get("sources", []))
         updates = list(dict.fromkeys(s["source_updated"] for s in row.get("sources", []) if s.get("source_updated")))
         self.work_detail.setText(" · ".join(v for v in (data["title"], data["subtitle"], ranks) if v)
                                 + ("\n" + "；".join(updates) if updates else "")
                                 + ("\n榜单仅供发现内容，官方页面可能需要会员或地区权限。" if ranks else ""))
-        self.watch_button.setVisible(bool(row.get("sources")))
+        self.watch_button.setVisible(any(official_url(s.get("url"), s.get("platform")) for s in row.get("sources", [])))
         self.watch_button.setText("官方搜索" if row.get("url_kind") == "search" else "官方观看")
 
     def _activate_category_item(self, item):
         row = item.data(Qt.UserRole)
         if self._view == "continue":
-            self.play_history.emit(row)
+            self._activate_continue(item)
         elif self._view in ("local", "recent"):
             self.play_local.emit(row)
         else:

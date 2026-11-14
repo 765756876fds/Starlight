@@ -129,6 +129,17 @@ class MovieController:
         history_db = self._config.get("movie.history_db") or os.path.join(
             self._config.get("app.data_dir", str(PROJECT_ROOT / "data")), "movie_history.db")
         self.history = MovieHistory(history_db)
+        from .preferences import FilmMemory
+        from .recommendation import FilmRecommendations
+        from .discovery import MovieDiscovery
+        self.film_memory = FilmMemory(Path(self.history.db_path).with_name("movie_preferences.db"))
+        self.recommendations = FilmRecommendations(self, self.film_memory,
+            MovieDiscovery(Path(self.history.db_path).parent / "movie" / "public_ranks.json"))
+        self._play_guard_local = threading.local()
+        self._recommendation_ready = None
+        self._film_last_sample = None
+        self._film_saved_at = 0
+        self._resume_pending = None
         self._pending_history = None
         self._history_recorded_gen = None
         self._sub_searched = set()
@@ -156,6 +167,8 @@ class MovieController:
         try:
             bus = get_command_bus()
             bus.register(CommandType.MOVIE_SEARCH_PLAY, self._cmd_search_play)
+            bus.register(CommandType.MOVIE_RECOMMEND, lambda c: self._cmd_recommend(c))
+            bus.register(CommandType.MOVIE_CONTINUE, lambda c: self._cmd_recommend(c, resume=True))
             bus.register(CommandType.MOVIE_PAUSE, lambda c: self.pause())
             bus.register(CommandType.MOVIE_RESUME, lambda c: self.resume())
             bus.register(CommandType.MOVIE_NEXT_EPISODE, lambda c: self.next_episode())
@@ -168,11 +181,31 @@ class MovieController:
         except Exception as e:
             logger.error(f"[Movie] 注册语音命令失败: {e}")
 
+    def _cmd_recommend(self, command, resume=False):
+        from ..core.operation_result import OperationResult, OperationStatus
+        from ..core.notifications import current_operation_id
+        select = self.recommendations.continuing if resume else self.recommendations.recommend
+        batch, current = select(is_current=command.is_current, **command.params)
+        presenter = self._recommendation_ready
+        if not current():
+            return OperationResult(OperationStatus.UNKNOWN, "已取消过时的影视推荐")
+        if not callable(presenter):
+            return OperationResult(OperationStatus.UNAVAILABLE, "电影页面尚未就绪，请打开电影页再试")
+        presenter((batch, current, current_operation_id()))
+        if not batch.rows:
+            return OperationResult(OperationStatus.UNAVAILABLE, batch.message)
+        return OperationResult(OperationStatus.ACCEPTED if resume else OperationStatus.CONFIRMED,
+                               "续播请求已提交，正在加载或等待选择" if resume else f"已准备 {len(batch.rows)} 部候选，请在电影页选择")
+
     def _cmd_search_play(self, command):
         """语音"播放电影XX"：搜索 → 播 Top1（语音直达，不弹 UI 选集对话框）。
         包2c：params["episode"] 直跳对应集（"播放电影甄嬛传第5集"→第5集）；
         无集数 → 播第一集（现状不变）；集数越界 → 提示 + False（不崩）。"""
+        service = getattr(self, "recommendations", None)
+        movie_guard = service.begin(getattr(command, "is_current", None)) if service is not None else None
         def current():
+            if movie_guard is not None:
+                return movie_guard()
             guard = getattr(command, "is_current", None)
             return guard is None or guard()
 
@@ -187,14 +220,22 @@ class MovieController:
         def load(item, index=None):
             if not current():
                 return None
-            ok = self.play(item) if index is None else self.play(item, index=index)
+            local = getattr(self, "_play_guard_local", None)
+            previous = getattr(local, "current", None) if local is not None else None
+            if local is not None:
+                local.current = current
+            try:
+                ok = self.play(item) if index is None else self.play(item, index=index)
+            finally:
+                if local is not None:
+                    local.current = previous
             if ok is False:
                 notify("电影加载未成功，请尝试其他片源")
             elif ok is True and current():
                 ready = getattr(self, "_voice_playback_ready", None)
                 if callable(ready):
                     try:
-                        ready(getattr(command, "is_current", None))
+                        ready(current if movie_guard is not None else getattr(command, "is_current", None))
                     except Exception as e:
                         logger.error("[Movie] 语音播放窗口显示请求失败: %s", e)
             return ok
@@ -305,6 +346,8 @@ class MovieController:
         不自动改 active_source（本次临时换，用户选的源保留）。"""
         if not keyword or not keyword.strip():
             return []
+        if hasattr(self, "film_memory"):
+            self.film_memory.record_action("search", keyword)
         sources = self._source_manager.get_enabled_sources()
         if not sources:
             self.last_search_error = "无可用源"
@@ -394,6 +437,13 @@ class MovieController:
         否则（embed 关 / 窗口未建）→ 独立 mpv 窗口（现状，安全回退）。"""
         if not isinstance(item, dict):
             return False
+        resume_guard = item.get("_resume_guard") or getattr(getattr(self, "_play_guard_local", None), "current", None)
+        if "_resume_guard" in item:
+            item = {key: value for key, value in item.items() if key != "_resume_guard"}
+        if callable(resume_guard) and not resume_guard():
+            return False
+        if not callable(resume_guard) and hasattr(self, "recommendations"):
+            self.recommendations.cancel()
         url = item.get("first_url") or ""
         idx = 0
         eps = self.episodes(item)
@@ -410,6 +460,7 @@ class MovieController:
         if not url:
             print(f"[Movie] 无可用播放地址: {item.get('vod_name')}")
             return False
+        self._remember_view(force=True)
         # 互斥 1：电影 → 音乐（暂停，保留队列与进度；music.pause() 不发事件，无循环）
         music = self._music
         if music is not None:
@@ -433,6 +484,8 @@ class MovieController:
         #   抛异常（IPC 未连接/写入失败）→ 不伪造播放成功。
         # 失败时音乐已按互斥先行暂停（既有行为，如实保留，不加回滚）。
         try:
+            if callable(resume_guard) and not resume_guard():
+                return False
             resp = self.mpv.loadfile(url)
         except Exception as e:
             logger.error(f"[Movie] loadfile 异常: {e!r}")
@@ -458,6 +511,11 @@ class MovieController:
         self._external_url_seen_active = False
         self._pending_history = (dict(item), str(url))
         self._history_recorded_gen = None
+        self._film_last_sample = None
+        self._film_saved_at = 0
+        position = item.get("_resume_position")
+        self._resume_pending = ((self._playback_gen, self._current_index, float(position), 0) if not item.get("local_file")
+                                and type(position) in (int, float) and position > 0 else None)
         self._write_state(playing=True, paused=False)
         self._pending_local_subtitle = None
         if item.get("local_file"):
@@ -680,6 +738,54 @@ class MovieController:
             logger.warning(f"[Movie] subtitle visibility failed: {type(e).__name__}")
             return False, "字幕状态调整失败，请稍后重试"
 
+    def _remember_view(self, now_idle=None, *, force=False):
+        if not hasattr(self, "film_memory") or not self._current or getattr(self, "_external_url_mode", False):
+            return
+        from .recommendation import item_work
+        try:
+            idle = self.mpv.get_property("idle-active", timeout=.15) if now_idle is None else now_idle
+            identity = (self._playback_gen, self._current_index)
+            if idle is False:
+                position = self.mpv.get_property("time-pos", timeout=.15)
+                duration = self.mpv.get_property("duration", timeout=.15)
+                if type(position) not in (int, float) or type(duration) not in (int, float) or duration <= 0:
+                    return
+                self._film_last_sample = (identity, position, duration)
+                if not force and time.monotonic() - self._film_saved_at < 15:
+                    return
+                self.film_memory.observe(item_work(self._current), self._current, position, duration, self._current_index)
+                self._film_saved_at = time.monotonic()
+            elif idle is True and not self._last_idle and self._film_last_sample:
+                previous, position, duration = self._film_last_sample
+                if previous == identity:
+                    self.film_memory.observe(item_work(self._current), self._current, duration, duration,
+                                             self._current_index, ended=True)
+                self._film_last_sample = None
+        except Exception as exc:
+            logger.warning("[Movie] preference progress unavailable: %s", type(exc).__name__)
+
+    def _restore_online_position(self, now_idle):
+        pending = getattr(self, "_resume_pending", None)
+        if not pending or now_idle is not False:
+            return
+        generation, episode, position, attempts = pending
+        if generation != self._playback_gen or episode != self._current_index:
+            self._resume_pending = None
+            return
+        try:
+            actual = self.mpv.get_property("time-pos", timeout=.15)
+            if type(actual) in (int, float) and abs(actual - position) <= 3:
+                self._resume_pending = None
+                return
+            if attempts == 0:
+                self.mpv.seek(position, "absolute")
+            self._resume_pending = (generation, episode, position, attempts + 1) if attempts < 3 else None
+            if attempts == 3:
+                logger.warning("[Movie] saved online position not confirmed")
+        except Exception:
+            self._resume_pending = None
+            logger.warning("[Movie] saved online position unavailable")
+
     def _record_history_if_started(self, now_idle):
         if now_idle is not False or not self._pending_history:
             return
@@ -708,6 +814,9 @@ class MovieController:
         """
         if not url:
             return False
+        self._remember_view(force=True)
+        if hasattr(self, "recommendations"):
+            self.recommendations.cancel()
         music = self._music
         if music is not None:
             try:
@@ -734,6 +843,8 @@ class MovieController:
             pass
         self._last_idle = False
         self._external_url_mode = True  # 外部 URL：播完不连播，idle 上升沿写 playing=False
+        self._playback_gen = getattr(self, "_playback_gen", 0) + 1
+        self._film_last_sample = None
         self._external_url_seen_active = False  # 缓冲期保护
         self._write_state(playing=True, paused=False)
         return True
@@ -772,6 +883,8 @@ class MovieController:
         if not self.mpv.is_running():
             return
         now_idle = self.mpv.get_idle_active()
+        self._restore_online_position(now_idle)
+        self._remember_view(now_idle)
         self._record_history_if_started(now_idle)
         # Watching history is independent of automatic episode advancement.
         # A user who disables auto-next still needs the existing resume entry.
@@ -900,6 +1013,9 @@ class MovieController:
         """
         if self._stopping:
             return None
+        self._remember_view(force=True)
+        if hasattr(self, "recommendations"):
+            self.recommendations.cancel()
         self._stopping = True
         try:
             if self.mpv.is_running():
@@ -1053,7 +1169,7 @@ class MovieController:
             return
         self._pausing = True
         try:
-            if self._current is not None and self.mpv.is_running():
+            if (self._current is not None or self._external_url_mode) and self.mpv.is_running():
                 self.mpv.pause()
                 if self.mpv.get_property("pause", timeout=0.5) is not True:
                     return None
@@ -1113,12 +1229,12 @@ class MovieController:
         return None
 
     def resume(self):
-        if self._current is None or not self.mpv.is_running():
+        if (self._current is None and not self._external_url_mode) or not self.mpv.is_running():
             return False
         self.mpv.play()
         if self.mpv.get_property("pause", timeout=0.5) is not False:
             return None
-        if self._current is not None:
+        if self._current is not None or self._external_url_mode:
             self._write_state(playing=True, paused=False)
             self._notify_voice("电影继续播放")
         return True
@@ -1171,6 +1287,10 @@ class MovieController:
         return bool(item and self.play(item))
 
     def close(self):
+        self._remember_view(force=True)
+        self._recommendation_ready = None
+        if hasattr(self, "recommendations"):
+            self.recommendations.cancel(close=True)
         if self._subscribed:
             try:
                 bus = get_event_bus()

@@ -350,6 +350,13 @@ class RuleBasedIntent:
             return None
 
         from .registry import match_volume
+        from .film_semantics import film_request
+        film = film_request(text)
+        if film is not None:
+            return Intent(film[0], params=film[1])
+        contextual = {"先停一下": "pause", "停一会儿": "pause", "接着放": "resume"}
+        if text in contextual:
+            return Intent(CommandType.MEDIA_CONTEXT, params={"action": contextual[text]})
         volume = match_volume(text)
         if volume is not None:
             return Intent(volume[0], confidence=0.99, params=volume[1])
@@ -750,6 +757,10 @@ class IntentRouter:
             return Intent("system.context_cancel", params={})
 
         intent = self.rule_based.match(text)
+        if intent and intent.intent_type in (CommandType.MOVIE_RECOMMEND, CommandType.MOVIE_CONTINUE,
+                                             CommandType.MEDIA_CONTEXT) and unsafe_control_text(text):
+            self.clear_context()
+            return Intent("system.unknown", confidence=0.0)
         candidate = parse_music_candidate(text)
         if intent and intent.intent_type in MUSIC_ACTIONS.values():
             if unsafe_control_text(text):

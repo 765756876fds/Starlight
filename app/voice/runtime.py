@@ -90,6 +90,8 @@ class VoiceRuntime:
         # V2-2：控制器提供者（取 _playback_gen）
         self.music_controller_provider = None
         self.movie_controller_provider = None
+        from .media_context import MediaContext
+        self.media_context = MediaContext(self)
 
         # 打断旁路（Side-channel）参数：
         # TTS 播放期间采集的段走独立队列与独立检测线程（不挤占主 ASR 队列）。
@@ -958,7 +960,8 @@ class VoiceRuntime:
                 outcome = OperationResult(OperationStatus.TIMEOUT, "搜索超时，请稍后重试")
             elif error is not None:
                 outcome = OperationResult(OperationStatus.FAILED, "搜索播放未成功，请检查网络和音源")
-            elif command_type == CommandType.MUSIC_RECOMMEND and isinstance(value, OperationResult):
+            elif command_type in (CommandType.MUSIC_RECOMMEND, CommandType.MOVIE_RECOMMEND,
+                                  CommandType.MOVIE_CONTINUE, CommandType.MEDIA_CONTEXT) and isinstance(value, OperationResult):
                 # The business handler owns the real result; recommendation feedback stays visual.
                 return
             elif command_type == CommandType.MOVIE_SEARCH_PLAY:
@@ -979,6 +982,16 @@ class VoiceRuntime:
                            else "failed" if outcome.status is OperationStatus.FAILED else "warning")
                     self._enqueue_speak(outcome.message, "voice_search_result")
         return completed
+
+    def _context_control(self, action, generation):
+        from .media_context import MediaContext
+        if not hasattr(self, "media_context"):
+            self.media_context = MediaContext(self)
+        self.command_bus.register(CommandType.MEDIA_CONTEXT,
+            lambda c: self.media_context.execute(c.get("action"), is_current=c.is_current))
+        self.command_bus.execute_async(Command(CommandType.MEDIA_CONTEXT, params={"action": action},
+            source="voice", is_current=lambda: self._request_is_current(generation)),
+            on_done=self._async_feedback(CommandType.MEDIA_CONTEXT, generation))
 
     def _request_is_current(self, generation):
         with self._feedback_lock:
@@ -1022,7 +1035,8 @@ class VoiceRuntime:
                 raise
             finally:
                 record = center.get(operation_id)
-                asynchronous = intent.intent_type in (CommandType.MUSIC_RECOMMEND, CommandType.MUSIC_SEARCH_PLAY,
+                asynchronous = intent.intent_type in (CommandType.MEDIA_CONTEXT, CommandType.MOVIE_RECOMMEND,
+                    CommandType.MOVIE_CONTINUE, CommandType.MUSIC_RESUME, CommandType.MUSIC_RECOMMEND_NEXT, CommandType.MUSIC_RECOMMEND, CommandType.MUSIC_SEARCH_PLAY,
                     CommandType.MOVIE_SEARCH_PLAY, CommandType.MUSIC_RESCAN, CommandType.PLAYER_QUERY)
                 if record and record.status == "processing" and not asynchronous:
                     center.update(operation_id, title="操作已发送，结果尚未确认",
@@ -1061,6 +1075,10 @@ class VoiceRuntime:
             self._enqueue_speak("已取消这次设置", "voice_parameter")
             return
 
+        if intent_type == CommandType.MEDIA_CONTEXT:
+            self._context_control(params.get("action"), request_generation)
+            return
+
         # 独立打断路由（system.stop_tts）：不走 CommandBus，
         # 直接停止 TTS 播报（物理停止 + 队列当前项标记取消），
         # 保证语音打断即时生效且不经过业务中间件。
@@ -1077,8 +1095,10 @@ class VoiceRuntime:
         elif intent_type == CommandType.MUSIC_RESUME:
             if getattr(intent, "scope", None) == "music":
                 self._explicit_music_control(intent_type, params, False)
-            else:
+            elif getattr(self, "_global_pause_snapshot", None):
                 self._global_resume()
+            else:
+                self._context_control("resume", request_generation)
 
         elif intent_type == CommandType.MUSIC_PLAY:
             try:
@@ -1315,14 +1335,14 @@ class VoiceRuntime:
                 is_current=lambda: self._request_is_current(request_generation),
             ), on_done=self._async_feedback(intent_type, request_generation))
 
-        elif intent_type == CommandType.MUSIC_RECOMMEND:
+        elif intent_type in (CommandType.MUSIC_RECOMMEND, CommandType.MOVIE_RECOMMEND, CommandType.MOVIE_CONTINUE):
             self.command_bus.execute_async(Command(
                 command_type=intent_type, params=params, source="voice",
                 is_current=lambda: self._request_is_current(request_generation),
             ), on_done=self._async_feedback(intent_type, request_generation))
 
         elif intent_type == CommandType.MUSIC_RECOMMEND_NEXT:
-            self._execute_control(intent_type, params)
+            self._context_control("next", request_generation)
 
         elif intent_type == CommandType.MUSIC_SEARCH_PLAY:
             # 长任务（在线搜索/JS 桥接，10s+）：异步执行，不阻塞识别线程

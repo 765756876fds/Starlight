@@ -66,7 +66,7 @@ def official_url(url, platform):
     if url.startswith("//"):
         url = "https:" + url
     parsed = urlsplit(url)
-    domains = {"bilibili": "bilibili.com", "iqiyi": "iqiyi.com", "tencent": "v.qq.com",
+    domains = {"douban": "movie.douban.com", "bilibili": "bilibili.com", "iqiyi": "iqiyi.com", "tencent": "v.qq.com",
                "youku": "youku.com", "mango": "mgtv.com"}
     domain, host = domains.get(platform), parsed.hostname or ""
     return url if parsed.scheme == "https" and domain and (host == domain or host.endswith("." + domain)) else ""
@@ -117,6 +117,7 @@ class BilibiliRank:
         return fetch_public(url)
 
     def read(self, category):
+        from .catalog_metadata import bilibili_metadata
         payload = self.fetch(self.ENDPOINTS[category])
         if not isinstance(payload, dict) or type(payload.get("code")) is not int:
             raise CatalogReadError("response")
@@ -137,7 +138,8 @@ class BilibiliRank:
                          "platform": self.key, "platform_name": self.name,
                          "source_id": str(item["season_id"]), "rank": item.get("rank", index + 1),
                          "url": url, "cover_url": self.cover_url(item.get("cover")),
-                         "board": CATEGORIES[category], "note": str(data.get("note") or "")[:240]})
+                         "board": CATEGORIES[category], "note": str(data.get("note") or "")[:240],
+                         **bilibili_metadata(item)})
         if data["list"] and not rows:
             raise ValueError("ranking items could not be validated")
         return rows

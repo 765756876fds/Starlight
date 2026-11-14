@@ -70,6 +70,9 @@ class CommandType:
 
     # ===== 电影命令（包2b：语音控制电影） =====
     MOVIE_SEARCH_PLAY = "movie.search_play"
+    MOVIE_RECOMMEND = "movie.recommend"
+    MOVIE_CONTINUE = "movie.continue_watching"
+    MEDIA_CONTEXT = "player.context"
     MOVIE_PAUSE = "movie.pause"
     MOVIE_RESUME = "movie.resume"
     MOVIE_NEXT_EPISODE = "movie.next_episode"

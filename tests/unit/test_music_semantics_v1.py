@@ -64,9 +64,10 @@ def test_no_object_has_no_reliable_state_and_never_guesses(text):
     router = IntentRouter({})
     # No stale utterance context may stand in for live music/movie state.
     router.parse("暂停音乐")
-    assert router.parse(text).intent_type == "system.clarify"
+    expected = C.MEDIA_CONTEXT if text in ("先停一下", "接着放") else "system.clarify"
+    assert router.parse(text).intent_type == expected
     router.parse("继续电影")
-    assert router.parse(text).intent_type == "system.clarify"
+    assert router.parse(text).intent_type == expected
 
 
 @pytest.mark.parametrize("text,expected", POSITIVE)
@@ -95,9 +96,24 @@ def test_unavailable_context_cannot_touch_either_player():
     rt = VoiceRuntime({"asr": {}, "intent": {}})
     rt.command_bus = CommandBus()
     rt._enqueue_speak = Mock()
+    controls = [Mock() for _ in range(5)]
+    for kind, handler in zip((C.MUSIC_PAUSE, C.MUSIC_RESUME, C.MOVIE_PAUSE, C.MOVIE_RESUME, C.MUSIC_NEXT), controls):
+        rt.command_bus.register(kind, handler)
+    threads = []
+    execute_async = rt.command_bus.execute_async
+    def track(command, on_done=None):
+        thread = execute_async(command, on_done)
+        threads.append(thread)
+        return thread
+    rt.command_bus.execute_async = track
     for text in CONTEXTUAL + NEGATIVE:
         rt._execute_intent(rt.intent_router.parse(text), text)
-    assert rt.command_bus.get_history() == []
+    for thread in threads:
+        thread.join(1)
+        assert not thread.is_alive()
+    assert all(c.command_type == C.MEDIA_CONTEXT for c in rt.command_bus.get_history())
+    for handler in controls:
+        handler.assert_not_called()
 
 
 def test_explicit_rules_and_parameter_followup_keep_priority():

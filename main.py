@@ -1438,6 +1438,14 @@ class Application:
             logger.info(f"[UI] services wiring failed: {e}")
         window.switch_to_tabs(tabs)
         self._movie_panel = tabs._panels.get("movie")
+        from app.ui.widgets.media_focus import MediaFocusTracker
+        for domain in ("music", "movie"):
+            panel = tabs._panels.get(domain)
+            if panel is not None:
+                panel.setProperty("starlightMediaDomain", domain)
+        media_context = getattr(getattr(self, "voice", None), "media_context", None)
+        if media_context is not None:
+            self._media_focus_tracker = MediaFocusTracker(media_context, window)
         # R001: 注入电影暂停确认回调到音乐控制器
         try:
             if self._movie_panel is not None and hasattr(self, "music"):
