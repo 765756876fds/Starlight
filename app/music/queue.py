@@ -256,7 +256,7 @@ class PlayQueue:
             return None
 
     @_queue_mutation
-    def play_at(self, index: int) -> dict[str, Any] | None:
+    def play_at(self, index: int, *, collection_start: bool = False) -> dict[str, Any] | None:
         """播放指定位置的歌曲"""
         with self._lock:
             if 0 <= index < len(self._queue):
@@ -264,6 +264,13 @@ class PlayQueue:
                     self._next_up.remove(index)
                 self._current_index = index
                 self._add_history(index)
+                if collection_start and self._play_mode == PlayMode.SHUFFLE:
+                    # A newly selected collection already played this entry.
+                    # Preserve the shuffled relative order of every other entry.
+                    if index in self._shuffle_order:
+                        self._shuffle_order.remove(index)
+                    self._shuffle_order.insert(0, index)
+                    self._shuffle_pos = 0
                 return self._queue[index]
             return None
 

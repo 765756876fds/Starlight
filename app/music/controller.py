@@ -18,6 +18,8 @@ from ..core.operation_result import OperationResult, OperationStatus
 from ..core.state_store import StateNamespace, get_state_store
 from .database import MusicDatabase
 from .history_recorder import HistoryRecorder
+from .preferences import PreferenceStore
+from .recommendation import RecommendationService
 from .lx_client import LxMusicClient
 from .mpv import MpvController
 from .mpv_adapter import MpvAdapter
@@ -55,6 +57,9 @@ def _cancel_switch_on_user_action(method):
     def wrapper(self, *args, **kwargs):
         try:
             self._cancel_candidate_switch()
+            if hasattr(self, "recommendations"):
+                self.recommendations.cancel(clear_session=method.__name__ in
+                    {"play_song", "play_search_result", "clear_queue", "stop_current"})
         except Exception:
             pass
         return method(self, *args, **kwargs)
@@ -89,6 +94,9 @@ class MusicController:
 
         # 初始化子模块
         self.db = MusicDatabase(self.db_path)
+        from pathlib import Path
+        self.music_memory = PreferenceStore(Path(self.db_path).with_name("music_preferences.db"))
+        self.recommendations = RecommendationService(self, self.music_memory)
         self.scanner = MusicScanner(self.db, self.scan_dirs, self.extensions, self.mpv_path)
         self.search = MusicSearch(self.db)
         self.queue = PlayQueue()
@@ -484,6 +492,8 @@ class MusicController:
             "caller": "stop()",
         })
         self._running = False
+        if hasattr(self, "recommendations"):
+            self.recommendations.cancel(close=True)
         self.cancel_sleep_timer()
         self._invalidate_highlight()
         stop_scanner = getattr(getattr(self, "scanner", None), "stop_highlight_background", None)
@@ -510,6 +520,9 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_VOLUME_DOWN, lambda c: self.volume_down(c.get("step", 10)))
         self.command_bus.register(CommandType.MUSIC_SEEK, self._cmd_seek)
         self.command_bus.register(CommandType.MUSIC_SEARCH_PLAY, self._cmd_search_play)
+        self.command_bus.register(CommandType.MUSIC_RECOMMEND_NEXT, self._cmd_recommend_next)
+        self.command_bus.register(CommandType.MUSIC_RECOMMEND,
+            lambda c: self.recommend_music(is_current=c.is_current, **c.params))
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT, lambda c: self.jump_to_highlight())
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT_MODE, self._cmd_highlight_mode)
         self.command_bus.register(CommandType.MUSIC_SET_PLAY_MODE, self._cmd_set_play_mode)
@@ -1284,10 +1297,10 @@ class MusicController:
         req_id = self._play_request_id
         threading.Thread(
             target=self._resolve_online_worker,
-            args=(song, query, req_id), daemon=True,
+            args=(song, query, req_id, self._current_origin()), daemon=True,
             name="music-online-resolve").start()
 
-    def _resolve_online_worker(self, song: dict[str, Any], query: str, req_id: int):
+    def _resolve_online_worker(self, song: dict[str, Any], query: str, req_id: int, origin="auto"):
         """后台线程：重搜 → 逐个候选取 URL → loadfile → 状态/历史。
         解析完成时 req_id 已过期（期间用户又切歌）→ 丢弃结果，不覆盖新歌。
         网络解析经 OnlineResolver（纯解析，不碰 mpv/队列/Qt 信号）；
@@ -1355,6 +1368,12 @@ class MusicController:
                 online_song = self._apply_stream(
                     chosen_track, url,
                     headers if headers is not None else play_result.get("headers"))
+                if online_song is not None and hasattr(self, "music_memory"):
+                    recommended = bool(song.get("extra", {}).get("_starlight_recommended"))
+                    if recommended:
+                        online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
+                    self.music_memory.record(online_song, "recommendation" if recommended else
+                                             "manual" if origin == "user" else "automatic")
             try:
                 self.history_recorder.record_song({
                     "id": -1,
@@ -1643,6 +1662,8 @@ class MusicController:
 
         # 增加播放计数
         self.db.increment_play_count(song["id"])
+        if hasattr(self, 'music_memory'):
+            self.music_memory.record(song, "manual" if self._current_origin() == "user" else "automatic")
 
         # 更新状态
         self._update_state(
@@ -2067,15 +2088,20 @@ class MusicController:
             if self._play_request_id == req_id:
                 self._is_switching_track = False
 
-    def play_online(self, track, _before_load=None) -> bool:
+    def play_online(self, track, _before_load=None, *, _on_loaded=None, _resolved=None,
+                    _expected_request=None, _recommendation=False) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_online", track, 0)
+        if not _recommendation and hasattr(self, 'recommendations'):
+            self.recommendations.cancel(clear_session=True)
         # 代次隔离：play_online 是不经 _play_song 的公开入口，同样递增代次
         # 并置切换态——URL 解析（get_play_url）窗口内 mpv 仍报旧歌位置，必须失效。
         # 递增 + 快照 + 切换态在锁内完成（与 _play_song/play_search_result 同契约），
         # 避免无锁 read-modify-write 丢代次导致旧请求误判有效。
         with self._lock:
+            if _expected_request is not None and self._play_request_id != _expected_request:
+                return False
             self._play_request_id += 1
             req_id = self._play_request_id
             self._is_switching_track = True
@@ -2086,8 +2112,8 @@ class MusicController:
         if self.online_manager is None:
             self._end_switch_state_if_current(req_id)
             return False
-        result = self.online_manager.get_play_url(track)
-        if not result:
+        result = _resolved if _resolved is not None else self.online_manager.get_play_url(track)
+        if not result or not result.get("url"):
             logger.info(f"[Music] online 无 URL: {track.title}")
             self._end_switch_state_if_current(req_id)
             return False
@@ -2114,6 +2140,10 @@ class MusicController:
                     if req_id == self._play_request_id:
                         self._is_switching_track = False
                     return False
+                if _recommendation:
+                    online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
+                if _on_loaded is not None:
+                    _on_loaded()
                 logger.info("[Music] mpv loadfile ok")
         except Exception as e:
             logger.info(f"[Music] mpv loadfile fail: {e}")
@@ -2138,7 +2168,33 @@ class MusicController:
             })
         except Exception as e:
             logger.error(f"[Music] 记录播放历史失败: {e}")
+        if hasattr(self, 'music_memory'):
+            self.music_memory.record(online_song, "recommendation" if _recommendation else "manual")
         return True
+
+    def recommend_music(self, **params):
+        """Run through CommandBus.execute_async or an existing UI background task."""
+        result = self.recommendations.play(**params)
+        if result.status in (OperationStatus.CONFIRMED, OperationStatus.ACCEPTED):
+            self.event_bus.publish(Event(event_type="music.recommendation_changed",
+                data={"message": result.message}, source="music"))
+        return result
+
+    def _cmd_recommend_next(self, command):
+        song = self.get_current_song() or {}
+        if (not self.recommendations.session or not song.get("extra", {}).get("_starlight_recommended")
+                or self.state_store.get(StateNamespace.MOVIE, "playing", False)):
+            return OperationResult(OperationStatus.NEEDS_PARAMETER,
+                "请明确说音乐下一首，或先让我为你选歌")
+        self.next()
+        return OperationResult(OperationStatus.ACCEPTED, "正在切换当前榜单的下一首")
+
+    def recommendation_feedback(self, kind, value, positive=True):
+        self.recommendations.cancel()
+        ok = self.music_memory.set_preference(kind, value, 1 if positive else -1)
+        return OperationResult(OperationStatus.CONFIRMED if ok else OperationStatus.FAILED,
+            ("已记住你的偏好" if positive else "已记住，下次选歌将避开这首；当前队列保持不变")
+            if ok else "偏好暂时无法保存，播放仍可继续")
 
     def set_volume(self, volume: int):
         """设置音量"""
@@ -2733,6 +2789,7 @@ class MusicController:
             self._last_idle = True
             self._update_state(playing=False, current_song=None)
 
+    @_cancel_switch_on_user_action
     def stop_current(self):
         """停止当前歌曲播放（保留队列，不推进队列指针）。
 

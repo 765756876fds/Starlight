@@ -1,7 +1,8 @@
 """Music discovery workbench backed exclusively by existing controller APIs."""
 import time
 import json
-from PySide6.QtCore import Qt, Signal
+import weakref
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QButtonGroup,
     QComboBox, QScrollArea, QStackedWidget, QLineEdit)
 
@@ -18,6 +19,7 @@ def music_card(row):
 
 
 class MusicDiscovery(QWidget):
+    recommendation_changed = Signal(str)
     tracks_ready = Signal(object, str)
     navigate = Signal(int)
     history_chosen = Signal(object)
@@ -27,6 +29,24 @@ class MusicDiscovery(QWidget):
     def __init__(self, music, parent=None):
         super().__init__(parent)
         self.music = music
+        self._recommend_closed = False
+        self._recommend_task = LatestTask(self)
+        self._recommend_task.completed.connect(self._recommendation_done)
+        self.recommendation_changed.connect(self._show_recommendation, Qt.QueuedConnection)
+        self._recommend_bus = getattr(music, "event_bus", None)
+        weak_self = weakref.ref(self)
+        def recommendation_event(event):
+            widget = weak_self()
+            if widget is not None:
+                try:
+                    widget.recommendation_changed.emit(event.data.get("message", ""))
+                except RuntimeError:
+                    pass
+        self._recommend_event = recommendation_event
+        if self._recommend_bus is not None:
+            bus = self._recommend_bus
+            bus.subscribe("music.recommendation_changed", recommendation_event)
+            self.destroyed.connect(lambda *_: bus.unsubscribe("music.recommendation_changed", recommendation_event))
         self._view = "home"
         self._page = 1
         self._last_request = None
@@ -82,6 +102,24 @@ class MusicDiscovery(QWidget):
         root.addLayout(controls)
         self.status = label("内容由音源实际能力提供；歌曲版本与来源均保留。", True)
         root.addWidget(self.status)
+        recommendation = QHBoxLayout()
+        self.recommend_button = QPushButton("为我播放")
+        self.change_chart_button = QPushButton("换个榜单")
+        self.like_artist_button = QPushButton("喜欢这位歌手")
+        self.reduce_track_button = QPushButton("减少这首")
+        self.recommend_button.clicked.connect(lambda: self._recommend())
+        self.change_chart_button.clicked.connect(lambda: self._recommend(change_chart=True))
+        self.like_artist_button.clicked.connect(lambda: self._remember_preference(True))
+        self.reduce_track_button.clicked.connect(lambda: self._remember_preference(False))
+        for button in (self.recommend_button, self.change_chart_button,
+                       self.like_artist_button, self.reduce_track_button):
+            button.setEnabled(callable(getattr(music, "recommend_music", None)))
+            recommendation.addWidget(button)
+        recommendation.addStretch()
+        root.addLayout(recommendation)
+        self.recommendation_status = label("为我播放：参考本地偏好选歌；没有记录时从可用榜单开始。", True)
+        self.recommendation_status.setWordWrap(True)
+        root.addWidget(self.recommendation_status)
         self.pages = QStackedWidget()
         root.addWidget(self.pages, 1)
         self.home = QScrollArea()
@@ -154,8 +192,47 @@ class MusicDiscovery(QWidget):
             self._refresh_local()
 
     def shutdown(self):
+        self._recommend_closed = True
+        if self._recommend_bus is not None:
+            self._recommend_bus.unsubscribe("music.recommendation_changed", self._recommend_event)
+        self._recommend_task.cancel()
+        service = getattr(self.music, "recommendations", None)
+        if service is not None:
+            service.cancel()
         for task in (self._task, self._catalog_task, self._local_task):
             task.cancel()
+
+    @Slot(str)
+    def _show_recommendation(self, message):
+        if not self._recommend_closed:
+            self.recommendation_status.setText(message)
+
+    def _recommend(self, **params):
+        self.recommendation_status.setText("正在从可用榜单选歌，可继续使用搜索和播放器…")
+        self._recommend_task.submit("recommend", lambda: self.music.recommend_music(**params))
+
+    def _remember_preference(self, positive):
+        from ...music.preferences import media_key
+        # Capture identity now; a later track change must not change the feedback target.
+        with self.music._lock:
+            song = dict(self.music._current_song or {})
+        value = song.get("artist") if positive else media_key(song)
+        if not song.get("title") or not value:
+            self.recommendation_status.setText("请先播放有歌手信息的歌曲" if positive else "请先播放一首歌曲")
+            return
+        kind = "artist" if positive else "track"
+        self._recommend_task.submit("preference",
+            lambda: self.music.recommendation_feedback(kind, value, positive))
+
+    def _recommendation_done(self, key, result, error):
+        from ...core.operation_result import OperationResult, OperationStatus
+        if error or not isinstance(result, OperationResult):
+            self.recommendation_status.setText("选歌没有完成，请重试或切换音源")
+            notify("选歌没有完成", "请重试或切换音源", status="failed")
+            return
+        self.recommendation_status.setText(result.message)
+        notify(result.message, status="success" if result.status is OperationStatus.CONFIRMED
+               else "warning" if result.status is OperationStatus.ACCEPTED else "failed")
 
     def refresh_sources(self):
         # Metadata refresh invalidates the old read, even if its worker is still running.

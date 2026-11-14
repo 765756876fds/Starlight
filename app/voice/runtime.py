@@ -958,6 +958,9 @@ class VoiceRuntime:
                 outcome = OperationResult(OperationStatus.TIMEOUT, "搜索超时，请稍后重试")
             elif error is not None:
                 outcome = OperationResult(OperationStatus.FAILED, "搜索播放未成功，请检查网络和音源")
+            elif command_type == CommandType.MUSIC_RECOMMEND and isinstance(value, OperationResult):
+                # The business handler owns the real result; recommendation feedback stays visual.
+                return
             elif command_type == CommandType.MOVIE_SEARCH_PLAY:
                 return  # controller already supplies its own UI + TTS result
             elif isinstance(value, dict) and (value.get("title") or value.get("path")):
@@ -1019,7 +1022,7 @@ class VoiceRuntime:
                 raise
             finally:
                 record = center.get(operation_id)
-                asynchronous = intent.intent_type in (CommandType.MUSIC_SEARCH_PLAY,
+                asynchronous = intent.intent_type in (CommandType.MUSIC_RECOMMEND, CommandType.MUSIC_SEARCH_PLAY,
                     CommandType.MOVIE_SEARCH_PLAY, CommandType.MUSIC_RESCAN, CommandType.PLAYER_QUERY)
                 if record and record.status == "processing" and not asynchronous:
                     center.update(operation_id, title="操作已发送，结果尚未确认",
@@ -1311,6 +1314,15 @@ class VoiceRuntime:
                 source="voice",
                 is_current=lambda: self._request_is_current(request_generation),
             ), on_done=self._async_feedback(intent_type, request_generation))
+
+        elif intent_type == CommandType.MUSIC_RECOMMEND:
+            self.command_bus.execute_async(Command(
+                command_type=intent_type, params=params, source="voice",
+                is_current=lambda: self._request_is_current(request_generation),
+            ), on_done=self._async_feedback(intent_type, request_generation))
+
+        elif intent_type == CommandType.MUSIC_RECOMMEND_NEXT:
+            self._execute_control(intent_type, params)
 
         elif intent_type == CommandType.MUSIC_SEARCH_PLAY:
             # 长任务（在线搜索/JS 桥接，10s+）：异步执行，不阻塞识别线程

@@ -184,6 +184,7 @@ def notify(title, message="", *, status="success", source="app", operation_id=No
 _ACTIONS = {
     "music.pause": "暂停音乐", "music.resume": "继续音乐", "music.stop": "停止音乐",
     "music.next": "播放下一首", "music.previous": "播放上一首", "music.play": "播放音乐",
+    "music.recommend": "为你选歌", "music.recommend_next": "切换音乐",
     "music.search_play": "搜索并播放歌曲", "music.set_speed": "设置音乐倍速",
     "music.volume_set": "调整音乐音量", "music.volume_up": "调大音乐音量",
     "music.volume_down": "调小音乐音量", "music.identify": "打开识曲",

@@ -301,6 +301,8 @@ class RuleBasedIntent:
         if sum(i is not None for i in matched) > 1:
             return Intent("system.clarify", params={"message": "请一次说一个操作"})
         intent = cls._match_rules(normalized)
+        if intent and intent.intent_type in (CommandType.MUSIC_RECOMMEND, CommandType.MUSIC_RECOMMEND_NEXT) and re.search(r"[?？]", text):
+            return Intent("system.clarify", params={"message": "请直接说要听什么音乐"})
         if intent and intent.intent_type in (CommandType.AUTO_QUEUE_SET, CommandType.AUTO_ACCEPT_SET,
                 CommandType.AUTO_BANPICK_SET, CommandType.AUTO_COMBO_SET) and re.search(r"[?？]", text):
             return Intent("system.clarify", params={"message": "请明确说打开、关闭，或查询状态"})
@@ -489,6 +491,21 @@ class RuleBasedIntent:
                     except ValueError:
                         pass
                 return Intent(command, confidence=0.99, params=params)
+
+        # Finite recommendation requests precede generic song-title search.
+        # Existing negative/question/quotation guards have already run above.
+        recommend = {
+            "我想听歌了": {}, "放点歌听听": {}, "放点我喜欢的": {},
+            "换个榜单": {"change_chart": True}, "换个风格": {"change_style": True},
+        }
+        if text == "换一个":
+            return Intent(CommandType.MUSIC_RECOMMEND_NEXT, confidence=0.99)
+        if text in recommend:
+            return Intent(CommandType.MUSIC_RECOMMEND, confidence=0.99, params=dict(recommend[text]))
+        style_request = re.fullmatch(r"来点(伤感|轻松|摇滚|怀旧|动感)的", text)
+        if style_request:
+            return Intent(CommandType.MUSIC_RECOMMEND, confidence=0.99,
+                          params={"style": style_request.group(1)})
 
         # Explicit media requests reserve their title before game rules inspect
         # it. A song/film title may contain a champion, skill or “used” verb.
