@@ -77,6 +77,8 @@ def test_queue_online_song_direct_url_first(tmp_path):
     assert c._resolver.resolve.call_count == 0, "直取成功不得触发重搜"
     assert _wait_until(lambda: c.mpv.loadfile.call_count == 1, timeout=2.0), "后台切歌超时未执行 loadfile"
     c.mpv.loadfile.assert_called_once_with("http://x/direct.mp3")
+    # loadfile is only an intermediate worker step; await the actual history write.
+    assert _wait_until(lambda: len(c.db.get_history()) == 1), "后台未记录播放历史"
     rows = c.db.get_history()
     assert len(rows) == 1 and rows[0]["source_type"] == "online"
     assert rows[0]["track_id"] == "old-1", "历史应记录直取 track 的 id"
@@ -101,6 +103,7 @@ def test_queue_online_song_researches_when_direct_fails(tmp_path):
     assert c._resolver.resolve.call_args.args[0] == "夜曲 周杰伦"
     assert _wait_until(lambda: c.mpv.loadfile.call_count == 1, timeout=2.0), "后台切歌超时未执行 loadfile"
     c.mpv.loadfile.assert_called_once_with("http://x/new.mp3")
+    assert _wait_until(lambda: len(c.db.get_history()) == 1), "后台未记录播放历史"
     rows = c.db.get_history()
     assert len(rows) == 1 and rows[0]["source_type"] == "online"
     assert rows[0]["track_id"] == "new-1", "历史应记录重搜拿到的新 track_id（非存的 old-1）"

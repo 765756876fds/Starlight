@@ -1389,7 +1389,7 @@ class MusicController:
             logger.error(f"[Music] 队列在线歌播放失败: {e}")
             self._schedule_skip_online(song)
 
-    def _apply_stream(self, track, url: str, headers, before_load=None) -> dict | None:
+    def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None) -> dict | None:
         """统一播放在线流：http-header-fields 重设 + loadfile + pause 同步 + 状态落库。
 
         三处在线播放共用（play_search_result 在线 fallback / 队列在线 worker /
@@ -1434,6 +1434,10 @@ class MusicController:
                 return None
         except Exception as e:
             logger.error(f"[Music] 电影暂停确认异常: {e}")
+            return None
+        # Movie pause confirmation may wait for IPC. Recheck recommendation
+        # currency immediately afterwards; legacy before_load may have side effects.
+        if verify_load is not None and not verify_load():
             return None
         # 影子模式：记录在线 loadfile 发起时刻与文件类型（classify 的 elapsed/kind 依据）
         self._shadow_loadfile_ts = time.perf_counter()
@@ -2131,7 +2135,8 @@ class MusicController:
                 # 统一流设置（DRY）：header 重设 + before_load 紧贴 loadfile（保持
                 # "校验→loadfile"原子）+ loadfile + pause + 状态落库。
                 online_song = self._apply_stream(
-                    track, url, result.get("headers"), before_load=_before_load)
+                    track, url, result.get("headers"), before_load=_before_load,
+                    **({"verify_load": _before_load} if _recommendation else {}))
                 if online_song is None:
                     # 互斥确认或紧邻 loadfile 前置校验失败时，没有异常可供
                     # 外层 except 收口；必须结束本次切换态，避免 UI 永久冻结。

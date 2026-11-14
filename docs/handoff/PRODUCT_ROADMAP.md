@@ -210,3 +210,13 @@ Ruff 0.17.4仅开发工具：无配置首次2321条/390文件，新显式E4/E7/E
 - 干净候选真实MPV首次发现随机起点被重复消费（1 failed、2 passed），已保留首败；仅为新推荐集合增加play_at(collection_start=True)起点对齐，保留其他随机顺序及旧接口默认行为。正序/倒序两种确定性回归均通过；涉及队列的定向回归135 passed（与前述单元集合有重叠，不累计）。最终干净候选和CI另行核验。
 
 - 最终干净候选：受影响队列/推荐135 passed；新增单元完整44 passed（两批重叠，不累加）；Qt35 passed；真实MPV三模式3 passed。工作区Qt较宽回归69 passed。新文件Ruff通过，旧文件无新增违规，compileall及两类diff检查通过。保留全部67个施工前文件指纹；15个文件仅本阶段增量进入候选。
+
+### 音乐推荐收尾：取消与电影暂停确认时序
+
+实际控制器探针复现：推荐在等待电影暂停确认期间被取消，旧 loadfile 仍执行（1 failed，日志在项目外隔离取证目录）。在确认返回后、loadfile 之前补充仅推荐路径的纯代次检查；旧 before_load 钩子仍只调用一次。新增测试验证结果为 UNKNOWN、未加载旧歌曲、未建立推荐会话。定向回归 69 passed、0 failed/skip/warnings；退出码0。此补丁不修改电影播放器、MPV、既有队列语义或网络配置。
+
+### 发布验证首败及资源收口
+
+首个 Windows Unit CI（42f6c84，43624479304）结果：2840 passed、3 failed、9 skipped、1 warning。两项在线队列测试在后台 loadfile 调用后立即读取历史，早于实际写入；改为有界等待实际历史后保留原全部断言。命令注册测试的 SimpleNamespace 补充两个新增音乐方法。对应两文件 165 passed、0 failed/skip/warnings。
+
+另以真实SQLite连接保留引用验证：原偏好库仅使用事务上下文，成功/异常后连接均未关闭（2 failed）。补充 closing，确保事务提交/回滚后立即释放连接；新增两参数用例，推荐单元完整47 passed、0 failed/skip/warnings。取消补丁的干净候选含真实MPV三模式回归72 passed（与其他批次重叠，不累计）。旧测试等待修正不会更改业务断言。最终SHA的Unit/UI结果另行记录。

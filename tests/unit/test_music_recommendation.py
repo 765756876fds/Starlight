@@ -396,3 +396,35 @@ def test_cancel_after_ipc_ack_does_not_publish_stale_success(controller):
     result = controller.recommend_music()
     assert result.status is OperationStatus.UNKNOWN
     assert not events
+
+
+def test_cancel_while_confirming_movie_pause_never_loads_old_recommendation(controller):
+    def pause_then_cancel():
+        controller.recommendations.cancel()
+        return True
+    controller.set_movie_pauser(pause_then_cancel)
+    result = controller.recommend_music()
+    assert result.status is OperationStatus.UNKNOWN
+    assert controller.mpv.loaded == []
+    assert controller.recommendations.session is None
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_preference_connection_closes_on_success_and_failure(tmp_path, monkeypatch, fail):
+    import sqlite3
+    original = sqlite3.connect
+    opened = []
+    def capture(*args, **kwargs):
+        connection = original(*args, **kwargs)
+        opened.append(connection)
+        return connection
+    monkeypatch.setattr("app.music.preferences.sqlite3.connect", capture)
+    memory = PreferenceStore(tmp_path / "memory.db")
+    def read(db):
+        if fail:
+            raise sqlite3.OperationalError("controlled read failure")
+        return db.execute("SELECT 1").fetchone()[0]
+    assert memory._run(read) == (None if fail else 1)
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        opened[0].execute("SELECT 1")

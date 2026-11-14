@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 import unicodedata
+from contextlib import closing
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class PreferenceStore:
                 return None
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(str(self.path), timeout=0.15) as db:
+                with closing(sqlite3.connect(str(self.path), timeout=0.15)) as db, db:
                     if not self._initialized:
                         version = db.execute("PRAGMA user_version").fetchone()[0]
                         if version > 1:
