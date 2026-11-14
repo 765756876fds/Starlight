@@ -2,7 +2,7 @@
 Intent / 人话理解
 
 将用户自然语言转换为结构化意图。
-采用：RuleBasedIntent 规则匹配（纯确定性，无 LLM fallback）
+采用：明确规则优先，未命中时尝试有限音乐语义（纯确定性，无 LLM）
 
 AI 不参与意图识别。规则要求明确动词才产生写操作副作用，
 裸陈述（如"对面莎弥拉闪现了"）返回 system.unknown。
@@ -15,6 +15,7 @@ from typing import Any
 from ..core.command_bus import CommandType
 from .text import normalize_text
 from .numbers import parse_integer, parse_number
+from .music_semantics import MUSIC_ACTIONS, parse_music_candidate, unsafe_control_text
 
 
 class Intent:
@@ -43,7 +44,7 @@ class Intent:
 
 class RuleBasedIntent:
     """
-    规则匹配意图识别（唯一意图来源）
+    原有明确规则匹配（优先于有限音乐语义候选）
 
     明确命令直接用规则匹配，无 LLM fallback。
     覆盖音乐控制、游戏提醒、冷却计时、玩家查询。
@@ -677,11 +678,11 @@ class RuleBasedIntent:
 
 class IntentRouter:
     """
-    意图路由器（纯规则版）
+    意图路由器（明确规则优先，有限音乐语义回退）
 
     处理流程：
     语音文本 -> RuleBasedIntent.match -> 命中：返回 Intent
-                                    -> 未命中：返回 system.unknown
+                                    -> 未命中：有限音乐候选或 system.unknown
 
     无 LLM fallback。写操作（alarm.* / cooldown.*）只由规则产生，
     规则要求明确动词（"记一下"/"用了"/"插了"/"提醒我"），
@@ -723,7 +724,7 @@ class IntentRouter:
 
     def _parse_text(self, text: str) -> Intent:
         """
-        解析意图：规则命中返回 Intent，否则返回 system.unknown。
+        明确规则优先；有限音乐候选不确定时不执行，不保存媒体上下文。
         """
         if not text or not text.strip():
             return Intent("system.unknown", confidence=0.0)
@@ -732,6 +733,22 @@ class IntentRouter:
             return Intent("system.context_cancel", params={})
 
         intent = self.rule_based.match(text)
+        candidate = parse_music_candidate(text)
+        if intent and intent.intent_type in MUSIC_ACTIONS.values():
+            if unsafe_control_text(text):
+                self.clear_context()
+                return Intent("system.unknown", confidence=0.0)
+            # Keep the existing dedicated global “暂停/继续” contract. Natural
+            # objectless aliases must not inherit that global execution power.
+            if candidate and candidate.target == "current_media" and normalize_text(text) != "暂停":
+                self.clear_context()
+                return Intent("system.clarify", params={"message": "请明确说音乐，例如“音乐先停一下”"})
+        if intent is None and candidate is not None:
+            self.clear_context()
+            if candidate.target == "current_media":
+                return Intent("system.clarify", params={"message": "请明确说音乐，例如“音乐接着放”"})
+            intent = Intent(candidate.command)
+            intent.scope = "music"
         if intent:
             from .registry import PARAMETERS
             spec = PARAMETERS.get(intent.intent_type)

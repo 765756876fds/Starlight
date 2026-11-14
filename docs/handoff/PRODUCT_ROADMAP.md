@@ -183,3 +183,12 @@ Ruff 0.17.4仅开发工具：无配置首次2321条/390文件，新显式E4/E7/E
 - 新测试修改前6 failed/7 passed，修改后13 passed；125%与150%独立进程各13 passed（重复缩放验证不累计为新增测试）。仅本轮三文件叠加HEAD的干净候选45 passed。相关六文件回归修改前后均146 passed/2 failed：test_glass_theme中的test_minimize_and_close_slots、test_boot_timeout_forces_switch为既有失败，保留首次日志及对照，不修改、不跳过。无skip/warning或原生崩溃记录。新13与既有148去重为159 passed/2项基线失败，45项和DPI复核不重复累计。
 - 实际命令由项目外qt_entry.py先创建QApplication和ThemeManager，再调用pytest；参数为-o addopts= -p no:cacheprovider --basetemp <外部临时目录> --junitxml <外部报告> -q。定向tests/ui/test_overlay_transparency.py；回归tests/ui/{test_theme_switching,test_overlay_incremental,test_glass_theme}.py及tests/unit/{test_overlay,test_theme_palette,test_single_instance}.py；干净候选仅运行前三文件中theme_switching、overlay_incremental与新增transparency。编译及git diff --check通过；新测试和源码Ruff零违规，旧theme_switching的1项F401修改前后相同。完整命令、JUnit、首败和历史差异保留于项目外starlight-overlay-alpha-*目录。
 - 未改LCU、技能计时、提醒、主题/GC实现、其他模块或系统设置，无新依赖/常驻任务。离屏alpha、可见倒计时和真实点击信号不等于游戏内DWM验收；用户只需在实际游戏中确认背景透出画面、图标数字清楚并可按原方式点击/拖动。旧Qt原生异常不能据此宣称永久消失。
+
+
+## 2026-11-14 Voice Semantics v1
+
+明确规则优先，仅增加音乐暂停／继续／下一首／上一首的有限语义候选。新增对象在前等明确表达，复用 CommandType、Runtime、CommandBus；原始问号／引用在归一化前保护。没有可靠原子当前媒体状态接口，无对象自然表达先提示明确音乐；旧专用“暂停／继续”全局契约保留。不改 ASR、VAD、TTS、调度、电影、LoL、MPV、队列或安装包，不引入依赖／常驻任务。
+
+接入前探针36 failed/199 passed，接入后同组235 passed；最终669单元＋18 Qt通过，无失败／跳过／警告，其中105项新增。干净HEAD精确叠加三份本轮源码／测试257 passed，和前述重叠不累计。最终178条独立影子文本：正向6/20→20/20，不应执行候选9/158→0/158；不代表真实麦克风识别率。编译通过，无原生异常标记。Ruff模块未安装，项目外官方工具下载超时，未完成该检查，不宣称通过。真实麦克风与设备播放仍待验收。
+
+详见[本轮设计与验收](../Voice_Semantics_v1_20261114.md)。其他历史成果、用户数据、模型、安装包与转储保留；维护记录仅追加本段。提交／同步／新SHA对应Windows CI以最终回执为准，不借用旧结果。本轮完成后停止，不开展v2。
