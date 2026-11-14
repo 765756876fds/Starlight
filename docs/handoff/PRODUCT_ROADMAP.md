@@ -220,3 +220,7 @@ Ruff 0.17.4仅开发工具：无配置首次2321条/390文件，新显式E4/E7/E
 首个 Windows Unit CI（42f6c84，43624479304）结果：2840 passed、3 failed、9 skipped、1 warning。两项在线队列测试在后台 loadfile 调用后立即读取历史，早于实际写入；改为有界等待实际历史后保留原全部断言。命令注册测试的 SimpleNamespace 补充两个新增音乐方法。对应两文件 165 passed、0 failed/skip/warnings。
 
 另以真实SQLite连接保留引用验证：原偏好库仅使用事务上下文，成功/异常后连接均未关闭（2 failed）。补充 closing，确保事务提交/回滚后立即释放连接；新增两参数用例，推荐单元完整47 passed、0 failed/skip/warnings。取消补丁的干净候选含真实MPV三模式回归72 passed（与其他批次重叠，不累计）。旧测试等待修正不会更改业务断言。最终SHA的Unit/UI结果另行记录。
+
+### Windows Unit CI 旧初始化竞态收尾
+
+1e4f8dc 的 Unit CI（43625684136）：2845 passed、1 failed、9 skipped、1 warning；原三项失败已修正。唯一新失败为 test_same_puuid_no_surge_no_reload：计数从0变10，属于首批历史尚未加载，非重复请求。隔离施加150ms初始加载延迟时，原始de0基线与新候选均1 failed，证明为既有测试初始化竞态。仅修正测试等待首批十人历史全部完成后再记录计数，保留后续计数严格不变断言，并参数化即时/延迟初始加载；整文件11 passed、0 failed/skip/warnings，未修改任何LoL生产代码。最终提交的CI结果另记；未对同一SHA反复重跑。

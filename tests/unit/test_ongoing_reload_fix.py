@@ -183,7 +183,8 @@ class TestServiceForceRebuild:
         finally:
             svc.stop()
 
-    def test_same_puuid_no_surge_no_reload(self):
+    @pytest.mark.parametrize("initial_delay", [0.0, 0.15])
+    def test_same_puuid_no_surge_no_reload(self, monkeypatch, initial_delay):
         """同一局 puuid 数不变 → 不触发重建/补拉（回归：不打断已加载会话）。"""
         fake = FakeLcu()
         fake.phase = "InProgress"
@@ -192,11 +193,22 @@ class TestServiceForceRebuild:
                                          game_id=601006257268)
         acct = FakeAcct()
         svc = _make_svc(fake, acct=acct)
+        load = svc._load_in_thread
+        def delayed_load(*args, **kwargs):
+            time.sleep(initial_delay)
+            return load(*args, **kwargs)
+        monkeypatch.setattr(svc, "_load_in_thread", delayed_load)
         svc.start()
         try:
             assert _wait(lambda: svc.get_session() is not None
                          and sum(1 for p in svc.get_session().players if p.puuid) == 10), "初始 10 人未建立"
+            # Session creation precedes background history loading. Compare only
+            # after the initial batch completes, including deliberately slow startup.
+            assert _wait(lambda: acct.calls == 10 and not svc._loading_in_progress
+                         and all(p.history is not None for p in svc.get_session().players)), \
+                "初始历史加载未完成"
             n0 = acct.calls
+            assert n0 == 10, "初始批次必须恰好加载十名玩家"
             # 继续 tick（同 session、puuid 数不变）→ 不触发新加载
             time.sleep(0.4)
             assert acct.calls == n0, "puuid 数未变却触发了重复加载"
