@@ -11,6 +11,7 @@ get_state_store / get_event_bus / get_command_bus / get_config 的 patch 通过 
 fixture 存活到用例结束（_write_state 等运行时查找必须在用例生命周期内命中替身）。
 """
 from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -72,11 +73,16 @@ class FakeMpv:
         self.calls.append(("set_property", name, value))
         self._properties[name] = value
 
+    def get_property(self, name, **kwargs):
+        return self._properties.get(name)
+
     def pause(self):
         self.calls.append(("pause",))
+        self._properties["pause"] = True
 
     def play(self):
         self.calls.append(("play",))
+        self._properties["pause"] = False
 
     def seek(self, seconds, mode="relative"):
         self.calls.append(("seek", seconds, mode))
@@ -87,9 +93,16 @@ class FakeMusic:
 
     def __init__(self):
         self.calls = []
+        self._play_request_id = 1
+        self._paused = False
+        self.mpv = SimpleNamespace(get_property=lambda *a, **k: self._paused)
 
-    def pause(self):
+    def pause(self, _voice_guard=None):
+        if _voice_guard is not None and not _voice_guard():
+            return False
         self.calls.append(("pause",))
+        self._paused = True
+        return True
 
 
 class FakeStore:
@@ -312,10 +325,20 @@ def test_play_pauses_music(tmp_path, env):
     ok = mc.play(ITEM_MULTI)
 
     assert ok is True
-    assert ("pause",) in music.calls          # 电影开始播放 → 先暂停音乐
+    assert music.calls == []  # loadfile acknowledgement alone never pauses music
     assert ("loadfile", "http://example.com/1", "replace") in fake.calls
     assert mc._current is ITEM_MULTI
     assert mc._current_index == 0
+    for _ in range(3):
+        mc.tick()  # observe actual non-idle playback via existing polling
+        worker = getattr(mc, "_ownership_worker", None)
+        if worker is not None:
+            worker.join(.3)
+            assert not worker.is_alive()
+        if music.calls:
+            break
+    assert music.calls == [("pause",)]
+    mc.close()
 
 
 def test_music_event_pauses_movie(tmp_path, env):
@@ -385,7 +408,7 @@ def test_play_loadfile_error_response_does_not_pretend_success(tmp_path, env):
     assert mc._current_index is None
     assert (StateNamespace.MOVIE, "playing") not in store.data
     assert ("loadfile", "http://example.com/1", "replace") in fake.calls
-    assert ("pause",) in music.calls      # 互斥先行行为保留：音乐已暂停（既有语义）
+    assert music.calls == []  # failed playback must not interrupt music
     mock_logger.error.assert_called_once()
     assert "失败" in mock_logger.error.call_args[0][0]
 

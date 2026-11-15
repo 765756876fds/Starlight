@@ -783,8 +783,13 @@ class IntentRouter:
         legacy_music = parse_music_candidate(text)
         pause_exception = legacy_music is not None and legacy_music.action == "pause" and "别放了" in text
         content_request = intent is not None and intent.intent_type in (CommandType.MUSIC_SEARCH_PLAY, CommandType.MOVIE_SEARCH_PLAY)
+        named_playlist = intent is not None and intent.intent_type in (
+            CommandType.MUSIC_PLAY_PLAYLIST, CommandType.MUSIC_CREATE_PLAYLIST, CommandType.MUSIC_ADD_TO_PLAYLIST)
+        # A validated playlist name is an argument, not the subject of a casual
+        # evaluation. Keep question/report/negative guards for these commands.
+        subject_is_parameter = named_playlist and rejected == "unrelated_subject"
         if not content_request and (intent is None or intent.intent_type.startswith(("music.", "movie.", "player."))) and rejected in (
-                "reported", "question", "negative_request", "unrelated_subject") and not pause_exception:
+                "reported", "question", "negative_request", "unrelated_subject") and not pause_exception and not subject_is_parameter:
             self.clear_context()
             blocked = Intent("system.unknown", confidence=0.0)
             blocked.natural_rejection = rejected

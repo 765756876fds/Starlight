@@ -7,6 +7,9 @@ def _make_controller():
     c = MovieController.__new__(MovieController)
     c.mpv = MagicMock()
     c._music = MagicMock()
+    c._music._play_request_id = 1
+    c._music.pause.return_value = True
+    c._stopping = False
     c._embed = False
     c._embed_wid = None
     c._current = None
@@ -25,10 +28,22 @@ def test_play_external_url_success():
     c.mpv.loadfile.return_value = {"error": "success"}
     ok = c.play_external_url("http://x/y.mp4", "test")
     assert ok is True
-    c._music.pause.assert_called_once()
+    c._music.pause.assert_not_called()  # accepting loadfile is not observed playback
     c.mpv.loadfile.assert_called_once_with("http://x/y.mp4")
     c.mpv.set_property.assert_called_with("pause", False)
     c._write_state.assert_called_once_with(playing=True, paused=False)
+    c.mpv.get_property.return_value = False
+    c._music.mpv.get_property.return_value = True
+    c.mpv.get_idle_active.return_value = False
+    for _ in range(3):
+        c.tick()
+        worker = getattr(c, "_ownership_worker", None)
+        if worker is not None:
+            worker.join(.3)
+            assert not worker.is_alive()
+        if c._music.pause.called:
+            break
+    c._music.pause.assert_called_once()
 
 
 def test_play_external_url_mpv_start_failure():
@@ -37,7 +52,7 @@ def test_play_external_url_mpv_start_failure():
     c.mpv.start.return_value = False
     ok = c.play_external_url("http://x/y.mp4")
     assert ok is False
-    c._music.pause.assert_called_once()  # 音乐仍 pause（既有契约）
+    c._music.pause.assert_not_called()  # unsuccessful movie startup preserves music
     c.mpv.loadfile.assert_not_called()
     c._write_state.assert_not_called()
 

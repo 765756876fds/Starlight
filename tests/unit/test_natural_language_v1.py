@@ -1,4 +1,4 @@
-"""Frozen, unseen paraphrases and unchanged legacy execution boundaries."""
+"""Frozen regression corpus, separate unseen set and legacy execution boundaries."""
 
 import hashlib
 import json
@@ -88,3 +88,13 @@ def test_final_file_stays_frozen_including_unrecognized_answers():
         hashlib.sha256(FINAL.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         == "b37fe7b290fdc4ede5b045b83be10972718f026f6edc9ef9e31454a09d3ea592"
     )
+
+
+@pytest.mark.parametrize("text", ["播放工作歌单", "新建歌单叫工作", "把这首歌加到工作歌单", "把晴天加入工作歌单"])
+def test_named_playlist_arguments_do_not_disable_language_safety(text):
+    before = RuleBasedIntent.match(text)
+    after = IntentRouter({}).parse(text)
+    assert before is not None
+    assert (after.intent_type, after.params) == (before.intent_type, before.params)
+    for prefix in ("不要", "他说", "为什么"):
+        assert IntentRouter({}).parse(prefix + text).intent_type in ("system.unknown", "system.clarify")
