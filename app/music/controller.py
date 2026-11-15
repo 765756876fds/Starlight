@@ -20,6 +20,7 @@ from .database import MusicDatabase
 from .history_recorder import HistoryRecorder
 from .preferences import PreferenceStore
 from .recommendation import RecommendationService
+from .collection_diagnostics import record_collection
 from .lx_client import LxMusicClient
 from .mpv import MpvController
 from .mpv_adapter import MpvAdapter
@@ -59,7 +60,7 @@ def _cancel_switch_on_user_action(method):
             self._cancel_candidate_switch()
             if hasattr(self, "recommendations"):
                 self.recommendations.cancel(clear_session=method.__name__ in
-                    {"play_song", "play_search_result", "clear_queue", "stop_current"})
+                    {"play_song", "play_search_result", "clear_queue", "stop_current"}, reason=method.__name__)
         except Exception:
             pass
         return method(self, *args, **kwargs)
@@ -493,7 +494,7 @@ class MusicController:
         })
         self._running = False
         if hasattr(self, "recommendations"):
-            self.recommendations.cancel(close=True)
+            self.recommendations.cancel(close=True, reason="shutdown")
         self.cancel_sleep_timer()
         self._invalidate_highlight()
         stop_scanner = getattr(getattr(self, "scanner", None), "stop_highlight_background", None)
@@ -755,6 +756,7 @@ class MusicController:
             return
         self._invalidate_highlight()
         is_auto = (self._current_origin() == "auto")
+        record_collection(self, "next", "natural" if is_auto else "manual")
         song = self.queue.next(auto=is_auto)
         if song:
             self._play_song(song)
@@ -2078,6 +2080,7 @@ class MusicController:
             self.queue.clear()
             if rest:
                 self.queue.add_all(rest)
+            record_collection(self, "replaced", "online_list", track_count=len(tracks), retained_count=len(rest))
         return self.play_online(tracks[index])
 
     def _end_switch_state_if_current(self, req_id: int) -> None:
@@ -2098,7 +2101,7 @@ class MusicController:
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_online", track, 0)
         if not _recommendation and hasattr(self, 'recommendations'):
-            self.recommendations.cancel(clear_session=True)
+            self.recommendations.cancel(clear_session=True, reason="direct_online")
         # 代次隔离：play_online 是不经 _play_song 的公开入口，同样递增代次
         # 并置切换态——URL 解析（get_play_url）窗口内 mpv 仍报旧歌位置，必须失效。
         # 递增 + 快照 + 切换态在锁内完成（与 _play_song/play_search_result 同契约），
@@ -2149,6 +2152,7 @@ class MusicController:
                     online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
                 if _on_loaded is not None:
                     _on_loaded()
+                record_collection(self, "loaded", "recommendation" if _recommendation else "direct_online")
                 logger.info("[Music] mpv loadfile ok")
         except Exception as e:
             logger.info(f"[Music] mpv loadfile fail: {e}")
@@ -2195,7 +2199,7 @@ class MusicController:
         return OperationResult(OperationStatus.ACCEPTED, "正在切换当前榜单的下一首")
 
     def recommendation_feedback(self, kind, value, positive=True):
-        self.recommendations.cancel()
+        self.recommendations.cancel(reason="preference")
         ok = self.music_memory.set_preference(kind, value, 1 if positive else -1)
         return OperationResult(OperationStatus.CONFIRMED if ok else OperationStatus.FAILED,
             ("已记住你的偏好" if positive else "已记住，下次选歌将避开这首；当前队列保持不变")
@@ -2785,6 +2789,7 @@ class MusicController:
             self._invalidate_highlight()
             self._current_song = None
             self.queue.clear()
+            record_collection(self, "cleared", "clear_queue")
             try:
                 self.mpv.stop()  # mpv 回 idle，停止当前播放
             except Exception:

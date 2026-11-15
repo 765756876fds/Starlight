@@ -418,6 +418,11 @@ class PlayQueue:
         """获取当前播放索引"""
         return self._current_index
 
+    def diagnostic_snapshot(self) -> dict:
+        """Atomic O(1) counters only, without copying songs or consuming next."""
+        with self._lock:
+            return {"size": len(self._queue), "index": self._current_index, "mode": self._play_mode}
+
     def size(self) -> int:
         """队列长度"""
         return len(self._queue)

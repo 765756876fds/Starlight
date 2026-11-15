@@ -6,6 +6,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 
 from app.core.operation_result import OperationResult, OperationStatus
+from .collection_diagnostics import record_collection
 from .preferences import media_key, normalize
 
 
@@ -89,12 +90,15 @@ class RecommendationService:
         self._catalog = None
         self._catalog_at = 0
 
-    def cancel(self, close=False, clear_session=False):
+    def cancel(self, close=False, clear_session=False, *, reason="cancelled"):
         with self._lock:
+            report = self._busy or bool(self.session) and (clear_session or close)
             self._generation += 1
             self._closed |= close
             if clear_session or close:
                 self.session = None
+        if report:
+            record_collection(self.controller, "session_cleared" if clear_session or close else "request_cancelled", reason)
 
     def _current(self, generation, guard):
         if guard is not None and not guard():
@@ -166,7 +170,10 @@ class RecommendationService:
                 import logging
                 logging.getLogger(__name__).exception("music_recommendation_chart_failed")
                 continue
-            tracks = list((detail or {}).get("tracks", []))[:50]
+            returned = list((detail or {}).get("tracks", []))
+            tracks = returned[:50]
+            record_collection(self.controller, "chart_read", "recommendation", source=chart["source"],
+                              chart_id=chart["id"], track_count=len(returned), retained_count=len(tracks))
             for index, track in enumerate(tracks[:20]):
                 artist = normalize(track.artist)
                 key = media_key(track_row(track))
@@ -249,6 +256,8 @@ class RecommendationService:
                     self.session = {"key": (choice.chart["source"], str(choice.chart["id"])),
                                     "title": choice.chart["title"], "source": choice.chart["source"],
                                     "reason": choice.reason, "style": style}
+                    record_collection(controller, "established", "recommendation", source=choice.chart["source"],
+                                      chart_id=choice.chart["id"], track_count=len(choice.tracks))
 
                 if controller.play_online(track, _before_load=current, _on_loaded=loaded,
                                           _resolved=result, _expected_request=original_request,
