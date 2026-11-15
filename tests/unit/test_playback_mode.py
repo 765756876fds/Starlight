@@ -14,15 +14,45 @@ Phase 1-C: Playback Mode + Highlight Mode 测试
 """
 import pytest
 
-pytestmark = pytest.mark.unit
-
 import time
-import pytest
+import threading
 from unittest.mock import MagicMock, patch
 
 from app.music.controller import MusicController
 from app.music.queue import PlayMode
 
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _controller_lifetime(monkeypatch):
+    """This module owns the fake controllers and every worker they start."""
+    created = []
+    original = _make_controller
+    def make(*args, **kwargs):
+        result = original(*args, **kwargs)
+        created.append(result)
+        return result
+    monkeypatch.setitem(globals(), "_make_controller", make)
+    yield
+    for ctrl, db, _ in created:
+        def belongs(thread):
+            for callback in (getattr(thread, "_target", None), getattr(thread, "function", None)):
+                if getattr(callback, "__self__", None) is ctrl:
+                    return True
+                if any(cell.cell_contents is ctrl for cell in (getattr(callback, "__closure__", None) or ())):
+                    return True
+            return False
+        workers = [thread for thread in threading.enumerate() if belongs(thread)]
+        ctrl.stop()
+        for thread in workers:
+            thread.join(2)
+            assert not thread.is_alive(), "playback fixture still owns a worker"
+        if ctrl.db._conn is not None:
+            ctrl.db.close()
+        if db._conn is not None:
+            db.close()
+        ctrl.event_bus.shutdown()
 
 def _make_controller(tmp_path, songs_with_highlight=None):
     """创建带 mock mpv 的 MusicController，songs_with_highlight = [{song, highlight}]"""
@@ -56,13 +86,27 @@ def _make_controller(tmp_path, songs_with_highlight=None):
         "default_volume": 70,
     }
 
-    with patch("app.music.controller.MpvController"):
+    from app.core.command_bus import CommandBus
+    from app.core.event_bus import EventBus
+    from app.core.state_store import StateStore
+    with patch("app.music.controller.MpvController"), \
+            patch("app.music.controller.LxMusicClient") as lx, \
+            patch("app.music.controller.get_command_bus", return_value=CommandBus()), \
+            patch("app.music.controller.get_event_bus", return_value=EventBus()), \
+            patch("app.music.controller.get_state_store", return_value=StateStore()):
+        lx.return_value.is_connected.return_value = False
         ctrl = MusicController(cfg)
 
     ctrl.mpv = MagicMock()
     ctrl._running = True
     # 默认返回 0，避免 poller 线程拿到 MagicMock
     ctrl.mpv.get_live_playback_time.return_value = 0.0
+    # A loaded fake file is playing, not a truthy MagicMock for idle-active.
+    # Concrete IPC values keep the real confirmation guard enabled and prevent
+    # an unrelated bad-file skip from racing the manual-next assertion.
+    ctrl.mpv.get_property.side_effect = lambda key, **kwargs: {
+        "idle-active": False, "playback-time": 0.0, "duration": 200.0, "pause": False,
+    }.get(key)
     # mpv.py loadfile 契约：成功返回 {"error": "success"}（控制器据此收口播放成功）
     ctrl.mpv.loadfile.return_value = {"error": "success"}
     return ctrl, db, song_ids

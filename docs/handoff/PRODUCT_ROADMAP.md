@@ -259,3 +259,12 @@ Ruff 0.17.4仅开发工具：无配置首次2321条/390文件，新显式E4/E7/E
 - 只修复tests/unit/test_mpv_threadsafe.py：用Event控制两种先后顺序，模拟响应按实际发出的请求ID和属性生成；仍严格检查请求编号、属性响应不串线、最大未完成交换数为1、缓冲消耗完毕及两个线程均退出。播放器源码不改。
 - 定向3 passed，连同诊断/联调共16 passed（13项与前682项重叠，不重复计数）。移除锁的外部负对照两种顺序均失败，证明未放宽并发安全断言。Ruff及编译通过；初始测试路径/FFmpeg环境记录仍保留。
 - 本阶段本地唯一用例更新为832项：682相关单元、3项MPV测试、140项Qt、7项真实MPV，均0 failed/skipped/warnings。首次CI失败已按证据修测试，不无限重跑；最终提交需另验Unit和UI。此次仅测试/记录，UI工作流不匹配测试文件路径，将在确认最终SHA无既有运行后通过现有workflow_dispatch手动触发一次，不改YAML。
+
+### 第二次CI唯一失败：播放模式测试替身与清理（2026-11-15）
+
+- a9b32b9的Unit运行43684570663：1 failed、2943 passed、9 skipped、1条既有warning；已修正的MPV并发测试通过。该SHA的UI运行43684646925通过（四组110 passed、0 failed/skipped/warnings；helper41 passed、1条既有warning），四组独立JUnit已下载。
+- 唯一失败test_manual_next_invalidates_poller：旧替身get_property默认返回MagicMock，idle-active被当成True，健康文件触发坏文件自动跳过并写入300ms防抖时间戳，干扰手动切歌断言。日志同时出现natural切歌、数据库已关闭后的历史写入及手动next防抖。不能仅称环境偶发。
+- 用外部受控写入延迟和固定防抖时钟，在父962b5f7及阶段源码均复现同一generation未变化断言失败（各1 failed、exit1）。同一探针对修正后的替身1 passed；没有修改生产确认、高潮或切歌算法，也没有关闭安全守卫。
+- 只修正tests/unit/test_playback_mode.py：提供False/数值等真实IPC类型，隔离CommandBus/EventBus/StateStore及LX连接；测试结束停止自身控制器、等待自身线程、关闭两条临时DB连接和自身事件总线。原业务断言全部保留，已关闭连接不重复close。
+- 定向组合97 passed（含大量前轮重叠，不累计）；最终该文件15 passed、0 failed/skipped/warnings，Ruff及编译通过。各次CI、受控首败和测试清理记录均保留。
+- 本阶段本地最终唯一范围847项：相关单元682+MPV并发3+播放模式15，Qt140，真实MPV7；各组0 failed/skipped/warnings，不能把重复执行或负对照失败混入成功数。最终新SHA再核对Unit/UI，保留推荐队列未定位观察项。本轮不打包、不改网络或业务架构。
