@@ -327,8 +327,22 @@ class NaturalControl:
             if action in ("next", "previous", "style", "chart")
             else "pause"
         )
+        hint, page_evidence = meaning.target, None
+        if hint == "current" and action in ("evaluate", "save"):
+            with context._lock:
+                focused = context._focus
+            if (
+                focused
+                and context.clock() - focused[1] <= 30
+                and context._controller_token(focused[0]) == focused[2]
+            ):
+                hint = focused[0]
+            else:
+                page = context.page_hint()
+                if page in ("music", "movie"):
+                    hint, page_evidence = page, page
         selected, samples, focus = context.select(
-            selecting, meaning.target, feature=meaning.feature, memory=self.memory
+            selecting, hint, feature=meaning.feature, memory=self.memory
         )
         if selected is None:
             return OperationResult(S.NEEDS_PARAMETER, "没有唯一可靠的播放对象，请明确说音乐或电影")
@@ -351,6 +365,12 @@ class NaturalControl:
                 or self.generation(self.controller(domain), domain) != generation
             ):
                 return False
+            if meaning.target == "current":
+                with context._lock:
+                    if context._focus != focus:
+                        return False
+                if page_evidence is not None and context.page_hint() != page_evidence:
+                    return False
             if domain == "music":
                 actual = controller.get_current_song()
                 return isinstance(actual, dict) and media_key(actual) == media_key(song)

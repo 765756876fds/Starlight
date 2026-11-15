@@ -234,6 +234,13 @@ def extract(text):
     )
     if found & {"recommend"}:
         rating = ""  # “找个好听的” describes requested content, not the current song.
+    if rating:
+        visual = any(w in clause for w in ("不好看", "难看", "看腻", "看不下去"))
+        auditory = any(w in clause for w in ("好听", "难听", "听腻", "勉强能听"))
+        if visual and auditory or visual and target == "music" or auditory and target == "movie":
+            return None
+        if target == "current":
+            target = "movie" if visual else "music" if auditory else "current"
     primary = found & ACTIONS - {"save"}
     if "style" in primary:
         primary -= {"next", "recommend", "chart"}

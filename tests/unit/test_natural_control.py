@@ -511,3 +511,51 @@ def test_denied_previous_action_never_executes_and_only_undoes_attributable_feed
     assert control.memory.weak_profile("music") == ({} if revoked else before)
     assert len(controller.mpv.loaded) == loads
     assert control.close()
+
+
+@pytest.mark.parametrize("text,page", [("这个不好看", "music"), ("这个一般般", "movie")])
+def test_movie_evaluation_never_skips_background_music_without_movie_target(
+    controller, tmp_path, text, page
+):
+    ready(controller)
+    rt, control = build(controller, tmp_path)
+    rt.media_context.note_page(page)
+    before = controller._play_request_id
+    try:
+        result = natural(rt, text)
+        assert result.status is S.NEEDS_PARAMETER
+        assert controller._play_request_id == before
+        assert control.memory.flush()
+        assert control.memory.weak_profile("music") == {}
+    finally:
+        assert control.close()
+
+
+def test_explicit_song_evaluation_still_controls_music_on_movie_page(controller, tmp_path):
+    ready(controller)
+    rt, control = build(controller, tmp_path)
+    rt.media_context.note_page("movie")
+    before = controller._play_request_id
+    assert natural(rt, "这首歌一般般").status is S.ACCEPTED
+    settle(controller)
+    assert controller._play_request_id == before + 1
+    assert control.close()
+
+
+def test_page_evidence_changing_after_selection_blocks_old_feedback(controller, tmp_path):
+    ready(controller)
+    rt, control = build(controller, tmp_path)
+    rt.media_context.note_page("music")
+    freeze = control._frozen_song
+
+    def changed(c):
+        song = freeze(c)
+        rt.media_context.note_page("movie")
+        return song
+
+    control._frozen_song = changed
+    before = controller._play_request_id
+    assert natural(rt, "这个一般般").status is S.UNKNOWN
+    assert controller._play_request_id == before
+    assert control.memory.flush() and control.memory.weak_profile("music") == {}
+    assert control.close()
