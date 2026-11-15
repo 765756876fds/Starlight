@@ -1,0 +1,3 @@
+# Frozen bytes must match their pre-inference SHA256 on every checkout.
+data/*.json -text whitespace=cr-at-eol
+confirmation_data/*.json -text whitespace=cr-at-eol
