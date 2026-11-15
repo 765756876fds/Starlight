@@ -133,15 +133,7 @@ def test_asr_manager_unknown_preserves_original_behavior():
 
 def test_voice_runtime_start_disabled_skips_asr():
     """bootstrap_result="disabled" 时 VoiceRuntime.start 不调 asr.initialize。"""
-    from app.voice.runtime import VoiceRuntime
-    from app.voice.intent import IntentRouter
-    vr = VoiceRuntime.__new__(VoiceRuntime)
-    vr.intent_router = IntentRouter({})
-    vr._running = False
-    vr.asr = MagicMock()
-    vr._asr_thread = None
-    vr._interrupt_thread = None
-    vr._speech_queue = MagicMock()
+    vr = _make_fake_voice_runtime()
     vr.start(bootstrap_result="disabled")
     vr.asr.initialize.assert_not_called()
 
@@ -182,18 +174,10 @@ def test_asr_enabled_string_parsing(raw, expected):
 
 def _make_fake_voice_runtime():
     from app.voice.runtime import VoiceRuntime
-    from app.voice.intent import IntentRouter
-    vr = VoiceRuntime.__new__(VoiceRuntime)
-    vr.intent_router = IntentRouter({})
-    vr._running = False
+    # Constructor is cheap: no microphone, model server or worker is started.
+    # Keep all lifecycle state in step with production, replacing only IO edges.
+    vr = VoiceRuntime({})
     vr.asr = MagicMock()
-    vr._asr_thread = None
-    vr._interrupt_thread = None
-    vr._speech_queue = MagicMock()
-    import queue as _q
-    vr._interrupt_queue = _q.Queue()
-    vr._asr_generation = 0
-    vr._interrupt_stop = MagicMock()
     vr.state_store = MagicMock()
     return vr
 

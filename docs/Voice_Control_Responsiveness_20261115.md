@@ -48,3 +48,10 @@ MusicPanel构造及定时刷新曾在GUI线程get_volume，经过MPV IPC锁等�
 用户最少验收：只播放音乐，分别说停一下/继续播放及先停一下/接着放；只播放电影重复一次。正常网络说换个榜单并连续快速说几次，确认窗口可切页/点击、旧结果不抢播。如仍卡顿，仅提供对应时间段的脱敏voice_timing/recommendation_timing/gui_latency记录以定位64秒具体段，不需先改网络设置。
 
 Git/Windows Unit与UI CI最终回执在本地WORK_LOG追加，按实际SHA和日志分别记录；CI选定UI组不代表新增60秒/全部165项都在远端执行。
+
+
+## 首次Windows CI与ASR替身修正
+
+新SHA a62553768e339f8df70fbff679f07babfcd2cc81：Windows UI工作流43690735199成功，四组110 passed/0 failed/skipped/warnings，工具41 passed/1既有config.py转义警告；5份JUnit已下载核验。Unit工作流43690735217首次为2992 passed、3 failed、9 skipped、1既有asyncio标记警告；无access violation/Windows fatal exception记录。3项失败均为test_asr_status_propagation的__new__替身缺少_observations，与生产构造路径不同。
+
+本地原样复现3 failed/30 passed后，仅将ASR启动替身改为真实VoiceRuntime构造、只替换ASR与状态存储IO边界；disabled/ok/fail原有断言保留，不改生产代码。相关ASR/语音回归71 passed、0 failed/skipped/warnings，exit0；包含前述部分已测节点，不与1117重复累加。一次误写不存在测试路径的exit4/no tests ran也保留在外部日志，修正路径后正常执行。最终SHA与新Windows CI回执另记本地维护记录。
