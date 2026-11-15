@@ -1,0 +1,5370 @@
+[
+  {
+    "id": "control-01",
+    "category": "control",
+    "split": "dev",
+    "text": "音乐先暂停一会",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.pause"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "control-02",
+    "category": "control",
+    "split": "dev",
+    "text": "电影接着播吧",
+    "state": {
+      "music": "stopped",
+      "movie": "paused",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "movie",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.resume"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "control-03",
+    "category": "control",
+    "split": "dev",
+    "text": "先歇会",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.pause"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "control-04",
+    "category": "control",
+    "split": "dev",
+    "text": "音乐停止",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "stop"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.stop"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "evaluation-01",
+    "category": "evaluation",
+    "split": "dev",
+    "text": "这首歌不好听",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": {
+        "domain": "music",
+        "rating": "negative",
+        "strength": "weak",
+        "item_id": "synthetic-track-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "evaluation-02",
+    "category": "evaluation",
+    "split": "dev",
+    "text": "这首歌一般般",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "neutral_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": {
+        "domain": "music",
+        "rating": "neutral",
+        "strength": "weak",
+        "item_id": "synthetic-track-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "evaluation-03",
+    "category": "evaluation",
+    "split": "dev",
+    "text": "这个没劲透了",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.stop",
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "movie",
+        "preserve_progress": true
+      },
+      "weak_feedback": {
+        "domain": "movie",
+        "rating": "negative",
+        "strength": "weak",
+        "item_id": "synthetic-work-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "evaluation-04",
+    "category": "evaluation",
+    "split": "dev",
+    "text": "这个不对味",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [
+        "candidate-1",
+        "candidate-2"
+      ],
+      "playable_ids": [
+        "candidate-1"
+      ],
+      "previous_candidate_id": "candidate-1",
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "movie"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "positive_save-01",
+    "category": "positive_save",
+    "split": "dev",
+    "text": "这首不错，给我留着",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "positive_feedback",
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback",
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "positive_save-02",
+    "category": "positive_save",
+    "split": "dev",
+    "text": "这首不错",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "positive_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "positive_save-03",
+    "category": "positive_save",
+    "split": "dev",
+    "text": "给我留着",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "save"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "positive_save-04",
+    "category": "positive_save",
+    "split": "dev",
+    "text": "这首歌好听，收藏一下",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "positive_feedback",
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback",
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "change-01",
+    "category": "change",
+    "split": "dev",
+    "text": "换个榜单吧",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_list"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "change-02",
+    "category": "change",
+    "split": "dev",
+    "text": "换种音乐风格",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_style"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true,
+        "change_style": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "change-03",
+    "category": "change",
+    "split": "dev",
+    "text": "换首歌听",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "change-04",
+    "category": "change",
+    "split": "dev",
+    "text": "音乐换个感觉",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_style"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true,
+        "change_style": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "discovery-01",
+    "category": "discovery",
+    "split": "dev",
+    "text": "放点歌曲吧",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "discovery-02",
+    "category": "discovery",
+    "split": "dev",
+    "text": "我想看一部电影",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "movie"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "discovery-03",
+    "category": "discovery",
+    "split": "dev",
+    "text": "搜索《样例歌甲》",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "search"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.search"
+      ],
+      "params": {
+        "query": "样例歌甲"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "discovery-04",
+    "category": "discovery",
+    "split": "dev",
+    "text": "找个好看的",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "tv",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "tv"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "history_selection-01",
+    "category": "history_selection",
+    "split": "dev",
+    "text": "继续看昨天的",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [
+        {
+          "id": "synthetic-tv-yesterday",
+          "kind": "tv",
+          "reliable": true,
+          "unfinished": true,
+          "day": "yesterday"
+        }
+      ],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "continue_watch"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.continue_watching"
+      ],
+      "params": {
+        "history_id": "synthetic-tv-yesterday",
+        "kind": "tv"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "history_selection-02",
+    "category": "history_selection",
+    "split": "dev",
+    "text": "就刚才那个",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [
+        "candidate-1",
+        "candidate-2"
+      ],
+      "playable_ids": [
+        "candidate-1"
+      ],
+      "previous_candidate_id": "candidate-1",
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "select_previous"
+      ],
+      "target_hint": "previous_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.select_candidate"
+      ],
+      "params": {
+        "candidate_id": "candidate-1"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "history_selection-03",
+    "category": "history_selection",
+    "split": "dev",
+    "text": "接着看上回没看完的",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [
+        {
+          "id": "synthetic-tv-yesterday",
+          "kind": "tv",
+          "reliable": true,
+          "unfinished": true,
+          "day": "yesterday"
+        }
+      ],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "continue_watch"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.continue_watching"
+      ],
+      "params": {
+        "history_id": "synthetic-tv-yesterday",
+        "kind": "tv"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "history_selection-04",
+    "category": "history_selection",
+    "split": "dev",
+    "text": "刚刚那个吧",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [
+        "candidate-1",
+        "candidate-2"
+      ],
+      "playable_ids": [
+        "candidate-1"
+      ],
+      "previous_candidate_id": "candidate-1",
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "select_previous"
+      ],
+      "target_hint": "previous_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.select_candidate"
+      ],
+      "params": {
+        "candidate_id": "candidate-1"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "experience-01",
+    "category": "experience",
+    "split": "dev",
+    "text": "音乐音量调高一点",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "volume_up"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.volume_up"
+      ],
+      "params": {
+        "step": 5
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "experience-02",
+    "category": "experience",
+    "split": "dev",
+    "text": "电影音量调低一点",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "volume_down"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.volume_down"
+      ],
+      "params": {
+        "step": 5
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "experience-03",
+    "category": "experience",
+    "split": "dev",
+    "text": "向前跳十秒",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "seek_forward"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.seek"
+      ],
+      "params": {
+        "seconds": 10,
+        "mode": "relative"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "experience-04",
+    "category": "experience",
+    "split": "dev",
+    "text": "往回跳十五秒",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "seek_backward"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.seek"
+      ],
+      "params": {
+        "seconds": -15,
+        "mode": "relative"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "denial_correction-01",
+    "category": "denial_correction",
+    "split": "dev",
+    "text": "不要暂停音乐",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "music",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "denial_correction-02",
+    "category": "denial_correction",
+    "split": "dev",
+    "text": "别换了",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "denial_correction-03",
+    "category": "denial_correction",
+    "split": "dev",
+    "text": "不是让你换歌，是换个榜单",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_list"
+      ],
+      "target_hint": "music",
+      "polarity": "correction"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "denial_correction-04",
+    "category": "denial_correction",
+    "split": "dev",
+    "text": "不要停",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "question_report-01",
+    "category": "question_report",
+    "split": "dev",
+    "text": "你是不是暂停了",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "question",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "question_report-02",
+    "category": "question_report",
+    "split": "dev",
+    "text": "他说这首不好听",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "reported",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "question_report-03",
+    "category": "question_report",
+    "split": "dev",
+    "text": "为什么换歌",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "question",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "question_report-04",
+    "category": "question_report",
+    "split": "dev",
+    "text": "朋友说这个不错",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "reported",
+      "signals": [
+        "positive_feedback"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "noise_ambiguity-01",
+    "category": "noise_ambiguity",
+    "split": "dev",
+    "text": "晚上吃啥",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "chat",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "noise_ambiguity-02",
+    "category": "noise_ambiguity",
+    "split": "dev",
+    "text": "嗯啊那个",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "chat",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "noise_ambiguity-03",
+    "category": "noise_ambiguity",
+    "split": "dev",
+    "text": "先暂停电影再换歌",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content",
+        "pause"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "noise_ambiguity-04",
+    "category": "noise_ambiguity",
+    "split": "dev",
+    "text": "播放电影《不要停》",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "search"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.search"
+      ],
+      "params": {
+        "query": "不要停"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-01",
+    "category": "control",
+    "split": "test",
+    "text": "把歌先停片刻",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.pause"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-02",
+    "category": "control",
+    "split": "test",
+    "text": "片子先歇一会吧",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.pause"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-03",
+    "category": "control",
+    "split": "test",
+    "text": "现在音乐接上吧",
+    "state": {
+      "music": "paused",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "music",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.resume"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-04",
+    "category": "control",
+    "split": "test",
+    "text": "电影恢复着放",
+    "state": {
+      "music": "stopped",
+      "movie": "paused",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "movie",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.resume"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-05",
+    "category": "control",
+    "split": "test",
+    "text": "咱先暂停播放呗",
+    "state": {
+      "music": "playing",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.pause"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-06",
+    "category": "control",
+    "split": "test",
+    "text": "接着播起来",
+    "state": {
+      "music": "paused",
+      "movie": "paused",
+      "focus": "none",
+      "page": "music",
+      "recent_pause": "music",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.resume"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-07",
+    "category": "control",
+    "split": "test",
+    "text": "这就恢复播放",
+    "state": {
+      "music": "unknown",
+      "movie": "stopped",
+      "focus": "none",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-control-08",
+    "category": "control",
+    "split": "test",
+    "text": "先把音乐关掉吧",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "stop"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.stop"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-evaluation-01",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这曲子太难听了",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": {
+        "domain": "music",
+        "rating": "negative",
+        "strength": "weak",
+        "item_id": "synthetic-track-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-evaluation-02",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这歌忒没劲",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": {
+        "domain": "music",
+        "rating": "negative",
+        "strength": "weak",
+        "item_id": "synthetic-track-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-evaluation-03",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这首勉强能听",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "neutral_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": {
+        "domain": "music",
+        "rating": "neutral",
+        "strength": "weak",
+        "item_id": "synthetic-track-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-evaluation-04",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这歌有点拉胯",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": {
+        "domain": "music",
+        "rating": "negative",
+        "strength": "weak",
+        "item_id": "synthetic-track-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-evaluation-05",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这个片太烂了",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.stop",
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "movie",
+        "preserve_progress": true
+      },
+      "weak_feedback": {
+        "domain": "movie",
+        "rating": "negative",
+        "strength": "weak",
+        "item_id": "synthetic-work-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-evaluation-06",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这个剧情看不下去",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.stop",
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "movie",
+        "preserve_progress": true
+      },
+      "weak_feedback": {
+        "domain": "movie",
+        "rating": "negative",
+        "strength": "weak",
+        "item_id": "synthetic-work-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-evaluation-07",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这首马马虎虎",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "neutral_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": {
+        "domain": "music",
+        "rating": "neutral",
+        "strength": "weak",
+        "item_id": "synthetic-track-1"
+      },
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-evaluation-08",
+    "category": "evaluation",
+    "split": "test",
+    "text": "这个也一般",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [
+        "candidate-1",
+        "candidate-2"
+      ],
+      "playable_ids": [
+        "candidate-1"
+      ],
+      "previous_candidate_id": "candidate-1",
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "neutral_feedback"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "movie"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-01",
+    "category": "positive_save",
+    "split": "test",
+    "text": "这曲儿挺合胃口",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "positive_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-02",
+    "category": "positive_save",
+    "split": "test",
+    "text": "听着挺带劲，给我存起来",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "positive_feedback",
+        "save"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback",
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-03",
+    "category": "positive_save",
+    "split": "test",
+    "text": "这首真赞，帮我收下",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "positive_feedback",
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback",
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-04",
+    "category": "positive_save",
+    "split": "test",
+    "text": "把这歌留住",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-05",
+    "category": "positive_save",
+    "split": "test",
+    "text": "这一首不错",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [
+        "positive_feedback"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-06",
+    "category": "positive_save",
+    "split": "test",
+    "text": "我挺中意这首，收藏吧",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "positive_feedback",
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback",
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-07",
+    "category": "positive_save",
+    "split": "test",
+    "text": "这歌喜欢，保存好",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "positive_feedback",
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback",
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-positive_save-08",
+    "category": "positive_save",
+    "split": "test",
+    "text": "这首可以，给我留下",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "positive_feedback",
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommendation_feedback",
+        "music.add_to_playlist"
+      ],
+      "params": {
+        "feedback": "positive",
+        "item_id": "synthetic-track-1",
+        "name": "我喜欢的音乐"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": true
+  },
+  {
+    "id": "confirm-change-01",
+    "category": "change",
+    "split": "test",
+    "text": "咱换个音乐口味吧",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_style"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true,
+        "change_style": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-change-02",
+    "category": "change",
+    "split": "test",
+    "text": "另挑一张榜单",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_list"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-change-03",
+    "category": "change",
+    "split": "test",
+    "text": "来一首别的",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-change-04",
+    "category": "change",
+    "split": "test",
+    "text": "这段先跳过",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-change-05",
+    "category": "change",
+    "split": "test",
+    "text": "这首切走",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-change-06",
+    "category": "change",
+    "split": "test",
+    "text": "换一种听感",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_style"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true,
+        "change_style": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-change-07",
+    "category": "change",
+    "split": "test",
+    "text": "榜单和风格都换换",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_list",
+        "change_style"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true,
+        "change_style": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-change-08",
+    "category": "change",
+    "split": "test",
+    "text": "换一首别的吧",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-01",
+    "category": "discovery",
+    "split": "test",
+    "text": "给我安排点音乐",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-02",
+    "category": "discovery",
+    "split": "test",
+    "text": "帮我挑个好看的片子",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "tv",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "tv"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-03",
+    "category": "discovery",
+    "split": "test",
+    "text": "推荐些电影看看",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "tv",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "movie"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-04",
+    "category": "discovery",
+    "split": "test",
+    "text": "想看一部番剧",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "anime",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "anime"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-05",
+    "category": "discovery",
+    "split": "test",
+    "text": "给我搜一下《合成歌戊》",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "search"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.search"
+      ],
+      "params": {
+        "query": "合成歌戊"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-06",
+    "category": "discovery",
+    "split": "test",
+    "text": "查找影片《合成片己》",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "tv",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "search"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.search"
+      ],
+      "params": {
+        "query": "合成片己"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-07",
+    "category": "discovery",
+    "split": "test",
+    "text": "挑点合适的看看",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "tv",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.recommend"
+      ],
+      "params": {
+        "kind": "tv"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-discovery-08",
+    "category": "discovery",
+    "split": "test",
+    "text": "找个好看的东西",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "none",
+      "page": "home",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "recommend"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-01",
+    "category": "history_selection",
+    "split": "test",
+    "text": "昨天那集还没看完，接着看",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [
+        {
+          "id": "synthetic-tv-yesterday",
+          "kind": "tv",
+          "reliable": true,
+          "unfinished": true,
+          "day": "yesterday"
+        }
+      ],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "continue_watch"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.continue_watching"
+      ],
+      "params": {
+        "history_id": "synthetic-tv-yesterday",
+        "kind": "tv"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-02",
+    "category": "history_selection",
+    "split": "test",
+    "text": "把上回的续上",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [
+        {
+          "id": "synthetic-tv-yesterday",
+          "kind": "tv",
+          "reliable": true,
+          "unfinished": true,
+          "day": "yesterday"
+        }
+      ],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "continue_watch"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.continue_watching"
+      ],
+      "params": {
+        "history_id": "synthetic-tv-yesterday",
+        "kind": "tv"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-03",
+    "category": "history_selection",
+    "split": "test",
+    "text": "续看那部没看完的",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "continue_watch"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-04",
+    "category": "history_selection",
+    "split": "test",
+    "text": "刚才那个就它了",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [
+        "candidate-1",
+        "candidate-2"
+      ],
+      "playable_ids": [
+        "candidate-1"
+      ],
+      "previous_candidate_id": "expired",
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "select_previous"
+      ],
+      "target_hint": "previous_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-05",
+    "category": "history_selection",
+    "split": "test",
+    "text": "给我放先前那个",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [
+        "candidate-1",
+        "candidate-2"
+      ],
+      "playable_ids": [
+        "candidate-1"
+      ],
+      "previous_candidate_id": "candidate-1",
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "select_previous"
+      ],
+      "target_hint": "previous_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.pause",
+        "movie.select_candidate"
+      ],
+      "params": {
+        "candidate_id": "candidate-1"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-06",
+    "category": "history_selection",
+    "split": "test",
+    "text": "就刚刚选的那部",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [
+        "candidate-1",
+        "candidate-2"
+      ],
+      "playable_ids": [
+        "candidate-1"
+      ],
+      "previous_candidate_id": "candidate-1",
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "select_previous"
+      ],
+      "target_hint": "previous_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.select_candidate"
+      ],
+      "params": {
+        "candidate_id": "candidate-1"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-07",
+    "category": "history_selection",
+    "split": "test",
+    "text": "恢复昨天那部",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [
+        {
+          "id": "synthetic-tv-yesterday",
+          "kind": "tv",
+          "reliable": false,
+          "unfinished": true,
+          "day": "yesterday"
+        }
+      ],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "continue_watch"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-history_selection-08",
+    "category": "history_selection",
+    "split": "test",
+    "text": "继续看没看完的",
+    "state": {
+      "music": "stopped",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [
+        {
+          "id": "synthetic-tv-yesterday",
+          "kind": "tv",
+          "reliable": true,
+          "unfinished": true,
+          "day": "yesterday"
+        },
+        {
+          "id": "another-history",
+          "kind": "tv",
+          "reliable": true,
+          "unfinished": true,
+          "day": "yesterday"
+        }
+      ],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "continue_watch"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-01",
+    "category": "experience",
+    "split": "test",
+    "text": "音量再小一点",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "volume_down"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.volume_down"
+      ],
+      "params": {
+        "step": 5
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-02",
+    "category": "experience",
+    "split": "test",
+    "text": "影片大声一点",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "volume_up"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.volume_up"
+      ],
+      "params": {
+        "step": 5
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-03",
+    "category": "experience",
+    "split": "test",
+    "text": "把音乐往回跳20秒",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "seek_backward"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.seek"
+      ],
+      "params": {
+        "seconds": -20,
+        "mode": "relative"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-04",
+    "category": "experience",
+    "split": "test",
+    "text": "电影往前跳30秒",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "seek_forward"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "movie.seek"
+      ],
+      "params": {
+        "seconds": 30,
+        "mode": "relative"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-05",
+    "category": "experience",
+    "split": "test",
+    "text": "音乐慢点播吧",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "speed_down"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.set_speed"
+      ],
+      "params": {
+        "direction": "down"
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-06",
+    "category": "experience",
+    "split": "test",
+    "text": "声音吵得慌",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "evaluation",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-07",
+    "category": "experience",
+    "split": "test",
+    "text": "让我听清，响一点",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "volume_up"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.volume_up"
+      ],
+      "params": {
+        "step": 5
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-experience-08",
+    "category": "experience",
+    "split": "test",
+    "text": "稍微快进点",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "seek_forward"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-01",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "别再跳过这首啦",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-02",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "不准暂停电影",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "movie",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-03",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "别给我换榜单",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_list"
+      ],
+      "target_hint": "music",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-04",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "我不是要暂停，是继续播",
+    "state": {
+      "music": "paused",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "music",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "correction"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.resume"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-05",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "不是收藏，是换首歌",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "correction"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.next"
+      ],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-06",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "别恢复音乐",
+    "state": {
+      "music": "paused",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "music",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "music",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-07",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "不是让你换风格，是换榜单",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "change_list"
+      ],
+      "target_hint": "music",
+      "polarity": "correction"
+    },
+    "gold": {
+      "disposition": "execute",
+      "actions": [
+        "music.recommend"
+      ],
+      "params": {
+        "change_chart": true
+      },
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-denial_correction-08",
+    "category": "denial_correction",
+    "split": "test",
+    "text": "不用关掉电影",
+    "state": {
+      "music": "stopped",
+      "movie": "playing",
+      "focus": "movie",
+      "page": "movie",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "stop"
+      ],
+      "target_hint": "movie",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-01",
+    "category": "question_report",
+    "split": "test",
+    "text": "朋友问我这首好不好听",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "reported",
+      "signals": [
+        "positive_feedback"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-02",
+    "category": "question_report",
+    "split": "test",
+    "text": "她说这个难看",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "reported",
+      "signals": [
+        "negative_feedback"
+      ],
+      "target_hint": "current_item",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-03",
+    "category": "question_report",
+    "split": "test",
+    "text": "暂停会不会丢进度",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "question",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-04",
+    "category": "question_report",
+    "split": "test",
+    "text": "收藏这首能干嘛",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "question",
+      "signals": [
+        "save"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-05",
+    "category": "question_report",
+    "split": "test",
+    "text": "他说让你继续音乐",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "reported",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-06",
+    "category": "question_report",
+    "split": "test",
+    "text": "有人说换个榜单",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "reported",
+      "signals": [
+        "change_list"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-07",
+    "category": "question_report",
+    "split": "test",
+    "text": "‘别给我换歌’",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "reported",
+      "signals": [
+        "change_content"
+      ],
+      "target_hint": "music",
+      "polarity": "negative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-question_report-08",
+    "category": "question_report",
+    "split": "test",
+    "text": "音乐暂停了没",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "question",
+      "signals": [
+        "pause"
+      ],
+      "target_hint": "music",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-01",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "明天午饭吃啥",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "chat",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-02",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "这个菜味道不错",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "chat",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-03",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "今天工作挺没劲",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "chat",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-04",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "那个嗯就是",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "chat",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "ignore",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-05",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "接着那个啥",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "unclear",
+      "signals": [
+        "resume"
+      ],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-06",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "音乐停鸦下",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "unclear",
+      "signals": [],
+      "target_hint": "music",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-07",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "不要不要了",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "unclear",
+      "signals": [],
+      "target_hint": "unspecified",
+      "polarity": "unclear"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  },
+  {
+    "id": "confirm-noise_ambiguity-08",
+    "category": "noise_ambiguity",
+    "split": "test",
+    "text": "先暂停电影再保存歌曲",
+    "state": {
+      "music": "playing",
+      "movie": "stopped",
+      "focus": "music",
+      "page": "music",
+      "recent_pause": "none",
+      "queue_count": 20,
+      "recommendation_session": true,
+      "music_id": "synthetic-track-1",
+      "movie_id": "synthetic-work-1",
+      "kind": "movie",
+      "preferred_kind": "movie",
+      "stale": false,
+      "candidate_ids": [],
+      "playable_ids": [],
+      "previous_candidate_id": null,
+      "history": [],
+      "liked_playlist_exists": true
+    },
+    "semantic": {
+      "speech_act": "command",
+      "signals": [
+        "pause",
+        "save"
+      ],
+      "target_hint": "movie",
+      "polarity": "affirmative"
+    },
+    "gold": {
+      "disposition": "clarify",
+      "actions": [],
+      "params": {},
+      "weak_feedback": null,
+      "reason": "policy"
+    },
+    "implicit": false
+  }
+]
