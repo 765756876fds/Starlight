@@ -21,6 +21,8 @@ def perform(controller, command):
     action = command.get("action")
     if action not in ("pause", "resume", "next", "previous", "stop"):
         return OperationResult(S.UNSUPPORTED, "暂不支持这项播放操作")
+    if action == "next":
+        return controller._next_feedback.perform(command)
     before = controller._play_request_id
     method = {"previous": controller.prev, "stop": controller.stop_current}.get(action) or getattr(
         controller, action

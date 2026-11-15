@@ -113,9 +113,12 @@ def test_explicit_music_pause_uses_only_music_controller():
 @pytest.mark.parametrize("error,word", [(RuntimeError("private"), "未成功"), (TimeoutError(), "超时")])
 def test_control_failure_feedback_once(error, word):
     rt = runtime()
+    completed = threading.Event()
+    rt._enqueue_speak.side_effect = lambda *args: completed.set()
     handler = MagicMock(side_effect=error)
     rt.command_bus.register(C.MUSIC_NEXT, handler)
     rt._execute_intent(Intent(C.MUSIC_NEXT), "下一首")
+    assert completed.wait(1), "asynchronous next failure must report within a bounded wait"
     handler.assert_called_once()
     rt._enqueue_speak.assert_called_once()
     assert word in rt._enqueue_speak.call_args.args[0]

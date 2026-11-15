@@ -61,6 +61,7 @@ class Notification:
     speech_status: str = "none"
     created_at: float = 0.0
     updated_at: float = 0.0
+    result_owner: str = ""
 
 
 class NotificationCenter:
@@ -217,6 +218,13 @@ def _command_result(command, value=None, error=None):
     """Observe existing return contracts; unknown legacy None stays unknown."""
     operation_id = current_operation_id()
     if not operation_id:
+        return
+    record = get_notification_center().get(operation_id)
+    if record is not None and record.result_owner and command in (
+        "music.next", "music.guarded_action", "player.natural", "player.context",
+    ):
+        # A playback observer owns this operation's staged result. Nested legacy
+        # returns must not replace confirmed playback with a generic None result.
         return
     action = action_title(command)
     if error is not None:

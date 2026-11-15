@@ -1070,7 +1070,7 @@ class VoiceRuntime:
                 record = center.get(operation_id)
                 asynchronous = intent.intent_type in (CommandType.NATURAL_MEDIA, CommandType.MEDIA_CONTEXT, CommandType.MOVIE_RECOMMEND,
                     CommandType.MOVIE_CONTINUE, CommandType.MUSIC_RESUME, CommandType.MUSIC_RECOMMEND_NEXT, CommandType.MUSIC_RECOMMEND, CommandType.MUSIC_SEARCH_PLAY,
-                    CommandType.MOVIE_SEARCH_PLAY, CommandType.MUSIC_RESCAN, CommandType.PLAYER_QUERY)
+                    CommandType.MOVIE_SEARCH_PLAY, CommandType.MUSIC_RESCAN, CommandType.PLAYER_QUERY, CommandType.MUSIC_NEXT)
                 if record and record.status == "processing" and not asynchronous:
                     center.update(operation_id, title="操作已发送，结果尚未确认",
                                   status="warning", phase="done")
@@ -1310,7 +1310,22 @@ class VoiceRuntime:
             self._enqueue_speak(media_result(result, label="音乐", action="停止").message,
                                 "voice_music_control")
 
-        elif intent_type in (CommandType.MUSIC_NEXT, CommandType.MUSIC_PREV,
+        elif intent_type == CommandType.MUSIC_NEXT:
+            if self.command_bus.has_handler(intent_type) is False:
+                self._enqueue_speak("该功能尚未就绪，请等待初始化完成", "voice_control")
+                return
+            notification_id = current_operation_id()
+            def next_done(value, error):
+                if error is not None and self._request_is_current(request_generation):
+                    with operation_scope(notification_id):
+                        self._enqueue_speak(
+                            "操作超时，暂时无法确认结果" if isinstance(error, TimeoutError) else
+                            "操作未成功，请检查播放器状态", "voice_control")
+            self.command_bus.execute_async(Command(
+                intent_type, params=params, source="voice",
+                is_current=lambda: self._request_is_current(request_generation)), on_done=next_done)
+
+        elif intent_type in (CommandType.MUSIC_PREV,
                              CommandType.MUSIC_TOGGLE, CommandType.MUSIC_HIGHLIGHT,
                              CommandType.MUSIC_CLEANUP,
                              CommandType.MUSIC_HIGHLIGHT_MODE,

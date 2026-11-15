@@ -42,6 +42,7 @@ from .playback_state import (
     reduce,
 )
 from .queue import PlayMode, PlayQueue
+from .next_feedback import NextFeedback, report as report_next_feedback
 from .scanner import MusicScanner
 from .search import MusicSearch
 
@@ -113,6 +114,7 @@ class MusicController:
                 pass  # 非法模式值 → 保持默认，不崩
         self._missing_file_streak = 0   # 连续文件不可用计数（限次保护）
         self._last_next_ts = 0.0        # next() 防抖时间戳（语音+UI 并发双触发合并）
+        self._next_feedback = NextFeedback(self)
         if mpv_adapter is not None:
             # 外部注入（Fake/替身）：controller 依赖协议而非具体类
             self.mpv = mpv_adapter
@@ -496,6 +498,9 @@ class MusicController:
             "caller": "stop()",
         })
         self._running = False
+        observer = getattr(self, "_next_feedback", None)
+        if observer is not None:
+            observer.close()
         if hasattr(self, "recommendations"):
             self.recommendations.cancel(close=True, reason="shutdown")
         self.cancel_sleep_timer()
@@ -521,7 +526,8 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_PAUSE, lambda c: self.pause(_voice_guard=c.is_current) if c.is_current else self.pause())
         self.command_bus.register(CommandType.MUSIC_RESUME, lambda c: self.resume(_voice_guard=c.is_current) if c.is_current else self.resume())
         self.command_bus.register(CommandType.MUSIC_TOGGLE, lambda c: self.toggle())
-        self.command_bus.register(CommandType.MUSIC_NEXT, lambda c: self.next())
+        self.command_bus.register(CommandType.MUSIC_NEXT, lambda c:
+            self._next_feedback.perform(c) if c.source == "voice" else self.next())
         self.command_bus.register(CommandType.MUSIC_PREV, lambda c: self.prev())
         self.command_bus.register(CommandType.MUSIC_VOLUME_SET, self._cmd_volume_set)
         self.command_bus.register(CommandType.MUSIC_VOLUME_UP, lambda c: self.volume_up(c.get("step", 10)))
@@ -728,17 +734,20 @@ class MusicController:
         _t_enter = time.perf_counter() if (self._trace and self._trace.enabled) else None
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
+            report_next_feedback(self, "voice_next", "unavailable")
             return
         # 防抖：语音 + UI 并发双触发（<300ms）只跳一首，避免一次跳两首
         now = time.time()
         if now - self._last_next_ts < 0.3:
             logger.info("[Music] next 防抖：300ms 内重复触发已忽略")
+            report_next_feedback(self, "voice_next", "debounced")
             return
         self._last_next_ts = now
         # 优先控制落雪
         if self.lx_connected:
             try:
                 if self.lx_client.next():
+                    report_next_feedback(self, "voice_next", "external")
                     return
             except Exception as e:
                 logger.error(f"[Music] 落雪 next 失败，回落 mpv: {e}")
@@ -747,9 +756,11 @@ class MusicController:
         if _timeout is not None:
             if not self._lock.acquire(timeout=_timeout):
                 logger.info("[Music] next：业务锁忙，放弃本轮")
+                report_next_feedback(self, "voice_next", "busy")
                 return
             try:
                 if _voice_guard is not None and not _voice_guard():
+                    report_next_feedback(self, "voice_next", "stale")
                     return False
                 self._next_locked()
             finally:
@@ -782,6 +793,7 @@ class MusicController:
         if song:
             self._play_song(song)
         else:
+            report_next_feedback(self, "voice_next", "empty" if self.queue.size() == 0 else "end")
             # 队列空（顺序模式播完队列尾）：停止当前播放、保持空闲，
             # 绝不跨界加载本地库——在线歌单播完不得突然切到本地歌曲
             # （旧逻辑 db.get_all_songs 自动加载整个本地库续播，是 bug 根源）。
@@ -1336,6 +1348,7 @@ class MusicController:
         播放（play_song 持锁）并发竞态——旧网络请求绝不覆盖最新播放意图。"""
         try:
             if self._resolver is None:
+                report_next_feedback(self, "resolve", "unavailable", req_id)
                 logger.error("[Music] 在线解析器未就绪，跳过")
                 self._schedule_skip_online(song)
                 return
@@ -1377,6 +1390,7 @@ class MusicController:
                 logger.info(f"[Music] 队列在线歌走重搜兜底: {query}")
                 result = self._resolver.resolve(query, limit_per_source=5)
                 if not result:
+                    report_next_feedback(self, "resolve", "no_url", req_id)
                     logger.info("[Music] 队列在线歌重搜无结果/URL 均失败，跳过")
                     self._schedule_skip_online(song)
                     return
@@ -1415,6 +1429,7 @@ class MusicController:
                 logger.error(f"[Music] 记录播放历史失败: {e}")
         except Exception as e:
             logger.error(f"[Music] 队列在线歌播放失败: {e}")
+            report_next_feedback(self, "resolve", "failed", req_id)
             self._schedule_skip_online(song)
 
     def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None) -> dict | None:
@@ -1450,18 +1465,22 @@ class MusicController:
         except Exception:
             pass
         if before_load is not None and not before_load():
+            report_next_feedback(self, "voice_load_failed", "stale", req_epoch)
             return None
         # 互斥：在线起播前确认电影已暂停（未装配 pauser 时阻断）
         if self._movie_pauser is None:
             logger.warning("[Music] movie pauser not wired, blocking online play")
+            report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
             return None
         try:
             ok = self._movie_pauser()
             if not ok:
                 logger.warning("[Music] 电影暂停确认失败，阻断在线起播")
+                report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
                 return None
         except Exception as e:
             logger.error(f"[Music] 电影暂停确认异常: {e}")
+            report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
             return None
         # Movie pause confirmation may wait for IPC. Recheck recommendation
         # currency immediately afterwards; legacy before_load may have side effects.
@@ -1472,7 +1491,10 @@ class MusicController:
         self._shadow_file_kind = "online"
         try:
             resp = self.mpv.loadfile(url)
+            report_next_feedback(self, "loadfile", "unknown" if resp is None else
+                                 "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed", req_epoch)
         except Exception as e:
+            report_next_feedback(self, "loadfile", "failed", req_epoch)
             # loadfile 抛异常（IPC 未连接/写入失败/MPV 拒绝）：不得让切换态
             # 永久卡 True（UI 进度冻结），也不得伪造播放成功。
             logger.error(f"[Music] 在线 loadfile 失败: {url[:80]!r}: {e!r}")
@@ -1573,6 +1595,7 @@ class MusicController:
         # 在线解析结果——旧网络请求（_resolve_online_worker）锁内校验不过，绝不 loadfile。
         self._play_request_id += 1
         current_epoch = self._play_request_id  # 本代次号（代次隔离：窗口内旧数据全部失效）
+        report_next_feedback(self, "voice_selected", "selected", current_epoch)
         # UI 切换态：新歌 loadfile 前禁止渲染旧进度（在线解析窗口内 mpv 仍报旧歌位置）
         self._is_switching_track = True
         # 切歌重置播放时间快照与暂停标志：防止旧位置外推污染新歌的进度显示
@@ -1593,6 +1616,7 @@ class MusicController:
 
         filepath = song.get("path")
         if not filepath or not os.path.exists(filepath):
+            report_next_feedback(self, "voice_load_failed", "missing", current_epoch)
             # 决策点：缺失文件分支（记录连续失败计数）
             self._record_decision({
                 "kind": "missing_file",
@@ -1638,7 +1662,10 @@ class MusicController:
 
         try:
             resp = self.mpv.loadfile(filepath)
+            report_next_feedback(self, "loadfile", "unknown" if resp is None else
+                                 "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed", current_epoch)
         except Exception as e:
+            report_next_feedback(self, "loadfile", "failed", current_epoch)
             # loadfile 抛异常（IPC 未连接/写入失败/MPV 拒绝）：不得让切换态
             # 永久卡 True（UI 进度冻结），也不得伪造播放成功。
             logger.error(f"[Music] 本地 loadfile 失败: {filepath!r}: {e!r}")
