@@ -107,7 +107,11 @@ class PreferenceStore:
                 ) GROUP BY artist
             """))
             return {"explicit": explicit, "artists": inferred}
-        return self._run(read) or {"explicit": {}, "artists": {}}
+        result = self._run(read) or {"explicit": {}, "artists": {}}
+        provider = getattr(self, "weak_provider", None)
+        if callable(provider):
+            result["weak_tracks"] = provider()
+        return result
 
     def cache(self, key, value=None, ttl=300):
         def access(db):

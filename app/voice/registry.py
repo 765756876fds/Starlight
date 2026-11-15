@@ -110,7 +110,7 @@ REGISTRY: list[Feature] = [
         name="下一部电影",
         concepts=["下一部"],
         actions=["next_film"],
-        executor="MOVIE_NEXT_EPISODE",
+        executor="MOVIE_RECOMMEND",
     ),
     Feature(
         feature_id="movie.next_episode",

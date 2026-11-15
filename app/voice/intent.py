@@ -2,10 +2,10 @@
 Intent / 人话理解
 
 将用户自然语言转换为结构化意图。
-采用：明确规则优先，未命中时尝试有限音乐语义（纯确定性，无 LLM）
+采用：明确规则优先，未命中时提取有限组合语义（纯确定性，无 LLM）。
 
-AI 不参与意图识别。规则要求明确动词才产生写操作副作用，
-裸陈述（如"对面莎弥拉闪现了"）返回 system.unknown。
+语义候选不等于执行许可；隐含媒体评价由实时情境和安全守卫决定。
+游戏指令保留原有识别与执行边界。
 """
 import re
 import time
@@ -80,7 +80,7 @@ class RuleBasedIntent:
         (r"^(下一个)$", CommandType.PLAYER_NEXT, {}),
         # 电影"下一部"（明确域，不经过仲裁）
         (r"^(下一部|下一部电影|换一部|换一部电影|播放下一部|看下一部)$",
-         CommandType.MOVIE_NEXT_EPISODE, {}),
+         CommandType.MOVIE_RECOMMEND, {"kind": "movie"}),
         # 音乐高潮模式开关
         (r"^(开启高潮模式|打开高潮模式|高潮模式开)$",
          CommandType.MUSIC_HIGHLIGHT_MODE, {"enabled": True}),
@@ -768,6 +768,27 @@ class IntentRouter:
             return Intent("system.context_cancel", params={})
 
         intent = self.rule_based.match(text)
+        from .natural_language import extract, safety
+        meaning = extract(text)
+        clause, corrected, rejected = safety(text)
+        if normalize_text(text) in ("清空歌单", "清空我的歌单"):
+            self.clear_context()
+            return Intent("system.clarify", params={"message": "歌单和临时播放队列不同。若只想停止并清空待播歌曲，请说清空队列"})
+        if meaning is not None and corrected:
+            self.clear_context()
+            return Intent(CommandType.NATURAL_MEDIA, params=meaning.to_dict())
+        if meaning is not None and meaning.rating and intent and intent.intent_type == CommandType.MUSIC_NEXT:
+            self.clear_context()
+            return Intent(CommandType.NATURAL_MEDIA, params=meaning.to_dict())
+        legacy_music = parse_music_candidate(text)
+        pause_exception = legacy_music is not None and legacy_music.action == "pause" and "别放了" in text
+        content_request = intent is not None and intent.intent_type in (CommandType.MUSIC_SEARCH_PLAY, CommandType.MOVIE_SEARCH_PLAY)
+        if not content_request and (intent is None or intent.intent_type.startswith(("music.", "movie.", "player."))) and rejected in (
+                "reported", "question", "negative_request", "unrelated_subject") and not pause_exception:
+            self.clear_context()
+            blocked = Intent("system.unknown", confidence=0.0)
+            blocked.natural_rejection = rejected
+            return blocked
         if intent and intent.intent_type in (CommandType.MOVIE_RECOMMEND, CommandType.MOVIE_CONTINUE,
                                              CommandType.MEDIA_CONTEXT) and unsafe_control_text(text):
             self.clear_context()
@@ -795,6 +816,10 @@ class IntentRouter:
             if spec and (spec.key not in intent.params or intent.params[spec.key] is None):
                 self._pending_parameter = (intent.intent_type, time.monotonic() + 12.0)
             return intent
+
+        if meaning is not None:
+            self.clear_context()
+            return Intent(CommandType.NATURAL_MEDIA, params=meaning.to_dict())
 
         reply = self._parameter_reply(text)
         if reply is not None:

@@ -56,6 +56,9 @@ logger = get_logger()
 def _cancel_switch_on_user_action(method):
     """用户操作入口装饰器：先取消进行中的候选换源（用户优先）。"""
     def wrapper(self, *args, **kwargs):
+        guard = kwargs.get("_voice_guard")
+        if guard is not None and not guard():
+            return False
         try:
             self._cancel_candidate_switch()
             if hasattr(self, "recommendations"):
@@ -510,9 +513,13 @@ class MusicController:
 
     def _register_commands(self):
         """注册命令处理器"""
+        from . import voice_actions
+        self.command_bus.register(CommandType.MUSIC_GUARDED_ACTION, lambda c: voice_actions.perform(self, c))
+        self.command_bus.register(CommandType.MUSIC_SAVE_CURRENT, lambda c: voice_actions.save(self, c))
+        self.command_bus.register(CommandType.MUSIC_FEEDBACK, lambda c: voice_actions.feedback(self, c))
         self.command_bus.register(CommandType.MUSIC_PLAY, lambda c: self.play())
-        self.command_bus.register(CommandType.MUSIC_PAUSE, lambda c: self.pause())
-        self.command_bus.register(CommandType.MUSIC_RESUME, lambda c: self.resume())
+        self.command_bus.register(CommandType.MUSIC_PAUSE, lambda c: self.pause(_voice_guard=c.is_current) if c.is_current else self.pause())
+        self.command_bus.register(CommandType.MUSIC_RESUME, lambda c: self.resume(_voice_guard=c.is_current) if c.is_current else self.resume())
         self.command_bus.register(CommandType.MUSIC_TOGGLE, lambda c: self.toggle())
         self.command_bus.register(CommandType.MUSIC_NEXT, lambda c: self.next())
         self.command_bus.register(CommandType.MUSIC_PREV, lambda c: self.prev())
@@ -615,7 +622,7 @@ class MusicController:
                 return True
 
     @_cancel_switch_on_user_action
-    def pause(self):
+    def pause(self, _voice_guard=None):
         """暂停"""
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("pause", self._current_song, 0)
@@ -635,7 +642,12 @@ class MusicController:
         # 要么阻塞等锁、在切歌（loadfile + 无条件 unpause）完成后才执行（作用于新歌）。
         # 二者必居其一——切歌进行中提出的暂停意图绝不会被 _play_song 的
         # set_property("pause", False) 无条件抹掉（起播即响竞态修复）。
-        with self._lock:
+        from .voice_actions import playback_lock
+        with playback_lock(self._lock, _voice_guard) as acquired:
+            if not acquired:
+                return False
+            if _voice_guard is not None and not _voice_guard():
+                return False
             self.mpv.pause()
             self._paused_snapshot = True
             # 实时同步状态
@@ -646,7 +658,7 @@ class MusicController:
             self._update_state(playing=False)
 
     @_cancel_switch_on_user_action
-    def resume(self):
+    def resume(self, _voice_guard=None):
         """继续播放"""
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("resume", self._current_song, 0)
@@ -655,7 +667,12 @@ class MusicController:
             return
         # 与 pause 同契约：与播放/切歌持同一业务锁，恢复意图与切歌顺序化，
         # 不会与 _play_song 的 loadfile/unpause 交错（切歌完成后的恢复作用于新歌）。
-        with self._lock:
+        from .voice_actions import playback_lock
+        with playback_lock(self._lock, _voice_guard) as acquired:
+            if not acquired:
+                return False
+            if _voice_guard is not None and not _voice_guard():
+                return False
             self.mpv.play()
             self._paused_snapshot = False
             # 实时同步状态
@@ -702,7 +719,7 @@ class MusicController:
                 pass
 
     @_cancel_switch_on_user_action
-    def next(self, _timeout: float | None = None):
+    def next(self, _timeout: float | None = None, _voice_guard=None):
         """下一首。
 
         _timeout 非空时：业务锁忙则放弃本轮（自动跳过路径用，防无限等锁）。
@@ -732,12 +749,16 @@ class MusicController:
                 logger.info("[Music] next：业务锁忙，放弃本轮")
                 return
             try:
+                if _voice_guard is not None and not _voice_guard():
+                    return False
                 self._next_locked()
             finally:
                 self._lock.release()
             return
 
         with self._lock:
+            if _voice_guard is not None and not _voice_guard():
+                return False
             # 意图打点：已获取锁，记录锁等待耗时与切走前的当前曲目
             if _t_enter is not None:
                 self._record_intent(
@@ -774,7 +795,7 @@ class MusicController:
             self._update_state(playing=False, current_song=None)
 
     @_cancel_switch_on_user_action
-    def prev(self):
+    def prev(self, _voice_guard=None):
         """上一首"""
         # 打点：意图入口（实际记录在锁内）
         _t_enter = time.perf_counter() if (self._trace and self._trace.enabled) else None
@@ -790,8 +811,13 @@ class MusicController:
                 logger.error(f"[Music] 落雪 prev 失败，回落 mpv: {e}")
                 self.lx_connected = False
         
-        with self._lock:
+        from .voice_actions import playback_lock
+        with playback_lock(self._lock, _voice_guard) as acquired:
+            if not acquired:
+                return False
             # 意图打点：已获取锁
+            if _voice_guard is not None and not _voice_guard():
+                return False
             if _t_enter is not None:
                 self._record_intent(
                     "prev", self.queue.get_current(),
@@ -2800,7 +2826,7 @@ class MusicController:
             self._update_state(playing=False, current_song=None)
 
     @_cancel_switch_on_user_action
-    def stop_current(self):
+    def stop_current(self, _voice_guard=None):
         """停止当前歌曲播放（保留队列，不推进队列指针）。
 
         与 clear_queue() 的差别：不清空队列、不改动 queue.current_index——
@@ -2821,7 +2847,12 @@ class MusicController:
         不自动重试——超时后命令可能已经执行，盲目重试只会增加不确定性。
         成功确认仅为 MPV 协议层确认，不代表扬声器已物理静音。
         """
-        with self._lock:
+        from .voice_actions import playback_lock
+        with playback_lock(self._lock, _voice_guard) as acquired:
+            if not acquired:
+                return False
+            if _voice_guard is not None and not _voice_guard():
+                return False
             self._invalidate_highlight()
             self._user_stopped = True  # V2-4.5.6：标记用户主动停止，阻止 idle/EOF 自动续播
             try:

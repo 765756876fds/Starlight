@@ -614,6 +614,48 @@ class MusicDatabase:
             self._conn.commit()
             return True
 
+    def save_liked_song(self, song: dict[str, Any], is_current=None) -> bool:
+        """Atomic fixed-playlist save; no file operation or playback lock held."""
+        st = song.get("source_type") or "local"
+        mid = int(song.get("music_id") or song.get("id") or 0)
+        sn, tid = str(song.get("source_name") or ""), str(song.get("track_id") or "")
+        if not song.get("title") or st not in ("local", "online") or (st == "local" and mid <= 0) or (st == "online" and (not sn or not tid)):
+            return False
+        if not self._lock.acquire(timeout=.15):
+            return False
+        old_timeout = None
+        try:
+            if self._conn is None or is_current is not None and not is_current():
+                return False
+            old_timeout = self._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            self._conn.execute("PRAGMA busy_timeout=150")
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute("INSERT OR IGNORE INTO playlists(name,created_at) VALUES(?,?)", ("我喜欢的音乐", time.time()))
+            pid = self._conn.execute("SELECT id FROM playlists WHERE name=?", ("我喜欢的音乐",)).fetchone()[0]
+            duplicate = self._conn.execute(
+                "SELECT 1 FROM playlist_songs WHERE playlist_id=? AND source_type=? AND "
+                + ("music_id=?" if st == "local" else "source_name=? AND track_id=?"),
+                (pid, st, mid) if st == "local" else (pid, st, sn, tid)).fetchone()
+            if not duplicate:
+                self._conn.execute("""INSERT INTO playlist_songs
+                    (playlist_id,title,artist,source_type,source_name,track_id,music_id,added_at)
+                    VALUES(?,?,?,?,?,?,?,?)""", (pid, song["title"], song.get("artist") or "", st, sn, tid, mid, time.time()))
+            if is_current is not None and not is_current():
+                self._conn.rollback()
+                return False
+            self._conn.commit()
+            return True
+        except (sqlite3.Error, OSError):
+            if self._conn is not None:
+                self._conn.rollback()
+            return False
+        finally:
+            try:
+                if old_timeout is not None and self._conn is not None:
+                    self._conn.execute(f"PRAGMA busy_timeout={int(old_timeout)}")
+            finally:
+                self._lock.release()
+
     def remove_from_playlist(self, playlist_id: int, song_id: int) -> bool:
         """从歌单移除（song_id 为 playlist_songs.id）。"""
         with self._lock:

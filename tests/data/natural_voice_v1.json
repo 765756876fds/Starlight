@@ -1,0 +1,356 @@
+{
+  "schema": 1,
+  "note": "Frozen before first evaluation; synthetic Chinese text, no private speech. Independent of historical 160/80 experimental sets.",
+  "cases": [
+    {
+      "id": "held-001",
+      "text": "麻烦暂停会儿吧",
+      "action": "pause"
+    },
+    {
+      "id": "held-002",
+      "text": "这首先歇会儿",
+      "action": "pause"
+    },
+    {
+      "id": "held-003",
+      "text": "电影稍微停一停",
+      "action": "pause"
+    },
+    {
+      "id": "held-004",
+      "text": "咱先缓一缓",
+      "action": "pause"
+    },
+    {
+      "id": "held-005",
+      "text": "请把音乐停片刻",
+      "action": "pause"
+    },
+    {
+      "id": "held-006",
+      "text": "音乐现在接着播吧",
+      "action": "resume"
+    },
+    {
+      "id": "held-007",
+      "text": "把这片恢复播放",
+      "action": "resume"
+    },
+    {
+      "id": "held-008",
+      "text": "请恢复音乐",
+      "action": "resume"
+    },
+    {
+      "id": "held-009",
+      "text": "再继续放这首",
+      "action": "resume"
+    },
+    {
+      "id": "held-010",
+      "text": "咱接上吧",
+      "action": "resume"
+    },
+    {
+      "id": "held-011",
+      "text": "这歌真没意思",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-012",
+      "text": "这一首听腻了",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-013",
+      "text": "这曲太拉胯了",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-014",
+      "text": "这首还凑合",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-015",
+      "text": "这片看不下去",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-016",
+      "text": "这部真棒",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-017",
+      "text": "这歌合胃口",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-018",
+      "text": "当前这首普普通通",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-019",
+      "text": "这个也不行",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-020",
+      "text": "这首挺棒给我存着",
+      "action": "evaluate"
+    },
+    {
+      "id": "held-021",
+      "text": "请把这曲收下",
+      "action": "save"
+    },
+    {
+      "id": "held-022",
+      "text": "给我留着",
+      "action": "save"
+    },
+    {
+      "id": "held-023",
+      "text": "收藏这一首吧",
+      "action": "save"
+    },
+    {
+      "id": "held-024",
+      "text": "把当前这首收起来",
+      "action": "save"
+    },
+    {
+      "id": "held-025",
+      "text": "换种口味吧",
+      "action": "style"
+    },
+    {
+      "id": "held-026",
+      "text": "来些不同的听感",
+      "action": "style"
+    },
+    {
+      "id": "held-027",
+      "text": "音乐换个感觉",
+      "action": "style"
+    },
+    {
+      "id": "held-028",
+      "text": "请换一种音乐风格",
+      "action": "style"
+    },
+    {
+      "id": "held-029",
+      "text": "请换个排行榜",
+      "action": "chart"
+    },
+    {
+      "id": "held-030",
+      "text": "音乐另换榜单",
+      "action": "chart"
+    },
+    {
+      "id": "held-031",
+      "text": "麻烦挑个好看的",
+      "action": "recommend"
+    },
+    {
+      "id": "held-032",
+      "text": "找点影视看看",
+      "action": "recommend"
+    },
+    {
+      "id": "held-033",
+      "text": "请接着看昨天的",
+      "action": "continue_watch"
+    },
+    {
+      "id": "held-034",
+      "text": "上回没看完的接着看",
+      "action": "continue_watch"
+    },
+    {
+      "id": "held-035",
+      "text": "别再跳过这首啦",
+      "action": "none"
+    },
+    {
+      "id": "held-036",
+      "text": "我不是让你换歌",
+      "action": "none"
+    },
+    {
+      "id": "held-037",
+      "text": "不要再暂停了",
+      "action": "none"
+    },
+    {
+      "id": "held-038",
+      "text": "别收藏这首",
+      "action": "none"
+    },
+    {
+      "id": "held-039",
+      "text": "不要说这歌难听",
+      "action": "none"
+    },
+    {
+      "id": "held-040",
+      "text": "你是不是停了",
+      "action": "none"
+    },
+    {
+      "id": "held-041",
+      "text": "这首是不是一般般",
+      "action": "none"
+    },
+    {
+      "id": "held-042",
+      "text": "这首不错吗",
+      "action": "none"
+    },
+    {
+      "id": "held-043",
+      "text": "他说这曲没劲",
+      "action": "none"
+    },
+    {
+      "id": "held-044",
+      "text": "朋友问这个好看吗",
+      "action": "none"
+    },
+    {
+      "id": "held-045",
+      "text": "她讲这首不好听",
+      "action": "none"
+    },
+    {
+      "id": "held-046",
+      "text": "这首叫什么",
+      "action": "none"
+    },
+    {
+      "id": "held-047",
+      "text": "我的工作真没意思",
+      "action": "none"
+    },
+    {
+      "id": "held-048",
+      "text": "这个菜一般般",
+      "action": "none"
+    },
+    {
+      "id": "held-049",
+      "text": "歌曲《暂停》不错",
+      "action": "none"
+    },
+    {
+      "id": "held-050",
+      "text": "“给我留着”",
+      "action": "none"
+    },
+    {
+      "id": "held-051",
+      "text": "不是让你停歌是换歌",
+      "action": "none"
+    },
+    {
+      "id": "held-052",
+      "text": "暂停音乐并收藏这首",
+      "action": "none"
+    },
+    {
+      "id": "held-053",
+      "text": "先暂停电影然后恢复音乐",
+      "action": "none"
+    },
+    {
+      "id": "held-054",
+      "text": "先暂停电影再打开字幕",
+      "action": "none"
+    },
+    {
+      "id": "held-055",
+      "text": "打开歌词再下一首",
+      "action": "none"
+    },
+    {
+      "id": "held-056",
+      "text": "恢复播放再暂停",
+      "action": "none"
+    },
+    {
+      "id": "held-057",
+      "text": "音乐和电影歇会儿",
+      "action": "none"
+    },
+    {
+      "id": "held-058",
+      "text": "你喜欢这首歌吗",
+      "action": "none"
+    },
+    {
+      "id": "held-059",
+      "text": "哪首不好听",
+      "action": "none"
+    },
+    {
+      "id": "held-060",
+      "text": "我没说这首不好听",
+      "action": "none"
+    },
+    {
+      "id": "held-061",
+      "text": "听说这个不好看",
+      "action": "none"
+    },
+    {
+      "id": "held-062",
+      "text": "这首不好听是什么意思",
+      "action": "none"
+    },
+    {
+      "id": "held-063",
+      "text": "不要因为不好听就换歌",
+      "action": "none"
+    },
+    {
+      "id": "held-064",
+      "text": "不是要换榜单",
+      "action": "none"
+    },
+    {
+      "id": "held-065",
+      "text": "就刚才",
+      "action": "none"
+    },
+    {
+      "id": "held-066",
+      "text": "接着",
+      "action": "none"
+    },
+    {
+      "id": "held-067",
+      "text": "等等我",
+      "action": "none"
+    },
+    {
+      "id": "held-068",
+      "text": "今天天气不错",
+      "action": "none"
+    },
+    {
+      "id": "held-069",
+      "text": "不是换歌是换榜单",
+      "action": "none"
+    },
+    {
+      "id": "held-070",
+      "text": "这首不是不好听",
+      "action": "none"
+    }
+  ]
+}

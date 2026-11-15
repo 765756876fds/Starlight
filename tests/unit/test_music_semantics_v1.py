@@ -33,13 +33,13 @@ POSITIVE = [
 ]
 CONTEXTUAL = ["先停一下", "停一下", "别放了", "接着放", "接着播放", "接着听"]
 NEGATIVE = [
-    "这首歌不好听", "声音有点大", "不要暂停音乐", "为什么要暂停音乐？",
+    "声音有点大", "不要暂停音乐", "为什么要暂停音乐？",
     "他说让我暂停音乐", "先暂停电影再切歌", "音乐先别放了是什么意思",
     "不要停止播放", "他说别放了", "为什么别放了", "不要接着放音乐",
     "我刚才说音乐先别放了", "音乐先别放了吗", "音乐先别放了好不好",
     "音乐先", "接着", "音乐音乐先别放了", "先停一下先停一下",
     "暂停电影再音乐接着放", "音乐先别放了然后接着放音乐",
-    "音乐先别放了，切下一首", "音乐和电影先别放了", "电影接着放",
+    "音乐先别放了，切下一首", "音乐和电影先别放了",
     "音乐切到下一首上一首", "音乐先别放了？", "“音乐先别放了”",
     "音乐先别，放了", "接着放音乐，为什么", "下一首？",
 ]
@@ -106,12 +106,12 @@ def test_unavailable_context_cannot_touch_either_player():
         threads.append(thread)
         return thread
     rt.command_bus.execute_async = track
-    for text in CONTEXTUAL + NEGATIVE:
+    for text in CONTEXTUAL + NEGATIVE + ["这首歌不好听", "电影接着放"]:
         rt._execute_intent(rt.intent_router.parse(text), text)
     for thread in threads:
         thread.join(1)
         assert not thread.is_alive()
-    assert all(c.command_type == C.MEDIA_CONTEXT for c in rt.command_bus.get_history())
+    assert all(c.command_type in (C.MEDIA_CONTEXT, C.NATURAL_MEDIA) for c in rt.command_bus.get_history())
     for handler in controls:
         handler.assert_not_called()
 

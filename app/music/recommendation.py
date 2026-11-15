@@ -202,11 +202,12 @@ class RecommendationService:
                     continue
                 explicit_match = sum(max(0, explicit.get((kind, value), 0))
                                      for kind, value in features.items() if value)
-                tier = (chart["preference"], explicit_match, profile["artists"].get(artist, 0))
+                tier = (chart["preference"], explicit_match,
+                        profile.get("weak_tracks", {}).get(key, 0), profile["artists"].get(artist, 0))
                 reason = "按本次“%s”要求匹配榜单" % style if style else (
                     "按你设置的榜单风格偏好" if chart["preference"] else
                     "根据你明确设置且有资料匹配的偏好" if explicit_match else
-                    "参考你的主动收听记录" if tier[2] else "从可用榜单前列选择")
+                    "参考你的主动收听记录" if tier[3] else "从可用榜单前列选择")
                 if change_style and self.session and not self.session.get("style"):
                     reason = "当前风格资料不足，改选另一榜单；" + reason
                 options.append((tier, index, Choice(chart, tracks, index, reason)))
@@ -227,7 +228,7 @@ class RecommendationService:
                 ordered.append(selected[2])
         return ordered
 
-    def play(self, *, style="", change_chart=False, change_style=False, is_current=None):
+    def play(self, *, style="", change_chart=False, change_style=False, is_current=None, expected_request=None):
         with self._lock:
             if self._closed or self._busy:
                 return OperationResult(OperationStatus.UNAVAILABLE, "推荐仍在处理中，请稍候再试")
@@ -243,6 +244,8 @@ class RecommendationService:
             return (self._current(generation, is_current) and time.monotonic() < deadline
                     and controller.online_manager is manager and source_revision(manager) == revision)
         try:
+            if expected_request is not None and original_request != expected_request:
+                return OperationResult(OperationStatus.UNKNOWN, "播放已变化，已取消旧的选歌请求")
             if controller.online_manager is None or not controller._mpv_available:
                 return OperationResult(OperationStatus.UNAVAILABLE, "音源或播放器尚未就绪，请检查音乐设置")
             self.memory.import_history_once(controller.db.get_history(limit=100))

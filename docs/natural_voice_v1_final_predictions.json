@@ -1,0 +1,348 @@
+{
+  "sha256_lf": "b37fe7b290fdc4ede5b045b83be10972718f026f6edc9ef9e31454a09d3ea592",
+  "total": 24,
+  "strict_correct": 20,
+  "reject_cases": 12,
+  "unsafe_candidates": 0,
+  "p50_ms": 0.26034999999999997,
+  "p95_ms": 0.4964,
+  "samples": 240,
+  "predictions": [
+    {
+      "id": "final-001",
+      "text": "音乐停一停吧",
+      "action": "pause",
+      "target": "music",
+      "rating": "",
+      "actual": {
+        "action": "pause",
+        "target": "music",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-002",
+      "text": "影片现在接着播",
+      "action": "resume",
+      "target": "movie",
+      "rating": "",
+      "actual": {
+        "action": "resume",
+        "target": "movie",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-003",
+      "text": "这歌真拉胯",
+      "action": "evaluate",
+      "target": "music",
+      "rating": "negative",
+      "actual": {
+        "action": "evaluate",
+        "target": "music",
+        "rating": "negative"
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-004",
+      "text": "这个就那样",
+      "action": "evaluate",
+      "target": "current",
+      "rating": "neutral",
+      "actual": {
+        "action": "evaluate",
+        "target": "current",
+        "rating": "neutral"
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-005",
+      "text": "请把这首保存起来",
+      "action": "save",
+      "target": "music",
+      "rating": "",
+      "actual": {
+        "action": "save",
+        "target": "music",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-006",
+      "text": "这部挺棒",
+      "action": "evaluate",
+      "target": "movie",
+      "rating": "positive",
+      "actual": {
+        "action": "evaluate",
+        "target": "movie",
+        "rating": "positive"
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-007",
+      "text": "先换种听感吧",
+      "action": "style",
+      "target": "current",
+      "rating": "",
+      "actual": {
+        "action": "style",
+        "target": "current",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-008",
+      "text": "另换个排行榜",
+      "action": "chart",
+      "target": "music",
+      "rating": "",
+      "actual": {
+        "action": "chart",
+        "target": "current",
+        "rating": ""
+      },
+      "correct": false,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-009",
+      "text": "给我找个好看的",
+      "action": "recommend",
+      "target": "movie",
+      "rating": "",
+      "actual": {
+        "action": "recommend",
+        "target": "movie",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "player.natural"
+    },
+    {
+      "id": "final-010",
+      "text": "这曲实在乏味",
+      "action": "evaluate",
+      "target": "music",
+      "rating": "negative",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": false,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-011",
+      "text": "帮我挑部养眼的",
+      "action": "recommend",
+      "target": "movie",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": false,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-012",
+      "text": "把这一首留在喜欢的里",
+      "action": "save",
+      "target": "music",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": false,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-013",
+      "text": "别再给我切走了",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-014",
+      "text": "并非让你收藏这首",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-015",
+      "text": "暂停会怎样",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-016",
+      "text": "我之前问过为什么换榜单",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-017",
+      "text": "同事讲这个不行",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-018",
+      "text": "《给我留着》这首歌真棒",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-019",
+      "text": "你觉得这首合胃口吗",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-020",
+      "text": "听说这首拉胯",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-021",
+      "text": "别把这片停止",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-022",
+      "text": "我只是觉得这个菜太烂",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-023",
+      "text": "换首音乐再打开全屏",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    },
+    {
+      "id": "final-024",
+      "text": "先收藏这首然后暂停",
+      "action": "none",
+      "target": "",
+      "rating": "",
+      "actual": {
+        "action": "none",
+        "target": "",
+        "rating": ""
+      },
+      "correct": true,
+      "router": "system.unknown"
+    }
+  ]
+}

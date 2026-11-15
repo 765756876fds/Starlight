@@ -3,6 +3,7 @@
 """
 import os
 import sys
+import threading
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -175,9 +176,17 @@ def test_mpv_no_video_launch_args():
 class _FakeMusic:
     def __init__(self):
         self.paused = 0
+        self._play_request_id = 1
+        self.mpv = MagicMock()
+        self.mpv.get_property.return_value = True
+        self.done = threading.Event()
 
-    def pause(self):
+    def pause(self, _voice_guard=None):
+        if _voice_guard is not None and not _voice_guard():
+            return False
         self.paused += 1
+        self.done.set()
+        return True
 
 
 def test_movie_play_pauses_music():
@@ -187,6 +196,12 @@ def test_movie_play_pauses_music():
     mmpv.start.return_value = True
     ok = ctrl.play({"vod_name": "X", "first_url": "https://u/i.m3u8"})
     assert ok is True
+    assert music.paused == 0
+    mmpv.is_running.return_value = True
+    mmpv.get_idle_active.return_value = False
+    mmpv.get_property.return_value = False
+    ctrl.tick()
+    assert music.done.wait(1)
     assert music.paused == 1
     # 内嵌 S1：wid 参数化——无播放窗口注入时显式 wid=None（独立窗口现状，语义零变化）
     mmpv.start.assert_called_once_with(taskkill=False, wid=None)
@@ -209,7 +224,7 @@ def test_movie_play_mpv_start_fail():
     mmpv.is_running.return_value = False
     mmpv.start.return_value = False
     assert ctrl.play({"vod_name": "X", "first_url": "https://u/i.m3u8"}) is False
-    assert music.paused == 1
+    assert music.paused == 0  # failed movie start must not interrupt music
     ctrl.close()
 
 
@@ -246,8 +261,8 @@ def test_exclusive_no_loop():
     bus = get_event_bus()
 
     class LoopMusic(_FakeMusic):
-        def pause(self):
-            super().pause()
+        def pause(self, _voice_guard=None):
+            super().pause(_voice_guard=_voice_guard)
             bus.publish(Event(EventType.MUSIC_PLAY, {}))
 
     music = LoopMusic()
@@ -256,6 +271,11 @@ def test_exclusive_no_loop():
     mmpv.start.return_value = True
     ok = ctrl.play({"vod_name": "X", "first_url": "https://u/i.m3u8"})
     assert ok is True
+    mmpv.is_running.return_value = True
+    mmpv.get_idle_active.return_value = False
+    mmpv.get_property.return_value = False
+    ctrl.tick()
+    assert music.done.wait(1)
     assert music.paused == 1   # 电影 pause 不反向调 music.pause → 无循环
     assert ctrl._stopping is False
     ctrl.close()

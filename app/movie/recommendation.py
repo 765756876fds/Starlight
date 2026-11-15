@@ -145,7 +145,8 @@ class FilmRecommendations:
                         and s["rank"] > 0), default=100)
             work["recommendation_reason"] = ("符合本次类型要求" if genre else
                 "参考你明确表达的喜好" if preference > 0 else "参考本地偏好记录" if history else "来自可用热门榜单")
-            candidates.append(((not record or record["state"] != "completed", preference, history), rank, work))
+            candidates.append(((not record or record["state"] != "completed", preference,
+                                profile.get("weak", {}).get(key, 0), history), rank, work))
         selected = []
         while candidates and len(selected) < 6:
             tier = max(row[0] for row in candidates)
@@ -166,9 +167,17 @@ class FilmRecommendations:
             message += "；偏好暂不可读写，本次按榜单筛选"
         return FilmBatch(selected, message, kind, states=result.get("states", [])), current
 
-    def continuing(self, kind="tv", *, is_current=None):
+    def continuing(self, kind="tv", *, is_current=None, period=""):
         current = self.begin(is_current)
         rows = self.resume_rows(kind)
+        if period:
+            from datetime import datetime, timedelta
+            if period != "yesterday":
+                return FilmBatch(message="请说明可靠的续播记录", kind=kind), current
+            yesterday = datetime.now().date() - timedelta(days=1)
+            rows = [r for r in rows if datetime.fromtimestamp(r.get("updated", 0)).date() == yesterday]
+            if not rows:
+                return FilmBatch(message="没有找到昨天的可靠续播记录，请从继续观看选择", kind=kind), current
         message = "正在恢复上次观看的位置" if len(rows) == 1 else "请选择要继续观看的内容" if rows else "还没有可靠的续播记录，请从播放历史选择"
         if not rows and callable(getattr(self.movie, "get_history", None)):
             history = self.movie.get_history()

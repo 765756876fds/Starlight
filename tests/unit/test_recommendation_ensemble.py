@@ -3,6 +3,7 @@ from contextlib import closing
 import hashlib
 import sqlite3
 import threading
+import time
 
 import pytest
 
@@ -78,6 +79,11 @@ def test_music_film_and_context_share_bus_without_losing_collections(ensemble, m
     monkeypatch.setattr(cinema, "search", lambda query: [item])
     say("播放电影集成测试电影")
     assert picture.loads == [item["first_url"]]
+    assert music.mpv.get_property("pause") is False  # load acknowledgement alone is insufficient
+    cinema.tick()  # observes actual non-idle movie playback
+    deadline = time.monotonic() + 1
+    while music.mpv.get_property("pause") is not True and time.monotonic() < deadline:
+        time.sleep(.005)
     assert music.mpv.get_property("pause") is True
     say("先停一下")
     assert picture.get_property("pause") is True

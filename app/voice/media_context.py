@@ -20,6 +20,15 @@ class MediaContext:
         self._lock = threading.Lock()
         self._focus = None
         self._paused = None
+        self._page = None
+
+    def note_page(self, domain):
+        with self._lock:
+            self._page = domain if domain in ("music", "movie") else None
+
+    def page_hint(self):
+        with self._lock:
+            return self._page
 
     def _controller_token(self, domain):
         provider = getattr(self.runtime, domain + "_controller_provider", None)
@@ -35,6 +44,10 @@ class MediaContext:
     def sample(self, domain):
         provider = getattr(self.runtime, domain + "_mpv_provider", None)
         try:
+            controller_provider = getattr(self.runtime, domain + "_controller_provider", None)
+            controller = controller_provider() if callable(controller_provider) else None
+            if domain == "music" and getattr(controller, "_is_switching_track", False) is True:
+                return MediaSample(domain, "unknown")
             mpv = provider() if callable(provider) else None
             if mpv is None or mpv.is_running() is False:
                 return MediaSample(domain, "stopped")
@@ -52,20 +65,21 @@ class MediaContext:
         except Exception:
             return MediaSample(domain, "unknown")
 
-    def execute(self, action, *, is_current=None):
-        current = is_current or (lambda: True)
-        if action not in ("pause", "resume", "next"):
-            return OperationResult(OperationStatus.NEEDS_PARAMETER, "请说明要暂停、继续还是切换")
+    def select(self, action, hint="current", *, feature="", memory=None):
+        """Read-only selection, shared by legacy control and natural decisions."""
         samples = [self.sample(d) for d in ("music", "movie")]
-        if not current():
-            return OperationResult(OperationStatus.UNKNOWN, "已取消过时的播放操作")
         state = "paused" if action == "resume" else "playing"
         candidates = [sample for sample in samples if sample.state == state]
-        if action == "next" and not candidates:
+        if action in ("next", "save", "positive") and not candidates:
             candidates = [sample for sample in samples if sample.state == "paused"]
         selected = None
         with self._lock:
             focus, paused = self._focus, self._paused
+        if hint in ("music", "movie"):
+            if action in ("next", "save", "positive"):
+                candidates = [s for s in samples if s.domain == hint and s.state in ("playing", "paused")]
+            selected = next((s for s in candidates if s.domain == hint), None)
+            return selected, samples, focus
         if focus and self.clock() - focus[1] <= 30:
             selected = next((s for s in candidates if s.domain == focus[0]
                              and s.token[1:3] == focus[2]), None)
@@ -73,8 +87,20 @@ class MediaContext:
             selected = next((s for s in candidates if s.token == paused[0]), None)
         if selected is None and len(candidates) == 1 and all(s.state != "unknown" for s in samples):
             selected = candidates[0]
+        if selected is None and len(candidates) > 1 and memory is not None:
+            preferred = memory.preferred_domain(feature, [s.domain for s in candidates])
+            selected = next((s for s in candidates if s.domain == preferred), None)
+        return selected, samples, focus
+
+    def execute(self, action, *, is_current=None, hint="current", feature="", memory=None):
+        current = is_current or (lambda: True)
+        if action not in ("pause", "resume", "next"):
+            return OperationResult(OperationStatus.NEEDS_PARAMETER, "请说明要暂停、继续还是切换")
+        selected, samples, focus = self.select(action, hint, feature=feature, memory=memory)
+        if not current():
+            return OperationResult(OperationStatus.UNKNOWN, "已取消过时的播放操作")
         if selected is None:
-            message = "请明确说音乐还是电影" if candidates else "当前没有可确认的播放内容，请先选择歌曲或影片"
+            message = "请明确说音乐还是电影" if any(s.state in ("playing", "paused") for s in samples) else "当前没有可确认的播放内容，请先选择歌曲或影片"
             return OperationResult(OperationStatus.NEEDS_PARAMETER, message)
         if action == "next":
             if selected.domain == "movie":
@@ -97,7 +123,9 @@ class MediaContext:
             return OperationResult(OperationStatus.UNKNOWN, "播放内容已变化，请重新说一次")
         if not self.runtime.command_bus.has_handler(command):
             return OperationResult(OperationStatus.UNAVAILABLE, "播放器尚未就绪，请稍后再试")
-        value = self.runtime.command_bus.execute(Command(command, source="voice", is_current=current))
+        def guarded():
+            return current() and self._controller_token(selected.domain) == selected.token[1:3]
+        value = self.runtime.command_bus.execute(Command(command, source="voice", is_current=guarded))
         if value is False:
             return OperationResult(OperationStatus.FAILED, "播放操作未成功，请检查播放器")
         if action == "next":

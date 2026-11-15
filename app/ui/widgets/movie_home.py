@@ -249,6 +249,7 @@ class MovieHome(QWidget):
         self._board_task.invalidate()
         self._requested = None
         self._view = kind
+        self.movie.voice_browse_kind = kind if kind in KINDS else ""
         self._selected_work = None
         self.detail.hide()
         self.nav_buttons[kind if kind in self.nav_buttons else "all"].setChecked(True)
@@ -313,7 +314,10 @@ class MovieHome(QWidget):
         if index >= 0:
             self.recommendation_kind.setCurrentIndex(index)
         self.recommendation_section.title.setText("继续观看" if batch.action == "resume" else "猜你喜欢 · " + CATEGORIES.get(batch.kind, "影视"))
-        self.recommendation_section.set_rows(batch.rows, film_card, batch.message)
+        publish = getattr(self.movie, "publish_voice_candidates", None)
+        rows = publish(batch.rows) if callable(publish) else batch.rows
+        self.movie.voice_browse_kind = batch.kind if batch.kind in KINDS else ""
+        self.recommendation_section.set_rows(rows, film_card, batch.message)
         self.recommendation_section.hint.setText(batch.message)
         self.recommendation_section.hint.show()
 
@@ -527,6 +531,9 @@ class MovieHome(QWidget):
 
     def _select_work(self, item, *_):
         self._selected_work = item.data(Qt.UserRole) if item else None
+        remember = getattr(self.movie, "note_voice_candidate", None)
+        if callable(remember):
+            remember(self._selected_work.get("_voice_candidate_id") if isinstance(self._selected_work, dict) else None)
         row = self._selected_work
         self.detail.setVisible(bool(row))
         if not row:

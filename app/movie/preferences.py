@@ -187,7 +187,11 @@ class FilmMemory:
                 "SELECT kind,value,weight FROM preferences WHERE domain=?", (domain,))}
             records, feedback = self._records(db, domain), self._feedback(db, domain)
             return dict(profile=self._profile(explicit, records, feedback), records=records, feedback=feedback)
-        return self._run(read, dict(profile={"explicit": {}, "inferred": {}}, records=[], feedback=[]))
+        result = self._run(read, dict(profile={"explicit": {}, "inferred": {}}, records=[], feedback=[]))
+        provider = getattr(self, "weak_provider", None)
+        if callable(provider):
+            result["profile"]["weak"] = provider()
+        return result
 
     def profile(self, domain):
         return self.snapshot(domain)["profile"]

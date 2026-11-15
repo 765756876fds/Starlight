@@ -1,8 +1,8 @@
 """
 电影链控制器 - 苹果 CMS 搜索 + mpv 独立视频实例播放。
 
-- 与音乐链互斥：播电影前停音乐（直接调 music.stop()）；音乐开始播新歌时
-  电影订阅 MUSIC_TRACK_CHANGED 事件自行停止（事件解耦，音乐链零改动）。
+- 与音乐链互斥：确认电影实际起播后暂停音乐；音乐开始播新歌时
+  电影订阅 MUSIC_TRACK_CHANGED 事件自行暂停（事件解耦）。
 - mpv 独立实例（video=True 出视频窗口，taskkill=False 不杀音乐实例）。
 - 剧集选集 + 自动连播（idle 上升沿检测）+ Assrt 字幕（搜索/下载/解压/加载）。
 """
@@ -18,6 +18,7 @@ import zipfile
 from pathlib import Path
 from collections import Counter
 from difflib import SequenceMatcher
+from functools import wraps
 
 import requests
 
@@ -70,6 +71,24 @@ def _mpv_buffer_args(config) -> list:
     return args
 
 
+def _serialized_media(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        guard = kwargs.pop("_voice_guard", None)
+        lock = getattr(self, "_media_action_lock", None)
+        if lock is None:
+            lock = self._media_action_lock = threading.RLock()
+        if not lock.acquire(timeout=0 if method.__name__ == "tick" else .2):
+            return False
+        try:
+            if guard is not None and not guard():
+                return False
+            return method(self, *args, **kwargs)
+        finally:
+            lock.release()
+    return wrapped
+
+
 class MovieController:
     """搜索 + 播放控制 + 与音乐互斥（事件解耦）。"""
 
@@ -113,6 +132,15 @@ class MovieController:
         self._current_index = None
         # V2-2：播放会话代次，每次加载新片递增；全局暂停快照据此判断会话是否变化
         self._playback_gen: int = 0
+        self._media_action_lock = threading.RLock()
+        self._music_pause_generation = None
+        self._ownership_attempts = (None, 0)
+        self._voice_candidate_lock = threading.RLock()
+        self._voice_candidates = ()
+        self._voice_candidate_revision = 0
+        self._voice_candidate_guard = lambda: False
+        self._voice_selected = None
+        self.voice_browse_kind = ""
         self._stopping = False
         self._pausing = False
         self._subscribed = False
@@ -169,11 +197,12 @@ class MovieController:
             bus.register(CommandType.MOVIE_SEARCH_PLAY, self._cmd_search_play)
             bus.register(CommandType.MOVIE_RECOMMEND, lambda c: self._cmd_recommend(c))
             bus.register(CommandType.MOVIE_CONTINUE, lambda c: self._cmd_recommend(c, resume=True))
-            bus.register(CommandType.MOVIE_PAUSE, lambda c: self.pause())
-            bus.register(CommandType.MOVIE_RESUME, lambda c: self.resume())
+            bus.register(CommandType.MOVIE_PAUSE, lambda c: self.pause(_voice_guard=c.is_current) if c.is_current else self.pause())
+            bus.register(CommandType.MOVIE_RESUME, lambda c: self.resume(_voice_guard=c.is_current) if c.is_current else self.resume())
             bus.register(CommandType.MOVIE_NEXT_EPISODE, lambda c: self.next_episode())
             bus.register(CommandType.MOVIE_PREV_EPISODE, lambda c: self.prev_episode())
-            bus.register(CommandType.MOVIE_STOP, lambda c: self.stop())
+            bus.register(CommandType.MOVIE_STOP, lambda c: self.stop(_voice_guard=c.is_current) if c.is_current else self.stop())
+            bus.register(CommandType.MOVIE_FEEDBACK, lambda c: self._cmd_feedback(c))
             bus.register(CommandType.MOVIE_VOLUME_SET, lambda c: self.set_volume(c.get("volume", 50)))
             bus.register(CommandType.MOVIE_VOLUME_UP, lambda c: self.volume_up(c.get("step", 5)))
             bus.register(CommandType.MOVIE_VOLUME_DOWN, lambda c: self.volume_down(c.get("step", 5)))
@@ -185,7 +214,24 @@ class MovieController:
         from ..core.operation_result import OperationResult, OperationStatus
         from ..core.notifications import current_operation_id
         select = self.recommendations.continuing if resume else self.recommendations.recommend
-        batch, current = select(is_current=command.is_current, **command.params)
+        if command.get("kind") == "mixed":
+            from .recommendation import FilmBatch
+            rows, states = [], []
+            current = command.is_current or (lambda: True)
+            for kind in ("movie", "tv", "anime"):
+                if not current():
+                    return OperationResult(OperationStatus.UNKNOWN, "已取消过时的影视推荐")
+                part, current = select(kind=kind, is_current=command.is_current,
+                    **({"period": command.get("period", "")} if resume else {}))
+                if not current():
+                    return OperationResult(OperationStatus.UNKNOWN, "已取消过时的影视推荐")
+                if not resume or part.action == "resume":
+                    rows.extend(part.rows[:2])
+                states.extend(part.states)
+            message = ("已找到续播记录，请选择要继续观看的内容" if rows else "没有找到可靠的续播记录，请查看继续观看") if resume else ("综合影视候选：请在页面选择后搜索片源" if rows else "暂无可用影视候选，请刷新榜单或稍后重试")
+            batch = FilmBatch(rows, message, "mixed", "resume" if resume else "recommend", states=states)
+        else:
+            batch, current = select(is_current=command.is_current, **command.params)
         presenter = self._recommendation_ready
         if not current():
             return OperationResult(OperationStatus.UNKNOWN, "已取消过时的影视推荐")
@@ -196,6 +242,48 @@ class MovieController:
             return OperationResult(OperationStatus.UNAVAILABLE, batch.message)
         return OperationResult(OperationStatus.ACCEPTED if resume else OperationStatus.CONFIRMED,
                                "续播请求已提交，正在加载或等待选择" if resume else f"已准备 {len(batch.rows)} 部候选，请在电影页选择")
+
+    def _cmd_feedback(self, command):
+        from .recommendation import item_work
+        from ..core.operation_result import OperationResult, OperationStatus
+        item = command.get("item")
+        if not isinstance(item, dict) or command.is_current is not None and not command.is_current():
+            return OperationResult(OperationStatus.UNKNOWN, "影片已变化，请重新选择")
+        ok = self.film_memory.remember(item_work(item), bool(command.get("positive")))
+        return OperationResult(OperationStatus.CONFIRMED if ok else OperationStatus.FAILED,
+                               "已记住影视偏好" if ok else "影视偏好暂未保存")
+
+    def publish_voice_candidates(self, rows):
+        from copy import deepcopy
+        import uuid
+        service = self.recommendations
+        generation = service._generation
+        with self._voice_candidate_lock:
+            self._voice_candidate_revision += 1
+            self._voice_candidates = tuple(dict(deepcopy(row), _voice_candidate_id=uuid.uuid4().hex) for row in rows)
+            self._voice_selected = None
+            self._voice_candidate_guard = lambda: not service._closed and service._generation == generation
+            return list(self._voice_candidates)
+
+    def note_voice_candidate(self, candidate_id):
+        with self._voice_candidate_lock:
+            self._voice_selected = candidate_id
+
+    def voice_candidate(self, index=None):
+        with self._voice_candidate_lock:
+            if not self._voice_candidate_guard():
+                return None
+            rows = self._voice_candidates
+            row = (rows[index] if type(index) is int and 0 <= index < len(rows) else None) if index is not None else next((r for r in rows if r.get("_voice_candidate_id") == self._voice_selected), None)
+            return (row["_voice_candidate_id"], self._voice_candidate_revision) if row else None
+
+    def voice_candidate_row(self, identity):
+        from copy import deepcopy
+        with self._voice_candidate_lock:
+            if not isinstance(identity, (tuple, list)) or len(identity) != 2 or identity[1] != self._voice_candidate_revision or not self._voice_candidate_guard():
+                return None
+            row = next((r for r in self._voice_candidates if r.get("_voice_candidate_id") == identity[0]), None)
+            return deepcopy(row) if row else None
 
     def _cmd_search_play(self, command):
         """语音"播放电影XX"：搜索 → 播 Top1（语音直达，不弹 UI 选集对话框）。
@@ -430,8 +518,9 @@ class MovieController:
 
     # ---- 播放 ----
 
+    @_serialized_media
     def play(self, item, index=None):
-        """播电影：先停音乐（互斥），再起视频 mpv 播指定集（默认第一条 URL）。
+        """播电影：启动视频 mpv 播指定集，确认实际起播后再暂停音乐。
         index=None → 取 first_url（现状不变）；index=N → 取第 N 集 URL。失败返回 False。
         内嵌：embed 开且有播放窗口注入 winId → mpv --wid 渲染进 Qt 容器；
         否则（embed 关 / 窗口未建）→ 独立 mpv 窗口（现状，安全回退）。"""
@@ -461,13 +550,7 @@ class MovieController:
             print(f"[Movie] 无可用播放地址: {item.get('vod_name')}")
             return False
         self._remember_view(force=True)
-        # 互斥 1：电影 → 音乐（暂停，保留队列与进度；music.pause() 不发事件，无循环）
-        music = self._music
-        if music is not None:
-            try:
-                music.pause()
-            except Exception as e:
-                logger.error(f"[Movie] 暂停音乐失败: {e}")
+        # 音乐互斥由 tick 确认实际起播后处理；加载失败不打断音乐。
         # 内嵌 wid：embed 开且窗口已注入 → 传 --wid；否则 None（独立窗口，现状）
         wid = self._embed_wid if (self._embed and self._embed_wid) else None
         if wid is not None:
@@ -805,6 +888,7 @@ class MovieController:
         except Exception as e:
             logger.warning("[Movie] history record failed: %s", type(e).__name__)
 
+    @_serialized_media
     def play_external_url(self, url: str, title: str = "外部流") -> bool:
         """播放任意 URL（解析出来的外链，无 vod_id/剧集结构）。
 
@@ -817,12 +901,6 @@ class MovieController:
         self._remember_view(force=True)
         if hasattr(self, "recommendations"):
             self.recommendations.cancel()
-        music = self._music
-        if music is not None:
-            try:
-                music.pause()
-            except Exception as e:
-                logger.error(f"[Movie] 暂停音乐失败: {e}")
         wid = self._embed_wid if (self._embed and self._embed_wid) else None
         if not self.mpv.is_running():
             if not self.mpv.start(taskkill=False, wid=wid):
@@ -858,6 +936,43 @@ class MovieController:
     def is_auto_next(self) -> bool:
         return self._auto_next
 
+    def _pause_music_after_start(self, idle):
+        if idle is not False or getattr(self, "_music", None) is None or getattr(self, "_media_voice_closed", False):
+            return
+        worker = getattr(self, "_ownership_worker", None)
+        if worker is not None and worker.is_alive():
+            return
+        generation = self._playback_gen
+        previous, attempts = getattr(self, "_ownership_attempts", (None, 0))
+        attempts = attempts if previous == generation else 0
+        if getattr(self, "_music_pause_generation", None) == generation or attempts >= 3:
+            return
+        self._ownership_attempts = generation, attempts + 1
+        self._music_pause_generation = generation
+        def pause_music():
+            confirmed = False
+            try:
+                if self.mpv.get_property("pause", timeout=.15) is not False:
+                    return
+                music = self._music
+                request = getattr(music, "_play_request_id", None)
+                def current():
+                    return (self._playback_gen == generation and self._last_idle is False
+                        and not getattr(self, "_media_voice_closed", False)
+                        and not self._stopping and (self._current is not None or self._external_url_mode)
+                        and getattr(music, "_play_request_id", None) == request)
+                if current():
+                    value = music.pause(_voice_guard=current)
+                    confirmed = value is not False and current() and music.mpv.get_property("pause", timeout=.15) is True
+            except Exception:
+                logger.warning("[Movie] music pause after confirmed start unavailable", exc_info=True)
+            finally:
+                if not confirmed and self._playback_gen == generation:
+                    self._music_pause_generation = None
+        self._ownership_worker = threading.Thread(target=pause_music, name="movie-start-ownership", daemon=True)
+        self._ownership_worker.start()
+
+    @_serialized_media
     def tick(self):
         """供面板轮询调用（500ms）：检测 mpv idle 上升沿 → 播完自动下一集。
         手动 stop（_current=None）/ 开关关 → 不连播；末集播完 → 停（不循环）。"""
@@ -866,6 +981,7 @@ class MovieController:
         # 缓冲期保护：loadfile 成功 ≠ 媒体已播放，先观察到 idle=False 才认可"正在播"。
         if getattr(self, "_external_url_mode", False):
             now_idle = self.mpv.get_idle_active()
+            self._pause_music_after_start(now_idle)
             if not self._external_url_seen_active:
                 # 尚未观察到播放：idle=False → 标记已开始；idle=True 继续等（缓冲）
                 if not now_idle:
@@ -883,6 +999,7 @@ class MovieController:
         if not self.mpv.is_running():
             return
         now_idle = self.mpv.get_idle_active()
+        self._pause_music_after_start(now_idle)
         self._restore_online_position(now_idle)
         self._remember_view(now_idle)
         self._record_history_if_started(now_idle)
@@ -942,6 +1059,7 @@ class MovieController:
         self._current_index = nxt
         return True
 
+    @_serialized_media
     def next_episode(self) -> bool:
         """语音切下一集；保留切换前的暂停状态。"""
         was_paused = False
@@ -958,6 +1076,7 @@ class MovieController:
                 logger.warning(f"[Movie] 下一集已切换但恢复暂停失败: {e!r}")
         return ok
 
+    @_serialized_media
     def prev_episode(self) -> bool:
         """语音切上一集；首集返回 False。"""
         item = self._current
@@ -1001,6 +1120,7 @@ class MovieController:
         except Exception as e:
             logger.error(f"[Movie] 本地电影进度保存失败，继续停止/退出: {type(e).__name__}: {e}")
 
+    @_serialized_media
     def stop(self):
         """停电影（幂等；_stopping 守卫防互斥循环）。
 
@@ -1163,6 +1283,7 @@ class MovieController:
 
     # ---- 播放控制（复用 mpv JSON IPC） ----
 
+    @_serialized_media
     def pause(self):
         """暂停电影（保留进度；_pausing 守卫防互斥循环）。"""
         if self._pausing:
@@ -1228,6 +1349,7 @@ class MovieController:
         self.mpv.toggle_pause()
         return None
 
+    @_serialized_media
     def resume(self):
         if (self._current is None and not self._external_url_mode) or not self.mpv.is_running():
             return False
@@ -1287,6 +1409,10 @@ class MovieController:
         return bool(item and self.play(item))
 
     def close(self):
+        self._media_voice_closed = True
+        worker = getattr(self, "_ownership_worker", None)
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(.25)
         self._remember_view(force=True)
         self._recommendation_ready = None
         if hasattr(self, "recommendations"):

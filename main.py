@@ -1446,6 +1446,10 @@ class Application:
         media_context = getattr(getattr(self, "voice", None), "media_context", None)
         if media_context is not None:
             self._media_focus_tracker = MediaFocusTracker(media_context, window)
+        if getattr(self, "voice", None) is not None:
+            from app.ui.widgets.media_voice_bridge import MediaVoiceBridge
+            self.voice.configure_natural_media()
+            self._media_voice_bridge = MediaVoiceBridge(self.voice, tabs, window)
         # R001: 注入电影暂停确认回调到音乐控制器
         try:
             if self._movie_panel is not None and hasattr(self, "music"):

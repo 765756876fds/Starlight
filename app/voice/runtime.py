@@ -227,6 +227,10 @@ class VoiceRuntime:
             self._voice_request_generation += 1
             self._recent_audio.clear()
             self.intent_router.clear_context()
+        natural = getattr(self, "_natural_media", None)
+        if natural is not None:
+            natural.close()
+            self._natural_media = None
         self._listening = False
         self._mic_stop.set()
 
@@ -975,7 +979,7 @@ class VoiceRuntime:
             elif error is not None:
                 outcome = OperationResult(OperationStatus.FAILED, "搜索播放未成功，请检查网络和音源")
             elif command_type in (CommandType.MUSIC_RECOMMEND, CommandType.MOVIE_RECOMMEND,
-                                  CommandType.MOVIE_CONTINUE, CommandType.MEDIA_CONTEXT) and isinstance(value, OperationResult):
+                                  CommandType.MOVIE_CONTINUE, CommandType.MEDIA_CONTEXT, CommandType.NATURAL_MEDIA) and isinstance(value, OperationResult):
                 # The business handler owns the real result; recommendation feedback stays visual.
                 return
             elif command_type == CommandType.MOVIE_SEARCH_PLAY:
@@ -1001,11 +1005,26 @@ class VoiceRuntime:
         from .media_context import MediaContext
         if not hasattr(self, "media_context"):
             self.media_context = MediaContext(self)
-        self.command_bus.register(CommandType.MEDIA_CONTEXT,
-            lambda c: self.media_context.execute(c.get("action"), is_current=c.is_current))
+        def contextual(c):
+            natural = getattr(self, "_natural_media", None)
+            if natural is not None and not natural._closed and c.get("action") in ("pause", "resume"):
+                return natural.execute(Command(CommandType.NATURAL_MEDIA,
+                    params={"action": c.get("action")}, source="voice", is_current=c.is_current))
+            return self.media_context.execute(c.get("action"), is_current=c.is_current)
+        self.command_bus.register(CommandType.MEDIA_CONTEXT, contextual)
         self.command_bus.execute_async(Command(CommandType.MEDIA_CONTEXT, params={"action": action},
             source="voice", is_current=lambda: self._request_is_current(generation)),
             on_done=self._async_feedback(CommandType.MEDIA_CONTEXT, generation))
+
+    def configure_natural_media(self, memory=None):
+        from .natural_control import NaturalControl
+        with self._feedback_lock:
+            natural = getattr(self, "_natural_media", None)
+            if natural is None or natural._closed:
+                self._natural_media = NaturalControl(self, memory)
+            else:
+                natural.bind()
+            return self._natural_media
 
     def _request_is_current(self, generation):
         with self._feedback_lock:
@@ -1049,7 +1068,7 @@ class VoiceRuntime:
                 raise
             finally:
                 record = center.get(operation_id)
-                asynchronous = intent.intent_type in (CommandType.MEDIA_CONTEXT, CommandType.MOVIE_RECOMMEND,
+                asynchronous = intent.intent_type in (CommandType.NATURAL_MEDIA, CommandType.MEDIA_CONTEXT, CommandType.MOVIE_RECOMMEND,
                     CommandType.MOVIE_CONTINUE, CommandType.MUSIC_RESUME, CommandType.MUSIC_RECOMMEND_NEXT, CommandType.MUSIC_RECOMMEND, CommandType.MUSIC_SEARCH_PLAY,
                     CommandType.MOVIE_SEARCH_PLAY, CommandType.MUSIC_RESCAN, CommandType.PLAYER_QUERY)
                 if record and record.status == "processing" and not asynchronous:
@@ -1066,7 +1085,7 @@ class VoiceRuntime:
             self._feedback_lock = threading.RLock()
             self._voice_request_generation = 0
         with self._feedback_lock:
-            if intent_type != "system.unknown":
+            if intent_type != "system.unknown" or getattr(intent, "natural_rejection", None) == "negative_request":
                 self._voice_request_generation += 1
             request_generation = self._voice_request_generation
             self._activity = {"heard": original_text, "intent": intent_type,
@@ -1078,6 +1097,25 @@ class VoiceRuntime:
             category = "voice_music_speed" if intent_type == CommandType.MUSIC_SET_SPEED else (
                 "voice_music_timer" if intent_type == CommandType.MUSIC_SLEEP_TIMER_SET else "voice_parameter")
             self._enqueue_speak(issue.message, category)
+            return
+
+        if getattr(intent, "natural_rejection", None):
+            if intent.natural_rejection == "negative_request":
+                from .natural_language import rejected_previous_action
+                rejected = rejected_previous_action(original_text)
+                natural = getattr(self, "_natural_media", None)
+                if rejected is not None and natural is not None and not natural._closed:
+                    if natural.reject_previous(request_generation, rejected):
+                        notify("没有改变播放状态", "正在撤销刚才误记的轻微评价，不会反向操作播放器", status="warning")
+                        return
+            notify("没有改变播放状态", "这句话是询问、转述或否定，未执行播放操作", status="warning")
+            return
+
+        if intent_type == CommandType.NATURAL_MEDIA:
+            self.configure_natural_media()
+            self.command_bus.execute_async(Command(CommandType.NATURAL_MEDIA, params=params, source="voice",
+                is_current=lambda: self._request_is_current(request_generation)),
+                on_done=self._async_feedback(CommandType.NATURAL_MEDIA, request_generation))
             return
 
         if intent_type == "system.clarify":
