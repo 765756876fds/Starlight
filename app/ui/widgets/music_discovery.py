@@ -214,8 +214,9 @@ class MusicDiscovery(QWidget):
     def _remember_preference(self, positive):
         from ...music.preferences import media_key
         # Capture identity now; a later track change must not change the feedback target.
-        with self.music._lock:
-            song = dict(self.music._current_song or {})
+        # Controller replaces the current-song reference; metadata capture must
+        # never wait for its playback/IPC lock on the GUI thread.
+        song = dict(self.music._current_song or {})
         value = song.get("artist") if positive else media_key(song)
         if not song.get("title") or not value:
             self.recommendation_status.setText("请先播放有歌手信息的歌曲" if positive else "请先播放一首歌曲")

@@ -64,7 +64,7 @@ def test_no_object_has_no_reliable_state_and_never_guesses(text):
     router = IntentRouter({})
     # No stale utterance context may stand in for live music/movie state.
     router.parse("暂停音乐")
-    expected = C.MEDIA_CONTEXT if text in ("先停一下", "接着放") else "system.clarify"
+    expected = C.MEDIA_CONTEXT if text in ("先停一下", "停一下", "接着放", "接着播放") else "system.clarify"
     assert router.parse(text).intent_type == expected
     router.parse("继续电影")
     assert router.parse(text).intent_type == expected

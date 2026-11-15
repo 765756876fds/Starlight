@@ -151,12 +151,16 @@ class MusicPanel(QWidget):
     _sleep_timer_signal = Signal(bool, int)
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
     _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
+    _volume_signal = Signal(int, int)  # gesture generation, volume; worker -> GUI
     _speed_result = Signal(object, float, int, str)  # 倍速三态结果：True / False / None
     _queue_changed = Signal()
 
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
         self._music = music
+        self._volume_request_gen = 0
+        self._syncing_volume = False
+        self._last_ui_tick = None
         self._queue_dialog = None
         self._queue_retry_count = 0
         self._queue_refresh_timer = QTimer(self)
@@ -539,9 +543,13 @@ class MusicPanel(QWidget):
             self.list_results.setContextMenuPolicy(Qt.CustomContextMenu)
             self.list_results.customContextMenuRequested.connect(self._on_online_context_menu)
             try:
-                self.slider_vol.setValue(int(music.get_volume() or 0))
+                self._syncing_volume = True
+                initial_volume = getattr(music, "default_volume", 70)
+                self.slider_vol.setValue(initial_volume if type(initial_volume) is int else 70)
             except Exception:
                 pass
+            finally:
+                self._syncing_volume = False
             try:
                 for name in (music.get_online_sources() or []):
                     self.cb_source.addItem(name, userData=name)
@@ -559,6 +567,7 @@ class MusicPanel(QWidget):
         self._progress_polling = False
         self._last_dur = 0.0  # 最近一次进度快照的时长，供拖动预览换算（_on_seek_preview）
         self._progress_signal.connect(self._on_progress)
+        self._volume_signal.connect(self._on_volume_snapshot, Qt.QueuedConnection)
 
         # P1 候选旁路：订阅 controller 推送的候选事件（Signal 桥到主线程）
         self._search_event.connect(self._on_search_show)
@@ -591,6 +600,7 @@ class MusicPanel(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._last_ui_tick = None
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.start()
         self._progress_polling = True
@@ -598,6 +608,7 @@ class MusicPanel(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        self._last_ui_tick = None
         self._queue_refresh_timer.stop()
         if self._queue_dialog is not None:
             self._queue_dialog.hide()
@@ -1171,8 +1182,9 @@ class MusicPanel(QWidget):
                          daemon=True, name="ui-music-next").start()
 
     def _on_volume(self, v):
-        if self._music is None:
+        if self._music is None or self._syncing_volume:
             return
+        self._volume_request_gen += 1
         threading.Thread(target=self._safe_call,
                          args=(self._music.set_volume, int(v)),
                          daemon=True, name="ui-music-volume").start()
@@ -2583,6 +2595,12 @@ class MusicPanel(QWidget):
                         pos = self._music.current_playback_time
                         dur = self._music.mpv.get_duration()
                         self._progress_signal.emit(pos, dur)
+                        volume_generation = self._volume_request_gen
+                        volume = self._music.get_volume()
+                        if not self._progress_polling:
+                            break
+                        if type(volume) in (int, float) and 0 <= volume <= 100:
+                            self._volume_signal.emit(volume_generation, int(volume))
                 except Exception:
                     pass
                 time.sleep(0.4)
@@ -2590,6 +2608,18 @@ class MusicPanel(QWidget):
         self._progress_thread = threading.Thread(target=poll, daemon=True,
                                                  name="ui-music-progress-poll")
         self._progress_thread.start()
+
+    @Slot(int, int)
+    def _on_volume_snapshot(self, generation, volume):
+        if (not self._progress_polling or generation != self._volume_request_gen
+                or self.slider_vol.isSliderDown()):
+            return
+        self._syncing_volume = True
+        try:
+            # Keep popover signals, but never write this observation back to MPV.
+            self.slider_vol.setValue(volume)
+        finally:
+            self._syncing_volume = False
 
     def _on_progress(self, pos: float, dur: float) -> None:
         """主线程槽：只做内存级 UI 更新（setValue/setText），不碰 mpv IPC。"""
@@ -2633,15 +2663,11 @@ class MusicPanel(QWidget):
     def _refresh(self):
         if self._music is None:
             return
-        try:
-            # V2-4.6.5：同步语音/外部修改的音乐音量到滑块（不 blockSignals：
-            # VolumeButton.popover.slider 由 slider_vol.valueChanged 驱动，blockSignals 会
-            # 导致悬浮面板不刷新；写回值相同，无回环）
-            v = int(self._music.get_volume() or 0)
-            if self.slider_vol.value() != v:
-                self.slider_vol.setValue(v)
-        except Exception:
-            pass
+        now = time.monotonic()
+        previous = getattr(self, "_last_ui_tick", None)
+        self._last_ui_tick = now
+        if previous is not None and now - previous > 3:
+            logging.getLogger(__name__).warning("gui_latency panel=music elapsed_ms=%.0f", (now - previous) * 1000)
         try:
             # 进度滑块/时间由后台轮询线程（_progress_signal → _on_progress）驱动，
             # 主线程绝不同步 IPC 读 mpv——playback-time/duration 响应慢曾造成拖拽窗口卡顿。

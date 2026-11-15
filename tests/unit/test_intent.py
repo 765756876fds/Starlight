@@ -93,7 +93,7 @@ class TestRuleBasedIntent:
             ("高潮模式开，", "music.highlight_mode", True),
             ("随机播放。", "music.set_play_mode", "shuffle"),
             ("下一首！", "music.next", None),
-            ("暂停，一下。", "music.pause", None),
+            ("暂停，一下。", "player.context", None),
             ("顺序模式？", "music.set_play_mode", "sequential"),
         ]
         for text, expected_type, expected_param in cases:
@@ -190,7 +190,7 @@ class TestRuleBasedIntent:
     def test_resume(self):
         intent = RuleBasedIntent.match("继续播放")
         assert intent is not None
-        assert intent.intent_type == "music.resume"
+        assert intent.intent_type == "player.context"
 
     def test_tail_particle_cleaned(self):
         """句尾语气词清理：下一首啊/暂停呗/上一首呢 → 命中"""

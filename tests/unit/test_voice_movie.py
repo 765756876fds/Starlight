@@ -43,7 +43,7 @@ class TestVoiceMovieIntent(unittest.TestCase):
 
     def test_pause_resume_intents_unchanged(self):
         self.assertEqual(RuleBasedIntent.match("暂停").intent_type, CommandType.MUSIC_PAUSE)
-        self.assertEqual(RuleBasedIntent.match("继续播放").intent_type, CommandType.MUSIC_RESUME)
+        self.assertEqual(RuleBasedIntent.match("继续播放").intent_type, CommandType.MEDIA_CONTEXT)
 
     def test_other_search_forms_stay_music(self):
         # "听流浪地球" / "放点流浪地球" 仍音乐（无"电影/影片/片子"字样）
@@ -650,7 +650,7 @@ class TestFoldDuplicatedText(unittest.TestCase):
 
     def test_pause_case(self):
         self.assertEqual(fold_duplicated_text(
-            "暂停播放。暂停。暂停。暂停。暂停。"), "暂停播放。")
+            "暂停播放。暂停。暂停。暂停。暂停。"), "暂停播放。暂停。")
 
     def test_real_log_case(self):
         t = "播放电影《甄嬛传》第五集。播放《甄嬛传》。播放电影《甄嬛传》第五集。播放电影《甄嬛传》第五集。"
@@ -677,7 +677,7 @@ class TestFoldDuplicatedText(unittest.TestCase):
     def test_process_speech_uses_fold(self):
         """_process_speech：ASR 返回重复拼接 → 发布折叠后的文本。"""
         from app.voice.runtime import VoiceRuntime
-        rt = VoiceRuntime.__new__(VoiceRuntime)
+        rt = VoiceRuntime({})
         rt._asr_enabled = True
         rt._asr_generation = 0
         rt._running = True
@@ -690,9 +690,15 @@ class TestFoldDuplicatedText(unittest.TestCase):
         rt.event_bus = MagicMock()
         rt.intent_router = MagicMock()
         rt.intent_router.parse.return_value = MagicMock()
+        rt.intent_router.get_parse_timing.return_value = {}
         rt._execute_intent = MagicMock()
         rt._should_collect_speech = MagicMock(return_value=True)
         rt._process_speech(b"audio", 16000)
+        worker = rt._observations._worker
+        if worker is not None:
+            worker.join(1)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(rt.event_bus.publish.call_count, 2)
         # 第一次 publish = VOICE_TEXT_RECEIVED（text 已折叠）；第二次 = VOICE_INTENT_PARSED
         published = rt.event_bus.publish.call_args_list[0][0][0]
         self.assertEqual(published.data["text"], "播放电影X。播放X。")

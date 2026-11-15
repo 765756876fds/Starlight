@@ -266,6 +266,8 @@ def test_one_pending_request_no_extra_threads(controller):
         assert release.wait(1)
         return original()
     controller.online_manager.get_top_lists = delayed
+    controller.music_memory.import_history_once(controller.db.get_history(limit=100))
+    controller.music_memory.profile()
     worker = threading.Thread(target=controller.recommend_music)
     worker.start()
     assert entered.wait(1)

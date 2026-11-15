@@ -170,6 +170,7 @@ def test_music_panel_volume_uses_glass_ui(qapp):
     from app.ui.panels.music_panel import MusicPanel
 
     class FakeMusic:
+        default_volume = 66  # Cached startup setting; IPC is observed asynchronously.
         def get_play_mode(self):
             return "sequential"
 

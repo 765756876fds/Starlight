@@ -56,17 +56,30 @@ class Choice:
     reason: str
 
 
+class SourceReadBusy(RuntimeError):
+    """A cancelled/timed-out source is still running; never stack more reads."""
+
+
 class RecommendationService:
     MAX_CHARTS = 3
     MAX_TRIES = 4
     READ_TIMEOUT = 20
+    MAX_PENDING_READS = 2  # Leave capacity for other users of the existing source pool.
 
-    def _read(self, manager, read, current):
+    def _read(self, manager, read, current, *, stage="source"):
         """Use the source manager's existing bounded pool; never add a permanent worker."""
+        if not current():
+            raise TimeoutError("recommendation cancelled before source read")
         executor = getattr(manager, "_executor", None)
         if executor is None:
             return read()  # Simple in-process source fixtures; production manager owns the pool.
-        future = executor.submit(read)
+        started = time.monotonic()
+        with self._lock:
+            self._source_futures = {future for future in self._source_futures if not future.done()}
+            if len(self._source_futures) >= self.MAX_PENDING_READS:
+                raise SourceReadBusy("previous recommendation source read still running")
+            future = executor.submit(read)
+            self._source_futures.add(future)
         end = time.monotonic() + self.READ_TIMEOUT
         try:
             while current() and time.monotonic() < end:
@@ -78,6 +91,9 @@ class RecommendationService:
             raise TimeoutError("recommendation source deadline")
         finally:
             future.cancel()  # Running reads remain bounded by the existing JS bridge timeout.
+            import logging
+            logging.getLogger(__name__).info("recommendation_timing stage=%s elapsed_ms=%.0f source_pending=%s",
+                                             stage, (time.monotonic() - started) * 1000, not future.done())
 
     def __init__(self, controller, memory, rng=None):
         self.controller, self.memory = controller, memory
@@ -89,6 +105,7 @@ class RecommendationService:
         self.session = None
         self._catalog = None
         self._catalog_at = 0
+        self._source_futures = set()
 
     def cancel(self, close=False, clear_session=False, *, reason="cancelled"):
         with self._lock:
@@ -111,7 +128,7 @@ class RecommendationService:
         if self._catalog and self._catalog[0] == cache_key and time.monotonic() - self._catalog_at < 120:
             catalog = self._catalog[1]
         else:
-            catalog = self._read(manager, manager.get_top_lists, current)
+            catalog = self._read(manager, manager.get_top_lists, current, stage="catalog")
             if catalog:
                 self._catalog = (cache_key, catalog)
                 self._catalog_at = time.monotonic()
@@ -165,7 +182,10 @@ class RecommendationService:
                 break
             try:
                 detail = self._read(manager,
-                    lambda chart=chart: manager.get_top_list_detail(chart["source"], str(chart["id"]), page=1), current)
+                    lambda chart=chart: manager.get_top_list_detail(chart["source"], str(chart["id"]), page=1), current,
+                    stage="detail")
+            except SourceReadBusy:
+                raise
             except Exception:
                 import logging
                 logging.getLogger(__name__).exception("music_recommendation_chart_failed")
@@ -228,7 +248,11 @@ class RecommendationService:
             self.memory.import_history_once(controller.db.get_history(limit=100))
             try:
                 choices = self.choices(controller.online_manager, style, change_chart, change_style, current)
+            except SourceReadBusy:
+                return OperationResult(OperationStatus.UNAVAILABLE, "上次音源请求仍在结束，请稍后重试；当前播放不受影响")
             except Exception:
+                if not current():
+                    return OperationResult(OperationStatus.UNKNOWN, "推荐已取消或超时，请重试")
                 import logging
                 logging.getLogger(__name__).exception("music_recommendation_catalog_failed")
                 return OperationResult(OperationStatus.FAILED, "榜单暂时无法获取，请重试或切换音源")
@@ -239,7 +263,9 @@ class RecommendationService:
                     return OperationResult(OperationStatus.UNKNOWN, "已取消过时的推荐")
                 track = choice.tracks[choice.index]
                 try:
-                    result = self._read(manager, lambda track=track: manager.get_play_url(track), current)
+                    result = self._read(manager, lambda track=track: manager.get_play_url(track), current, stage="url_resolution")
+                except SourceReadBusy:
+                    return OperationResult(OperationStatus.UNAVAILABLE, "上次音源请求仍在结束，请稍后重试；当前播放不受影响")
                 except Exception:
                     continue
                 if not result or not result.get("url"):

@@ -158,7 +158,10 @@ def test_folding_never_erases_changed_parameter_negation_or_domain(text):
 
 def test_equivalent_pause_wording_still_folds_once():
     from app.voice.runtime import fold_duplicated_text
-    assert fold_duplicated_text("暂停播放。暂停。暂停。") == "暂停播放。"
+    # Contextual pause and legacy global pause are different targets; do not
+    # silently discard one. Exact repeats still fold, and mixed intent is safe.
+    assert fold_duplicated_text("暂停播放。暂停。暂停。") == "暂停播放。暂停。"
+    assert fold_duplicated_text("停一下。先停一下。") == "停一下。"
 
 
 def test_pending_tts_feedback_is_skipped_after_new_request_without_clearing_other_speech():

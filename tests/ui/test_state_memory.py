@@ -77,6 +77,7 @@ class TestVolumeMemory:
     def test_release_schedules_debounced_save(self, qapp, monkeypatch):
         """滑块松开 → 调度 1s 防抖写回（不立即写，拖动过程不落盘）。"""
         from app.ui import settings_store
+        panel = self._panel(qapp)  # Startup timers are not volume-save timers.
         captured = []
         monkeypatch.setattr(
             "app.ui.panels.music_panel.QTimer.singleShot",
@@ -86,7 +87,6 @@ class TestVolumeMemory:
             settings_store, "save_settings_yaml",
             lambda upd: captured.append(("save", upd)),
         )
-        panel = self._panel(qapp)
         panel.slider_vol.setValue(80)            # 拖动实时 set_volume（不写盘）
         panel._on_volume_released()
         assert captured, "singleShot 应被调度"

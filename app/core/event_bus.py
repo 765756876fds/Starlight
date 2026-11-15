@@ -204,6 +204,7 @@ class EventBus:
 
         # 按顺序执行
         for handler in handlers:
+            started = time.monotonic()
             try:
                 handler(event)
             except Exception as e:
@@ -227,6 +228,11 @@ class EventBus:
                     ))
                 except Exception:
                     logger.error("发布 SYSTEM_ERROR 失败（源事件 %s）", event.event_type, exc_info=True)
+            finally:
+                elapsed = time.monotonic() - started
+                if elapsed >= 1 and event.event_type in (EventType.VOICE_TEXT_RECEIVED, EventType.VOICE_INTENT_PARSED):
+                    logger.warning("voice_event_slow type=%s handler=%s elapsed_ms=%.0f",
+                                   event.event_type, getattr(handler, "__qualname__", "callback"), elapsed * 1000)
 
     def publish_async(self, event: Event):
         """异步发布事件（按事件类型路由到隔离双池）"""

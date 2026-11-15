@@ -9,6 +9,7 @@
 - 命令执行（通过 CommandBus）
 """
 import queue
+import logging
 import hashlib
 import threading
 import time
@@ -21,6 +22,7 @@ from ..core.state_store import StateNamespace, get_state_store
 from .asr import ASRManager
 from .intent import Intent, IntentRouter, RuleBasedIntent
 from .registry import parameter_issue
+from .observations import VoiceObservations
 from .text import normalize_text
 from ..core.notifications import (get_notification_center, current_operation_id,
                                   operation_scope, action_title, notify)
@@ -110,6 +112,7 @@ class VoiceRuntime:
 
         # 核心服务
         self.event_bus = get_event_bus()
+        self._observations = VoiceObservations(lambda event: self.event_bus.publish(event))
         self.command_bus = get_command_bus()
         self.state_store = get_state_store()
 
@@ -158,6 +161,7 @@ class VoiceRuntime:
         if self._running:
             return
 
+        self._observations.reopen()
         self._running = True
         self.intent_router.clear_context()
 
@@ -218,6 +222,7 @@ class VoiceRuntime:
     def stop(self):
         """停止语音运行时"""
         self._running = False
+        self._observations.close()
         with self._feedback_lock:
             self._voice_request_generation += 1
             self._recent_audio.clear()
@@ -586,39 +591,48 @@ class VoiceRuntime:
         # 轻量去重：ASR 重复拼接（播放声污染场景）→ 只保留一段
         original_text = text
         text = fold_duplicated_text(text)
-        get_notification_center().update(current_operation_id(), title=text,
-                                         heard=original_text, phase="recognized")
+        timings = {"input_guard": (time.monotonic() - _t_asr) * 1000}
+        def stage(name, function):
+            started = time.monotonic()
+            try:
+                return function()
+            finally:
+                timings[name] = (time.monotonic() - started) * 1000
 
-        print(f"[Voice] 识别: {text}")
-
-        # 发布识别结果事件
-        self.event_bus.publish(Event(
-            event_type=EventType.VOICE_TEXT_RECEIVED,
-            data={"text": text, "original_text": original_text},
-            source="voice"
-        ))
-
-        # 意图解析
-        intent = self.intent_router.parse(text)
-        _t_intent = time.monotonic()
-        print(f"[Voice] 意图: {intent}")
-
-        # 发布意图事件
-        self.event_bus.publish(Event(
-            event_type=EventType.VOICE_INTENT_PARSED,
-            data={"intent": intent.to_dict(), "original_text": original_text},
-            source="voice"
-        ))
-
-        # 执行命令
-        if generation != self._asr_generation or (running and not self._running):
-            print("[Voice] stale parsed intent ignored")
-            return
-        self._execute_intent(intent, text)
-        _t_cmd = time.monotonic()
-        print("[PERF] asr=%.0fms intent=%.0fms command=%.0fms total=%.0fms i=%s" % (
-            (_t_asr-_t0)*1000, (_t_intent-_t_asr)*1000,
-            (_t_cmd-_t_intent)*1000, (_t_cmd-_t0)*1000, intent.intent_type))
+        intent = None
+        try:
+            stage("notification", lambda: get_notification_center().update(
+                current_operation_id(), title=text, heard=original_text, phase="recognized"))
+            stage("recognized_log", lambda: print(f"[Voice] 识别: {text}"))
+            text_event = Event(event_type=EventType.VOICE_TEXT_RECEIVED,
+                data={"text": text, "original_text": original_text}, source="voice")
+            intent = stage("parse", lambda: self.intent_router.parse(text))
+            getter = getattr(self.intent_router, "get_parse_timing", None)
+            if callable(getter):
+                timings.update(getter())
+            stage("intent_log", lambda: print(f"[Voice] 意图: {intent}"))
+            # Passive diagnostic events retain text-before-intent order. They do
+            # not hold ASR for observer IO or occupy the game-reminder executor.
+            stage("observation_submit", lambda: self._observations.submit((text_event,
+                Event(event_type=EventType.VOICE_INTENT_PARSED,
+                    data={"intent": intent.to_dict(), "original_text": original_text}, source="voice"))))
+            if generation != self._asr_generation or (running and not self._running):
+                return
+            # Late input is not permission to execute an old command. This guard
+            # applies to user input only, never to normal game reminders.
+            if time.monotonic() - _t_asr > 8.0:
+                get_notification_center().update(current_operation_id(),
+                    title="这条指令等待过久，请再说一次", status="warning", phase="done")
+                return
+            stage("dispatch", lambda: self._execute_intent(intent, text))
+        finally:
+            elapsed = time.monotonic()
+            fields = " ".join(f"{key}={value:.0f}ms" for key, value in timings.items())
+            logging.getLogger(__name__).info("voice_timing %s total=%.0fms", fields, (elapsed-_t0)*1000)
+            print("[PERF] asr=%.0fms intent=%.0fms command=%.0fms total=%.0fms i=%s" % (
+                (_t_asr-_t0)*1000, (elapsed-_t_asr)*1000-timings.get("dispatch", 0),
+                timings.get("dispatch", 0), (elapsed-_t0)*1000,
+                intent.intent_type if intent else "unknown"))
 
     # ---- 包2b：谁在播谁响应（电影/音乐暂停继续路由） ----
     # 路由读 state_store 的 MOVIE 播放态（movie_controller play/pause/stop 写入）。

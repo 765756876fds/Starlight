@@ -15,7 +15,7 @@ from typing import Any
 from ..core.command_bus import CommandType
 from .text import normalize_text
 from .numbers import parse_integer, parse_number
-from .music_semantics import MUSIC_ACTIONS, parse_music_candidate, unsafe_control_text
+from .music_semantics import MUSIC_ACTIONS, parse_media_control, parse_music_candidate, unsafe_control_text
 
 
 class Intent:
@@ -354,9 +354,10 @@ class RuleBasedIntent:
         film = film_request(text)
         if film is not None:
             return Intent(film[0], params=film[1])
-        contextual = {"先停一下": "pause", "停一会儿": "pause", "接着放": "resume"}
-        if text in contextual:
-            return Intent(CommandType.MEDIA_CONTEXT, params={"action": contextual[text]})
+        contextual = parse_media_control(text)
+        # Bare pause/resume keep their global snapshot compatibility contract.
+        if contextual is not None and text not in ("暂停", "继续"):
+            return Intent(CommandType.MEDIA_CONTEXT, params={"action": contextual.action})
         volume = match_volume(text)
         if volume is not None:
             return Intent(volume[0], confidence=0.99, params=volume[1])
@@ -718,6 +719,7 @@ class IntentRouter:
         self.rule_based = RuleBasedIntent()
         self._pending_parameter = None
         self._context_lock = threading.RLock()
+        self._parse_timing = threading.local()
 
     def clear_context(self):
         with self._context_lock:
@@ -743,8 +745,17 @@ class IntentRouter:
         return Intent(command, params=params) if params is not None else None
 
     def parse(self, text: str) -> Intent:
+        started = time.monotonic()
         with self._context_lock:
-            return self._parse_text(text)
+            acquired = time.monotonic()
+            try:
+                return self._parse_text(text)
+            finally:
+                self._parse_timing.value = {"lock_wait_ms": (acquired - started) * 1000,
+                                            "parse_ms": (time.monotonic() - acquired) * 1000}
+
+    def get_parse_timing(self):
+        return dict(getattr(self._parse_timing, "value", {}))
 
     def _parse_text(self, text: str) -> Intent:
         """
@@ -768,7 +779,7 @@ class IntentRouter:
                 return Intent("system.unknown", confidence=0.0)
             # Keep the existing dedicated global “暂停/继续” contract. Natural
             # objectless aliases must not inherit that global execution power.
-            if candidate and candidate.target == "current_media" and normalize_text(text) != "暂停":
+            if candidate and candidate.target == "current_media" and normalize_text(text) not in ("暂停", "继续"):
                 self.clear_context()
                 return Intent("system.clarify", params={"message": "请明确说音乐，例如“音乐先停一下”"})
         if intent is None and candidate is not None:
