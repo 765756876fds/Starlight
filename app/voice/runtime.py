@@ -1316,6 +1316,15 @@ class VoiceRuntime:
                 return
             notification_id = current_operation_id()
             def next_done(value, error):
+                if value is None and error is None and not self._request_is_current(request_generation):
+                    # CommandBus may reject a stale command before invoking its
+                    # handler. Close its original record; never leave it loading
+                    # forever or claim that an already-issued operation was undone.
+                    center = get_notification_center()
+                    record = center.get(notification_id)
+                    if record is not None and record.status == "processing" and not record.result_owner:
+                        center.update(notification_id, title="后续指令已到达，未继续确认这次切歌",
+                                      status="warning", phase="done")
                 if error is not None and self._request_is_current(request_generation):
                     with operation_scope(notification_id):
                         self._enqueue_speak(

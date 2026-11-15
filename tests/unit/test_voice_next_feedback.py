@@ -303,3 +303,35 @@ def test_late_ipc_success_sample_is_rechecked_before_confirmation(setup):
     wait(lambda: center.get(operation).phase == "done")
     assert center.get(operation).status == "warning"
     assert "过期" in center.get(operation).title
+
+
+def test_superseded_before_handler_starts_closes_original_notification(setup):
+    c, center, _ = setup
+    c.command_bus.register(C.MUSIC_VOLUME_UP, lambda command: True)
+    runtime = VoiceRuntime({})
+    runtime.command_bus = c.command_bus
+    execute = c.command_bus.execute
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    def gated(command):
+        if command.command_type == C.MUSIC_NEXT:
+            entered.set()
+            assert release.wait(1)
+            try:
+                return execute(command)
+            finally:
+                finished.set()
+        return execute(command)
+    c.command_bus.execute = gated
+    try:
+        runtime._execute_intent(runtime.intent_router.parse("下一首"), "下一首")
+        assert entered.wait(1)
+        first = center.history()[0].id
+        runtime._execute_intent(runtime.intent_router.parse("音乐声音大一点"), "音乐声音大一点")
+        second = center.history()[0].id
+        assert second != first
+    finally:
+        release.set()
+    assert finished.wait(1)
+    wait(lambda: center.get(first).phase == "done")
+    assert center.get(first).status == "warning"
+    assert len(c.mpv.loaded) == 1 and len(center.history()) == 2
