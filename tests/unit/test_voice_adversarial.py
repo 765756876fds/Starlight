@@ -374,6 +374,10 @@ def test_deferred_music_search_guard_prevents_start_after_new_command():
     old = rt.command_bus.execute_async.call_args.args[0]
     assert old.is_current() is True
     rt._execute_intent(Intent(C.MUSIC_NEXT), "下一首")
+    current = rt.command_bus.execute_async.call_args.args[0]
+    assert current.command_type == C.MUSIC_NEXT and current.is_current() is True
+    assert rt.command_bus.execute_async.call_count == 2
+    rt.command_bus.execute(current)  # Drain the captured async command through the real bus.
     rt.command_bus.execute(old)
     next_song.assert_called_once()
     search.assert_not_called()

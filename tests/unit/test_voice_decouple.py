@@ -8,7 +8,7 @@ VOICE-DECOUPLE-01: 采集/识别解耦（方案 A）单测
 - 识别线程异常兜底（线程不退出、后续段仍被处理 → 故障隔离）
 - stop 干净退出（识别线程结束、队列清空）
 - 长任务白名单 execute_async（MUSIC_SEARCH_PLAY / MUSIC_RESCAN / PLAYER_QUERY）
-- 短命令保持 execute（保序、兼容 test_voice_dispatch）
+- 语音下一首异步，其他旧短命令保持 execute
 """
 import pytest
 
@@ -67,7 +67,10 @@ def test_restart_after_stop():
     time.sleep(0.6)          # seg2 被新识别线程处理 → execute 2 次
 
     # 恰好 2 次：seg1 + seg2；无残留段被重复处理（若有，会 >2）
-    assert rt.command_bus.execute.call_count == 2
+    assert rt.command_bus.execute_async.call_count == 2
+    assert all(call.args[0].command_type == CommandType.MUSIC_NEXT
+               for call in rt.command_bus.execute_async.call_args_list)
+    rt.command_bus.execute.assert_not_called()
     assert rt.event_bus.publish.call_count >= 1
     rt.stop()
 
@@ -148,9 +151,15 @@ def test_player_query_async():
 
 
 def test_short_command_still_sync():
-    """短命令保持 execute：保序、兼容现有 test_voice_dispatch"""
+    """下一首等待播放确认时异步；其他旧短命令仍保持同步。"""
     rt = _make_exec_runtime()
     intent = Intent(CommandType.MUSIC_NEXT, confidence=0.99, params={})
     rt._execute_intent(intent, "下一首")
+    rt.command_bus.execute_async.assert_called_once()
+    rt.command_bus.execute.assert_not_called()
+    cmd = rt.command_bus.execute_async.call_args.args[0]
+    assert cmd.command_type == CommandType.MUSIC_NEXT and cmd.is_current() is True
+    rt._execute_intent(Intent(CommandType.MUSIC_PREV), "上一首")
     rt.command_bus.execute.assert_called_once()
-    rt.command_bus.execute_async.assert_not_called()
+    assert rt.command_bus.execute.call_args.args[0].command_type == CommandType.MUSIC_PREV
+    rt.command_bus.execute_async.assert_called_once()

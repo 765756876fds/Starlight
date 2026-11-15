@@ -160,7 +160,11 @@ class TestVoiceMovieRouting(unittest.TestCase):
                   CommandType.MUSIC_HIGHLIGHT, CommandType.MUSIC_CLEAR_QUEUE):
             rt = _mk_rt(True, False)
             rt._execute_intent(Intent(t), "x")
-            cmd = rt.command_bus.execute.call_args[0][0]
+            dispatch = rt.command_bus.execute_async if t == CommandType.MUSIC_NEXT else rt.command_bus.execute
+            other = rt.command_bus.execute if t == CommandType.MUSIC_NEXT else rt.command_bus.execute_async
+            dispatch.assert_called_once()
+            other.assert_not_called()
+            cmd = dispatch.call_args.args[0]
             self.assertEqual(cmd.command_type, t)
 
 
