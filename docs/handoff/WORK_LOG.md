@@ -380,3 +380,11 @@ Ruff 0.17.4仅开发工具：无配置首次2321条/390文件，新显式E4/E7/E
 - 8个Python文件compileall exit0；新文件Ruff零违规，既有文件4项历史违规、零新增。完整staged diff及敏感值检查通过，git diff/check和cached检查通过。
 - 原70个变更/未跟踪文件均保留；66个非目标原文件哈希一致。控制器历史41行诊断保留在未暂存区；仅本轮生命周期日志增量入提交。前轮观察测试仅更新技术日志接口断言，业务断言不变。
 - 此次只补充可观测性和验收，没有业务算法修复；推荐队列偶发空状态仍未定位。真实联网采用用户已有验收，不用替身或生成音频冒充在线/麦克风实机成功。最终Windows Unit/UI CI需核对新SHA，另附本地回执。
+
+### 首次CI唯一失败：旧MPV测试调度契约（2026-11-15）
+
+- 6e5918c首次Unit运行43683385735：1 failed、2942 passed、9 skipped、1条既有warning；UI运行43683385786成功（四组110 passed、0 failed/skipped/warnings；helper41 passed、1条既有warning）。首次完整日志已保留。
+- 旧test_send_command_serialized错误假定线程1先start就先取得锁。外部控制线程2先执行，在父962b5f7和本轮6e5918c均复现request_id 2 != 1（各1 failed、exit1）。两提交的MPV源码和旧测试字节相同，非推荐或新增诊断回归。
+- 只修复tests/unit/test_mpv_threadsafe.py：用Event控制两种先后顺序，模拟响应按实际发出的请求ID和属性生成；仍严格检查请求编号、属性响应不串线、最大未完成交换数为1、缓冲消耗完毕及两个线程均退出。播放器源码不改。
+- 定向3 passed，连同诊断/联调共16 passed（13项与前682项重叠，不重复计数）。移除锁的外部负对照两种顺序均失败，证明未放宽并发安全断言。Ruff及编译通过；初始测试路径/FFmpeg环境记录仍保留。
+- 本阶段本地唯一用例更新为832项：682相关单元、3项MPV测试、140项Qt、7项真实MPV，均0 failed/skipped/warnings。首次CI失败已按证据修测试，不无限重跑；最终提交需另验Unit和UI。此次仅测试/记录，UI工作流不匹配测试文件路径，将在确认最终SHA无既有运行后通过现有workflow_dispatch手动触发一次，不改YAML。
