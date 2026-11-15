@@ -147,3 +147,24 @@ def test_disk_lock_never_blocks_memory_reads_or_voice_submission(tmp_path):
         assert not m.flush(0.5)
         db.rollback()
     assert m.close()
+
+
+def test_fast_revoke_completion_cannot_leave_unbounded_pending_ids(tmp_path, monkeypatch):
+    m = InteractionMemory(tmp_path / "fast-revoke.db")
+    assert record(m, "feedback", kind="weak", media_key="a", rating="negative")
+    assert m.flush()
+    submit = m._submit
+
+    def completed_before_return(task):
+        accepted = submit(task)
+        if task[0] == "revoke":
+            assert m.flush(1)
+        return accepted
+
+    monkeypatch.setattr(m, "_submit", completed_before_return)
+    try:
+        assert m.revoke("feedback")
+        assert m.weak_profile("music") == {}
+        assert m._revoking == set()
+    finally:
+        assert m.close()

@@ -81,10 +81,12 @@ class InteractionMemory:
     def revoke(self, event_id):
         if not event_id:
             return False
-        if not self._submit(("revoke", str(event_id))):
-            return False
         with self._lock:
             self._revoking.add(str(event_id))
+        if not self._submit(("revoke", str(event_id))):
+            with self._lock:
+                self._revoking.discard(str(event_id))
+            return False
         return True
 
     def weak_profile(self, domain):
