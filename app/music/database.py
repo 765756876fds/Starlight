@@ -673,6 +673,11 @@ class MusicDatabase:
                 (playlist_id,))
             return [dict(r) for r in cursor.fetchall()]
 
+    def playback_member_lease(self, playlist_id: int, member_id: int, deadline: float):
+        """Opt-in authority read for goal admission; no schema or legacy change."""
+        from .goal_admission import member_lease
+        return member_lease(self, playlist_id, member_id, deadline)
+
     def delete_playlist_songs_by_music_id(self, music_id: int):
         """按 music_id 从所有歌单移除（删本地文件时同步清理引用）。"""
         with self._lock:

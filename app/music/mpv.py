@@ -292,6 +292,20 @@ class MpvController:
     def play(self):
         self.set_property("pause", False)
 
+    def loadfile_guarded(self, filepath: str, deadline: float, is_current):
+        """Opt-in bounded IPC admission, never used by ordinary loadfile calls."""
+        def remaining():
+            return max(0, deadline-time.monotonic())
+        if not self._pipe_lock.acquire(timeout=min(.02, remaining())):
+            return None
+        try:
+            if remaining() <= 0 or not is_current():
+                return None
+            return self._send_command("loadfile", [filepath, "replace"],
+                                      timeout=min(.2, remaining()), _locked=True)
+        finally:
+            self._pipe_lock.release()
+
     def pause(self):
         self.set_property("pause", True)
 

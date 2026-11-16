@@ -32,6 +32,12 @@ class Request:
 
 
 def report(controller, stage, result, epoch=None):
+    admission = getattr(controller, "_goal_admission", None)
+    if admission is not None:
+        try:
+            admission.report(stage, result, epoch)
+        except Exception:
+            pass  # Optional receipt observation must not alter old playback.
     observer = getattr(controller, "_next_feedback", None)
     if observer is not None:
         try:

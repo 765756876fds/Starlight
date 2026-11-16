@@ -60,6 +60,9 @@ def _cancel_switch_on_user_action(method):
         guard = kwargs.get("_voice_guard")
         if guard is not None and not guard():
             return False
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None:
+            admission.user_action(guard, method.__name__)
         try:
             self._cancel_candidate_switch()
             if hasattr(self, "recommendations"):
@@ -491,6 +494,9 @@ class MusicController:
 
     def stop(self):
         """停止音乐模块"""
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None:
+            admission.close()
         # 决策点：模块级 stop 被触发（记录调用来源；controller 内部无 self.stop() 调用，
         # 均由外部/UI 触发，caller 恒为 stop 方法本身）
         self._record_decision({
@@ -556,6 +562,44 @@ class MusicController:
                                   lambda c: self.cancel_sleep_timer())
 
     # ===== 播放控制 =====
+
+    def _goal_owner(self):
+        """Opt-in owner; no default command/voice path constructs this object."""
+        from .goal_admission import GoalAdmission, SnapshotError, require_worker
+        require_worker()
+        owner = getattr(self, "_goal_admission", None)
+        if owner is not None:
+            return owner
+        if not self._lock.acquire(timeout=.02):
+            raise SnapshotError("controller_busy")
+        try:
+            owner = getattr(self, "_goal_admission", None)
+            if owner is None:
+                owner = self._goal_admission = GoalAdmission(self)
+            return owner
+        finally:
+            self._lock.release()
+
+    def goal_state(self):
+        return self._goal_owner().snapshot()
+
+    def goal_member(self, playlist_id, member_id):
+        return self._goal_owner().member(playlist_id, member_id)
+
+    def admit_music_goal(self, request):
+        from .goal_admission import AdmissionStatus, GoalReceipt, SnapshotError
+        try:
+            return self._goal_owner().admit(request)
+        except SnapshotError:
+            return GoalReceipt(getattr(request, "operation_id", ""), AdmissionStatus.REJECTED_UNAVAILABLE,
+                               "worker_or_controller_unavailable")
+
+    def observe_music_goal(self, operation_id):
+        return self._goal_owner().observe(operation_id)
+
+    def cancel_music_goal(self, operation_id):
+        owner = getattr(self, "_goal_admission", None)
+        return owner.cancel(operation_id) if owner is not None else None
 
     @_cancel_switch_on_user_action
     def play(self):
@@ -854,22 +898,27 @@ class MusicController:
                 self._record_intent(
                     "play_song", song,
                     round((time.perf_counter() - _t_enter) * 1000, 2))
-            if self._mpv_restart_pending:
-                logger.info("[Music] mpv 重启中，忽略播放请求")
-                return
-            self._invalidate_highlight()
-            # 如果队列是空的（语音首次播放本地歌曲），自动把整个本地库加进队列
-            if self.queue.size() == 0 and not song.get("online"):
-                try:
-                    all_songs = self.db.get_all_songs(limit=1000)
-                    if all_songs:
-                        self.queue.add_all(all_songs)
-                except Exception as e:
-                    logger.error(f"加载本地队列失败: {e}")
-            # 添加到队列并播放
-            self.queue.add(song)
-            self.queue.play_at(self.queue.size() - 1)
+            self._play_selected_song(song)
+
+    def _play_selected_song(self, song, *, _admission=None):
+        """Shared locked commit; legacy play_song keeps its existing semantics."""
+        if self._mpv_restart_pending:
+            logger.info("[Music] mpv 重启中，忽略播放请求")
+            return
+        self._invalidate_highlight()
+        if self.queue.size() == 0 and not song.get("online"):
+            try:
+                all_songs = self.db.get_all_songs(limit=1000)
+                if all_songs:
+                    self.queue.add_all(all_songs)
+            except Exception as e:
+                logger.error(f"加载本地队列失败: {e}")
+        self.queue.add(song)
+        self.queue.play_at(self.queue.size() - 1)
+        if _admission is None:
             self._play_song(song)
+        else:
+            self._play_song(song, _admission=_admission)
 
     def get_history(self, limit: int = 200) -> list:
         """播放历史（最近在前）。封面补全：本地反查 path，在线查最近封面缓存。"""
@@ -1467,21 +1516,29 @@ class MusicController:
         if before_load is not None and not before_load():
             report_next_feedback(self, "voice_load_failed", "stale", req_epoch)
             return None
-        # 互斥：在线起播前确认电影已暂停（未装配 pauser 时阻断）
-        if self._movie_pauser is None:
-            logger.warning("[Music] movie pauser not wired, blocking online play")
-            report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
-            return None
-        try:
-            ok = self._movie_pauser()
-            if not ok:
-                logger.warning("[Music] 电影暂停确认失败，阻断在线起播")
+        admission = getattr(self, "_goal_admission", None)
+        owned = admission.owned_operation() if admission is not None else None
+        if owned is not None:
+            # Goal admission has no cross-media control permission. Read-only
+            # permission evidence replaces the legacy movie-pause callback.
+            if not owned.guard():
+                return None
+        else:
+            # 互斥：在线起播前确认电影已暂停（未装配 pauser 时阻断）
+            if self._movie_pauser is None:
+                logger.warning("[Music] movie pauser not wired, blocking online play")
                 report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
                 return None
-        except Exception as e:
-            logger.error(f"[Music] 电影暂停确认异常: {e}")
-            report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
-            return None
+            try:
+                ok = self._movie_pauser()
+                if not ok:
+                    logger.warning("[Music] 电影暂停确认失败，阻断在线起播")
+                    report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
+                    return None
+            except Exception as e:
+                logger.error(f"[Music] 电影暂停确认异常: {e}")
+                report_next_feedback(self, "voice_load_failed", "blocked", req_epoch)
+                return None
         # Movie pause confirmation may wait for IPC. Recheck recommendation
         # currency immediately afterwards; legacy before_load may have side effects.
         if verify_load is not None and not verify_load():
@@ -1490,7 +1547,8 @@ class MusicController:
         self._shadow_loadfile_ts = time.perf_counter()
         self._shadow_file_kind = "online"
         try:
-            resp = self.mpv.loadfile(url)
+            resp = (self.mpv.loadfile(url) if owned is None else
+                    self.mpv.loadfile_guarded(url, owned.request.deadline, owned.guard))
             report_next_feedback(self, "loadfile", "unknown" if resp is None else
                                  "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed", req_epoch)
         except Exception as e:
@@ -1524,6 +1582,11 @@ class MusicController:
                 self._is_switching_track = False
                 self._last_idle = False
             raise RuntimeError(f"在线 loadfile 失败: error={err}")
+        if owned is not None and not owned.guard():
+            # The IPC acknowledgment cannot revive a cancelled goal's state writes.
+            if self._play_request_id == req_epoch:
+                self._is_switching_track = False
+            return None
         # 在线歌已真正 loadfile：代次生效（_poll_idle 恢复写缓存）+ 结束切换态。
         # 调用方（_resolve_online_worker/play_online）已在锁内/入口校验过 req_id
         # 等于当前代次，此处 loadfile 的一定是最新播放意图。
@@ -1587,14 +1650,19 @@ class MusicController:
                     if self._play_request_id == req_before:
                         self._is_switching_track = False
 
-    def _play_song(self, song: dict[str, Any]):
+    def _play_song(self, song: dict[str, Any], *, _admission=None):
         """实际播放歌曲（唯一咽喉：play_song/next/prev/_auto_next/在线队列全部汇入）"""
         if not song:
+            return
+        if _admission is not None and not _admission.guard():
             return
         # 播放请求代际号（request_id 契约）：一切新播放意图在此递增，作废在途的
         # 在线解析结果——旧网络请求（_resolve_online_worker）锁内校验不过，绝不 loadfile。
         self._play_request_id += 1
         current_epoch = self._play_request_id  # 本代次号（代次隔离：窗口内旧数据全部失效）
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None:
+            admission.bind_epoch(current_epoch)
         report_next_feedback(self, "voice_selected", "selected", current_epoch)
         # UI 切换态：新歌 loadfile 前禁止渲染旧进度（在线解析窗口内 mpv 仍报旧歌位置）
         self._is_switching_track = True
@@ -1661,7 +1729,8 @@ class MusicController:
         self._shadow_file_kind = "online" if str(filepath).startswith("http") else "local"
 
         try:
-            resp = self.mpv.loadfile(filepath)
+            resp = (self.mpv.loadfile(filepath) if _admission is None else
+                    self.mpv.loadfile_guarded(filepath, _admission.request.deadline, _admission.guard))
             report_next_feedback(self, "loadfile", "unknown" if resp is None else
                                  "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed", current_epoch)
         except Exception as e:
@@ -1693,6 +1762,10 @@ class MusicController:
                 self._is_switching_track = False
                 self._last_idle = False
             return
+        if _admission is not None and not _admission.guard():
+            if self._play_request_id == current_epoch:
+                self._is_switching_track = False
+            return
         # 本地歌已真正 loadfile 起播：代次生效（_poll_idle 恢复写缓存）+ 结束切换态
         self._last_loadfile_epoch = self._play_request_id
         self._is_switching_track = False
@@ -1712,12 +1785,13 @@ class MusicController:
         # 解码失败——mpv 会立刻回到 idle，或卡在“播放中”却拿不到任何播放时间
         # （playback-time/duration 均为 None）。此时 idle 轮询无法形成上升沿，
         # 播放器会永久卡住。确认线程发现播放未真正开始 → 自动跳过切下一首。
-        threading.Thread(
-            target=self._confirm_playback,
-            args=(song, filepath),
-            daemon=True,
-            name="music-playback-confirm"
-        ).start()
+        if _admission is None:
+            threading.Thread(
+                target=self._confirm_playback,
+                args=(song, filepath),
+                daemon=True,
+                name="music-playback-confirm"
+            ).start()
 
         # 增加播放计数
         self.db.increment_play_count(song["id"])
@@ -2014,6 +2088,9 @@ class MusicController:
         - 成功 -> 从 0:00 重播（不保进度）；全部失败 -> 发 ONLINE_ERROR；
         - 用户操作（_cancel_candidate_switch）可随时中断。
         """
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None:
+            admission.user_action()
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_online_resume", self._current_song, 0,
                             extra={"generation": int(generation), "idx": int(idx)})
@@ -2106,6 +2183,9 @@ class MusicController:
         播完整个歌单队列为空 → _next_locked 保持空闲，绝不跨界加载本地库。
         切歌单即替换队列（clear + add_all 剩余），符合"在当前来源内连续播放"语义。
         tracks 为 OnlineTrack 列表（panel 榜单缓存 self._rank_tracks）。"""
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None:
+            admission.user_action()
         if not self._mpv_available or self.online_manager is None:
             return False
         if not tracks or not 0 <= index < len(tracks):
@@ -2154,6 +2234,9 @@ class MusicController:
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_online", track, 0)
         if not _recommendation and hasattr(self, 'recommendations'):
+            admission = getattr(self, "_goal_admission", None)
+            if admission is not None:
+                admission.user_action()
             self.recommendations.cancel(clear_session=True, reason="direct_online")
         # 代次隔离：play_online 是不经 _play_song 的公开入口，同样递增代次
         # 并置切换态——URL 解析（get_play_url）窗口内 mpv 仍报旧歌位置，必须失效。
@@ -2165,6 +2248,9 @@ class MusicController:
             self._play_request_id += 1
             req_id = self._play_request_id
             self._is_switching_track = True
+            admission = getattr(self, "_goal_admission", None)
+            if admission is not None:
+                admission.bind_epoch(req_id)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             self._end_switch_state_if_current(req_id)
@@ -2236,6 +2322,9 @@ class MusicController:
 
     def recommend_music(self, **params):
         """Run through CommandBus.execute_async or an existing UI background task."""
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None:
+            admission.user_action(params.get("is_current"))
         result = self.recommendations.play(**params)
         if result.status in (OperationStatus.CONFIRMED, OperationStatus.ACCEPTED):
             self.event_bus.publish(Event(event_type="music.recommendation_changed",
@@ -2794,6 +2883,9 @@ class MusicController:
 
     def _notify_queue_view(self):
         """Lightweight invalidation on the existing state channel, no snapshot/IPC."""
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None:
+            admission.queue_changed()
         publish = getattr(getattr(self, "event_bus", None), "publish_async", None)
         if callable(publish):
             try:
@@ -2971,6 +3063,9 @@ class MusicController:
 
     def _auto_next(self):
         """自动播放下一首"""
+        admission = getattr(self, "_goal_admission", None)
+        if admission is not None and admission.blocks_auto_advance():
+            return
         # origin 上下文：自动切歌全程标记为 auto（_play_song 内部据此区分用户/自动意图）
         with self._origin_ctx("auto"):
             if self._candidate_switching:
