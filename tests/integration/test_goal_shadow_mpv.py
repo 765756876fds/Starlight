@@ -16,6 +16,7 @@ from tools.goal_shadow.contracts import Action, Goal
 from tools.goal_shadow.decision import decide
 from tools.goal_shadow.mpv_read_port import MpvReadPort
 from tools.goal_shadow.readonly import LiveReadAdapter
+from tests.unit.test_goal_shadow import capture_in_worker
 
 pytestmark = pytest.mark.integration
 
@@ -59,7 +60,7 @@ def test_independent_read_port_observes_real_decoder(tmp_path, paused, expected)
             time.sleep(.02)
         assert ready, "isolated decoder did not become ready"
         before = queue.snapshot(song)
-        world = adapter.capture(budget=1)
+        world = capture_in_worker(adapter, budget=1)
         result = decide(Goal(), world, now=time.monotonic(), current_generation=adapter.generation())
         assert result.action is expected, (world, result)
         assert result.goal_satisfied is (not paused)

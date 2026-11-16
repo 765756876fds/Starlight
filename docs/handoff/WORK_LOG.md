@@ -1,6 +1,14 @@
 # Starlight 2.0 — 工作历史
 
 
+## 2026-11-17 B1首次CI失败与测试调用契约修正
+
+- d7ce0bdb的Unit运行43935944641：6 failed、3300 passed、9 skipped、1项既有asyncio标记warning；UI运行43935944689四组110 passed。首次完整日志保留，不重跑取绿。
+- 6项均为新增测试在已有QApplication主线程调用capture，被只读线程守卫正确拒绝。先初始化Qt后定向稳定复现6 failed/31 passed；不是生产播放或B算法缺陷。
+- 仅修改两个新增测试文件的读取调用：有界工作线程＋异常原样回传，保留全部原断言和主线程保护；同一Qt已初始化环境下37单元＋3真实隔离MPV共40 passed/0 failed/skipped/warnings，与此前226项重叠不累计。报告补记首次失败。
+- 新提交只含测试契约与必要记录；未修改影子/生产实现。后续SHA和最终Windows CI以交付回执为准。
+
+
 ## 2026-11-17 B1 LISTEN_MUSIC只读状态与影子决策
 
 - 初始a0-cleanup/22051d342d9a979ebb9c23b75dec81788ef1cf72，24 tracked修改、49独立untracked（含上一轮研究报告）、暂存区空。73份历史文件指纹及文档原件存D:/starlight-b1-shadow-38667528；safe fetch远端同SHA，0/0。

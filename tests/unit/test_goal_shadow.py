@@ -40,6 +40,24 @@ def decision(w, constraints=GoalConstraints(), generation=None):
                   current_generation=w.generation if generation is None else generation)
 
 
+def capture_in_worker(adapter, budget=.6):
+    """Honor the real read contract even when an earlier test created Qt."""
+    replies = []
+    def read():
+        try:
+            replies.append((True, adapter.capture(budget)))
+        except BaseException as exc:
+            replies.append((False, exc))
+    thread = threading.Thread(target=read, daemon=True, name="b1-test-read")
+    thread.start()
+    thread.join(budget+.2)
+    assert not thread.is_alive(), "bounded test reader failed to exit"
+    succeeded, value = replies[0]
+    if not succeeded:
+        raise value
+    return value
+
+
 @pytest.mark.parametrize("state,expected", [("playing", Action.NO_OP), ("paused", Action.RESUME_MUSIC)])
 def test_current_session_is_preserved(state, expected):
     result = decision(world(state, [item()]))
@@ -237,7 +255,7 @@ def test_adapter_uses_real_queue_without_consuming_or_mutating(tmp_path):
     controller, port = controller_fixture(tmp_path)
     before = controller.queue.snapshot(controller._current_song)
     adapter = LiveReadAdapter(controller, port, movie_reader=lambda: SimpleNamespace(state="stopped"))
-    captured = adapter.capture()
+    captured = capture_in_worker(adapter)
     result = decide(Goal(), captured, now=time.monotonic(), current_generation=adapter.generation())
     assert result.action is Action.NO_OP
     assert captured.queue.state is A.YES
@@ -252,7 +270,7 @@ def test_generation_changes_mid_snapshot_are_rejected(tmp_path):
         controller._play_request_id += 1
         return original(deadline)
     port.sample = changed
-    captured = LiveReadAdapter(controller, port).capture()
+    captured = capture_in_worker(LiveReadAdapter(controller, port))
     assert not captured.consistent
     assert decision(captured).expired
 
@@ -264,14 +282,14 @@ def test_queue_revision_changes_mid_snapshot_are_rejected(tmp_path):
         controller.queue.add(dict(id=2, path="other-isolated-media"))
         return original(deadline)
     port.sample = changed
-    captured = LiveReadAdapter(controller, port).capture()
+    captured = capture_in_worker(LiveReadAdapter(controller, port))
     assert not captured.consistent
 
 
 def test_decoder_path_mismatch_is_unknown(tmp_path):
     controller, port = controller_fixture(tmp_path)
     controller._current_song["path"] = "different"
-    captured = LiveReadAdapter(controller, port).capture()
+    captured = capture_in_worker(LiveReadAdapter(controller, port))
     assert captured.music_state == "unknown"
 
 
@@ -279,7 +297,7 @@ def test_idle_false_before_decoded_position_is_not_playing(tmp_path):
     controller, port = controller_fixture(tmp_path)
     port.sample = lambda deadline: {"idle-active":False, "pause":False,
         "path":"isolated-media", "time-pos":None, "time-pos-after":.1}
-    captured = LiveReadAdapter(controller, port).capture()
+    captured = capture_in_worker(LiveReadAdapter(controller, port))
     assert captured.music_state == "unknown"
     assert captured.music.state is A.UNKNOWN
 
@@ -290,7 +308,7 @@ def test_controller_lock_contention_is_bounded(tmp_path):
     try:
         started = time.monotonic()
         with pytest.raises(TimeoutError):
-            LiveReadAdapter(controller, port).capture()
+            capture_in_worker(LiveReadAdapter(controller, port))
         assert time.monotonic()-started < .2
     finally:
         controller._lock.release()
