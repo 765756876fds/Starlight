@@ -1,6 +1,14 @@
 # Starlight 2.0 — 工作历史
 
 
+## 2026-11-17 B2活跃数据库与可尝试计划研究
+
+- 基线0a36a2a；新增tools/goal_shadow_b2、unit47/Qt3、冻结16开发/30保留和中文报告，保留B1原始答案、测量与61/63。仅临时SQLite及合成结果，无正式播放/网络/偏好写入。
+- A正常只读WAL事务、B实验所有者短锁均验证并发提交下快照一致。所有者原busy_timeout造成50ms请求约6344ms，局部限制并恢复timeout后约156.5ms；OS/SQLite超预算仍为明确限制。未修改MusicDatabase。
+- 最终本地145个去重节点通过、0失败/跳过/警告；首批扩大回归1失败/141通过为新增fixture漏filename，修复fixture、断言保留。冻结保留30/30非实机播放成功率；实际新播放0。
+- 原24 tracked脏改、49历史untracked和101份指纹均有施工前记录；维护文档仅增量追加。结果/日志见D:/starlight-b2-748fcce9及B2报告。最终精确提交、远端和CI另记回执，不预称成功；完成后不自动接线。
+
+
 ## 2026-11-17 B1首次CI失败与测试调用契约修正
 
 - d7ce0bdb的Unit运行43935944641：6 failed、3300 passed、9 skipped、1项既有asyncio标记warning；UI运行43935944689四组110 passed。首次完整日志保留，不重跑取绿。

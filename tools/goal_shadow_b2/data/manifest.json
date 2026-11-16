@@ -1,0 +1,13 @@
+{
+  "scope": "new B2 synthetic goal cases, no utterance recognition",
+  "files": {
+    "dev.jsonl": {
+      "count": 16,
+      "sha256": "89d84d70cbb13398cb2d7d531ea06ffeb3a4a9e70eedc43e49ce17b9b25df66f"
+    },
+    "holdout.jsonl": {
+      "count": 30,
+      "sha256": "c73c9a57c40c1902c0e28a402b4fd4c8fe3c021341096a6428b01d0b0e36baca"
+    }
+  }
+}
