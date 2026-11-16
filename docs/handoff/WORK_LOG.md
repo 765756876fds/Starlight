@@ -1,5 +1,16 @@
 # Starlight 2.0 — 工作历史
 
+
+## 2026-11-17 B1 LISTEN_MUSIC只读状态与影子决策
+
+- 初始a0-cleanup/22051d342d9a979ebb9c23b75dec81788ef1cf72，24 tracked修改、49独立untracked（含上一轮研究报告）、暂存区空。73份历史文件指纹及文档原件存D:/starlight-b1-shadow-38667528；safe fetch远端同SHA，0/0。
+- 重读上一轮原始语料、冻结文件、方案实现和逐题结果，不重新运行63题，不改变61/63。046/047应保留当前满足目标的会话；问题在答案规范与软偏好优先级，不是靠改答案提高分数。
+- tools/goal_shadow独立研究契约/只读SQL/独立MPV查询/Provider/决策/单槽观察器，新增unit、Qt和native测试；默认生产没有导入、配置开关或钩子。无CommandBus执行、数据库写入、联网选曲或播放副作用。
+- 干净HEAD精确叠加新文件：既有语音与推荐183、新单元37、Qt3、真实生成WAV+隔离MPV3，去重226 passed/0 failed/skipped；各独立单元/native进程有1项既有config.py无效转义DeprecationWarning，Qt0 warning。首次native2 failed/1 passed日志及进度测量首败保留。
+- 初次native fixture只等idle=false，time-pos仍可能null；按真实就绪证据修正fixture。固定20ms也可能未跨更新帧，只读端改为最多150ms内观察推进，不放宽确认条件；生产代码不变。
+- 实际本地只读音乐库因WAL伴随文件保守unknown；偏好聚合1项明确偏好、107 manual/legacy记录（只绑定歌手维度）。验证读取2.6755ms，4个数据库/sidecar前后SHA一致。5次独立MPV读取43.72～97.09ms，决策p50/p95 0.1173/0.1487ms（含tracemalloc），退出无观察线程残留。
+- 精确提交仅本轮新增文件及两份维护文档插入段；此前研究与历史脏改动不混入。最终SHA/推送/Windows CI及保护复核留交付回执，不在执行前伪写成功。无安装包、网络设置、LoL或V1业务改动，完成后停止。
+
 ## 2026-11-16 项目状态文档与仓库同步
 
 - 本次用户授权仅同步检查、项目文档增量提交与正常推送，不修改业务、数据库、模型、网络、LoL或安装器。
