@@ -102,7 +102,7 @@ def test_music_volume_handler_passes_requested_step():
                  "set_speed", "set_sleep_timer", "cancel_sleep_timer", "_cmd_volume_set", "_cmd_seek",
                  "_cmd_search_play", "_cmd_highlight_mode", "_cmd_set_play_mode", "_cmd_play_playlist",
                  "_cmd_create_playlist", "_cmd_add_to_playlist", "_cmd_add_next", "_cmd_play_rank_index",
-                 "_cmd_recommend_next", "recommend_music"):
+                 "_cmd_recommend_next", "_cmd_recommend", "recommend_music"):
         setattr(ctrl, name, MagicMock())
     MusicController._register_commands(ctrl)
     bus.execute(Command(C.MUSIC_VOLUME_UP, params={"step": 20}))
