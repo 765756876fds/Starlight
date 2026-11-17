@@ -78,6 +78,7 @@ class TestMpvRestart:
     def test_restart_limit_3_per_5min(self, tmp_path):
         """窗口内重启次数已达 3 → 放弃自愈（_mpv_gave_up），不再尝试。"""
         ctrl, db = _make_ctrl(tmp_path)
+        ctrl._running = True  # Model a live owner; stopped owners must not self-heal.
         ctrl._mpv_restart_count = 3
         ctrl._mpv_restart_window_ts = time.time()  # 窗口内
         ctrl._try_restart_mpv("test-limit")

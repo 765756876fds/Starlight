@@ -91,6 +91,7 @@ class VoiceRuntime:
         self.movie_mpv_provider = None
         # V2-2：控制器提供者（取 _playback_gen）
         self.music_controller_provider = None
+        self.listen_music_trial = None  # Explicit installation only; no default enable.
         self.movie_controller_provider = None
         from .media_context import MediaContext
         self.media_context = MediaContext(self)
@@ -219,9 +220,27 @@ class VoiceRuntime:
         self.state_store.set(StateNamespace.VOICE, "enabled", True)
         print("[Voice] 运行时已启动（麦克风默认关闭）")
 
+    def bind_listen_music_trial(self, trial):
+        """Bind an isolated, default-off entry to this existing command bus."""
+        import weakref
+        from .listen_music_trial import ListenMusicTrial
+
+        if not isinstance(trial, ListenMusicTrial) or trial.adapter.c.command_bus is not self.command_bus:
+            raise ValueError("trial must use this runtime command bus")
+        previous = getattr(self, "listen_music_trial", None)
+        owner_ref = getattr(trial.adapter.c, "_listen_music_trial_ref", None)
+        owner = owner_ref() if owner_ref is not None else None
+        if (previous is not None and previous is not trial) or (owner is not None and owner is not trial):
+            raise ValueError("trial owner already installed")
+        self.listen_music_trial = trial
+        trial.adapter.c._listen_music_trial_ref = weakref.ref(trial)
+
     def stop(self):
         """停止语音运行时"""
         self._running = False
+        trial = getattr(self, "listen_music_trial", None)
+        if trial is not None:
+            trial.set_enabled(False)
         self._observations.close()
         with self._feedback_lock:
             self._voice_request_generation += 1
@@ -1091,6 +1110,9 @@ class VoiceRuntime:
             self._activity = {"heard": original_text, "intent": intent_type,
                               "feedback": "", "speech_status": "none"}
             self._activity_speech = None
+        trial = getattr(self, "listen_music_trial", None)
+        if trial is not None and (intent_type != "system.unknown" or getattr(intent, "natural_rejection", None) == "negative_request"):
+            trial.voice_advanced()
         issue = parameter_issue(intent_type, params)
         if issue is not None:
             notify("还需要一点信息", issue.message, status="warning")
@@ -1412,10 +1434,13 @@ class VoiceRuntime:
             ), on_done=self._async_feedback(intent_type, request_generation))
 
         elif intent_type in (CommandType.MUSIC_RECOMMEND, CommandType.MOVIE_RECOMMEND, CommandType.MOVIE_CONTINUE):
-            self.command_bus.execute_async(Command(
+            command = Command(
                 command_type=intent_type, params=params, source="voice",
                 is_current=lambda: self._request_is_current(request_generation),
-            ), on_done=self._async_feedback(intent_type, request_generation))
+            )
+            if trial is not None and intent_type == CommandType.MUSIC_RECOMMEND:
+                command.goal_trial = trial.permit(original_text, params, command.notification_id)
+            self.command_bus.execute_async(command, on_done=self._async_feedback(intent_type, request_generation))
 
         elif intent_type == CommandType.MUSIC_RECOMMEND_NEXT:
             self._context_control("next", request_generation)

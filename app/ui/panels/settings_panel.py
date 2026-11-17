@@ -273,7 +273,7 @@ class SettingsPanel(QWidget):
                  overlay_toggle: Callable[[bool], None] | None = None,
                  overlay_enabled: bool = True,
                  on_online_sources_changed: Callable[[], None] | None = None,
-                 parent=None):
+                 parent=None, listen_music_trial=None):
         super().__init__(parent)
         self._music = music
         self._tts = tts
@@ -314,6 +314,9 @@ class SettingsPanel(QWidget):
         tab_music.addStretch(1)
         # Tab 2 语音：语音 TTS
         self._build_tts_group(tab_voice)
+        from ..widgets.listen_music_trial_controls import ListenMusicTrialControls
+        self.listen_music_trial_controls = ListenMusicTrialControls(listen_music_trial, self)
+        tab_voice.addWidget(self.listen_music_trial_controls)
         tab_voice.addStretch(1)
         # Tab 3 游戏：LoL
         self._build_lol_group(tab_game)

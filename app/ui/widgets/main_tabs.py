@@ -48,7 +48,7 @@ class MainTabs(QWidget):
                  snapshot_provider=None, history_repo=None,
                  combo_manager=None, tts=None, equip_toggle=None,
                  overlay_toggle=None, overlay_enabled: bool = True,
-                 speech_queue=None, parent=None):
+                 speech_queue=None, parent=None, listen_music_trial=None):
         super().__init__(parent)
         print("[UI] MainTabs 创建中")
         self._music = music
@@ -113,6 +113,7 @@ class MainTabs(QWidget):
                 overlay_enabled=overlay_enabled,
                 on_refresh_changed=self._apply_refresh_interval,
                 on_online_sources_changed=self._notify_online_sources_changed,
+                listen_music_trial=listen_music_trial,
             ), "设置", "settings")
         layout.addWidget(tabs)
 

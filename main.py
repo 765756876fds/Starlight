@@ -139,6 +139,7 @@ class Application:
         self.music: MusicController = None
         self.lol: LoLRuntime = None
         self.voice: VoiceRuntime = None
+        self.listen_music_trial = None
         self.tts: TTSController = None
         self.speech_queue: SpeechQueue = None
         self.speech_judge: SpeechJudge = None
@@ -482,6 +483,7 @@ class Application:
                 pass
             return None
         self.voice.movie_mpv_provider = _movie_mpv
+        self._assemble_listen_music_trial()
         self._set_module_status("asr", "disabled" if not asr_enabled else ("ok" if asr_ok else "fail"))
         self._set_module_status("intent", "ok")
 
@@ -569,6 +571,42 @@ class Application:
         logger.info("\nSystem started! Press Ctrl+C to stop.")
         logger.info("-" * 60)
 
+    def _assemble_listen_music_trial(self):
+        """Same owner/bus, no IO or enablement during application assembly."""
+        from app.music.goal_adapter import GoalAdapter
+        from app.voice.listen_music_trial import ListenMusicTrial
+
+        if getattr(self, "listen_music_trial", None) is not None:
+            return
+        try:
+            trial = ListenMusicTrial(GoalAdapter.for_user_trial(self.music),
+                                     prepare_context=self._prepare_goal_trial_context)
+            self.voice.bind_listen_music_trial(trial)
+            self.listen_music_trial = trial
+        except Exception:
+            logger.error("[ListenMusicTrial] assembly_unavailable; V1 retained", exc_info=True)
+
+    def _prepare_goal_trial_context(self):
+        """Only the enabled command worker may publish proven initial movie idle.
+
+        Never downgrade an unknown existing session. No IPC, Qt access, waits
+        for playback, or cross-media action; the movie owner publishes its state.
+        """
+        from app.music.goal_admission import require_worker
+        require_worker()
+        movie = getattr(getattr(self, "_movie_panel", None), "_movie", None)
+        if movie is None or self.music.state_store.get("movie", "playing", None) is not None:
+            return
+        if not movie._media_action_lock.acquire(timeout=0.02):
+            return
+        try:
+            if (movie._playback_gen == 0 and movie._current is None
+                    and not movie._external_url_mode and not movie._stopping
+                    and movie.mpv.is_running() is False):
+                movie._write_state(playing=False, paused=False)
+        finally:
+            movie._media_action_lock.release()
+
     def stop(self):
         """doc"""
         single_instance = getattr(self, "_single_instance", None)
@@ -578,6 +616,13 @@ class Application:
             except Exception:
                 logger.error("[SingleInstance] close failed", exc_info=True)
             self._single_instance = None
+        trial = getattr(self, "listen_music_trial", None)
+        if trial is not None:
+            try:
+                trial.set_enabled(False)
+                trial.adapter.close()
+            except Exception:
+                logger.error("[Shutdown] listen_music_trial close failed", exc_info=True)
         if not self._running:
             return
 
@@ -1421,6 +1466,7 @@ class Application:
             services_dict={"lcu": getattr(self.lol, "lcu", None) if getattr(self, "lol", None) else None},
             tts=getattr(self, "tts", None),
             speech_queue=getattr(self, "speech_queue", None),
+            listen_music_trial=getattr(self, "listen_music_trial", None),
             equip_toggle=lambda on: setattr(self, "_equip_enabled", bool(on)),
             overlay_toggle=window._on_overlay_toggle,
             overlay_enabled=True,

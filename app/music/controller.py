@@ -169,6 +169,8 @@ class MusicController:
         # 状态
         self._running = False
         self._lock = threading.Lock()
+        # Separate lifecycle gate: slow restart never holds the business lock.
+        self._mpv_lifecycle_lock = threading.Lock()
         self._current_song: dict[str, Any] | None = None
         # V2-2：播放会话代次，每次加载新媒体递增；全局暂停快照据此判断会话是否变化
         self._playback_gen: int = 0
@@ -403,7 +405,7 @@ class MusicController:
         不再持业务锁，UI 播放/切歌操作不被阻塞。
         窗口限制 3 次/5 分钟；超过则放弃（_mpv_gave_up），避免反复崩。"""
         with self._lock:
-            if self._mpv_restart_pending:
+            if not self._running or self._mpv_restart_pending:
                 return
             now = time.time()
             if now - self._mpv_restart_window_ts > 300:
@@ -431,11 +433,20 @@ class MusicController:
     def _restart_mpv_worker(self, restart_song: dict[str, Any] | None,
                             restart_req_id: int | None = None):
         """后台执行实际重启；状态更新后持锁收尾清 pending。"""
+        with self._mpv_lifecycle_lock:
+            self._restart_mpv_serialized(restart_song, restart_req_id)
+
+    def _restart_mpv_serialized(self, restart_song, restart_req_id):
         try:
+            with self._lock:
+                if not self._running:
+                    return
             try:
                 self.mpv.stop_process()
             except Exception:
                 pass
+            if not self._running:
+                return
             try:
                 ok = bool(self.mpv.start(taskkill=False, pipe_timeout=3.0, prop_timeout=0.5))
             except Exception as e:
@@ -447,7 +458,12 @@ class MusicController:
                 logger.error("[Music] mpv 重启失败，模块降级")
                 return
             with self._lock:
-                self._mpv_available = True
+                current = self._running
+                if current:
+                    self._mpv_available = True
+            if not current:
+                self.mpv.stop_process()
+                return
             # 重置轮询基线：mpv 冷启动处于 idle，必须真实读取（失败保守取 True）
             try:
                 self._last_idle = bool(self.mpv.get_property("idle-active", timeout=1.0))
@@ -483,6 +499,8 @@ class MusicController:
         if not self._running:
             return
         with self._lock:
+            if not self._running:
+                return
             if restart_req_id is not None and restart_req_id != self._play_request_id:
                 logger.info("[Music] 重启窗口内已发起新播放（代次变化），放弃恢复旧歌")
                 return
@@ -503,7 +521,8 @@ class MusicController:
             "kind": "module_stop",
             "caller": "stop()",
         })
-        self._running = False
+        with self._lock:
+            self._running = False
         observer = getattr(self, "_next_feedback", None)
         if observer is not None:
             observer.close()
@@ -519,7 +538,8 @@ class MusicController:
                 self.online_manager.close()
             except Exception:
                 pass
-        self.mpv.stop_process()
+        with self._mpv_lifecycle_lock:
+            self.mpv.stop_process()
         logger.info("[Music] 模块已停止")
 
     def _register_commands(self):
@@ -542,7 +562,7 @@ class MusicController:
         self.command_bus.register(CommandType.MUSIC_SEARCH_PLAY, self._cmd_search_play)
         self.command_bus.register(CommandType.MUSIC_RECOMMEND_NEXT, self._cmd_recommend_next)
         self.command_bus.register(CommandType.MUSIC_RECOMMEND,
-            lambda c: self.recommend_music(is_current=c.is_current, **c.params))
+            self._cmd_recommend)
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT, lambda c: self.jump_to_highlight())
         self.command_bus.register(CommandType.MUSIC_HIGHLIGHT_MODE, self._cmd_highlight_mode)
         self.command_bus.register(CommandType.MUSIC_SET_PLAY_MODE, self._cmd_set_play_mode)
@@ -2319,6 +2339,35 @@ class MusicController:
         if hasattr(self, 'music_memory'):
             self.music_memory.record(online_song, "recommendation" if _recommendation else "manual")
         return True
+
+    def _cmd_recommend(self, command):
+        trial_ref = getattr(self, "_listen_music_trial_ref", None)
+        trial = trial_ref() if trial_ref is not None else None
+        if trial is not None:
+            result = trial.handle(command)
+            if result is not None:
+                return result
+        result = self.recommend_music(is_current=command.is_current, **command.params)
+        if trial is not None:
+            trial.note_legacy_result(command, result)
+        return result
+
+    def recommend_music_guarded_route(self, expected, cancel, is_current, database_revision):
+        """Pre-B4 compatibility route; the original recommender owns playback."""
+        from .goal_admission import SnapshotError
+
+        claimed = False
+        try:
+            with self._goal_owner().legacy_recommendation(
+                expected, cancel, is_current, database_revision
+            ) as guard:
+                claimed = True
+                if not guard():
+                    return OperationResult(OperationStatus.UNAVAILABLE, "请求已过期，未发起推荐")
+                return self.recommend_music(is_current=guard, expected_request=expected.request)
+        except SnapshotError:
+            return OperationResult(OperationStatus.UNKNOWN if claimed else OperationStatus.UNAVAILABLE,
+                                   "暂时无法确认推荐结果" if claimed else "状态已变化或正在使用，未发起推荐")
 
     def recommend_music(self, **params):
         """Run through CommandBus.execute_async or an existing UI background task."""

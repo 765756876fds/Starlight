@@ -108,6 +108,16 @@ def require_worker():
             raise SnapshotError("goal_requires_worker")
 
 
+@contextmanager
+def bounded_lock(lock, reason):
+    if not lock.acquire(timeout=0.02):
+        raise SnapshotError(reason)
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def file_identity(path):
     p = Path(path)
     stat = p.stat()
@@ -200,6 +210,8 @@ class GoalAdmission:
         self._lock = threading.RLock()
         self._records = {}
         self._active = None
+        self._legacy = None
+        self._legacy_cancel = None
         self._local = threading.local()
         self._queue_revision = controller.queue._revision
         self._blocked_auto_epoch = None
@@ -240,6 +252,13 @@ class GoalAdmission:
 
     def user_action(self, guard=None, action=""):
         with self._lock:
+            if (self._legacy is not None and getattr(self._local, "legacy", None) is self._legacy
+                    and guard is getattr(self._local, "legacy_guard", None)):
+                return
+            if self._legacy is not None:
+                self._legacy_cancel.set()
+                self._legacy = None
+                self._legacy_cancel = None
             op = self._local.__dict__.get("operation")
             if op is not None and guard is op.guard:
                 return
@@ -255,8 +274,60 @@ class GoalAdmission:
             if revision == self._queue_revision:
                 return
             self._queue_revision = revision
+            if self._legacy is not None and getattr(self._local, "legacy", None) is self._legacy:
+                return
             if getattr(self._local, "operation", None) is not self._active or self._active is None:
                 self.user_action()
+
+    @contextmanager
+    def legacy_recommendation(self, expected, cancel, is_current, database_revision):
+        """One pre-admission handoff. Locks cover metadata claim, never playback.
+
+        Lock order is controller -> database -> owner; normal user_action never
+        waits for controller while holding owner. Own queue commits keep the
+        lease; foreign actions cancel it. No B4 operation/receipt is created.
+        """
+        require_worker()
+        c = self.controller
+        if not isinstance(expected, StateToken) or not isinstance(cancel, threading.Event):
+            raise SnapshotError("unsupported_route")
+        if is_current is not None and not is_current():
+            raise SnapshotError("voice_superseded")
+        marker = object()
+        with bounded_lock(c._lock, "controller_busy"):
+            with bounded_lock(c.db._lock, "database_busy"):
+                with bounded_lock(self._lock, "owner_busy"):
+                    stamp = (expected.revision, expected.request, expected.session, expected.content,
+                             expected.queue_revision, expected.paused, expected.stopped, expected.source)
+                    if (self.closed or not c._running or self._active is not None or self._legacy is not None
+                            or expected.owner != self.identity or self._stamp() != stamp
+                            or expected.media_state != "stopped" or cancel.is_set()
+                            or not 0 <= time.monotonic() - expected.captured <= 1
+                            or c.state_store.get("movie", "playing", None) is not False
+                            or type(database_revision) is not tuple or c.db._conn is None
+                            or (id(c.db), id(c.db._conn), c.db._conn.total_changes) != database_revision
+                            or getattr(self._local, "operation", None) is not None):
+                        raise SnapshotError("legacy_route_stale_or_unavailable")
+                    self.revision += 1
+                    revision = self.revision
+                    self._legacy, self._legacy_cancel = marker, cancel
+
+        def guard():
+            with self._lock:
+                valid = (not self.closed and self._legacy is marker and self.revision == revision
+                         and self._active is None and not cancel.is_set())
+            return (valid and (is_current is None or is_current())
+                    and self._source() == expected.source
+                    and c.state_store.get("movie", "playing", None) is False)
+
+        self._local.legacy, self._local.legacy_guard = marker, guard
+        try:
+            yield guard
+        finally:
+            self._local.legacy = self._local.legacy_guard = None
+            with self._lock:
+                if self._legacy is marker:
+                    self._legacy = self._legacy_cancel = None
 
     def bind_epoch(self, epoch):
         with self._lock:
@@ -411,6 +482,8 @@ class GoalAdmission:
             old = self._records.get(request.operation_id)
             if old:
                 return old.receipt if old.request == request else reject("operation_id_reused")
+            if self._legacy is not None:
+                return GoalReceipt(request.operation_id, AdmissionStatus.REJECTED_UNAVAILABLE, "legacy_route_in_progress")
         if (
             type(request.deadline) not in (int, float)
             or not math.isfinite(request.deadline)
@@ -669,6 +742,9 @@ class GoalAdmission:
         with self._lock:
             self.closed = True
             self.revision += 1
+            if self._legacy_cancel is not None:
+                self._legacy_cancel.set()
+            self._legacy = self._legacy_cancel = None
             if self._active:
                 self._stale(self._active, "controller_closed")
 

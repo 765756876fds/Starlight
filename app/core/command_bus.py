@@ -29,6 +29,9 @@ class Command:
     is_current: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
     notification_id: str = field(default_factory=current_operation_id, repr=False, compare=False)
 
+    # Optional isolated trial permit; absent on all legacy commands.
+    goal_trial: Any = field(default=None, repr=False, compare=False)
+
     def get(self, key: str, default: Any = None) -> Any:
         return self.params.get(key, default)
 

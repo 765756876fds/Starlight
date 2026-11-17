@@ -41,6 +41,7 @@ class TestBadFileFreeze:
         """核心验收：重启进行中（start 模拟 2s），play_song 不被锁阻塞（<0.2s），
         且 pending 防御生效（不执行 loadfile）。"""
         ctrl, db = _make_ctrl(tmp_path)
+        ctrl._running = True  # This test simulates a live restart without start().
         ctrl._mpv_restart_count = 0
         ctrl._mpv_restart_window_ts = 0.0
 
@@ -54,6 +55,7 @@ class TestBadFileFreeze:
         ctrl._current_song = None
         ctrl._try_restart_mpv("test-slow-restart")  # 启动后台重启线程
         time.sleep(0.1)  # 确保 worker 已开始，pending=True
+        assert ctrl._mpv_restart_pending
 
         song = {"id": 1, "title": "G", "path": str(tmp_path / "g.flac")}
         t0 = time.time()
@@ -82,6 +84,7 @@ class TestBadFileFreeze:
     def test_restart_no_reentry(self, tmp_path):
         """两次触发 _try_restart_mpv：pending 防重入，只有一次真重启。"""
         ctrl, db = _make_ctrl(tmp_path)
+        ctrl._running = True
         ctrl._mpv_restart_count = 0
         ctrl._mpv_restart_window_ts = 0.0
         ctrl._current_song = None
@@ -99,6 +102,7 @@ class TestBadFileFreeze:
     def test_bad_file_play_ui_no_long_block(self, tmp_path):
         """坏文件链路：轮询触发重启（后台，start 慢 2s），UI 线程 play_song 不冻结。"""
         ctrl, db = _make_ctrl(tmp_path)
+        ctrl._running = True
         ctrl._mpv_restart_count = 0
         ctrl._mpv_restart_window_ts = 0.0
         ctrl.mpv.stop_process = MagicMock()
@@ -108,6 +112,7 @@ class TestBadFileFreeze:
         ctrl._current_song = {"id": 26, "title": "bad", "path": "D:/bad.mp3"}
         ctrl._try_restart_mpv("pipe-fail")  # 模拟坏文件导致管道异常 → 重启
         time.sleep(0.1)
+        assert ctrl._mpv_restart_pending
         song = {"id": 1, "title": "G", "path": str(tmp_path / "g.flac")}
         t0 = time.time()
         ctrl.play_song(song)
