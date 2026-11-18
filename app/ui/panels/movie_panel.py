@@ -55,6 +55,7 @@ from ..dialogs.parse_link_dialog import ParseLinkDialog
 from ..widgets.clickable_slider import ClickableSlider
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import _GlassMsgBox, glass_info
+from ..widgets.movie_search_posters import SearchPosterLoader, poster_key
 
 logger = get_logger()
 
@@ -279,7 +280,7 @@ class _SearchWorker(QObject):
 
 
 class _PosterBatchWorker(QObject):
-    """串行下载整批海报到磁盘缓存；逐张 done(vod_id, 本地路径)（失败=""）。
+    """Legacy worker compatibility; manual searches use SearchPosterLoader now.
     finished 在整批结束后 emit（面板用它做"待处理批次"补偿）。
     cancel() 置位后循环尽快退出（当前阻塞请求最多等到 TIMEOUT）。"""
 
@@ -544,6 +545,8 @@ class MoviePanel(QWidget):
         from ..widgets.latest_task import LatestTask
         self._film_search = LatestTask(self, timeout_ms=35000)
         self._film_search.completed.connect(self._film_search_finished)
+        self._search_posters = SearchPosterLoader(_POSTER_DIR / "search-v2", self)
+        self._search_posters.ready.connect(self._on_search_poster_done)
         self._items_by_row = []
         # 榜单 QThread：同一时刻只持一个引用，运行中绝不覆盖（QThread 崩溃教训）
         self._rank_thread = None
@@ -875,6 +878,7 @@ class MoviePanel(QWidget):
 
     def _on_app_quit(self):
         self._recommendation_closed = True
+        self._search_posters.close()
         self._movie._recommendation_ready = None
         self._film_search.cancel()
         self.movie_home.shutdown()
@@ -919,6 +923,7 @@ class MoviePanel(QWidget):
         if not kw:
             self.lbl_status.setText("请输入片名")
             return
+        self._search_posters.begin()
         self._return_to_movie_browse = False
         self.btn_home.setText("电影首页")
         self.lbl_status.setText("正在搜索；可继续输入新的片名…")
@@ -977,6 +982,7 @@ class MoviePanel(QWidget):
 
     def _show_movie_home(self):
         self._film_search.invalidate()
+        self._search_posters.begin()
         self.stack_results.setCurrentWidget(self.movie_home)
         if not self._return_to_movie_browse:
             self.movie_home.show_category("all")
@@ -1012,6 +1018,7 @@ class MoviePanel(QWidget):
 
     def _do_clear(self):
         self._film_search.invalidate()
+        self._search_posters.begin()
         self.edit_kw.clear()
         self.list_results.clear()
         self.list_posters.clear()
@@ -1019,6 +1026,7 @@ class MoviePanel(QWidget):
         self.lbl_status.setText("")
 
     def _on_search_done(self, result: list):
+        self._search_posters.begin()
         self.list_results.clear()
         self.list_posters.clear()
         self._items_by_row = []
@@ -1047,15 +1055,16 @@ class MoviePanel(QWidget):
             pit.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
             self.list_posters.addItem(pit)
             self._items_by_row.append(it)
-            vod_id = str(it.get("vod_id", ""))
             pic = it.get("vod_pic") or ""
-            pix = _get_poster(vod_id)
+            key = self._search_poster_key(it)
+            pit.setData(Qt.UserRole + 82, key)
+            pix = self._search_posters.cached(key)
             if pix is not None:
                 pit.setIcon(QIcon(pix))
             else:
                 pit.setIcon(QIcon(_make_poster_placeholder(name)))
-                if pic:
-                    poster_jobs.append((vod_id, pic))
+                if key:
+                    poster_jobs.append((key, pic))
         if poster_jobs:
             self._start_poster_jobs(poster_jobs)
         n = len(self._filtered_content_results(result))
@@ -1598,25 +1607,40 @@ class MoviePanel(QWidget):
         glass_info(self, "解析失败", f"请检查链接或稍后再试。\n\n{err}")
 
     def _start_poster_jobs(self, jobs):
-        """搜索海报墙下载。防重入（存量同款缺陷修复）：旧线程运行中 →
-        记最新一批待处理，finished 后自动补下载（不覆盖运行中引用 → 不崩）。"""
-        if not jobs:
-            return
-        if self._poster_thread is not None and self._poster_thread.isRunning():
-            self._pending_poster_jobs = jobs
-            return
-        self._pending_poster_jobs = None
+        """One persistent two-slot loader owns both old and new search batches."""
+        for key, url in jobs:
+            self._search_posters.request(key, url)
+
+    def _search_poster_key(self, item):
+        name = item.get("_source") or getattr(self._movie, "last_search_source", "")
+        name = name if isinstance(name, str) else ""
+        manager = getattr(self._movie, "_source_manager", None)
+        read = getattr(manager, "get_enabled_sources", None)
         try:
-            self._poster_thread = QThread()
-            self._poster_worker = _PosterBatchWorker(jobs)
-            self._poster_worker.moveToThread(self._poster_thread)
-            self._poster_thread.started.connect(self._poster_worker.run)
-            self._poster_worker.done.connect(self._on_poster_done)
-            self._poster_worker.done.connect(self._poster_thread.quit)
-            self._poster_worker.finished.connect(self._on_poster_batch_finished)
-            self._poster_thread.start()
-        except Exception as e:
-            logger.error(f"[Movie] 海报下载线程启动失败: {e}")
+            sources = read() if callable(read) else []
+        except Exception:
+            sources = []
+        if not isinstance(sources, (list, tuple)):
+            sources = []
+        endpoint = next((s.get("url", "") for s in sources
+                         if isinstance(s, dict) and s.get("name") == name), "")
+        return poster_key([name, endpoint], item.get("vod_id"), item.get("vod_pic"))
+
+
+    @Slot(int, str, object)
+    def _on_search_poster_done(self, generation, key, pixmap):
+        if self._recommendation_closed or generation != self._search_posters._generation:
+            return
+        for index in range(self.list_posters.count()):
+            item = self.list_posters.item(index)
+            if item.data(Qt.UserRole + 82) == key:
+                item.setIcon(QIcon(pixmap))
+
+
+    def closeEvent(self, event):
+        self._search_posters.close()
+        super().closeEvent(event)
+
 
     def _on_poster_batch_finished(self):
         if self._pending_poster_jobs:
@@ -1631,8 +1655,8 @@ class MoviePanel(QWidget):
         if pix.isNull():
             return
         _posters_cache[vod_id] = pix
-        # 搜索海报墙（vod_id，原图）与榜单海报墙（db_key，缩略+圆角）都匹配更新
-        for lst in (self.list_posters, self.list_rank):
+        # Legacy rank results must never update qualified CMS search rows.
+        for lst in (self.list_rank,):
             for i in range(lst.count()):
                 it = lst.item(i)
                 data = it.data(Qt.UserRole)
@@ -1777,11 +1801,12 @@ class MoviePanel(QWidget):
             logger.error(f"[Movie] 后台控制调用失败: {e!r}")
 
     def _cleanup_poster_cache(self, max_files: int = 500):
-        """海报磁盘缓存上限：超过 max_files 张按 mtime 删最旧，防磁盘膨胀。"""
+        """Prune only new search thumbnails; legacy cache ownership is unknown."""
         try:
-            if not _POSTER_DIR.exists():
+            directory = _POSTER_DIR / "search-v2"
+            if not directory.exists():
                 return
-            files = [p for p in _POSTER_DIR.iterdir() if p.suffix.lower() == ".jpg"]
+            files = list(directory.glob("cms2-*.png"))
             if len(files) <= max_files:
                 return
             files.sort(key=lambda p: p.stat().st_mtime)
@@ -2125,8 +2150,9 @@ class _MovieDetailDialog(GlassDialog):
 
         root = self.body_layout
 
-        vod_id = str(it.get("vod_id", ""))
-        pix = _get_poster(vod_id)
+        # Search details share the source-qualified thumbnail cache; a legacy
+        # vod_id alone cannot establish which CMS owns the picture.
+        pix = panel._search_posters.cached(panel._search_poster_key(it))
         if pix is None:
             pix = _make_poster_placeholder(it.get("vod_name") or "")
         self.lbl_pic = QLabel()

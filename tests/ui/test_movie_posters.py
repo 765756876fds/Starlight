@@ -315,24 +315,24 @@ def test_panel_posters_rendered_with_placeholder_and_tooltip():
         assert "流浪地球" in tip0 and "评分 7.9" in tip0 and "2019" in tip0 and "正片" in tip0
         # 无 pic → 不启下载线程
         m_jobs.assert_called_once()
-        assert m_jobs.call_args[0][0] == [("1", "https://x/1.jpg")]
+        assert m_jobs.call_args[0][0] == [(p._search_poster_key(_ITEMS[0]), "https://x/1.jpg")]
 
 
 def test_panel_poster_worker_updates_icon(tmp_path):
-    """下载完成后 _on_poster_done 更新对应项 icon（含磁盘缓存写入）。"""
+    """Qualified current-generation signal updates the matching search item."""
     p, _ = _panel()
     with patch.object(p, "_start_poster_jobs"):
         p._on_search_done(list(_ITEMS))
-    # 造一张真图
     from PySide6.QtGui import QPixmap
-    fake = tmp_path / "1.jpg"
-    QPixmap(20, 30).save(str(fake))
-    _posters_cache.clear()
-    with patch.object(mp, "_POSTER_DIR", new=tmp_path):
-        p._on_poster_done("1", str(fake))
-        assert str(1) in _posters_cache
-        assert not p.list_posters.item(0).icon().isNull()
-    _posters_cache.clear()
+    pix = QPixmap(20, 30)
+    pix.fill(Qt.red)
+    item = p.list_posters.item(0)
+    before = item.icon().cacheKey()
+    key = item.data(Qt.UserRole + 82)
+    p._on_search_poster_done(p._search_posters._generation, key, pix)
+    assert not item.icon().isNull()
+    assert item.icon().cacheKey() != before
+    assert item.data(Qt.UserRole)["vod_id"] == _ITEMS[0]["vod_id"]
 
 
 def test_panel_click_opens_detail_after_timer():

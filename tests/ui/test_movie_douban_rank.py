@@ -517,28 +517,28 @@ def test_poster_done_updates_rank_item(tmp_path):
 
 # ---------- QThread 崩溃修复：海报下载防重入 + 补偿 + 退出清理 ----------
 
-def test_start_poster_jobs_reentry_pending(monkeypatch):
-    """搜索海报下载：旧线程运行中 → 不新建不覆盖，记最新一批待处理。"""
-    cls = _fake_qthread(monkeypatch)
+def test_start_poster_jobs_reentry_reuses_bounded_loader(monkeypatch):
+    """New searches reuse one two-slot owner instead of creating batch threads."""
+    _fake_qthread(monkeypatch)
     p, _ = _panel()
-    t = cls()
-    t.running = True
-    p._poster_thread = t
-    p._start_poster_jobs([("1", "https://x/1.jpg")])
-    assert p._pending_poster_jobs == [("1", "https://x/1.jpg")]
-    assert t.started_calls == 0
-    # 快速连点 A→B：pending 被最新覆盖
-    p._start_poster_jobs([("2", "https://y/2.jpg")])
-    assert p._pending_poster_jobs == [("2", "https://y/2.jpg")]
-    assert t.started_calls == 0
+    owner = p._search_posters
+    with patch.object(owner, "request") as request:
+        p._start_poster_jobs([("first-key", "https://x/1.jpg")])
+        owner.begin()
+        p._start_poster_jobs([("latest-key", "https://y/2.jpg")])
+        assert request.call_count == 2
+        assert request.call_args.args == ("latest-key", "https://y/2.jpg")
+    assert p._search_posters is owner and owner.MAX_ACTIVE == 2
+    assert p._poster_thread is None
 
 
 def test_start_poster_jobs_starts_when_idle(monkeypatch):
-    cls = _fake_qthread(monkeypatch)
+    _fake_qthread(monkeypatch)
     p, _ = _panel()
-    p._start_poster_jobs([("1", "https://x/1.jpg")])
-    assert p._poster_thread.started_calls == 1
-    assert p._pending_poster_jobs is None
+    with patch.object(p._search_posters, "request") as request:
+        p._start_poster_jobs([("qualified-key", "https://x/1.jpg")])
+        request.assert_called_once_with("qualified-key", "https://x/1.jpg")
+    assert p._poster_thread is None and p._poster_worker is None
 
 
 def test_poster_batch_finished_compensates():
