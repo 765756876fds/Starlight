@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -541,7 +542,7 @@ class MoviePanel(QWidget):
         self._thread = None
         self._worker = None
         from ..widgets.latest_task import LatestTask
-        self._film_search = LatestTask(self)
+        self._film_search = LatestTask(self, timeout_ms=35000)
         self._film_search.completed.connect(self._film_search_finished)
         self._items_by_row = []
         # 榜单 QThread：同一时刻只持一个引用，运行中绝不覆盖（QThread 崩溃教训）
@@ -926,22 +927,43 @@ class MoviePanel(QWidget):
         self.list_posters.clear()
         self._items_by_row = []
         selected = dict(self._selected_discovery_work) if self._selected_discovery_work else None
-        def read():
+        deadline = time.monotonic() + 30
+        def read(current):
+            if not current():
+                raise TimeoutError("search request expired")
             memory = getattr(self._movie, "film_memory", None)
             if memory is not None and selected:
                 memory.record_action("select", kw, work=selected)
+            bounded = getattr(self._movie, "search_for_ui", None)
+            if callable(bounded):
+                return bounded(kw, current, deadline)
             return self._movie.search(kw)
-        self._film_search.submit(kw, read)
+        self._film_search.submit(kw, read, guarded=True)
 
     def _film_search_finished(self, keyword, result, error):
+        # Log delivery and label assignment separately from task completion.
+        # task_serial is the current UI generation (expiry invalidates the old one).
+        logger.info("[MovieSearch] stage=ui_received task_serial=%s count=%s error_type=%s",
+                    self._film_search._serial, len(result) if isinstance(result, list) else 0,
+                    type(error).__name__ if error else "none")
+        if isinstance(error, TimeoutError):
+            self.lbl_status.setText("搜索超时，后台请求可能仍在收尾；请稍后重试或更换片源。")
+            logger.info("[MovieSearch] stage=ui_settled task_serial=%s outcome=timeout",
+                        self._film_search._serial)
+            notify("影片搜索超时", self.lbl_status.text(), status="failed", source="movie")
+            return
         source_error = getattr(self._movie, "last_search_error", "")
         if error or not isinstance(result, list) or (not result and isinstance(source_error, str) and source_error
                                                     and not self._sources_had_no_matches(source_error)):
             self.lbl_status.setText("尚无可用播放片源，请在“更多 → 片源管理”检查设置，或使用官方观看入口。" if source_error == "无可用源"
                                     else "搜索未完成，请检查网络或更换片源后重试。")
+            logger.info("[MovieSearch] stage=ui_settled task_serial=%s outcome=failed",
+                        self._film_search._serial)
             notify("影片搜索未完成", self.lbl_status.text(), status="failed", source="movie")
             return
         self._on_search_done(result)
+        logger.info("[MovieSearch] stage=ui_settled task_serial=%s outcome=%s count=%s",
+                    self._film_search._serial, "results" if result else "empty", len(result))
         candidates = any(it.get("first_url") or it.get("play_url") for it in result)
         notify("影片搜索已完成" if candidates else "暂未找到可播放片源" if result else "没有找到匹配影片",
                f"“{keyword}”找到 {len(result)} 个结果；片源可用性及播放权限需另行确认。" if candidates else self.lbl_status.text(),

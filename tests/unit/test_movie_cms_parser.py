@@ -1,6 +1,7 @@
 """CMS 纯解析边界及旧控制器入口的兼容性；不进行真实网络或播放。"""
 
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -57,9 +58,12 @@ def test_controller_search_and_episode_consumers_keep_their_schema(monkeypatch):
 
     def get(url, **kwargs):
         calls.append((url, kwargs))
-        return SimpleNamespace(text='{"list": [{"vod_id": 9, "vod_name": "测试剧", '
+        body = BytesIO(('{"list": [{"vod_id": 9, "vod_name": "测试剧", '
                                '"vod_pic": "https://img.invalid/a.jpg", '
-                               '"vod_play_url": "一$u#二$v"}]}')
+                               '"vod_play_url": "一$u#二$v"}]}').encode('utf-8'))
+        return SimpleNamespace(raw=SimpleNamespace(read1=lambda size, **kw: body.read(size)),
+                               encoding='utf-8', status_code=200,
+                               raise_for_status=lambda: None, close=body.close)
 
     monkeypatch.setattr(movie_controller.requests, 'get', get)
     # 无需创建播放器、历史库或注册事件，即可执行真实搜索结果转换及选集路径。
@@ -71,7 +75,8 @@ def test_controller_search_and_episode_consumers_keep_their_schema(monkeypatch):
         'first_name': '一', 'first_url': 'u',
     }]
     assert calls[0][1]['params'] == {'ac': 'videolist', 'wd': '测试剧'}
-    assert calls[0][1]['timeout'] == 2
+    assert calls[0][1]['timeout'] == (2, 2)
+    assert calls[0][1]['stream'] is True
     assert ctrl.episodes(items[0]) == [('一', 'u'), ('二', 'v')]
     assert ctrl.is_multi_episode(items[0]) is True
 

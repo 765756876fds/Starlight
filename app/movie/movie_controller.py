@@ -21,6 +21,7 @@ from difflib import SequenceMatcher
 from functools import wraps
 
 import requests
+from urllib3.exceptions import ReadTimeoutError
 
 from ..core.config import get_config, resolve_mpv_path
 from ..core.event_bus import EventType, get_event_bus
@@ -114,6 +115,7 @@ class MovieController:
         # 搜索策略 C 的状态：上次命中的源名（面板提示"已从 XX 源找到"）/ 全部失败原因
         self.last_search_source = None
         self.last_search_error = ""
+        self._search_local = threading.local()
         # mpv 查找链（打包零配置运行）：settings 显式 → 打包内置 bundled → PATH（下游兜底）
         mpv_bin = resolve_mpv_path(mpv_path or self._config.get("music.mpv_path"))
         pipe = ipc_pipe or self._config.get("movie.mpv_ipc_pipe") or DEFAULT_IPC_PIPE
@@ -426,6 +428,20 @@ class MovieController:
 
     # ---- 搜索 ----
 
+    def search_for_ui(self, keyword, is_current, deadline):
+        """Cooperative UI cancellation; reuses the original sequential search."""
+        if not is_current() or time.monotonic() >= deadline:
+            raise TimeoutError("search request expired")
+        self._search_local.context = (is_current, deadline)
+        try:
+            return self.search(keyword)
+        finally:
+            self._search_local.context = None
+
+    def _search_current(self):
+        context = getattr(getattr(self, "_search_local", None), "context", None)
+        return context is None or (time.monotonic() < context[1] and context[0]())
+
     def search(self, keyword, timeout=10.0):
         """苹果 CMS 多源搜索（策略 C：当前源挂了自动换，最多试 3 个启用源）。
 
@@ -441,16 +457,35 @@ class MovieController:
             self.last_search_error = "无可用源"
             return []
         active = self._source_manager.get_active_name()
-        # 当前源优先，其余按序（最多试 3 个）
-        ordered = ([s for s in sources if s.get("name") == active]
-                   + [s for s in sources if s.get("name") != active])[:3]
+        # Keep the user's current source first. Only use the enabled, currently
+        # configured endpoint for this verified fallback; never restore an old URL.
+        prioritized = ([s for s in sources if s.get("name") == active]
+                       + [s for s in sources if s.get("name") == "极速资源"] + sources)
+        ordered, seen = [], set()
+        for src in prioritized:
+            endpoint = src.get("url", "").strip()
+            if endpoint in seen:
+                continue
+            seen.add(endpoint)
+            ordered.append(src)
+            if len(ordered) == 3:
+                break
         errors = []
         for src in ordered:
+            if not self._search_current():
+                raise TimeoutError("search request expired")
+            started = time.monotonic()
             try:
                 items = self._search_one(src["url"], keyword, timeout)
             except Exception as e:
+                logger.info("[MovieSearch] stage=source result=failed attempt=%s elapsed_ms=%s type=%s",
+                            len(errors) + 1, round((time.monotonic() - started) * 1000), type(e).__name__)
                 errors.append(f"{src['name']}: {type(e).__name__}")
                 continue
+            if not self._search_current():
+                raise TimeoutError("search request expired")
+            logger.info("[MovieSearch] stage=source result=returned attempt=%s elapsed_ms=%s count=%s",
+                        len(errors) + 1, round((time.monotonic() - started) * 1000), len(items))
             if items:
                 for it in items:
                     it["_source"] = src["name"]
@@ -461,10 +496,14 @@ class MovieController:
                         it["content_category"] = info["category"]
                     except Exception:
                         it["content_category"] = "未知"
+                if not self._search_current():
+                    raise TimeoutError("search request expired")
                 self.last_search_source = src["name"]
                 self.last_search_error = ""
                 return items
             errors.append(f"{src['name']}: 无结果")
+        if not self._search_current():
+            raise TimeoutError("search request expired")
         self.last_search_source = None
         self.last_search_error = "；".join(errors) or "无可用源"
         return []
@@ -472,8 +511,49 @@ class MovieController:
     def _search_one(self, url, keyword, timeout):
         """单源搜索（策略 C 的单个源执行）。网络失败抛异常（上层换下一个源）。"""
         params = {"ac": "videolist", "wd": keyword.strip()}
-        r = requests.get(url, params=params, timeout=timeout, headers=UA)
-        data = parse_cms_response(r.text)
+        started = time.monotonic()
+        context = getattr(getattr(self, "_search_local", None), "context", None)
+        deadline = min(started + timeout, context[1]) if context else started + timeout
+        if not self._search_current() or deadline <= started:
+            raise requests.Timeout("search request expired")
+        from .playback_diagnostics import source_tag
+        tag = source_tag(url)
+        serial = getattr(context[0], "request_serial", None) if context else None
+        logger.info("[MovieSearch] stage=request serial=%s source_tag=%s", serial, tag)
+        read_budget = min(timeout, deadline - started)
+        # A connect timeout may apply to more than one resolved address. Keep
+        # failed connections from spending the whole three-source UI budget.
+        r = requests.get(url, params=params, timeout=(min(2., read_budget), read_budget), headers=UA,
+                         stream=True)
+        try:
+            logger.info("[MovieSearch] stage=headers serial=%s source_tag=%s status=%s elapsed_ms=%s",
+                        serial, tag, r.status_code,
+                        round((time.monotonic() - started) * 1000))
+            r.raise_for_status()
+            body = bytearray()
+            while True:
+                if not self._search_current() or time.monotonic() >= deadline:
+                    raise requests.Timeout("CMS response deadline exceeded")
+                # read1 returns currently available bytes, unlike a full-size read
+                # that a slow trickle could keep occupied indefinitely.
+                try:
+                    chunk = r.raw.read1(65536, decode_content=True)
+                except ReadTimeoutError as exc:
+                    raise requests.Timeout("CMS body read timeout") from exc
+                if not chunk:
+                    break
+                body.extend(chunk)
+                if len(body) > 2_000_000:
+                    raise ValueError("CMS response too large")
+            if not self._search_current() or time.monotonic() >= deadline:
+                raise requests.Timeout("CMS response deadline exceeded")
+            logger.info("[MovieSearch] stage=http serial=%s source_tag=%s status=%s bytes=%s elapsed_ms=%s",
+                        serial, tag, r.status_code, len(body), round((time.monotonic() - started) * 1000))
+            data = parse_cms_response(body.decode(r.encoding or "utf-8-sig", errors="replace"))
+            if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+                raise ValueError("invalid CMS response")
+        finally:
+            r.close()
         items = []
         for v in data.get("list", []) or []:
             pu = v.get("vod_play_url") or ""

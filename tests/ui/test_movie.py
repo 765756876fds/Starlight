@@ -19,6 +19,20 @@ from app.movie.movie_controller import (
 from app.music.mpv import MpvController
 
 
+@pytest.fixture(autouse=True)
+def _isolated_movie_configuration(tmp_path, monkeypatch):
+    # Controller tests must never inherit the real user's configured databases.
+    monkeypatch.setattr("app.movie.movie_controller.get_config", lambda: {
+        "app.data_dir": str(tmp_path),
+        "movie.history_db": str(tmp_path / "history.db"),
+        "movie.watch_later_dir": str(tmp_path / "watch"),
+    })
+    monkeypatch.setattr("app.ui.settings_store.UI_PREFS_PATH", str(tmp_path / "ui.json"))
+    from app.movie.library import MovieLibrary
+    monkeypatch.setattr("app.ui.widgets.movie_home.MovieLibrary",
+                        lambda _: MovieLibrary(tmp_path / "library.json"))
+
+
 # ---------- CMS 响应解析 ----------
 
 def test_parse_cms_response_json_body():
@@ -66,6 +80,12 @@ def test_first_play_url():
 
 # ---------- 搜索 ----------
 
+def _stream_response(response):
+    response.raw.read1.side_effect = [response.text.encode("utf-8"), b""]
+    response.encoding = "utf-8"
+    response.status_code = 200
+    return response
+
 def _make_ctrl(**kw):
     with patch("app.movie.movie_controller.MpvController") as M:
         ctrl = MovieController(source_url="http://source.test/api", music=kw.pop("music", None))
@@ -79,7 +99,7 @@ def test_search_ok():
     fake_resp = MagicMock()
     fake_resp.text = ('{"code":1,"total":1,"list":[{"vod_id":1,"vod_name":"流浪地球2",'
                       '"vod_remarks":"HD","vod_play_url":"流浪地球2$https://a/i.m3u8#4K$https://b/i.m3u8"}]}')
-    with patch("app.movie.movie_controller.requests.get", return_value=fake_resp) as m_get:
+    with patch("app.movie.movie_controller.requests.get", return_value=_stream_response(fake_resp)) as m_get:
         ctrl, _ = _make_ctrl()
         items = ctrl.search("流浪地球")
     m_get.assert_called_once()
@@ -94,7 +114,7 @@ def test_search_ok():
 def test_search_empty_result():
     fake_resp = MagicMock()
     fake_resp.text = '{"code":1,"total":0,"list":[]}'
-    with patch("app.movie.movie_controller.requests.get", return_value=fake_resp):
+    with patch("app.movie.movie_controller.requests.get", return_value=_stream_response(fake_resp)):
         ctrl, _ = _make_ctrl()
         assert ctrl.search("不存在的电影") == []
         ctrl.close()
@@ -125,7 +145,7 @@ def test_search_items_include_vod_pic():
                       '"vod_play_url":"正片$https://a/i.m3u8"},'
                       '{"vod_id":2,"vod_name":"B","vod_pic":"",'
                       '"vod_play_url":"正片$https://b/i.m3u8"}]}')
-    with patch("app.movie.movie_controller.requests.get", return_value=fake_resp):
+    with patch("app.movie.movie_controller.requests.get", return_value=_stream_response(fake_resp)):
         ctrl, _ = _make_ctrl()
         items = ctrl.search("A")
     assert items[0]["vod_pic"] == "https://p/1.jpg"
