@@ -116,6 +116,9 @@ class MovieController:
         self.last_search_source = None
         self.last_search_error = ""
         self._search_local = threading.local()
+        self._manual_search_lock = threading.Lock()
+        self._manual_search_serial = 0
+        self._manual_search_preferred = None
         # mpv 查找链（打包零配置运行）：settings 显式 → 打包内置 bundled → PATH（下游兜底）
         mpv_bin = resolve_mpv_path(mpv_path or self._config.get("music.mpv_path"))
         pipe = ipc_pipe or self._config.get("movie.mpv_ipc_pipe") or DEFAULT_IPC_PIPE
@@ -432,15 +435,64 @@ class MovieController:
         """Cooperative UI cancellation; reuses the original sequential search."""
         if not is_current() or time.monotonic() >= deadline:
             raise TimeoutError("search request expired")
+        lock = getattr(self, "_manual_search_lock", None)
+        serial = None
+        if lock is not None:
+            with lock:
+                self._manual_search_serial += 1
+                serial = self._manual_search_serial
         self._search_local.context = (is_current, deadline)
+        self._search_local.manual_serial = serial
         try:
             return self.search(keyword)
         finally:
             self._search_local.context = None
+            self._search_local.manual_serial = None
 
     def _search_current(self):
         context = getattr(getattr(self, "_search_local", None), "context", None)
-        return context is None or (time.monotonic() < context[1] and context[0]())
+        serial = getattr(getattr(self, "_search_local", None), "manual_serial", None)
+        return ((serial is None or serial == self._manual_search_serial)
+                and (context is None or (time.monotonic() < context[1] and context[0]())))
+
+    def _source_search_revision(self):
+        read = getattr(self._source_manager, "get_search_revision", None)
+        try:
+            revision = read() if callable(read) else None
+            return revision if type(revision) is int else None
+        except Exception:
+            return None  # Optional compatibility interface: preserve legacy order.
+
+
+    def _manual_source_stamp(self, sources, active, revision):
+        if revision is None or self._source_search_revision() != revision:
+            return None
+        return (self._source_manager, revision, active,
+                tuple((s.get("name"), s.get("url", "").strip()) for s in sources))
+
+
+    def _manual_cooldown(self, stamp, update=None):
+        """One bounded, owned observation; no networking or storage under this lock."""
+        if stamp is None:
+            return False
+        with self._manual_search_lock:
+            if not self._search_current():
+                return False
+            manager = self._source_manager
+            current = self._manual_source_stamp(manager.get_enabled_sources(), manager.get_active_name(), stamp[1])
+            if current != stamp:
+                self._manual_search_preferred = None
+                return False
+            now = time.monotonic()
+            if update == "learn":
+                self._manual_search_preferred = (stamp, now + 600.0)
+            elif update == "clear":
+                self._manual_search_preferred = None
+            known = self._manual_search_preferred
+            if known is not None and (known[0] != stamp or not 0 < known[1] - now <= 600.0):
+                self._manual_search_preferred = None
+            return self._manual_search_preferred is not None
+
 
     def search(self, keyword, timeout=10.0):
         """苹果 CMS 多源搜索（策略 C：当前源挂了自动换，最多试 3 个启用源）。
@@ -452,6 +504,8 @@ class MovieController:
             return []
         if hasattr(self, "film_memory"):
             self.film_memory.record_action("search", keyword)
+        manual = getattr(getattr(self, "_search_local", None), "manual_serial", None) is not None
+        revision = self._source_search_revision() if manual else None
         sources = self._source_manager.get_enabled_sources()
         if not sources:
             self.last_search_error = "无可用源"
@@ -461,6 +515,12 @@ class MovieController:
         # configured endpoint for this verified fallback; never restore an old URL.
         prioritized = ([s for s in sources if s.get("name") == active]
                        + [s for s in sources if s.get("name") == "极速资源"] + sources)
+        stamp = self._manual_source_stamp(sources, active, revision) if manual else None
+        preferred = self._manual_cooldown(stamp)
+        if preferred:
+            prioritized = [s for s in sources if s.get("name") == "极速资源"] + prioritized
+            logger.info("[MovieSearch] stage=route policy=recent_connect_failure manual_serial=%s",
+                        self._search_local.manual_serial)
         ordered, seen = [], set()
         for src in prioritized:
             endpoint = src.get("url", "").strip()
@@ -471,6 +531,7 @@ class MovieController:
             if len(ordered) == 3:
                 break
         errors = []
+        current_connect_failed = False
         for src in ordered:
             if not self._search_current():
                 raise TimeoutError("search request expired")
@@ -478,6 +539,10 @@ class MovieController:
             try:
                 items = self._search_one(src["url"], keyword, timeout)
             except Exception as e:
+                if src.get("name") == active and isinstance(e, requests.ConnectTimeout):
+                    current_connect_failed = True
+                if preferred and src.get("name") == "极速资源":
+                    self._manual_cooldown(stamp, "clear")
                 logger.info("[MovieSearch] stage=source result=failed attempt=%s elapsed_ms=%s type=%s",
                             len(errors) + 1, round((time.monotonic() - started) * 1000), type(e).__name__)
                 errors.append(f"{src['name']}: {type(e).__name__}")
@@ -498,9 +563,14 @@ class MovieController:
                         it["content_category"] = "未知"
                 if not self._search_current():
                     raise TimeoutError("search request expired")
+                if (current_connect_failed and src.get("name") == "极速资源"
+                        and isinstance(items, list) and all(isinstance(item, dict) for item in items)):
+                    self._manual_cooldown(stamp, "learn")
                 self.last_search_source = src["name"]
                 self.last_search_error = ""
                 return items
+            if preferred and src.get("name") == "极速资源":
+                self._manual_cooldown(stamp, "clear")
             errors.append(f"{src['name']}: 无结果")
         if not self._search_current():
             raise TimeoutError("search request expired")

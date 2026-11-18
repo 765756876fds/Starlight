@@ -66,12 +66,14 @@ class MovieSourceManager:
         self._config_path = config_path or _default_settings_path()
         self._sources: list[dict[str, Any]] = []
         self._active: str | None = None
+        self._search_revision = 0  # Process-local; never written to settings.
         self._load()
 
     # ---- 加载/保存 ----
 
     def _load(self):
         data = self._read_yaml()
+        self._search_revision += 1
         m = data.get("movie") or {}
         stored = m.get("sources")
         if isinstance(stored, list) and stored:
@@ -133,6 +135,11 @@ class MovieSourceManager:
     def get_enabled_sources(self) -> list[dict[str, Any]]:
         return [dict(s) for s in self._sources if s.get("enabled", True)]
 
+    def get_search_revision(self) -> int:
+        """Invalidate transient search evidence, including same-name selections."""
+        return self._search_revision
+
+
     def get_active_name(self) -> str | None:
         if self._active:
             return self._active
@@ -156,12 +163,14 @@ class MovieSourceManager:
         for s in self._sources:
             if s["name"] == name:
                 return False
+        self._search_revision += 1
         self._sources.append({"name": name, "url": url, "enabled": True})
         self._save()
         return True
 
     def remove_source(self, name: str):
         before = len(self._sources)
+        self._search_revision += 1
         self._sources = [s for s in self._sources if s["name"] != name]
         if len(self._sources) != before:
             if self._active == name:
@@ -171,12 +180,14 @@ class MovieSourceManager:
     def enable_source(self, name: str, enabled: bool):
         for s in self._sources:
             if s["name"] == name:
+                self._search_revision += 1
                 s["enabled"] = bool(enabled)
                 break
         self._save()
 
     def set_active(self, name: str):
         if any(s["name"] == name for s in self._sources):
+            self._search_revision += 1
             self._active = name
             self._save()
 
