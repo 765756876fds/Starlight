@@ -33,8 +33,9 @@ class _SourceTestWorker(QObject):
 class MovieSourceDialog(GlassDialog):
     """电影源管理：状态 + 名称 + URL + 勾选启用 + 设为当前 + 测试。"""
 
-    def __init__(self, parent=None, manager=None, on_sources_changed=None):
-        super().__init__("电影源管理", parent)
+    def __init__(self, parent=None, manager=None, on_sources_changed=None, *, view_only=False):
+        super().__init__("查看现有片源" if view_only else "电影源管理", parent)
+        self._view_only = view_only
         self.resize(680, 440)
         self.manager = manager if manager is not None else MovieSourceManager()
         self.on_sources_changed = on_sources_changed
@@ -44,13 +45,25 @@ class MovieSourceDialog(GlassDialog):
 
         root = self.body_layout
 
-        tip = QLabel("电影源（苹果 CMS V10 接口）。勾选启用、双击行切换；"
-                     "测试仅检查连通、搜索结果和播放清单可读，不代表视频能持续流畅播放。")
+        tip = QLabel(
+            "这里只查看现有片源，尚未验证当前影片、版本或播放质量。"
+            "不会切换当前播放，也不承诺跨源保留进度。"
+            if view_only else
+            "电影源（苹果 CMS V10 接口）。勾选启用、双击行切换；"
+            "测试仅检查连通、搜索结果和播放清单可读，不代表视频能持续流畅播放。")
         tip.setWordWrap(True)
         root.addWidget(tip)
 
         self.list_widget = QListWidget()
         root.addWidget(self.list_widget, 1)
+        if view_only:
+            self.setModal(False)
+            self.setWindowModality(Qt.NonModal)
+            close = QPushButton("关闭")
+            close.clicked.connect(self.close)
+            root.addWidget(close)
+            self._refresh_list()
+            return
 
         # 按钮行
         btn_row = QHBoxLayout()
@@ -97,7 +110,8 @@ class MovieSourceDialog(GlassDialog):
             active = self.manager.get_active_name()
             sources = self.manager.get_all_sources()
             if not sources:
-                item = QListWidgetItem("暂无电影源（点击上方添加）")
+                item = QListWidgetItem("暂无已配置片源" if self._view_only
+                                       else "暂无电影源（点击上方添加）")
                 item.setFlags(Qt.NoItemFlags)
                 self.list_widget.addItem(item)
                 return
@@ -113,8 +127,14 @@ class MovieSourceDialog(GlassDialog):
         star = "⭐ " if name == active else ""
         en = "✅" if s.get("enabled", True) else "❌"
         suffix = f"  |  {test}" if test else ""
-        item = QListWidgetItem(f"{star}{en} {name} - {url}{suffix}")
+        view_label = f"{name}  ·  {'当前 · ' if name == active else ''}" + (
+            "已启用" if s.get("enabled", True) else "已停用")
+        item = QListWidgetItem(view_label if self._view_only
+                               else f"{star}{en} {name} - {url}{suffix}")
         item.setData(Qt.UserRole, name)
+        if self._view_only:
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            return item
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
         item.setCheckState(Qt.Checked if s.get("enabled", True) else Qt.Unchecked)
         return item

@@ -526,6 +526,10 @@ class MoviePanel(QWidget):
         self._selected_discovery_work = None
         self.setProperty("starlightMediaDomain", "movie")
         self._movie = movie if movie is not None else MovieController(music=music, speech_queue=speech_queue)
+        # Normal application assembly always starts the process-only trial OFF.
+        quality_toggle = getattr(self._movie, "set_source_quality_trial", None)
+        if callable(quality_toggle):
+            quality_toggle(False)
         self._movie._recommendation_ready = self._film_recommendations.emit
         self._film_recommendations.connect(self._on_film_recommendations, Qt.QueuedConnection)
         # P1：语音搜电影结果 → 状态栏（controller 构造自注册 MOVIE_* 命令，回调在面板侧）
@@ -628,6 +632,13 @@ class MoviePanel(QWidget):
                               ("片源管理", self.btn_source), ("现有链接工具", self.btn_parse_link)):
             more_menu.addAction(title).triggered.connect(button.click)
             button.hide()
+        more_menu.addSeparator()
+        self.quality_trial_action = more_menu.addAction("实验：缓冲提示（本次运行）")
+        self.quality_trial_action.setCheckable(True)
+        self.quality_trial_action.setEnabled(callable(quality_toggle))
+        self.quality_trial_action.setToolTip(
+            "默认关闭；观察网络电影缓冲，不自动切换片源或恢复跨源进度。")
+        self.quality_trial_action.toggled.connect(self._toggle_quality_trial)
         self.btn_more.setMenu(more_menu)
         search_row.addWidget(self.btn_more)
         root.addLayout(search_row)
@@ -864,6 +875,20 @@ class MoviePanel(QWidget):
         self._embed_playing = False
         self._video_win = None
         self._ensure_video_win()
+
+    def _toggle_quality_trial(self, enabled):
+        accepted = self._movie.set_source_quality_trial(enabled)
+        if accepted is not True:
+            self.quality_trial_action.blockSignals(True)
+            self.quality_trial_action.setChecked(False)
+            self.quality_trial_action.blockSignals(False)
+        window = getattr(self, "_video_win", None)
+        if window is not None:
+            window.quality_notice.reset()
+            window._sync_quality_slot()
+        self.lbl_status.setText(
+            "已开启缓冲提示实验（仅本次运行，不会自动换源）。"
+            if enabled and accepted is True else "缓冲提示实验已关闭。")
 
     def showEvent(self, event):
         super().showEvent(event)

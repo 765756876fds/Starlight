@@ -27,7 +27,7 @@ def source_tag(value):
 PROPERTIES = (
     "paused-for-cache", "demuxer-cache-duration", "cache-speed",
     "demuxer-cache-state", "frame-drop-count", "decoder-frame-drop-count",
-    "hwdec-current", "time-pos", "pause", "seeking", "core-idle", "eof-reached",
+    "hwdec-current", "time-pos", "pause", "seeking", "core-idle", "eof-reached", "speed",
 )
 STATE_NUMBERS = ("fw-bytes", "raw-input-rate", "cache-end", "reader-pts")
 
@@ -182,7 +182,7 @@ class PlaybackSummary:
 
 
 class MoviePlaybackMonitor:
-    """Explicit opt-in, one lazy worker, <=120s per session, no GUI callbacks.
+    """One opt-in worker: M1 logs <=120s; optional quality observations <=4h.
 
     Replacing a job never starts another worker. Ownership is checked before and
     after IPC; old results cannot be logged as belonging to a new movie.
@@ -194,18 +194,40 @@ class MoviePlaybackMonitor:
         self._job = None
         self._closed = False
         self._thread = None
+        self._quality_epoch = 0
+        self._quality_failed = None
 
-    def start(self, pipe, generation, current, mode, source=None):
+    def start(self, pipe, generation, current, mode, source=None, *, on_sample=None,
+              duration=None):
         with self._condition:
             if self._closed:
                 return
             self._job = (pipe, generation, current,
                          mode if mode in ("local", "cms", "external") else "unknown",
-                         source_tag(source))
+                         source_tag(source), on_sample,
+                         self._duration if duration is None else min(duration, 14400))
+            self._quality_epoch += 1
             if self._thread is None:
                 self._thread = threading.Thread(target=self._run, name="movie-diagnostics", daemon=True)
                 self._thread.start()
             self._condition.notify_all()
+
+    def interrupt(self, *, suspend=False):
+        """Cheap controller-owned transition marker; no IPC or UI callbacks."""
+        with self._condition:
+            self._quality_epoch += 1
+            if suspend:
+                self._job = None
+                self._condition.notify_all()
+
+    def quality_current(self, epoch):
+        if not self._condition.acquire(blocking=False):
+            return False
+        try:
+            return (not self._closed and self._job is not None
+                    and self._quality_failed is not self._job and self._quality_epoch == epoch)
+        finally:
+            self._condition.release()
 
     def close(self):
         with self._condition:
@@ -226,8 +248,10 @@ class MoviePlaybackMonitor:
                     job = self._job
                     summary = PlaybackSummary(time.monotonic())
                     last_log, last_status = 0., None
-            pipe, generation, current, mode, source = job
+            pipe, generation, current, mode, source, on_sample, duration = job
             try:
+                with self._condition:
+                    epoch = self._quality_epoch
                 sample = self._reader(pipe) if current() else {}
                 now = time.monotonic()
                 with self._condition:
@@ -235,11 +259,12 @@ class MoviePlaybackMonitor:
                         return
                     if self._job is not job:
                         continue
-                    if not current() or now - summary.start >= self._duration:
+                    if not current() or now - summary.start >= duration:
                         self._job = None
                         continue
                     result = summary.add(sample, now)
-                    if result["status"] != last_status or now - last_log >= 30:
+                    if (now - summary.start < self._duration
+                            and (result["status"] != last_status or now - last_log >= 30)):
                         payload = {"generation": generation, "mode": mode,
                                    "source_tag": source, **result}
                         last_log, last_status = now, result["status"]
@@ -247,6 +272,15 @@ class MoviePlaybackMonitor:
                         payload = None
                 if payload is not None and current():
                     self._emit(payload)
+                if on_sample is not None and current():
+                    with self._condition:
+                        fresh = (self._job is job and not self._closed
+                                 and epoch == self._quality_epoch and self._quality_failed is not job)
+                    if fresh:
+                        try:
+                            on_sample(sample, now, epoch)
+                        except Exception:
+                            self._quality_failed = job
                 with self._condition:
                     if self._closed:
                         return

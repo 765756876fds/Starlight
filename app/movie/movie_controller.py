@@ -755,6 +755,8 @@ class MovieController:
         try:
             if callable(resume_guard) and not resume_guard():
                 return False
+            self._quality_transition(suspend=True)
+            requested_at = time.monotonic()
             resp = self.mpv.loadfile(url)
         except Exception as e:
             logger.error("[Movie] loadfile 异常: type=%s", type(e).__name__)
@@ -790,7 +792,8 @@ class MovieController:
         if item.get("local_file"):
             self._load_local_subtitle(str(url))
         self._start_playback_diagnostics("local" if item.get("local_file") else "cms",
-                                         item.get("_source"))
+                                         item.get("_source"), media_url=str(url),
+                                         requested_at=requested_at)
         self._play_feedback(item, idx, "accepted", media_url=url)  # loadfile accepted is not decoded playback.
         return True
 
@@ -1050,6 +1053,7 @@ class MovieController:
                 self._resume_pending = None
                 return
             if attempts == 0:
+                self._quality_transition()
                 self.mpv.seek(position, "absolute")
             self._resume_pending = (generation, episode, position, attempts + 1) if attempts < 3 else None
             if attempts == 3:
@@ -1096,6 +1100,8 @@ class MovieController:
                 print("[Movie] mpv 启动失败（外部 URL）")
                 return False
         try:
+            self._quality_transition(suspend=True)
+            requested_at = time.monotonic()
             resp = self.mpv.loadfile(url)
         except Exception as e:
             logger.error(f"[Movie] loadfile(外部 URL) 异常: {e!r}")
@@ -1114,37 +1120,139 @@ class MovieController:
         self._film_last_sample = None
         self._external_url_seen_active = False  # 缓冲期保护
         self._write_state(playing=True, paused=False)
-        self._start_playback_diagnostics("external", str(url))
+        self._start_playback_diagnostics("external", str(url), media_url=str(url),
+                                         requested_at=requested_at)
         return True
 
-    def _start_playback_diagnostics(self, mode, source=None):
+    def _start_playback_diagnostics(self, mode, source=None, *, media_url=None,
+                                    requested_at=None, _origin_hint=None):
         """Explicit opt-in observer; no UI-thread IPC and no player commands."""
         config = getattr(self, "_config", None)
-        if config is None or config.get("movie.playback_diagnostics", False) is not True:
+        diagnostic = config is not None and config.get("movie.playback_diagnostics", False) is True
+        process = getattr(self.mpv, "_process", None)
+        pipe = getattr(self.mpv, "ipc_pipe", None)
+        if process is None or not isinstance(pipe, str):
             return
         try:
-            process = getattr(self.mpv, "_process", None)
-            pipe = getattr(self.mpv, "ipc_pipe", None)
-            if process is None or not isinstance(pipe, str):
+            from .source_quality import media_origin
+            from urllib.parse import urlsplit
+            origin = _origin_hint if _origin_hint is not None else media_origin(media_url)
+            safe_source = source
+            if isinstance(source, str) and "://" in source:
+                try:
+                    safe_source = urlsplit(source).hostname
+                except ValueError:
+                    safe_source = None
+            # One volatile observation descriptor, never a URL/title/history row.
+            self._source_quality_context = (
+                mode, safe_source, origin, self._playback_gen,
+                getattr(self, "_current_index", None), process,
+            )
+            quality = self.source_quality_trial_enabled() and origin is not None
+            if not diagnostic and not quality:
                 return
             import json
             import weakref
             from .playback_diagnostics import MoviePlaybackMonitor
             monitor = getattr(self, "_playback_monitor", None)
             if monitor is None:
-                monitor = self._playback_monitor = MoviePlaybackMonitor(
-                    lambda data: logger.info("[MoviePerf] " + json.dumps(data, separators=(",", ":"))))
+                emit = ((lambda data: logger.info(
+                    "[MoviePerf] " + json.dumps(data, separators=(",", ":"))))
+                    if diagnostic else (lambda data: None))
+                monitor = self._playback_monitor = MoviePlaybackMonitor(emit)
             owner = weakref.ref(self)
             generation = self._playback_gen
+            index = getattr(self, "_current_index", None)
             def current():
                 controller = owner()
                 return (controller is not None
                         and not getattr(controller, "_media_voice_closed", False)
                         and controller._playback_gen == generation
+                        and getattr(controller, "_current_index", None) == index
                         and controller.mpv._process is process and process.poll() is None)
-            monitor.start(pipe, generation, current, mode, source)
+            observer = None
+            if quality:
+                from .source_quality import SourceQualityHistory, SourceQualitySession
+                from .playback_diagnostics import source_tag
+                if origin is not None:
+                    history = getattr(self, "_source_quality_history", None)
+                    if history is None:
+                        history = self._source_quality_history = SourceQualityHistory()
+                    serial = getattr(self, "_source_quality_serial", 0) + 1
+                    self._source_quality_serial = serial
+                    tracker = SourceQualitySession(
+                        source_tag(source), origin, serial,
+                        requested_at if requested_at is not None else time.monotonic(),
+                        measure_startup=requested_at is not None)
+                    last_log = [None, float("-inf")]
+                    def observer(sample, now, epoch):
+                        report = tracker.observe(sample, now, epoch)
+                        controller = owner()
+                        if (controller is None or not current()
+                                or not controller.source_quality_trial_enabled()):
+                            return
+                        controller._source_quality_latest = epoch, report
+                        history.update(report)
+                        # Summary only: no title, URL, position, Cookie or media ID.
+                        if (report.advisory_eligible or
+                                (report.state != last_log[0] and now - last_log[1] >= 30)):
+                            from dataclasses import asdict
+                            logger.info("[MovieQuality] " + json.dumps(asdict(report), separators=(",", ":")))
+                            last_log[:] = [report.state, now]
+            monitor.start(pipe, generation, current, mode, source, on_sample=observer,
+                          duration=14400 if observer is not None else None)
         except Exception as error:
             logger.warning(f"[MoviePerf] observer_unavailable type={type(error).__name__}")
+
+    def _quality_transition(self, *, suspend=False):
+        if suspend:
+            self._source_quality_context = None
+        monitor = getattr(self, "_playback_monitor", None)
+        if monitor is not None:
+            monitor.interrupt(suspend=suspend)
+
+    def source_quality_trial_enabled(self):
+        if getattr(self, "_media_voice_closed", False):
+            return False
+        override = getattr(self, "_source_quality_trial_override", None)
+        if override is not None:
+            return override
+        config = getattr(self, "_config", None)
+        return config is not None and config.get("movie.source_quality_enabled", False) is True
+
+    def set_source_quality_trial(self, enabled):
+        """Process-only observation permission. Never sends a player command."""
+        if enabled and getattr(self, "_media_voice_closed", False):
+            return False
+        if getattr(self, "_source_quality_trial_override", None) is bool(enabled):
+            return True
+        self._source_quality_trial_override = bool(enabled)
+        self._source_quality_latest = None
+        monitor = getattr(self, "_playback_monitor", None)
+        if monitor is not None:
+            monitor.interrupt(suspend=True)
+        context = getattr(self, "_source_quality_context", None)
+        if context is not None:
+            mode, source, origin, generation, index, process = context
+            if (generation == self._playback_gen and index == self._current_index
+                    and getattr(self.mpv, "_process", None) is process and process.poll() is None):
+                # Reattach read-only sampling to the already accepted session.
+                # A late enable is not a measurement of initial playback latency.
+                self._start_playback_diagnostics(mode, source, _origin_hint=origin)
+        return True
+
+    def source_quality_snapshot(self):
+        """Read-only, nonblocking; None means disabled or no collector."""
+        history = getattr(self, "_source_quality_history", None)
+        if history is None:
+            return None
+        monitor = getattr(self, "_playback_monitor", None)
+        latest = getattr(self, "_source_quality_latest", None)
+        now = time.monotonic()
+        current = (latest[1] if latest and monitor is not None
+                   and 0 <= now - latest[1].observed_at <= 5
+                   and monitor.quality_current(latest[0]) else None)
+        return {"current": current, "history": history.snapshot(now)}
 
     # ---- 自动连播 ----
 
@@ -1264,6 +1372,8 @@ class MovieController:
         # _current_index；error / None（未确认）/ 异常 → 不把失败集标记为当前集，
         # 不写任何播放状态（tick 随后钉住 _last_idle，失败集不会被无限重试）。
         try:
+            self._quality_transition(suspend=True)
+            requested_at = time.monotonic()
             resp = self.mpv.loadfile(url)
         except Exception as e:
             logger.error(f"[Movie] 自动连播 loadfile 异常: {e!r}")
@@ -1276,6 +1386,8 @@ class MovieController:
             logger.error(f"[Movie] 自动连播 loadfile 失败: error={err}")
             return False
         self._current_index = nxt
+        self._start_playback_diagnostics("cms", item.get("_source"), media_url=str(url),
+                                         requested_at=requested_at)
         return True
 
     @_serialized_media
@@ -1311,6 +1423,8 @@ class MovieController:
             return False
         name, url = eps[prev]
         try:
+            self._quality_transition(suspend=True)
+            requested_at = time.monotonic()
             resp = self.mpv.loadfile(url)
         except Exception as e:
             logger.error(f"[Movie] 切上一集 loadfile 异常: {e!r}")
@@ -1320,6 +1434,8 @@ class MovieController:
         if not isinstance(resp, dict) or resp.get("error") != "success":
             return False
         self._current_index = prev
+        self._start_playback_diagnostics("cms", item.get("_source"), media_url=str(url),
+                                         requested_at=requested_at)
         logger.info(f"[Movie] 切到上一集: {name}")
         return True
 
@@ -1352,6 +1468,7 @@ class MovieController:
         """
         if self._stopping:
             return None
+        self._quality_transition(suspend=True)
         self._remember_view(force=True)
         if hasattr(self, "recommendations"):
             self.recommendations.cancel()
@@ -1411,6 +1528,7 @@ class MovieController:
         → loadfile 当前集 URL → seek 回崩溃前位置（续播，位置取最后一次成功轮询缓存）。
         返回 True=已调度恢复；False=超限放弃或无可恢复上下文（调用方直接收尾）。
         """
+        self._quality_transition(suspend=True)
         self._ipc_fail_streak = 0
         self._mpv_start_ts = time.time()
         self._ipc_recover_triggered = False
@@ -1510,6 +1628,7 @@ class MovieController:
         self._pausing = True
         try:
             if (self._current is not None or self._external_url_mode) and self.mpv.is_running():
+                self._quality_transition()
                 self.mpv.pause()
                 if self.mpv.get_property("pause", timeout=0.5) is not True:
                     return None
@@ -1529,6 +1648,7 @@ class MovieController:
         try:
             if self._current is None or not self.mpv.is_running():
                 return True  # 电影未运行，视为已暂停
+            self._quality_transition()
             self.mpv.pause()
             self._write_state(paused=True)
             # 轮询确认
@@ -1550,6 +1670,7 @@ class MovieController:
 
     def toggle_pause(self):
         """切换暂停并同步共享播放状态；返回 True=已暂停、False=已继续。"""
+        self._quality_transition()
         try:
             paused = self.mpv.get_property("pause", timeout=0.5)
         except Exception:
@@ -1572,6 +1693,7 @@ class MovieController:
     def resume(self):
         if (self._current is None and not self._external_url_mode) or not self.mpv.is_running():
             return False
+        self._quality_transition()
         self.mpv.play()
         if self.mpv.get_property("pause", timeout=0.5) is not False:
             return None
@@ -1581,6 +1703,7 @@ class MovieController:
         return True
 
     def seek(self, seconds, mode="relative"):
+        self._quality_transition()
         try:
             dur = self.get_duration()
             if dur and dur > 0:

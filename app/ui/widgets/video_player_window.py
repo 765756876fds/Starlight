@@ -27,6 +27,7 @@ import os
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -593,6 +594,23 @@ class VideoPlayerWindow(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        from .movie_quality_notice import MovieQualityNotice
+        # Reserve the strip on explicit enable, never on an automatic alert.
+        # Resizing the native video child can activate its existing tool overlay.
+        self._quality_slot = QWidget(self)
+        self._quality_slot.setFixedHeight(64)
+        quality_layout = QGridLayout(self._quality_slot)
+        quality_layout.setContentsMargins(0, 0, 0, 0)
+        self._quality_idle = QLabel("缓冲提示实验已开启 · 仅本次运行", self._quality_slot)
+        self._quality_idle.setContentsMargins(10, 6, 10, 6)
+        self._quality_idle.setProperty("class", "secondary")
+        quality_layout.addWidget(self._quality_idle, 0, 0)
+        self.quality_notice = MovieQualityNotice(controller, self._quality_slot)
+        quality_layout.addWidget(self.quality_notice, 0, 0)
+        self.quality_notice.view_sources_requested.connect(self._view_quality_sources)
+        self._quality_sources_dialog = None
+        self._quality_slot.hide()
+        lay.addWidget(self._quality_slot)
         self.container = VideoContainer(self)
         lay.addWidget(self.container)
 
@@ -961,6 +979,7 @@ class VideoPlayerWindow(QWidget):
                     self._load_status("UNCONFIRMED", "加载已结束，但未取得起播确认；请检查该片源或选择其他候选。")
                 self._on_stopped()
                 return
+            self._poll_quality_notice()
             pos = self._movie.get_position()
             dur = self._movie.get_duration()
             it = self._movie.current_item() or {}
@@ -993,6 +1012,7 @@ class VideoPlayerWindow(QWidget):
         if self._recovering:
             return
         self._recovering = True
+        self.quality_notice.reset()
         self._show_recover_label("播放器异常，正在恢复…")
         ok = self._movie.restart_current(wid=self.container.native_id())
         if not ok:
@@ -1035,10 +1055,40 @@ class VideoPlayerWindow(QWidget):
     def _hide_recover_label(self):
         self._recover_label.hide()
 
+    def _poll_quality_notice(self):
+        self._sync_quality_slot()
+        self.quality_notice.poll(presentation_allowed=(
+            self._playing and not self._recovering and self.isVisible()
+            and not self.isMinimized()))
+        self._quality_idle.setVisible(not self.quality_notice.isVisible())
+
+    def _sync_quality_slot(self):
+        enabled = getattr(self._movie, "source_quality_trial_enabled", lambda: False)() is True
+        self._quality_slot.setVisible(enabled)
+
+    def _view_quality_sources(self):
+        # User-initiated, nonmodal READ-ONLY reuse of the existing source dialog.
+        # No search, source mutation, player call or progress mapping.
+        from ..dialogs.movie_source_dialog import MovieSourceDialog
+        manager = getattr(self._movie, "_source_manager", None)
+        if manager is None:
+            self.quality_notice.message.setText("片源列表暂不可用，请从电影页查看。")
+            return
+        dialog = self._quality_sources_dialog
+        if dialog is None:
+            dialog = self._quality_sources_dialog = MovieSourceDialog(
+                self, manager=manager, view_only=True)
+        else:
+            dialog._refresh_list()
+        dialog.show()
+
     def _on_stopped(self):
         """停播（播完/停止/异常）：停轮询 + 隐藏 overlay/侧栏 + 通知面板。"""
         self._invalidate_subtitle_menu()
         self._playing = False
+        self.quality_notice.reset()
+        if self._quality_sources_dialog is not None:
+            self._quality_sources_dialog.close()
         self._timer.stop()
         self._hide_timer.stop()
         self._overlay_hover = False
