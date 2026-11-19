@@ -7,7 +7,7 @@ import time
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from app.movie.cms_parser import first_play_url, parse_cms_response  # noqa: E402
+from app.movie.cms_parser import normalise_playback, parse_cms_response  # noqa: E402
 from app.movie.source_manager import UA, _TEST_KW  # noqa: E402
 
 MAX_BODY = 2_000_000
@@ -40,11 +40,11 @@ def fetch(payload):
         for raw in data["list"][:500]:
             if not isinstance(raw, dict):
                 raise ValueError("InvalidCMSRow")
-            item = dict(raw)  # Preserve real IDs, episode/version fields and original playback data.
-            play_url = raw.get("vod_play_url") or ""
-            first = first_play_url(play_url)
-            item.update(play_url=play_url, first_name=first[0] if first else "",
-                        first_url=first[1] if first else "")
+            item = dict(raw, play_url=raw.get("vod_play_url") or "", first_url="", first_name="")
+            item.pop("_playback_line_index", None)  # Only a local user choice can select a line.
+            item = normalise_playback(item)
+            item.setdefault("first_url", "")
+            item.setdefault("first_name", "")
             rows.append(item)
         return dict(status="ok" if rows else "empty", items=rows if payload.get("mode") != "probe" else [],
                     count=len(data["list"]), limited=len(data["list"]) > 500,

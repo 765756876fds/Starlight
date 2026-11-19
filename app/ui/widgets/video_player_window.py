@@ -20,6 +20,7 @@ from PySide6.QtCore import QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
 
 import threading
+import time
 from ...core.notifications import notify
 from ..theme.tokens import Tokens
 import os
@@ -562,6 +563,7 @@ class VideoPlayerWindow(QWidget):
 
     # 停播信号（close / 播完 / mpv 异常自愈失败时发，面板清 embed 状态）
     stopped = Signal()
+    playback_status = Signal(object, str, str)
     _subtitle_finished = Signal(int, object)
 
     def __init__(self, controller, title="电影播放"):
@@ -632,10 +634,16 @@ class VideoPlayerWindow(QWidget):
 
     def play(self, item, index=None):
         """注入容器 winId → 控制器播放 → 接管轮询/overlay/侧栏。"""
+        self._load_generation = None  # Even an unconfirmed new attempt invalidates old feedback.
+        self._load_notice_sent = True
         self._invalidate_subtitle_menu()
         self._movie.set_embed_wid(self.container.native_id())
         ok = self._movie.play(item, index=index)
         if ok:
+            self._load_generation = getattr(self._movie, "_playback_gen", None)
+            self._load_started_at = time.monotonic()
+            self._load_notice_sent = False
+            self._hide_recover_label()
             name = (item.get("vod_name") or "")[:20]
             self.setWindowTitle(f"{name} - {self._title_base}")
             self._playing = True
@@ -657,7 +665,17 @@ class VideoPlayerWindow(QWidget):
             self._show_overlay()          # S3：浮现 + 启动 3s 隐藏计时
             self._timer.start()
             self._position_overlay()
+        else:
+            read = getattr(self._movie, "playback_failure_message", None)
+            message = read() if callable(read) else None
+            if isinstance(message, str) and message:
+                self._show_recover_label(message)
         return ok
+
+    def _load_status(self, state, message):
+        generation = getattr(self, "_load_generation", None)
+        if type(generation) is int and generation == getattr(self._movie, "_playback_gen", None):
+            self.playback_status.emit(generation, state, message)
 
     def show_for_playback(self):
         """显示播放窗口，恢复最小化但保留全屏／最大化选择。"""
@@ -670,6 +688,18 @@ class VideoPlayerWindow(QWidget):
         窗口负责接管轮询/overlay 呈现。"""
         if not self._movie.is_playing():
             return
+        self._load_generation = None
+        self._load_notice_sent = True
+        self._hide_recover_label()
+        current = self._movie.current_item()
+        if isinstance(current, dict):
+            from app.movie.cms_parser import episode_eps
+            self._current_item = dict(current)
+            index = getattr(self._movie, "_current_index", 0)
+            self._current_index = index if type(index) is int else 0
+            self._switching = True
+            self.sidebar.set_episodes(episode_eps(current), self._current_index)
+            self.overlay.set_next_enabled(self._current_index+1 < self.sidebar.episode_count())
         self._invalidate_subtitle_menu()
         self._playing = True
         self._apply_mpv_mouse_passthrough()   # S3：mpv 子窗口鼠标穿透（幂等）
@@ -927,6 +957,8 @@ class VideoPlayerWindow(QWidget):
                 if self._playing and self._movie.is_crashed():
                     self._start_recover()
                     return
+                if self._playing and getattr(self, "_switching", False):
+                    self._load_status("UNCONFIRMED", "加载已结束，但未取得起播确认；请检查该片源或选择其他候选。")
                 self._on_stopped()
                 return
             pos = self._movie.get_position()
@@ -938,8 +970,13 @@ class VideoPlayerWindow(QWidget):
             # 起播确认（is_playing 且 pos>0）后放开守卫。
             if self._switching:
                 if not (self._movie.is_playing() and pos > 0):
+                    if (not getattr(self, "_load_notice_sent", True)
+                            and time.monotonic()-self._load_started_at >= 15):
+                        self._load_notice_sent = True
+                        self._load_status("PENDING", "播放器尚未确认起播，请检查当前片源；不会自动切换来源。")
                     return
                 self._switching = False
+                self._load_status("PROGRESS", "播放器已返回播放进度。")
             if dur > 0:
                 self.setWindowTitle(f"{name}  {_fmt(pos)}/{_fmt(dur)} - {self._title_base}")
             else:

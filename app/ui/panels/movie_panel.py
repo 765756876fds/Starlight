@@ -56,6 +56,7 @@ from ..widgets.clickable_slider import ClickableSlider
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import _GlassMsgBox, glass_info
 from ..widgets.movie_search_posters import SearchPosterLoader, poster_key
+from ...movie.cms_parser import normalise_playback
 
 logger = get_logger()
 
@@ -880,6 +881,9 @@ class MoviePanel(QWidget):
                 self._video_win = VideoPlayerWindow(self._movie)
                 self._video_win.setProperty("starlightMediaDomain", "movie")
                 self._video_win.stopped.connect(self._on_video_stopped)
+            status = getattr(self._video_win, "playback_status", None)
+            if status is not None:
+                status.connect(self._on_playback_status)
                 self._movie.set_embed_wid(self._video_win.container.native_id())
         except Exception as e:
             logger.error(f"[Movie] 内嵌播放窗口初始化失败（回退独立窗口）: {e}")
@@ -1614,6 +1618,7 @@ class MoviePanel(QWidget):
             QTimer.singleShot(0, self._video_win.raise_topmost)
             self._video_win.attach_current()
             self._embed_playing = True
+            self._refresh_source_label()
         except Exception as e:
             logger.error(f"[Movie] 语音窗口接管异常: {e}")
 
@@ -1632,12 +1637,16 @@ class MoviePanel(QWidget):
             return None
 
     def _refresh_source_label(self):
-        """状态栏显示当前源名；读不到时显示“未选择”。"""
+        """Configured default and actual media ownership are different facts."""
+        name = self._current_source_name() or "未选择"
+        read = getattr(self._movie, "current_item", None)
         try:
-            name = self._current_source_name()
-            self.lbl_source.setText(f"播放片源：{name}" if name else "播放片源：未选择")
+            current = read() if callable(read) else None
         except Exception:
-            self.lbl_source.setText("播放片源：未选择")
+            current = None
+        source = ((current.get("_source") or ("本地影片" if current.get("local_file") else "来源未标注"))
+                  if isinstance(current, dict) else "未加载")
+        self.lbl_source.setText(f"默认搜索源：{name}；当前影片来源：{source}")
 
     def _on_source_manage(self):
         """"源"按钮 → 源管理对话框（增删/测源/设当前；变更后刷新状态栏）。"""
@@ -1795,6 +1804,7 @@ class MoviePanel(QWidget):
         try:
             if callable(is_current) and not is_current():
                 return
+            it = normalise_playback(it)
             self._freeze_progressive()
             if self._video_win is not None:
                 # P0 卡死修复（宿主窗口系统同步高危）：显示序列延后一拍——
@@ -1806,14 +1816,20 @@ class MoviePanel(QWidget):
             if ok:
                 name = it.get("vod_name", "") or ""
                 self.lbl_now.setText(f"播放中: {name}")
-                self.lbl_status.setText("")
+                self.lbl_status.setText("播放器已接收加载，等待起播确认。")
                 self.slider_pos.setEnabled(True)
                 self._sync_toggle_icon()
                 self._maybe_auto_subtitle(it)
+                self._refresh_source_label()
             else:
-                self.lbl_status.setText("无法播放：无可用地址")
+                self.lbl_status.setText(self._play_failure_text())
         except Exception as e:
             self.lbl_status.setText(f"播放失败: {e}")
+
+    def _play_failure_text(self):
+        read = getattr(self._movie, "playback_failure_message", None)
+        message = read() if callable(read) else None
+        return message if isinstance(message, str) and message else "无法播放：请检查该片源或选择其他候选。"
 
     def _guarded_embed_play(self, it, index, is_current):
         if getattr(self, "_recommendation_closed", False) or (callable(is_current) and not is_current()):
@@ -1833,14 +1849,21 @@ class MoviePanel(QWidget):
             if ok:
                 name = it.get("vod_name", "") or ""
                 self.lbl_now.setText(f"播放中: {name}")
-                self.lbl_status.setText("")
+                self.lbl_status.setText("播放器已接收加载，等待起播确认。")
                 self._embed_playing = True
                 self._sync_toggle_icon()
                 self._maybe_auto_subtitle(it)
+                self._refresh_source_label()
             else:
-                self.lbl_status.setText("无法播放：无可用地址")
+                self.lbl_status.setText(self._play_failure_text())
         except Exception as e:
             self.lbl_status.setText(f"播放失败: {e}")
+
+    def _on_playback_status(self, generation, status, message):
+        if self._recommendation_closed or generation != getattr(self._movie, "_playback_gen", None):
+            return
+        self.lbl_status.setText(message)
+        self._refresh_source_label()
 
     def _on_video_stopped(self):
         """播放窗口停播（关窗/播完/异常）：面板清 embed 播放状态（现状控制行让位）。"""
@@ -1850,9 +1873,11 @@ class MoviePanel(QWidget):
         self.slider_pos.setValue(0)
         self.lbl_time.setText("0:00 / 0:00")
         self._sync_toggle_icon()
+        self._refresh_source_label()
 
     def _show_episode_dialog(self, it):
-        """多集 → 选集对话框（第01集…，点选即播）。"""
+        """Choose a line/episode within this immutable CMS candidate only."""
+        it = normalise_playback(it)
         eps = self._movie.episodes(it)
         if len(eps) <= 1:
             self._play_item(it, index=None)
@@ -1860,15 +1885,35 @@ class MoviePanel(QWidget):
         dlg = GlassDialog(f"选集 - {(it.get('vod_name') or '')[:24]}", self)
         dlg.resize(320, 420)
         lay = dlg.body_layout
-        tip = QLabel(f"共 {len(eps)} 集，双击选集播放（连播开时播完自动下一集）")
+        state = {"item": it, "eps": eps}
+        lines = it.get("_playback_lines") or []
+        combo = None
+        if len(lines) > 1:
+            combo = QComboBox()
+            combo.setObjectName("moviePlaybackLine")
+            for line in lines:
+                combo.addItem(line["name"], line["index"])
+            combo.setCurrentIndex(next(i for i, line in enumerate(lines)
+                                       if line["index"] == it["_playback_line_index"]))
+            lay.addWidget(combo)
+        tip = QLabel("双击所选线路的集数播放；不会切换到其他CMS来源。")
         tip.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(tip)
         lst = QListWidget()
-        for i, (name, _url) in enumerate(eps):
-            itm = QListWidgetItem(name or f"第{i + 1:02d}集", lst)
-            itm.setData(Qt.UserRole, i)
+        lst.setObjectName("moviePlaybackEpisodes")
+        def populate():
+            chosen = normalise_playback(it, combo.currentData()) if combo is not None else it
+            state.update(item=chosen, eps=self._movie.episodes(chosen))
+            lst.clear()
+            for i, (name, _) in enumerate(state["eps"]):
+                row = QListWidgetItem(name or f"第{i+1:02d}集", lst)
+                row.setData(Qt.UserRole, i)
+        populate()
+        if combo is not None:
+            combo.currentIndexChanged.connect(populate)
         lay.addWidget(lst)
-        lst.itemDoubleClicked.connect(lambda itm: self._on_episode_picked(itm, it, eps, dlg))
+        lst.itemDoubleClicked.connect(lambda row: self._on_episode_picked(
+            row, state["item"], state["eps"], dlg))
         dlg.exec()
 
     def _on_episode_picked(self, itm, it, eps, dlg):
@@ -2264,7 +2309,7 @@ class _MovieDetailDialog(GlassDialog):
         super().__init__(f"{(it.get('vod_name') or '')[:24]} - 详情", parent)
         self.resize(540, 660)
         self._panel = panel
-        self._it = it
+        self._it = normalise_playback(it)
 
         root = self.body_layout
 
@@ -2303,6 +2348,19 @@ class _MovieDetailDialog(GlassDialog):
         scroll.setWidget(self.lbl_info)
         root.addWidget(scroll, 1)
 
+        source = self._it.get("_source")
+        if source:
+            root.addWidget(QLabel("资源来源：" + str(source)))
+        self.combo_play_line = None
+        lines = self._it.get("_playback_lines") or []
+        if len(lines) > 1:
+            self.combo_play_line = QComboBox()
+            self.combo_play_line.setObjectName("moviePlaybackLine")
+            for line in lines:
+                self.combo_play_line.addItem(line["name"], line["index"])
+            self.combo_play_line.setCurrentIndex(next(i for i, line in enumerate(lines)
+                if line["index"] == self._it["_playback_line_index"]))
+            root.addWidget(self.combo_play_line)
         self.btn_play = QPushButton("播放")
         self.btn_play.clicked.connect(self._on_play)
         row = QHBoxLayout()
@@ -2312,7 +2370,8 @@ class _MovieDetailDialog(GlassDialog):
         root.addLayout(row)
 
     def _on_play(self):
-        it = self._it
+        it = (normalise_playback(self._it, self.combo_play_line.currentData())
+              if self.combo_play_line is not None else self._it)
         self.accept()
         try:
             if MovieController.is_multi_episode(it):

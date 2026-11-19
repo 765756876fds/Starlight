@@ -26,7 +26,7 @@ def split_play_url(vod_play_url):
     返回 [(name, url), ...]；无有效段时返回 []。
     """
     out = []
-    for seg in str(vod_play_url or "").split("#"):
+    for seg in str(vod_play_url or "").split("$$$", 1)[0].split("#"):
         seg = seg.strip()
         if not seg or "$" not in seg:
             continue
@@ -43,9 +43,39 @@ def first_play_url(vod_play_url):
     return parts[0] if parts else None
 
 
+def normalise_playback(item, line_index=None):
+    """Separate CMS playback lines without changing source or original vod fields.
+
+    $$$ separates lines, # separates episodes; never send a joined line to MPV.
+    Items containing only an existing first_url keep their legacy contract.
+    """
+    result = dict(item)
+    if not item.get("vod_play_url") and not item.get("play_url"):
+        return result
+    raw = str(item.get("vod_play_url") or item.get("play_url") or "")
+    names = str(item.get("vod_play_from") or "").split("$$$")
+    lines = [dict(index=i, name=names[i] if i < len(names) and names[i] else f"线路{i+1}", play_url=part)
+             for i, part in enumerate(raw.split("$$$")) if split_play_url(part)]
+    chosen = line_index if line_index is not None else item.get("_playback_line_index")
+    selected = next((line for line in lines if line["index"] == chosen), None)
+    if line_index is not None and selected is None:
+        raise ValueError("playback line unavailable")
+    selected = selected or (lines[0] if lines else None)
+    result["_playback_lines"] = lines
+    result["_playback_line_index"] = selected["index"] if selected else None
+    result["play_url"] = selected["play_url"] if selected else ""
+    first = first_play_url(result["play_url"])
+    result["first_name"] = first[0] if first else ""
+    result["first_url"] = first[1] if first else ""
+    return result
+
+
 def episode_eps(item):
     """取 item 的分集列表（非 dict / 无 play_url → 空列表）——episodes
     与 is_multi_episode 共用，消重复取数逻辑。"""
     if not isinstance(item, dict):
         return []
-    return split_play_url(item.get("play_url") or "")
+    value = item.get("play_url") or ""
+    if "$$$" in value:
+        value = normalise_playback(item).get("play_url", "")
+    return split_play_url(value)

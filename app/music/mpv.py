@@ -280,7 +280,8 @@ class MpvController:
             return 1
 
     def loadfile(self, filepath: str, mode: str = "replace"):
-        print(f"[mpv] cmd loadfile: {filepath[:80]} (mode={mode})")
+        media_tag = hashlib.sha256(str(filepath).encode("utf8")).hexdigest()[:12]
+        print(f"[mpv] cmd loadfile: media_tag={media_tag} (mode={mode})")
         resp = self._send_command("loadfile", [filepath, mode], timeout=5.0)
         err = (resp or {}).get("error")
         print(f"[mpv] resp: error={err}")

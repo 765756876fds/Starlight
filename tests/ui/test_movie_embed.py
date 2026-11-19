@@ -552,7 +552,7 @@ class TestPanelEmbedDeferred:
             it = {"vod_name": "X", "first_url": "u"}
             panel._play_item(it)
             _flush(qapp)
-            assert panel.lbl_status.text() == "无法播放：无可用地址"
+            assert panel.lbl_status.text() == "无法播放：请检查该片源或选择其他候选。"
             assert panel._embed_playing is False
         finally:
             panel._timer.stop()

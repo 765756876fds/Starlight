@@ -31,6 +31,7 @@ from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
 from .cms_parser import (
     episode_eps,
+    normalise_playback,
     first_play_url as first_play_url,
     parse_cms_response as parse_cms_response,
     split_play_url as split_play_url,
@@ -680,6 +681,22 @@ class MovieController:
 
     # ---- 播放 ----
 
+    def _play_feedback(self, item, index, status, message="", *, media_url=None):
+        import hashlib
+        source = str(item.get("_source_id") or item.get("_source") or "unknown")
+        key = repr((source, item.get("vod_id"), item.get("play_url"), item.get("first_url"), index))
+        ref = hashlib.sha256(key.encode("utf8")).hexdigest()[:12]
+        self._last_play_feedback = (ref, status, message)
+        media_tag = hashlib.sha256(str(media_url or "").encode("utf8")).hexdigest()[:12]
+        logger.info("[MoviePlay] attempt=%s generation=%s source_tag=%s candidate_tag=%s media_tag=%s episode=%s result=%s",
+                    getattr(self, "_play_attempt", 0), getattr(self, "_playback_gen", 0),
+                    hashlib.sha256(source.encode("utf8")).hexdigest()[:12], ref, media_tag, index, status)
+        return False
+
+    def playback_failure_message(self):
+        feedback = getattr(self, "_last_play_feedback", None)
+        return feedback[2] if feedback and feedback[2] else "播放未成功，请检查该片源或选择其他候选。"
+
     @_serialized_media
     def play(self, item, index=None):
         """播电影：启动视频 mpv 播指定集，确认实际起播后再暂停音乐。
@@ -688,6 +705,10 @@ class MovieController:
         否则（embed 关 / 窗口未建）→ 独立 mpv 窗口（现状，安全回退）。"""
         if not isinstance(item, dict):
             return False
+        if "$$$" in str(item.get("vod_play_url") or item.get("play_url") or ""):
+            item = normalise_playback(item)
+        self._play_attempt = getattr(self, "_play_attempt", 0) + 1
+        self._play_feedback(item, index, "selected")
         resume_guard = item.get("_resume_guard") or getattr(getattr(self, "_play_guard_local", None), "current", None)
         if "_resume_guard" in item:
             item = {key: value for key, value in item.items() if key != "_resume_guard"}
@@ -704,13 +725,12 @@ class MovieController:
                 url = eps[idx][1]
             else:
                 print(f"[Movie] 集数越界: index={index} 总集数={len(eps)}")
-                return False
+                return self._play_feedback(item, index, "invalid_episode", "该来源没有所选集数，请重新选择。")
         elif eps:
             idx = 0
             url = eps[0][1]
         if not url:
-            print(f"[Movie] 无可用播放地址: {item.get('vod_name')}")
-            return False
+            return self._play_feedback(item, index, "no_address", "该来源未提供播放地址，请选择其他候选。")
         self._remember_view(force=True)
         # 音乐互斥由 tick 确认实际起播后处理；加载失败不打断音乐。
         # 内嵌 wid：embed 开且窗口已注入 → 传 --wid；否则 None（独立窗口，现状）
@@ -720,8 +740,7 @@ class MovieController:
         # 独立视频实例：taskkill=False 不杀音乐实例；video=True 出视频窗口
         if not self.mpv.is_running():
             if not self.mpv.start(taskkill=False, wid=wid):
-                print("[Movie] mpv 启动失败")
-                return False
+                return self._play_feedback(item, index, "start_failed", "播放器启动失败，请稍后重试。")
         # loadfile 三态确认（与 mpv.stop() 同契约；命令被接受≠媒体已解码/出声）：
         #   resp.error == "success" → 命令被接受，按原逻辑更新播放上下文
         #   resp is None（超时/无响应）→ 结果未确认 → 不伪造播放成功
@@ -733,15 +752,15 @@ class MovieController:
                 return False
             resp = self.mpv.loadfile(url)
         except Exception as e:
-            logger.error(f"[Movie] loadfile 异常: {e!r}")
-            return False
+            logger.error("[Movie] loadfile 异常: type=%s", type(e).__name__)
+            return self._play_feedback(item, index, "load_exception", "播放器加载异常，请检查该片源后重试。", media_url=url)
         if resp is None:
             logger.error("[Movie] loadfile 结果未确认（IPC 超时/无响应）")
-            return False
+            return self._play_feedback(item, index, "load_unknown", "播放器加载结果未确认，请勿重复点击；请查看播放窗口。", media_url=url)
         if not isinstance(resp, dict) or resp.get("error") != "success":
             err = resp.get("error") if isinstance(resp, dict) else resp
-            logger.error(f"[Movie] loadfile 失败: error={err}")
-            return False
+            logger.error("[Movie] loadfile 失败: error_type=%s", type(err).__name__)
+            return self._play_feedback(item, index, "load_rejected", "播放器拒绝加载该地址，请选择其他候选。", media_url=url)
         # 确保新视频开始播放（不继承之前的暂停状态）
         self.mpv.set_property("pause", False)
         try:
@@ -765,6 +784,7 @@ class MovieController:
         self._pending_local_subtitle = None
         if item.get("local_file"):
             self._load_local_subtitle(str(url))
+        self._play_feedback(item, idx, "accepted", media_url=url)  # loadfile accepted is not decoded playback.
         return True
 
     @staticmethod
