@@ -15,7 +15,7 @@ from typing import Any
 import requests
 import yaml
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import USER_DATA_DIR
 
 from .cms_parser import CMS_HEADERS as UA, CMS_PROBE_KEYWORD as _TEST_KW
 
@@ -33,7 +33,7 @@ DEFAULT_SOURCES: list[dict[str, Any]] = [
 ]
 
 def _default_settings_path() -> str:
-    return str(PROJECT_ROOT / "config" / "settings.yaml")
+    return str(USER_DATA_DIR / "config" / "settings.yaml")
 
 
 def _check_hls(url: str, timeout: float) -> bool:
@@ -117,6 +117,7 @@ class MovieSourceManager:
             m["sources"] = [dict(s) for s in self._sources]
             m["active_source"] = self._active or (self._sources[0]["name"] if self._sources else "")
             try:
+                os.makedirs(os.path.dirname(os.path.abspath(self._config_path)), exist_ok=True)
                 with open(self._config_path, "w", encoding="utf-8") as f:
                     yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
             except Exception as e:

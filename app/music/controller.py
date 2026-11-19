@@ -88,8 +88,8 @@ class MusicController:
         不发真声音的 Fake，构造/播放全程无 IPC、无子进程。"""
         self.config = config
         # 路径绝对化（P0-2）：相对路径（如 ./data/music.db）基于 PROJECT_ROOT，不依赖 CWD
-        from app.core.path_resolve import resolve_under_root
-        self.db_path = resolve_under_root(config.get("database", "./data/music.db"))
+        from app.core.path_resolve import resolve_user_path
+        self.db_path = resolve_user_path(config.get("database", "./data/music.db"))
         self.scan_dirs = config.get("scan_dirs", [])
         self.extensions = set(config.get("extensions", [".mp3", ".flac", ".wav", ".m4a", ".ogg"]))
         # mpv 查找链（打包零配置运行）：settings 显式 → 打包内置 bundled → PATH（下游兜底）
@@ -3284,8 +3284,8 @@ class MusicController:
         try:
             import os as _os
             import yaml
-            from app.core.path_resolve import PROJECT_ROOT
-            p = _os.path.join(PROJECT_ROOT, "config", "settings.yaml")
+            from app.core.path_resolve import USER_DATA_DIR
+            p = _os.path.join(USER_DATA_DIR, "config", "settings.yaml")
             if _os.path.exists(p):
                 with open(p, "r", encoding="utf-8") as _f:
                     data = yaml.safe_load(_f) or {}

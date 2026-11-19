@@ -15,19 +15,20 @@ import threading
 from datetime import datetime
 
 from app.core.log_bus import get_log_bus
+from app.core.path_resolve import USER_DATA_DIR
 
 
 class TeeStream:
-    def __init__(self, original=None, log_dir="./logs", filename_prefix="print"):
+    def __init__(self, original=None, log_dir=None, filename_prefix="print"):
         self._original = original
         self._bus = get_log_bus()
         self._buffer = ""
-        self._log_dir = log_dir
+        self._log_dir = log_dir or str(USER_DATA_DIR / "logs")
         self._prefix = filename_prefix
         self._lock = threading.Lock()
         self._file = None
         self._date = None
-        os.makedirs(log_dir, exist_ok=True)   # 幂等：install 时 logs/ 未必存在
+        os.makedirs(self._log_dir, exist_ok=True)   # 幂等：install 时 logs/ 未必存在
 
     def _ensure_file(self):
         """按日期滚动：logs/{prefix}-{date}.log"""
@@ -108,7 +109,7 @@ class TeeStream:
 _streams = []
 
 
-def install_log_redirect(log_dir="./logs"):
+def install_log_redirect(log_dir=None):
     global _streams
     out = TeeStream(sys.stdout, log_dir, filename_prefix="print")
     err = TeeStream(sys.stderr, log_dir, filename_prefix="error")

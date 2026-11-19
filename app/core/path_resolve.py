@@ -158,6 +158,27 @@ def migrate_legacy_user_data() -> None:
         _migrate_sqlite(db_src, db_dst, label)
 
 
+def resolve_user_path(path: str) -> str:
+    """Resolve writable relative settings below the user data root."""
+    if not path:
+        return path
+    configured = Path(path)
+    if configured.is_absolute():
+        if not getattr(sys, "frozen", False):
+            return str(path)
+        for old_root in (PROJECT_ROOT / "_internal", PROJECT_ROOT):
+            try:
+                relative = configured.resolve().relative_to(old_root)
+            except ValueError:
+                continue
+            return str(USER_DATA_DIR / relative)
+        return str(path)
+    # Collapse parent references against a virtual root before joining.
+    relative = os.path.normpath(os.sep + os.path.splitdrive(path)[1]).lstrip(os.sep)
+    return str(USER_DATA_DIR / relative)
+
+
+
 def resolve_under_root(path: str) -> str:
     """把配置里的相对路径绝对化（基于 PROJECT_ROOT）；绝对路径原样返回。
 

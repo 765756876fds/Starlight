@@ -7,7 +7,7 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
+from app.core.path_resolve import USER_DATA_DIR, resolve_user_path
 
 
 @dataclass
@@ -48,7 +48,7 @@ class MusicSourceManager:
         if not config_dir:
             config_dir = str(USER_DATA_DIR / "config")
         elif not os.path.isabs(config_dir):
-            config_dir = str(PROJECT_ROOT / config_dir)
+            config_dir = resolve_user_path(config_dir)
         self.config_dir = config_dir
         self.sources_file = os.path.join(config_dir, "music_sources.json")
         self.sources: list[MusicSource] = []

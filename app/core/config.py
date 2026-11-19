@@ -1,7 +1,7 @@
 """
 全局配置加载器
 P2（2026-10-18）：配置缺失不再崩溃——使用内置默认配置并自动写盘；
-相对路径（./data、./logs、./data/music.db 等）基于 PROJECT_ROOT 绝对化，消除 CWD 依赖。
+相对路径（./data、./logs、./data/music.db 等）基于 USER_DATA_DIR 绝对化，消除 CWD 依赖。
 """
 import os
 from pathlib import Path
@@ -11,11 +11,10 @@ import yaml
 from app.version import get_version
 
 from app.core.path_resolve import (
-    PROJECT_ROOT,
     USER_DATA_DIR,
     bundled_tool,
     migrate_legacy_user_data,
-    resolve_under_root,
+    resolve_user_path,
 )
 
 # 相对路径键 → 绝对化（解析后写入 self._data，避免下游各自猜）
@@ -25,6 +24,11 @@ _RELATIVE_KEYS = (
     "music.database",
     "player.database",
     "tts.output_dir",
+    "music.download_dir",
+    "events.log_dir",
+    "movie.watch_later_dir",
+    "movie.history_db",
+    "movie.subtitle_dir",
 )
 
 
@@ -137,7 +141,7 @@ def _absolutize(data: dict[str, Any]) -> dict[str, Any]:
             continue
         val = cur.get(parts[-1])
         if isinstance(val, str) and val:
-            cur[parts[-1]] = resolve_under_root(val)
+            cur[parts[-1]] = resolve_user_path(val)
     return out
 
 
@@ -221,7 +225,7 @@ class Config:
                         yaml.safe_dump(self._data, f, allow_unicode=True, sort_keys=False)
                 except Exception:
                     pass
-        # 相对路径键 → 基于 PROJECT_ROOT 绝对化（不依赖 CWD）
+        # 相对路径键 → 基于 USER_DATA_DIR 绝对化（不依赖 CWD）
         self._data = _absolutize(dict(self._data))
 
         # P0-B: mpv_path 失效自动回退——用户配置指向不存在的旧路径时，回退到打包内置 mpv

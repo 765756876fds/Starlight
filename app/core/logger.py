@@ -8,16 +8,27 @@ import os
 from datetime import datetime
 from typing import Any
 
+from app.core.path_resolve import USER_DATA_DIR
+
 
 class Logger:
     """JSONL 日志记录器"""
 
-    def __init__(self, log_dir: str = "./logs", level: str = "INFO"):
-        self.log_dir = log_dir
+    def __init__(self, log_dir: str | None = None, level: str = "INFO"):
+        self.log_dir = log_dir or str(USER_DATA_DIR / "logs")
         self.level = self._level_to_int(level)
         self._current_date: str | None = None
         self._file = None
-        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(self.log_dir, exist_ok=True)
+
+    def configure(self, log_dir: str, level: str):
+        """Apply startup settings to references captured during module import."""
+        if os.path.normcase(self.log_dir) != os.path.normcase(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+            self.close()
+            self._current_date = None
+            self.log_dir = log_dir
+        self.level = self._level_to_int(level)
 
     def _level_to_int(self, level: str) -> int:
         levels = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
@@ -105,9 +116,11 @@ class Logger:
 _logger: Logger | None = None
 
 
-def get_logger(log_dir: str = "./logs", level: str = "INFO") -> Logger:
+def get_logger(log_dir: str | None = None, level: str = "INFO") -> Logger:
     """获取全局日志单例"""
     global _logger
     if _logger is None:
         _logger = Logger(log_dir, level)
+    elif log_dir is not None:
+        _logger.configure(log_dir, level)
     return _logger

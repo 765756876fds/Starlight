@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.core.logger import get_logger
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import USER_DATA_DIR
 
 from .event_bus import Event, get_event_bus
 
@@ -63,7 +63,7 @@ class EventLog:
     订阅 EventBus 所有事件，追加写入按日期分的 JSONL 文件。
     """
 
-    def __init__(self, log_dir: str = str(PROJECT_ROOT / "data" / "events"),
+    def __init__(self, log_dir: str = str(USER_DATA_DIR / "data" / "events"),
                  max_file_size_mb: float = 10.0, max_rotations: int = 5):
         self.log_dir = log_dir
         self._lock = threading.Lock()

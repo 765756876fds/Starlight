@@ -35,8 +35,8 @@ def _load_trace_enabled() -> bool:
     """读取 config/settings.yaml 的 music.trace_enabled（默认 False）。读失败静默降级。"""
     try:
         import yaml
-        from app.core.path_resolve import PROJECT_ROOT
-        p = os.path.join(PROJECT_ROOT, "config", "settings.yaml")
+        from app.core.path_resolve import USER_DATA_DIR
+        p = os.path.join(USER_DATA_DIR, "config", "settings.yaml")
         if os.path.exists(p):
             with open(p, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
@@ -91,11 +91,8 @@ class TraceRecorder:
 
     @staticmethod
     def _default_dir() -> str:
-        try:
-            from app.core.path_resolve import PROJECT_ROOT
-            return os.path.join(PROJECT_ROOT, "logs", "trace")
-        except Exception:
-            return os.path.join(os.getcwd(), "logs", "trace")
+        from app.core.path_resolve import USER_DATA_DIR
+        return os.path.join(USER_DATA_DIR, "logs", "trace")
 
     # ---- 启动清理：只删旧运行的 trace，本次运行文件 mtime 最新，天然保留 ----
 

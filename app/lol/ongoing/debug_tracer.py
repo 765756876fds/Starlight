@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import logging
-import os
+from app.core.path_resolve import USER_DATA_DIR
 
 # 全局调试开关：True=写 logs/ongoing_debug.log；False=静默（零开销跳过）
 _DEBUG_ONGOING = True
@@ -22,14 +22,12 @@ def _build_logger() -> logging.Logger:
     logger.setLevel(logging.DEBUG)
     logger.propagate = False  # 不冒泡到根 logger，避免与控制台日志重复
     if _DEBUG_ONGOING:
-        # logs/ 位于项目根（app/../.. 相对本模块上溯三层）
-        log_dir = os.path.normpath(
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "logs")
-        )
-        os.makedirs(log_dir, exist_ok=True)
-        fh = logging.FileHandler(
-            os.path.join(log_dir, "ongoing_debug.log"), encoding="utf-8"
-        )
+        try:
+            directory = USER_DATA_DIR / "logs"
+            directory.mkdir(parents=True, exist_ok=True)
+            fh = logging.FileHandler(directory / "ongoing_debug.log", encoding="utf-8")
+        except OSError:
+            fh = logging.NullHandler()
         fh.setFormatter(logging.Formatter(
             "%(asctime)s.%(msecs)03d [%(threadName)s] %(message)s",
             datefmt="%H:%M:%S",

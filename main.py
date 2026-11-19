@@ -32,11 +32,7 @@ from typing import Any, Dict
 # USER_DATA_DIR（= %LOCALAPPDATA%\Starlight，见 app/core/path_resolve.py R1），
 # 日志/事件/插件导入绝不写 Program Files。
 if getattr(sys, "frozen", False):
-    try:
-        from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
-    except Exception:
-        PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-        USER_DATA_DIR = PROJECT_ROOT
+    from app.core.path_resolve import PROJECT_ROOT, USER_DATA_DIR
 else:
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
     USER_DATA_DIR = PROJECT_ROOT
@@ -51,7 +47,7 @@ def _runtime_log_dir(config):
     return os.path.join(str(USER_DATA_DIR), "logs")
 
 
-sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # 无黑窗兜底（PyInstaller console=False / pythonw 下 sys.stdout/stderr 可能为 None，
 # print 会直接抛异常 —— 接到 devnull 保证永不崩溃）
@@ -855,9 +851,9 @@ class Application:
     def _register_player_query(self):
         """doc"""
         try:
-            db_path = os.path.join(PROJECT_ROOT, "data", "player.db")
+            db_path = os.path.join(USER_DATA_DIR, "data", "player.db")
             events_dir = self.config.get(
-                "events.log_dir", os.path.join(PROJECT_ROOT, "data", "events")
+                "events.log_dir", os.path.join(USER_DATA_DIR, "data", "events")
             )
             def _snapshot_provider():
                 try:

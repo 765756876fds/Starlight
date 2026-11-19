@@ -27,7 +27,7 @@ from urllib3.exceptions import ReadTimeoutError
 from ..core.config import get_config, resolve_mpv_path
 from ..core.event_bus import EventType, get_event_bus
 from ..core.logger import get_logger
-from ..core.path_resolve import PROJECT_ROOT
+from ..core.path_resolve import USER_DATA_DIR
 from ..core.state_store import StateNamespace, get_state_store
 from ..music.mpv import MpvController
 from .cms_parser import (
@@ -132,7 +132,7 @@ class MovieController:
         pipe = ipc_pipe or self._config.get("movie.mpv_ipc_pipe") or DEFAULT_IPC_PIPE
         # 断点续播目录（仅电影实例；音乐链不加——用户明确不要）
         watch_dir = (self._config.get("movie.watch_later_dir")
-                     or os.path.join(self._config.get("app.data_dir", str(PROJECT_ROOT / "data")),
+                     or os.path.join(self._config.get("app.data_dir", str(USER_DATA_DIR / "data")),
                                      "movie", "watch_later"))
         try:
             os.makedirs(watch_dir, exist_ok=True)
@@ -173,7 +173,7 @@ class MovieController:
         self._external_url_mode = False  # play() 正常剧集模式；play_external_url 置 True
         self._external_url_seen_active = False  # 外部 URL：是否已观察到 mpv 离开 idle
         history_db = self._config.get("movie.history_db") or os.path.join(
-            self._config.get("app.data_dir", str(PROJECT_ROOT / "data")), "movie_history.db")
+            self._config.get("app.data_dir", str(USER_DATA_DIR / "data")), "movie_history.db")
         self.history = MovieHistory(history_db)
         from .preferences import FilmMemory
         from .recommendation import FilmRecommendations
@@ -2041,7 +2041,7 @@ class MovieController:
 
     def subtitle_dir(self) -> str:
         d = (self._config.get("movie.subtitle_dir")
-             or os.path.join(self._config.get("app.data_dir", str(PROJECT_ROOT / "data")),
+             or os.path.join(self._config.get("app.data_dir", str(USER_DATA_DIR / "data")),
                              "movie", "subtitles"))
         try:
             os.makedirs(d, exist_ok=True)

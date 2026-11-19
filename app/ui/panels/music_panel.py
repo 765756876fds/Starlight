@@ -1538,10 +1538,10 @@ class MusicPanel(QWidget):
                                if d.get("enabled") and d.get("path")]
             scan_dirs = configured_dirs or list(getattr(music, "scan_dirs", None) or [])
             config = getattr(music, "config", None) or {}
-            from app.core.path_resolve import USER_DATA_DIR, resolve_under_root
+            from app.core.path_resolve import USER_DATA_DIR, resolve_user_path
             configured_db = config.get("fingerprints")
             if configured_db:
-                db_path = resolve_under_root(str(configured_db))
+                db_path = resolve_user_path(str(configured_db))
             else:
                 db_path = str(USER_DATA_DIR / "data" / "music" / "fingerprints.db")
             ext = list(config.get("extensions") or []) or None

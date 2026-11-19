@@ -12,13 +12,15 @@ import threading
 import time
 from typing import Any
 
+from app.core.path_resolve import USER_DATA_DIR
+
 
 class MusicDatabase:
     """音乐数据库管理"""
 
-    def __init__(self, db_path: str = "./data/music.db"):
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    def __init__(self, db_path: str | None = None):
+        self.db_path = db_path or str(USER_DATA_DIR / "data" / "music.db")
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._conn: sqlite3.Connection | None = None
         # 连接级互斥：scanner 后台 highlight 线程与 playback/UI 线程共享同一连接
         # （check_same_thread=False + WAL 只保证读写不互斥，写写并发仍需应用层锁）

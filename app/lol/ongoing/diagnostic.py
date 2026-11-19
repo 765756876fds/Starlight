@@ -18,14 +18,14 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from app.core.path_resolve import PROJECT_ROOT
+from app.core.path_resolve import USER_DATA_DIR
 
 
 class ChampSelectDiagnostic:
     def __init__(
         self,
         lcu_request_raw: Callable[[str, str, Any], Any],
-        capture_dir: str = str(PROJECT_ROOT / "runtime"),
+        capture_dir: str = str(USER_DATA_DIR / "runtime"),
         interval: float = 0.5,
         ring_seconds: float = 120.0,
         on_event: Callable[[str, dict], None] | None = None,
