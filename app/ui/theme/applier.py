@@ -88,7 +88,7 @@ QPushButton[class="primary"]:disabled {{
     color: rgba(255, 255, 255, 150);
 }}
 
-/* 播放控制金字塔：主按钮（播放/暂停）放大，跳曲次之，其余紧凑 */
+/* 播放控制：主按钮（播放/暂停）放大，跳曲次之。 */
 QPushButton#btn_toggle {{
     min-width: {T.BTN_MAIN}px; min-height: {T.BTN_MAIN}px;
     border-radius: {int(T.BTN_MAIN / 2)}px; padding: 0;
@@ -101,7 +101,7 @@ QPushButton#btn_prev, QPushButton#btn_next, QPushButton#btn_stop {{
     min-width: {T.BTN_SUB}px; min-height: {T.BTN_SUB}px;
     border-radius: {int(T.BTN_SUB / 2)}px; padding: 0;
 }}
-QPushButton#btn_mode, QPushButton#btn_clear_queue, QPushButton#btn_highlight {{
+QPushButton#btn_mode {{
     padding: 6px 12px; min-height: 18px;
 }}
 

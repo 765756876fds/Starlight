@@ -5,7 +5,7 @@ import time
 import pytest
 from PySide6.QtCore import QTimer
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
 from app.music.controller import MusicController
 from app.music.mpv import MpvController
@@ -22,8 +22,8 @@ class SpeedPanel(MusicPanel):
         self._queue_refresh_timer.setSingleShot(True)
         self._queue_dialog = None
         self._speed_steps = list(MusicController.SPEED_STEPS)
-        self._speed_idx = 2
-        self.btn_speed = QPushButton("倍速 1x", self)
+        self._speed_menu = QMenu(self)
+        self._setup_speed_actions()
         self.lbl_status = QLabel("", self)
         self._speed_result.connect(self._after_speed)
 
@@ -51,7 +51,8 @@ def test_speed_ui_signal_tracks_confirmed_failed_and_unknown_results(gui, respon
     panel = SpeedPanel(controller)
     spy = QSignalSpy(panel._speed_result)
     try:
-        panel._apply_speed(1.5, 4)
+        panel._speed_actions.actions()[4].trigger()
+        assert panel._speed_actions.checkedAction().text() == "1x"  # pending
         # QSignalSpy.wait holds the GIL in this PySide6 build, starving the
         # Python worker. Pump Qt events and yield Python with the same 3s bound.
         deadline = time.monotonic() + 3.0
@@ -65,12 +66,14 @@ def test_speed_ui_signal_tracks_confirmed_failed_and_unknown_results(gui, respon
         player._send_command.assert_called_once_with("set_property", ["speed", 1.5])
         if expected is True:
             assert panel._speed_idx == 4
-            assert panel.btn_speed.text() == "倍速 1.5x"
+            assert panel._speed_actions.checkedAction().text() == "1.5x"
+            assert panel._speed_menu.title() == "倍速 1.5x"
             assert controller.get_speed() == 1.5
             controller.state_store.set.assert_called_once()
         else:
             assert panel._speed_idx == 2
-            assert panel.btn_speed.text() == "倍速 1x"
+            assert panel._speed_actions.checkedAction().text() == "1x"
+            assert panel._speed_menu.title() == "倍速 1x"
             assert word in panel.lbl_status.text()
             assert controller.get_speed() == 1.0
             controller.state_store.set.assert_not_called()

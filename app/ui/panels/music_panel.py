@@ -5,8 +5,8 @@ from ...core.notifications import notify, get_notification_center, current_opera
 import time
 import zlib
 
-from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QFont, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QActionGroup, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -140,6 +140,47 @@ class _RankDetailWorker(QObject):
             self.done.emit(r)
         except Exception as e:
             self.failed.emit(str(e))
+
+
+class _TrackTitle(QLabel):
+    """Show a clear ellipsis and retain the full title for hover and accessibility."""
+
+    def __init__(self):
+        super().__init__()
+        self._full_title = ""
+        self.setTextFormat(Qt.PlainText)
+        self.setProperty("class", "title")
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.setMinimumWidth(1)
+        self.setMaximumWidth(620)
+        self.setText("未播放")
+
+    def setText(self, title):
+        if title != self._full_title:
+            self._full_title = title
+            self.setAccessibleName(title)
+            self._elide_title()
+            self.updateGeometry()
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        hint.setWidth(self.fontMetrics().horizontalAdvance(self._full_title) + 4)
+        return hint
+
+    def _elide_title(self):
+        visible = self.fontMetrics().elidedText(self._full_title, Qt.ElideRight, self.width())
+        super().setText(visible)
+        self.setToolTip(self._full_title if self._full_title != visible else "")
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.FontChange:
+            self._elide_title()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide_title()
 
 
 class MusicPanel(QWidget):
@@ -284,13 +325,7 @@ class MusicPanel(QWidget):
         self._dl_local = self._setup_card_view(self.list_local)
         ll.addWidget(self.list_local, 1)
         # 当前曲目（小标题级）
-        self.lbl_track = QLabel("未播放")
-        self.lbl_track.setAlignment(Qt.AlignCenter)
-        self.lbl_track.setProperty("class", "title")
-        self.lbl_track.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        self.lbl_track.setMinimumWidth(1)
-        self.lbl_track.setMaximumWidth(420)
-        self.lbl_track.setTextFormat(Qt.PlainText)
+        self.lbl_track = _TrackTitle()
         track_row = QHBoxLayout()
         self.btn_like = CurrentSongLikeButton(music, self)
         self.btn_like.changed.connect(self._refresh_visible_playlists)
@@ -319,7 +354,7 @@ class MusicPanel(QWidget):
         root.addWidget(self.slider_pos)
         root.addWidget(self.lbl_time)
 
-        # 播放控制：金字塔布局——高频操作（播放/暂停）放大居中，次要操作紧凑成行
+        # 模式、播放键、更多选项与音量共用一行。
         row_main = QHBoxLayout()
         self.btn_prev = QPushButton()
         self.btn_prev.setObjectName("btn_prev")
@@ -333,63 +368,66 @@ class MusicPanel(QWidget):
         self.btn_next.setObjectName("btn_next")
         self.btn_next.setIcon(lucide_icon("skip-forward", 16, Tokens.TEXT_PRIMARY))
         self.btn_next.setToolTip("下一首")
-        row_main.addStretch()
-        row_main.addWidget(self.btn_prev)
-        row_main.addWidget(self.btn_toggle)
-        row_main.addWidget(self.btn_next)
-        row_main.addStretch()
-        root.addLayout(row_main)
-
-        # 次要操作（紧凑）+ 音量
-        row_sub = QHBoxLayout()
-        self.btn_highlight = QPushButton("高潮模式：关")
-        self.btn_highlight.setObjectName("btn_highlight")
-        self.btn_highlight.setCheckable(True)
-        self.btn_highlight.setIcon(lucide_icon("music", 14, Tokens.TEXT_SECONDARY))
-        self.btn_highlight.toggled.connect(self._on_highlight)
         self.btn_mode = QPushButton("顺序")
         self.btn_mode.setObjectName("btn_mode")
+        self.btn_mode.setAccessibleName("播放模式")
         self.btn_mode.setIcon(lucide_icon("repeat", 14, Tokens.TEXT_SECONDARY))
-        self._modes = [
-            ("sequential", "顺序"),
-            ("shuffle", "随机"),
-            ("repeat_all", "列表循环"),
-            ("repeat_one", "单曲循环"),
-        ]
-        self._mode_idx = 0
-        self.btn_clear_queue = QPushButton("清空队列")
-        self.btn_clear_queue.setObjectName("btn_clear_queue")
-        self.btn_clear_queue.setIcon(lucide_icon("trash", 14, Tokens.TEXT_SECONDARY))
-        self.btn_mark_highlight = QPushButton("标记高潮")
-        self.btn_mark_highlight.setObjectName("btn_mark_highlight")
-        self.btn_mark_highlight.setToolTip("把当前播放位置保存为这首歌的人工高潮起点")
-        self.btn_mark_highlight.setIcon(lucide_icon("map-pin", 14, Tokens.TEXT_SECONDARY))
-        self.btn_mark_highlight.clicked.connect(self._on_mark_highlight)
-        self.btn_sleep = QPushButton("睡眠定时")
-        self.btn_sleep.setObjectName("btn_sleep")
-        self.btn_sleep.clicked.connect(self._on_sleep_timer)
-        # 倍速按钮（9 档，与电影侧一致；点按钮弹菜单选档）
-        self.btn_speed = QPushButton("倍速 1x")
-        self.btn_speed.setObjectName("btn_speed")
-        self.btn_speed.setToolTip("播放倍速")
+        self._mode_menu = QMenu(self.btn_mode)
+        self._mode_actions = QActionGroup(self._mode_menu)
+        for mode, label in (("sequential", "顺序"), ("shuffle", "随机"),
+                            ("repeat_all", "列表循环"), ("repeat_one", "单曲循环")):
+            action = self._mode_menu.addAction(label)
+            action.setData(mode)
+            action.setCheckable(True)
+            self._mode_actions.addAction(action)
+        self._mode_actions.triggered.connect(self._select_play_mode)
+        self._mode_menu.aboutToShow.connect(self._sync_play_mode)
+        self.btn_mode.setMenu(self._mode_menu)
+        self._set_play_mode_display("sequential")
+
+        self.btn_more = QPushButton("更多播放选项")
+        self._more_menu = QMenu(self.btn_more)
+        self.btn_more.setMenu(self._more_menu)
+        self._speed_menu = self._more_menu.addMenu("倍速")
         self._speed_steps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
-        self._speed_idx = 2  # 1.0x
-        self.btn_speed.clicked.connect(self._on_speed)
-        row_sub.addWidget(self.btn_highlight)
-        row_sub.addWidget(self.btn_mode)
-        row_sub.addWidget(self.btn_speed)
-        row_sub.addWidget(self.btn_clear_queue)
-        row_sub.addWidget(self.btn_mark_highlight)
-        row_sub.addWidget(self.btn_sleep)
-        row_sub.addStretch()
+        self._setup_speed_actions()
+
+        self.action_highlight = self._more_menu.addAction("高潮模式：关")
+        self.action_highlight.setCheckable(True)
+        self.action_highlight.triggered.connect(self._on_highlight)
+        self._more_menu.addAction("标记高潮起点", self._on_mark_highlight)
+        self._sleep_menu = self._more_menu.addMenu("睡眠定时")
+        for minutes in (30, 60, 90):
+            action = self._sleep_menu.addAction(f"{minutes} 分钟")
+            action.triggered.connect(lambda _checked=False, value=minutes:
+                                     self._set_sleep_timer(value * 60))
+        self._sleep_menu.addAction("取消定时", self._cancel_sleep_timer)
+        self._more_menu.addSeparator()
+        self._more_menu.addAction("清空队列…", self._on_clear_queue)
+        self._more_menu.aboutToShow.connect(self._sync_highlight)
+        self._more_menu.aboutToShow.connect(self._sync_speed)
+        self._speed_menu.aboutToShow.connect(self._sync_speed)
+        self.btn_mode.setEnabled(music is not None)
+        self.btn_more.setEnabled(music is not None)
         # 音量：MusicFree 悬浮极简风——平时仅喇叭图标，悬停/点击弹出垂直玻璃面板
         from ..widgets.glass_slider import GlassSlider, VolumeButton
         self.btn_volume = VolumeButton()
         self.slider_vol = GlassSlider(Qt.Vertical)
         self.slider_vol.setRange(0, 100)
         self.btn_volume.set_slider(self.slider_vol)
-        row_sub.addWidget(self.btn_volume)
-        root.addLayout(row_sub)
+        left = QHBoxLayout()
+        left.addWidget(self.btn_mode)
+        left.addStretch()
+        right = QHBoxLayout()
+        right.addStretch()
+        right.addWidget(self.btn_more)
+        right.addWidget(self.btn_volume)
+        row_main.addLayout(left, 1)
+        row_main.addWidget(self.btn_prev)
+        row_main.addWidget(self.btn_toggle)
+        row_main.addWidget(self.btn_next)
+        row_main.addLayout(right, 1)
+        root.addLayout(row_main)
 
         # 键盘优先：Ctrl+F / Ctrl+K 聚焦搜索框（窗口级快捷键）
         self._sc_find = QShortcut(
@@ -524,8 +562,6 @@ class MusicPanel(QWidget):
             self.btn_prev.clicked.connect(self._on_prev)
             self.btn_toggle.clicked.connect(self._on_toggle)
             self.btn_next.clicked.connect(self._on_next)
-            self.btn_mode.clicked.connect(self._on_toggle_mode)
-            self.btn_clear_queue.clicked.connect(self._on_clear_queue)
             self.slider_vol.valueChanged.connect(self._on_volume)
             self.slider_vol.sliderReleased.connect(self._on_volume_released)
             self.slider_pos.sliderReleased.connect(self._on_seek)
@@ -630,6 +666,10 @@ class MusicPanel(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        # A Qt popup can stay visible after its owning panel has been hidden.
+        if hasattr(self, "_mode_menu"):
+            self._mode_menu.close()
+            self._more_menu.close()
         self._last_ui_tick = None
         self._queue_refresh_timer.stop()
         if self._queue_dialog is not None:
@@ -955,13 +995,19 @@ class MusicPanel(QWidget):
                          ok_msg=f"正在播放：{s.get('title', '')}")
 
     def _on_highlight(self, on: bool):
-        self.btn_highlight.setText(f"高潮模式：{'开' if on else '关'}")
-        if self._music is not None:
-            try:
-                if hasattr(self._music, "set_highlight_mode"):
-                    self._music.set_highlight_mode(on)
-            except Exception as e:
-                print(f"[Music] highlight toggle: {e}")
+        try:
+            self._music.set_highlight_mode(on)
+        except Exception as e:
+            print(f"[Music] highlight toggle: {e}")
+        self._sync_highlight()
+
+    def _sync_highlight(self):
+        try:
+            on = bool(self._music.is_highlight_mode())
+        except Exception:
+            return
+        self.action_highlight.setChecked(on)
+        self.action_highlight.setText(f"高潮模式：{'开' if on else '关'}")
 
     def _on_mark_highlight(self):
         """把当前播放位置保存为人工高潮起点。"""
@@ -983,25 +1029,14 @@ class MusicPanel(QWidget):
     def _speed_label(rate: float) -> str:
         return f"{rate:g}x"
 
-    def _on_sleep_timer(self):
-        menu = QMenu(self)
-        for label, seconds in (("30 分钟", 1800), ("60 分钟", 3600),
-                               ("90 分钟", 5400), ("取消定时", None)):
-            action = menu.addAction(label)
-            if seconds is None:
-                action.triggered.connect(self._cancel_sleep_timer)
-            else:
-                action.triggered.connect(lambda _=False, s=seconds: self._set_sleep_timer(s))
-        menu.exec_(self.btn_sleep.mapToGlobal(self.btn_sleep.rect().bottomLeft()))
-
     def _set_sleep_timer(self, seconds):
-        ok = self._music.set_sleep_timer(seconds) if self._music else False
-        self.btn_sleep.setText("睡眠定时" if not ok else f"定时 {seconds // 60}分")
+        if self._music and self._music.set_sleep_timer(seconds):
+            self._on_sleep_timer_state(True, seconds)
 
     def _cancel_sleep_timer(self):
         if self._music:
             self._music.cancel_sleep_timer()
-        self.btn_sleep.setText("睡眠定时")
+        self._on_sleep_timer_state(False, 0)
 
     def _on_music_state_event(self, event):
         data = dict(getattr(event, "data", {}) or {})
@@ -1011,18 +1046,42 @@ class MusicPanel(QWidget):
             self._queue_changed.emit()
 
     def _on_sleep_timer_state(self, active: bool, seconds: int):
-        self.btn_sleep.setText(f"定时 {seconds // 60}分" if active and seconds else "睡眠定时")
+        if not active or not seconds:
+            label = "睡眠定时"
+        elif seconds % 60:
+            label = f"睡眠定时 · 已设 {seconds} 秒"
+        else:
+            label = f"睡眠定时 · 已设 {seconds // 60} 分钟"
+        self._sleep_menu.setTitle(label)
 
-    def _on_speed(self):
-        """点倍速按钮 → 弹菜单选档（当前档勾选高亮），对齐电影侧交互。"""
-        menu = QMenu(self)
-        for i, rate in enumerate(self._speed_steps):
-            act = menu.addAction(self._speed_label(rate))
-            act.setCheckable(True)
-            act.setChecked(i == self._speed_idx)
-            act.triggered.connect(
-                lambda _checked=False, r=rate, idx=i: self._apply_speed(r, idx))
-        menu.exec_(self.btn_speed.mapToGlobal(self.btn_speed.rect().bottomLeft()))
+    def _setup_speed_actions(self):
+        self._speed_actions = QActionGroup(self._speed_menu)
+        for idx, rate in enumerate(self._speed_steps):
+            action = self._speed_menu.addAction(self._speed_label(rate))
+            action.setData(idx)
+            action.setCheckable(True)
+            self._speed_actions.addAction(action)
+        self._speed_actions.triggered.connect(self._select_speed)
+        self._set_speed_display(self._speed_steps.index(1.0))
+
+    def _set_speed_display(self, idx):
+        self._speed_idx = idx
+        self._speed_actions.actions()[idx].setChecked(True)
+        self._speed_menu.setTitle(f"倍速 {self._speed_label(self._speed_steps[idx])}")
+
+    def _select_speed(self, action):
+        idx = action.data()
+        # Keep the last confirmed speed checked while the request is in flight.
+        self._set_speed_display(self._speed_idx)
+        self._apply_speed(self._speed_steps[idx], idx)
+
+    def _sync_speed(self):
+        try:
+            idx = self._speed_steps.index(self._music.get_speed())
+        except Exception:
+            return
+        if idx != self._speed_idx:
+            self._set_speed_display(idx)
 
     def _apply_speed(self, rate: float, idx: int | None = None):
         """应用倍速档位。仅明确成功才更新 UI 显示。
@@ -1056,8 +1115,7 @@ class MusicPanel(QWidget):
     def _after_speed(self, ok: bool | None, rate: float, idx: int, err: str):
         """主线程槽：根据后台实际结果更新按钮文字。"""
         if ok is True:
-            self._speed_idx = idx
-            self.btn_speed.setText(f"倍速 {self._speed_label(rate)}")
+            self._set_speed_display(idx)
         else:
             self.lbl_status.setText(err)
 
@@ -1171,12 +1229,29 @@ class MusicPanel(QWidget):
             self._icon_locked = False
             self._sync_toggle_icon()
 
-    def _on_toggle_mode(self):
-        self._mode_idx = (self._mode_idx + 1) % len(self._modes)
-        mode, label = self._modes[self._mode_idx]
-        self.btn_mode.setText(label)
-        if self._music:
-            self._music.set_play_mode(mode)
+    def _select_play_mode(self, action):
+        try:
+            mode = action.data()
+            if self._music.get_play_mode() != mode:
+                self._music.set_play_mode(mode)
+        except Exception:
+            logger.exception("播放模式更新失败")
+        self._sync_play_mode()
+
+    def _set_play_mode_display(self, mode):
+        for action in self._mode_actions.actions():
+            if action.data() == mode:
+                action.setChecked(True)
+                self.btn_mode.setText(action.text())
+                self.btn_mode.setToolTip(f"播放模式：{action.text()}")
+                return
+
+    def _sync_play_mode(self):
+        try:
+            mode = self._music.get_play_mode()
+        except Exception:
+            return
+        self._set_play_mode_display(mode)
 
     def _on_clear_queue(self):
         """清空队列：确认后停止播放 + 清队列（防误触）。"""
@@ -2640,15 +2715,6 @@ class MusicPanel(QWidget):
         """主线程槽：只做内存级 UI 更新（setValue/setText），不碰 mpv IPC。"""
         try:
             self._last_dur = dur  # 供拖动预览换算目标时间（_on_seek_preview）
-            # 同步倍速按钮显示（语音/外部调用 set_speed 后本地 _speed_idx 可能过期）
-            try:
-                cur = self._music.get_speed()
-                target_idx = self._speed_steps.index(cur) if cur in self._speed_steps else None
-                if target_idx is not None and target_idx != self._speed_idx:
-                    self._speed_idx = target_idx
-                    self.btn_speed.setText(f"倍速{self._speed_label(cur)}")
-            except Exception:
-                pass
             # 切换态（controller._is_switching_track）：在线解析窗口内 mpv 仍报
             # 旧歌实时位置，禁止渲染——保持归零 + "加载中"，新歌 loadfile 起播
             # （controller 置 False）后恢复渲染。
@@ -2720,34 +2786,11 @@ class MusicPanel(QWidget):
             print(f"[UI] sync buttons error: {e!r}")
 
     def _sync_state_buttons(self):
-        """从 controller 实时状态同步按钮显示：
-        语音「随机播放/顺序播放/高潮模式开/关」等命令改变 controller 状态后，
-        面板按钮必须跟随（不能只依赖用户点击更新）。"""
+        """Reflect backend playback state, including changes initiated by voice."""
         if self._music is None:
             return
-        try:
-            mode = self._music.get_play_mode()
-        except Exception:
-            mode = None
-        if mode:
-            for i, (m, label) in enumerate(self._modes):
-                if m == mode:
-                    if self._mode_idx != i:
-                        self._mode_idx = i
-                    if self.btn_mode.text() != label:
-                        self.btn_mode.setText(label)
-                    break
-        # 语音创建歌单后后台刷新，只在歌单可见时读取。
+        self._sync_play_mode()
+        self._sync_speed()
+        self._sync_highlight()
         if hasattr(self, "_playlist_task") and self.tabs.currentIndex() == 3:
             self._refresh_playlists(poll=True)
-        try:
-            hl = bool(self._music.is_highlight_mode())
-        except Exception:
-            hl = None
-        if hl is not None:
-            label = "高潮模式：开" if hl else "高潮模式：关"
-            if self.btn_highlight.isChecked() != hl:
-                self.btn_highlight.setChecked(hl)
-            if self.btn_highlight.text() != label:
-                self.btn_highlight.setText(label)
-                print(f"[UI] 高潮模式按钮同步: {label}")
