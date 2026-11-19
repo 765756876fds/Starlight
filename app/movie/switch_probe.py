@@ -11,6 +11,7 @@ import urllib3
 
 PROBE_MS = 9000
 MAX_BYTES = 8 * 1024 * 1024  # Across both origins, including both manifests.
+MAX_PACKED_SEGMENTS = 512  # A single TS object; still subject to the shared byte/time limits.
 MAX_SEGMENTS = 24
 MANIFEST_BYTES = 32 * 1024
 
@@ -32,6 +33,10 @@ def playlist(body, url):
     if not lines or lines[0] != "#EXTM3U" or lines[-1] != "#EXT-X-ENDLIST":
         raise ProbeRejected("unsupported_hls")
     segments, duration = [], None
+    size = None
+    next_offset = 0
+    packed = False
+    version = None
     for line in lines[1:-1]:
         if line.startswith("#EXTINF:"):
             if duration is not None:
@@ -39,9 +44,21 @@ def playlist(body, url):
             duration = float(line[8:].partition(",")[0])
             if not math.isfinite(duration) or not 0 < duration <= 20:
                 raise ProbeRejected("timeline_mismatch")
+        elif line.startswith("#EXT-X-BYTERANGE:"):
+            bounds = re.fullmatch(r"#EXT-X-BYTERANGE:([0-9]{1,10})@([0-9]{1,10})", line)
+            if not bounds or duration is None or size is not None:
+                raise ProbeRejected("unsupported_hls")
+            size, offset = map(int, bounds.groups())
+            if offset != next_offset or size < 376 or size % 188 or (segments and not packed):
+                raise ProbeRejected("timeline_mismatch")
+            packed = True
+        elif line.startswith("#EXT-X-VERSION:"):
+            if version is not None or not re.fullmatch(r"#EXT-X-VERSION:[0-9]{1,3}", line):
+                raise ProbeRejected("unsupported_hls")
+            version = int(line.split(":")[1])
         elif line in ("#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-INDEPENDENT-SEGMENTS"):
             continue
-        elif re.fullmatch(r"#EXT-X-(?:VERSION|TARGETDURATION|MEDIA-SEQUENCE):[0-9]+", line):
+        elif re.fullmatch(r"#EXT-X-(?:TARGETDURATION|MEDIA-SEQUENCE):[0-9]+", line):
             continue
         elif line.startswith("#"):
             raise ProbeRejected("unsupported_hls")
@@ -50,9 +67,16 @@ def playlist(body, url):
             if (duration is None or origin(target) != origin(url)
                     or not urlsplit(target).path.lower().endswith(".ts")):
                 raise ProbeRejected("unsupported_hls")
-            segments.append((duration, target))
+            if packed:
+                if size is None or (segments and target != segments[0][1]):
+                    raise ProbeRejected("timeline_mismatch")
+                next_offset += size
+            segments.append((duration, target, size))
+            size = None
             duration = None
-    if len(segments) > MAX_SEGMENTS:
+    if packed and (version is None or version < 4 or "#EXT-X-PLAYLIST-TYPE:VOD" not in lines):
+        raise ProbeRejected("unsupported_hls")
+    if len(segments) > (MAX_PACKED_SEGMENTS if packed else MAX_SEGMENTS):
         raise ProbeRejected("budget_exceeded")
     if duration is not None or len(segments) < 2:
         raise ProbeRejected("unsupported_hls")
@@ -64,10 +88,11 @@ def verify(payload):
     deadline = time.monotonic() + PROBE_MS / 1000
     remaining = MAX_BYTES
     connections = {}
+    validators = {}
     loopback = payload.get("loopback") is True
     left, right = payload["original"], payload["candidate"]
 
-    def fetch(url, limit):
+    def fetch(url, limit, byte_range=None):
         nonlocal remaining
         left_s = deadline - time.monotonic()
         if left_s <= 0 or remaining <= 0:
@@ -92,15 +117,28 @@ def verify(payload):
         left_s = deadline - time.monotonic()
         if left_s <= 0:
             raise ProbeRejected("budget_exceeded")
+        headers = {"Accept-Encoding": "identity", "Host": parts.netloc, "User-Agent": "StarlightMediaProbe/1"}
+        if byte_range is not None:
+            start, end, total = byte_range
+            headers["Range"] = f"bytes={start}-{end}"
+            if start:
+                headers["If-Match"] = validators[url]
         with pool.urlopen("GET", resource, redirect=False, retries=False, preload_content=False,
                           timeout=urllib3.Timeout(connect=min(left_s, 1.5), read=min(left_s, 1.5)),
-                          headers={"Accept-Encoding": "identity", "Host": parts.netloc,
-                                   "User-Agent": "StarlightMediaProbe/1"}) as response:
-            if response.status != 200 or response.headers.get("Content-Encoding", "identity") != "identity":
+                          headers=headers) as response:
+            if response.status != (206 if byte_range else 200) or response.headers.get("Content-Encoding", "identity") != "identity":
                 raise ProbeRejected("source_unavailable")
             length = response.headers.get("Content-Length", "")
             if not length.isdecimal() or int(length) <= 0:
                 raise ProbeRejected("source_unavailable")
+            if byte_range is not None and (int(length) != end - start + 1
+                    or response.headers.get("Content-Range") != f"bytes {start}-{end}/{total}"):
+                raise ProbeRejected("source_unavailable")
+            if byte_range is not None:
+                etag = response.headers.get("ETag", "")
+                if not re.fullmatch(r'"[!#-~]{1,128}"', etag) or (start and etag != validators[url]):
+                    raise ProbeRejected("source_unavailable")
+                validators[url] = etag
             if int(length) > limit:
                 raise ProbeRejected("budget_exceeded")
             data = bytearray()
@@ -119,18 +157,43 @@ def verify(payload):
         if origin(left) == origin(right):
             raise ProbeRejected("unsupported_origin")
         manifests = [playlist(fetch(url, MANIFEST_BYTES)[0], url) for url in (left, right)]
-        durations = [d for d, _ in manifests[0]]
-        if durations != [d for d, _ in manifests[1]]:
+        timeline = [(duration, size) for duration, _, size in manifests[0]]
+        if timeline != [(duration, size) for duration, _, size in manifests[1]]:
             raise ProbeRejected("timeline_mismatch")
-        for (duration, original), (_, candidate) in zip(*manifests):
-            # Segment deadline headroom is relative to the encoded time, not a Mbps threshold.
-            data, elapsed = fetch(candidate, MAX_BYTES)
-            if elapsed >= duration * .7:
-                raise ProbeRejected("candidate_too_slow")
-            if len(data) < 376 or data[0] != 0x47 or data[188] != 0x47:
-                raise ProbeRejected("unsupported_hls")
-            if hashlib.sha256(data).digest() != hashlib.sha256(fetch(original, MAX_BYTES)[0]).digest():
-                raise ProbeRejected("content_mismatch")
+        durations = [duration for duration, _ in timeline]
+        if timeline[0][1] is not None:
+            # Compare two contiguous ranges covering each entire object. The first
+            # segment is requested separately to exercise real random access.
+            sizes = [size for _, size in timeline]
+            total = sum(sizes)
+            if 2 * total > remaining:
+                raise ProbeRejected("budget_exceeded")
+            original, candidate = (segments[0][1] for segments in manifests)
+            for start, group, times in ((0, sizes[:1], durations[:1]),
+                                        (sizes[0], sizes[1:], durations[1:])):
+                limit = sum(group)
+                bounds = (start, start + limit - 1, total)
+                data, elapsed = fetch(candidate, limit, bounds)
+                # Conservative: even the coalesced read must fit the shortest
+                # segment window. Compare all bytes, including the last segment.
+                if elapsed >= min(times) * .7:
+                    raise ProbeRejected("candidate_too_slow")
+                offset = 0
+                for size in group:
+                    if data[offset] != 0x47 or data[offset+188] != 0x47:
+                        raise ProbeRejected("unsupported_hls")
+                    offset += size
+                if data != fetch(original, limit, bounds)[0]:
+                    raise ProbeRejected("content_mismatch")
+        else:
+            for (duration, original, _), (_, candidate, _) in zip(*manifests):
+                data, elapsed = fetch(candidate, MAX_BYTES)
+                if elapsed >= duration * .7:
+                    raise ProbeRejected("candidate_too_slow")
+                if len(data) < 376 or data[0] != 0x47 or data[188] != 0x47:
+                    raise ProbeRejected("unsupported_hls")
+                if hashlib.sha256(data).digest() != hashlib.sha256(fetch(original, MAX_BYTES)[0]).digest():
+                    raise ProbeRejected("content_mismatch")
         if time.monotonic() >= deadline:
             raise ProbeRejected("budget_exceeded")
         return dict(status="ok", items=[], duration=sum(durations), bytes=MAX_BYTES-remaining)

@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from PySide6.QtCore import QObject, Signal
 
 from app.movie.playback_diagnostics import number
+from app.movie.progressive_search import source_identity
 from app.movie.safe_switch import assess_context, context_current
 from app.movie.switch_probe import PROBE_MS
 from .latest_task import LatestTask
@@ -101,9 +102,15 @@ class MovieSwitchTrial(QObject):
             self.token = object()
             self._tried_generation = context.generation
             local_hosts = {"127.0.0.1", "::1"}
-            # Only an explicitly configured local CMS pair can opt into loopback.
+            # Loopback is limited to explicitly configured local CMS sources.
             sources = service.manager.get_enabled_sources()
-            loopback = (len(sources) >= 2 and all(urlsplit(s["url"]).hostname in local_hosts for s in sources)
+            own_record = context.line_binding is not None
+            if own_record and not any(source_identity(s.get("url")) == context.item["_source_id"] for s in sources):
+                self.token = None
+                self._record_reason("source_unavailable")
+                return False
+            own_local_record = own_record and len(sources) == 1
+            loopback = ((len(sources) >= 2 or own_local_record) and all(urlsplit(s["url"]).hostname in local_hosts for s in sources)
                         and all(urlsplit(u).hostname in local_hosts for u in (context.original, context.target)))
             if not service.pool.start(self.token, dict(mode="verify_switch", loopback=loopback,
                                                        original=context.original, candidate=context.target), PROBE_MS):

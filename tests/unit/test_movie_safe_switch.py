@@ -111,3 +111,38 @@ def test_late_manual_control_never_rolls_back_or_adopts_a_new_source(monkeypatch
     assert handoff(controller, context, 30, lambda: True) == "unknown"
     assert controller.current_item() is context.item and controller._switch_unsettled
     assert [c.args[0] for c in controller.mpv._send_command.call_args_list] == ["get_property", "loadfile"]
+
+
+@pytest.mark.parametrize("change", ["none", "different_episode", "same_origin", "missing_id", "only_one",
+                                    "stale_raw", "different_item", "ambiguous_current"])
+def test_line_candidates_belong_to_exact_current_cms_record(change):
+    from app.movie.cms_parser import normalise_playback
+
+    controller = fake_controller()
+    target = "https://mirror.example/movie.m3u8"
+    original = "https://primary.example/main.m3u8"
+    label = "第2集" if change == "different_episode" else "正片"
+    if change == "same_origin":
+        target = "https://primary.example/other.m3u8"
+    raw = f"{label}${target}$$$正片${original}"
+    row = normalise_playback(dict(item(identity=""), vod_play_url=raw, vod_play_from="A$$$A"), 1)
+    if change == "missing_id":
+        row.pop("vod_id")
+    elif change == "only_one":
+        row.pop("vod_play_url")
+    elif change == "ambiguous_current":
+        row["play_url"] += "#第2集$" + original
+    controller.current_item.return_value = row
+    context = context_for(controller, [dict(row, vod_id="other-record")])
+    if change in {"different_episode", "same_origin", "only_one", "missing_id", "ambiguous_current"}:
+        assert context is None
+        return
+    assert context and context.original == original and context.target == target
+    assert context.alternative["vod_id"] == row["vod_id"]
+    assert context.alternative["_source_id"] == row["_source_id"]
+    assert context.alternative["_playback_line_index"] == 0 and row["_playback_line_index"] == 1
+    if change == "stale_raw":
+        row["vod_play_url"] = "正片$" + original
+    elif change == "different_item":
+        controller.current_item.return_value = dict(row)
+    assert context_current(controller, context) == (change == "none")

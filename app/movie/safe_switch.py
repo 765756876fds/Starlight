@@ -19,6 +19,7 @@ class SwitchContext:
     original: str
     alternative: dict
     target: str
+    line_binding: tuple | None = None
 
 
 def _feature_episode(episodes):
@@ -31,7 +32,7 @@ def _film_url(item):
                     "恐怖片", "战争片", "纪录片", "动画电影", "悬疑片", "犯罪片"}:
         return None
     episodes = episode_eps(item)
-    if not _feature_episode(episodes) or len(item.get("_playback_lines") or ()) > 1:
+    if not _feature_episode(episodes):
         return None
     url = episodes[0][1]
     try:
@@ -45,9 +46,40 @@ def _film_url(item):
     return None
 
 
+def _line_binding(item):
+    return (item.get("_source_id"), item.get("vod_id"), item.get("vod_play_url"),
+            item.get("_playback_line_index"), item.get("play_url"), item.get("first_url"))
+
+
+def _other_line(current, original):
+    """Use only the raw lines of the loaded CMS record. Line labels carry no identity."""
+    raw = current.get("vod_play_url")
+    record = current.get("vod_id")
+    selected = current.get("_playback_line_index")
+    if (type(record) not in (int, str) or not str(record).strip() or not record
+            or type(selected) is not int or not isinstance(raw, str) or len(raw) > 32768):
+        return None
+    parts = raw.split("$$$")
+    if not 2 <= len(parts) <= 16 or not 0 <= selected < len(parts):
+        return None
+    if (current.get("play_url") != parts[selected] or "#" in parts[selected]
+            or current.get("first_url") != original):
+        return None
+    for index, line in enumerate(parts):
+        if index == selected or "#" in line:
+            continue
+        # Validate an individual line before asking the CMS parser to select it.
+        target = _film_url(dict(current, play_url=line))
+        if target and origin(target) != origin(original):
+            alternative = normalise_playback(current, index)
+            if alternative.get("first_url") == target:
+                return alternative
+    return None
+
+
 def assess_context(controller, group):
     current = controller.current_item()
-    if not current or not current.get("_source_id") or not (work := work_identity(current)):
+    if not current or not current.get("_source_id"):
         return None, "identity_insufficient"
     if controller._current_index != 0 or not _feature_episode(episode_eps(current)):
         return None, "episode_mismatch"
@@ -55,6 +87,17 @@ def assess_context(controller, group):
     process = getattr(controller.mpv, "_process", None)
     if not original or process is None:
         return None, "unsupported_hls"
+    alternative = _other_line(current, original)
+    if alternative is not None:
+        return SwitchContext(controller._playback_gen, 0, controller._play_attempt, process,
+                             current, original, alternative, alternative["first_url"],
+                             _line_binding(current)), None
+    work = work_identity(current)
+    if work is None:
+        return None, "identity_insufficient"
+    # Multi-line selection belongs only to the authoritative loaded record.
+    if len(current.get("_playback_lines") or ()) > 1:
+        return None, "no_candidate"
     reason = "no_candidate"
     for row in group:
         if not row.get("_source_id") or row["_source_id"] == current["_source_id"]:
@@ -63,6 +106,9 @@ def assess_context(controller, group):
             reason = "identity_insufficient"
             continue
         alternative = normalise_playback(row)
+        if len(alternative.get("_playback_lines") or ()) > 1:
+            reason = "unsupported_hls"
+            continue
         target = _film_url(alternative)
         if not target:
             reason = "episode_mismatch" if not _feature_episode(episode_eps(alternative)) else "unsupported_hls"
@@ -84,6 +130,7 @@ def context_current(controller, context):
             and controller._current_index == context.index
             and controller._play_attempt == context.attempt
             and controller.current_item() is context.item
+            and (context.line_binding is None or _line_binding(context.item) == context.line_binding)
             and controller.mpv._process is context.process
             and context.process.poll() is None)
 

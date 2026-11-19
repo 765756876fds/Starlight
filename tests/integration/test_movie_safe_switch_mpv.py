@@ -109,8 +109,9 @@ def test_real_hls_probe_shared_child_and_changed_manifest(qapp, routes):
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
+@pytest.mark.parametrize('same_record', [False, True])
 @pytest.mark.parametrize('candidate_disappears', [False, True])
-def test_real_mpvs_exact_start_and_failure_restore(qapp, routes, sessions, monkeypatch, candidate_disappears):
+def test_real_mpvs_exact_start_and_failure_restore(qapp, routes, sessions, monkeypatch, candidate_disappears, same_record):
     # This case injects only the transport-stall admission flag. Position,
     # duration, media identity, load/seek progress and rollback are real IPC.
     from app.movie import safe_switch
@@ -119,13 +120,17 @@ def test_real_mpvs_exact_start_and_failure_restore(qapp, routes, sessions, monke
     s.mpv.extra_video_args.remove('--no-audio')
     original, other = [dict(item(name), play_url='正片$'+url, first_url=url)
                        for name, url in zip(('first', 'second'), urls)]
+    if same_record:
+        from app.movie.cms_parser import normalise_playback
+        original = normalise_playback(dict(original, imdb_id="", vod_play_url="$$$".join(
+            "正片$" + url for url in urls)))
     try:
         assert s.ctl.play(original)
         wait(qapp, lambda: (read_sample(s.mpv.ipc_pipe, expected_path=urls[0]).get('time-pos') or 0) > .1)
         assert s.mpv._send_command('seek', [6, 'absolute+exact'])['error'] == 'success'
         pos = wait(qapp, lambda: (lambda x: x if x and 6 <= x < 7 else None)(
             read_sample(s.mpv.ipc_pipe, expected_path=urls[0]).get('time-pos')))
-        context = context_for(s.ctl, [other])
+        context = context_for(s.ctl, [] if same_record else [other])
         assert context is not None
         assert safe_switch.context_current(s.ctl, context)
         assert context.original == urls[0] and context.target == urls[1]
@@ -144,7 +149,9 @@ def test_real_mpvs_exact_start_and_failure_restore(qapp, routes, sessions, monke
         assert result == ('restored' if candidate_disappears else 'started')
         evidence = read_sample(s.mpv.ipc_pipe, expected_path=expected)
         assert evidence.get('time-pos', -1) >= pos-.75
-        assert s.ctl.current_item()['_source_id'] == ('first' if candidate_disappears else 'second')
+        assert s.ctl.current_item()['_source_id'] == ('first' if candidate_disappears or same_record else 'second')
+        if same_record:
+            assert s.ctl.current_item()['_playback_line_index'] == int(not candidate_disappears)
     finally:
         s.ctl.close()
         s.mpv.stop_process()
@@ -152,7 +159,10 @@ def test_real_mpvs_exact_start_and_failure_restore(qapp, routes, sessions, monke
 
 
 
-def test_real_stall_verified_then_explicitly_switch_to_local_mirror(qapp, routes, sessions):
+@pytest.mark.parametrize("same_record", [False, True])
+def test_real_stall_verified_then_explicitly_switch_to_local_mirror(qapp, routes, sessions, same_record):
+    from app.movie.cms_parser import normalise_playback
+    from app.movie.progressive_search import source_identity
     from types import SimpleNamespace
     from app.ui.theme.manager import get_theme_manager
     from app.ui.widgets.movie_switch_trial import MovieSwitchTrial
@@ -168,6 +178,11 @@ def test_real_stall_verified_then_explicitly_switch_to_local_mirror(qapp, routes
     ]
     original, other = [dict(item(name), play_url='正片$'+url, first_url=url)
                        for name, url in zip(('first', 'second'), urls)]
+    cms_urls = urls
+    if same_record:
+        cms_urls = [urls[0] + "/cms"]
+        original = normalise_playback(dict(original, vod_play_url="$$$".join("正片$" + u for u in urls),
+                                           _source_id=source_identity(cms_urls[0]), imdb_id=""))
     pool = SearchProcessPool(qapp)
     trial = MovieSwitchTrial(s.ctl, qapp)
     trial.enabled = True
@@ -176,9 +191,12 @@ def test_real_stall_verified_then_explicitly_switch_to_local_mirror(qapp, routes
     try:
         assert s.ctl.set_source_quality_trial(True)
         assert s.ctl.play(original)
+        loaded_item = s.ctl.current_item()
+        if not same_record:
+            assert loaded_item is original
         manager = SimpleNamespace(get_search_revision=lambda: 1,
-                                  get_enabled_sources=lambda: [{'url': u} for u in urls])
-        trial.prepare(SimpleNamespace(pool=pool, request=None, manager=manager), [other])
+                                  get_enabled_sources=lambda: [{'url': u} for u in cms_urls])
+        trial.prepare(SimpleNamespace(pool=pool, request=None, manager=manager), [] if same_record else [other])
         wait(qapp, lambda: (read_sample(s.mpv.ipc_pipe, expected_path=urls[0]).get('time-pos') or 0) > .1)
         assert not trial.poll(True) and not pool.active
         last = [-1]
@@ -193,13 +211,16 @@ def test_real_stall_verified_then_explicitly_switch_to_local_mirror(qapp, routes
             return trial.poll(True)
         wait(qapp, offer, seconds=30)
         pos = read_sample(s.mpv.ipc_pipe, expected_path=urls[0])['time-pos']
-        assert s.ctl.current_item() is original and pos >= 8
+        assert s.ctl.current_item() is loaded_item and pos >= 8
+        assert s.ctl.current_item()['_source_id'] == original['_source_id']
         trial.confirm()
         wait(qapp, lambda: outcomes, seconds=8)
         assert outcomes[0][1] == 'started'
         evidence = read_sample(s.mpv.ipc_pipe, expected_path=urls[1])
         assert evidence['time-pos'] >= pos-.75 and evidence['video-params']['w'] == 160
-        assert s.ctl.current_item()['_source_id'] == 'second'
+        assert s.ctl.current_item()['_source_id'] == (original['_source_id'] if same_record else 'second')
+        if same_record:
+            assert s.ctl.current_item()['_playback_line_index'] == 1
         assert not trial.poll(True) and pool.peak == 1
     finally:
         trial.reset()

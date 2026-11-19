@@ -145,3 +145,28 @@ def test_close_during_native_poll_defers_stop_and_invalidates_poll(scene):
         assert not window._playing
     finally:
         release.set()
+
+def test_removed_cms_record_cannot_start_a_same_record_probe(scene):
+    from app.movie.cms_parser import normalise_playback
+    from app.movie.progressive_search import source_identity
+
+    window, controller = scene.window, scene.controller
+    cms = "https://removed.example/api"
+    row = normalise_playback(dict(item(), _source_id=source_identity(cms),
+                                  vod_play_url="正片$https://a.example/a.m3u8$$$正片$https://b.example/b.m3u8"))
+    controller._current = row
+    controller._current_index = 0
+    controller._play_attempt = 1
+    controller.mpv._process = SimpleNamespace(poll=lambda: None)
+    controller.source_quality_snapshot = Mock(return_value=dict(current=SimpleNamespace(
+        state="BUFFERING", sustained_transport_wait=True)))
+    manager = SimpleNamespace(get_search_revision=lambda: 1,
+                              get_enabled_sources=lambda: [{"url": "https://other.example/api"}])
+    pool = Pool()
+    trial = window.switch_trial
+    trial.enabled = True
+    trial.prepare(SimpleNamespace(pool=pool, request=None, manager=manager), [])
+    assert trial.context is not None
+    assert not trial.poll(True) and not trial.poll(True)
+    assert trial.reason_counts["source_unavailable"] == 1
+    pool.start.assert_not_called()
