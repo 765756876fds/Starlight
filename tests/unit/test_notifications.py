@@ -176,8 +176,8 @@ def test_duplicate_audio_is_not_a_second_pending_notification(center):
     runtime.asr = Mock(transcribe=Mock(return_value="下一首"))
     handler = Mock(return_value=None)
     runtime.command_bus.register(C.MUSIC_NEXT, handler)
-    runtime._speech_queue.put((b"same-audio", 16000))
-    runtime._speech_queue.put((b"same-audio", 16000))
+    runtime._enqueue_speech(b"same-audio", 16000)
+    runtime._enqueue_speech(b"same-audio", 16000)
     runtime._speech_queue.put(None)
     runtime._asr_loop(0)
     assert len(center.history()) == 1

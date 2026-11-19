@@ -19,13 +19,20 @@ from ..core.command_bus import Command, CommandType, get_command_bus
 from ..core.operation_result import media_result, OperationResult, OperationStatus
 from ..core.event_bus import Event, EventType, get_event_bus
 from ..core.state_store import StateNamespace, get_state_store
-from .asr import ASRManager
+from .asr import ASRManager, ASRResult, ASRStatus
 from .intent import Intent, IntentRouter, RuleBasedIntent
 from .registry import parameter_issue
 from .observations import VoiceObservations
 from .text import normalize_text
 from ..core.notifications import (get_notification_center, current_operation_id,
                                   operation_scope, action_title, notify)
+
+
+_ASR_FAILURE_TITLES = {
+    ASRStatus.UNAVAILABLE: "语音识别暂时不可用",
+    ASRStatus.ERROR: "语音识别服务出错",
+    ASRStatus.TIMEOUT: "语音识别超时",
+}
 
 
 def fold_duplicated_text(text: str) -> str:
@@ -137,6 +144,7 @@ class VoiceRuntime:
         # 代际标记：stop 后立即 start 时，旧识别线程（若 transcribe 卡住未及时退出）
         # 发现代际过期后自动退出 → 防止双消费者同时取队列。
         self._asr_generation = 0
+        self._asr_input_generation = 0
         self._feedback_lock = threading.RLock()
         self._voice_request_generation = 0
         self._recent_audio = {}
@@ -199,6 +207,7 @@ class VoiceRuntime:
 
         # ③ 代际递增 + 创建新识别线程（捕获 my_gen；旧线程见代际过期自动退出）
         self._asr_generation += 1
+        self._mic_stop.clear()
         my_gen = self._asr_generation
         self._asr_thread = threading.Thread(
             target=self._asr_loop, args=(my_gen,), daemon=True, name="voice-asr"
@@ -237,7 +246,9 @@ class VoiceRuntime:
 
     def stop(self):
         """停止语音运行时"""
-        self._running = False
+        with self._feedback_lock:
+            self._running = False
+            self._asr_input_generation += 1
         trial = getattr(self, "listen_music_trial", None)
         if trial is not None:
             trial.set_enabled(False)
@@ -294,7 +305,9 @@ class VoiceRuntime:
 
     def _stop_microphone(self):
         """停止麦克风采集"""
-        self._mic_stop.set()
+        with self._feedback_lock:
+            self._mic_stop.set()
+            self._asr_input_generation += 1
         self._listening = False
 
     def _mic_loop(self):
@@ -414,6 +427,9 @@ class VoiceRuntime:
           - offer_latest 语义：队列满丢旧塞新（最新打断意图优先）。
         is_interrupt=False → 主 ASR 队列（满丢最旧，用户最新指令优先）。
         """
+        input_generation = self._asr_input_generation
+        if self._mic_stop.is_set() or not self._asr_enabled:
+            return
         if is_interrupt:
             # 打点：入队时刻（worker 取到后计算排队耗时 [Interrupt-Perf] Queue）
             t_enter = time.monotonic()
@@ -431,7 +447,7 @@ class VoiceRuntime:
                     pass
             return
 
-        item = (audio_data, sample_rate)
+        item = (audio_data, sample_rate, input_generation)
         try:
             self._speech_queue.put_nowait(item)
         except queue.Full:
@@ -458,6 +474,8 @@ class VoiceRuntime:
                 break
             if not self._running or self._asr_generation != my_gen:
                 break
+            if seg[2] != self._asr_input_generation or not self._asr_enabled:
+                continue
             # Avoid a second pending notification for an already accepted
             # audio segment, using the existing two-second dedup window.
             if seg[0]:
@@ -466,6 +484,7 @@ class VoiceRuntime:
                     accepted_at = self._recent_audio.get(signature)
                 if accepted_at is not None and time.monotonic() - accepted_at < 2.0:
                     continue
+            operation_id = None
             try:
                 center = get_notification_center()
                 operation_id = center.post("正在识别你的话", source="voice", phase="recognizing")
@@ -473,9 +492,13 @@ class VoiceRuntime:
                     self._process_speech(*seg)
             except Exception as e:
                 print(f"[Voice] 识别线程异常: {e}")
-                if self._running and self._asr_generation == my_gen:
-                    with operation_scope(operation_id):
-                        self._record_input_failure("语音处理未完成，请重试；持续失败时请在设置 → 诊断中检查识别服务")
+                with self._feedback_lock:
+                    if (self._running and self._asr_generation == my_gen and self._asr_enabled
+                            and self._asr_input_generation == seg[2]):
+                        with operation_scope(operation_id):
+                            self._record_input_failure(
+                                "请重试。持续失败时请在设置 → 诊断中检查识别服务。",
+                                title="语音处理未完成")
         print(f"[Voice] 识别线程 gen={my_gen} 退出")
 
     def _speech_gate(self):
@@ -525,8 +548,10 @@ class VoiceRuntime:
         # 截取前 1.5s（打断词通常在句首；缩短识别耗时）
         slice_bytes = int(self._INTERRUPT_SLICE_SECONDS * sample_rate * 2)
         audio = audio_data[:slice_bytes] if len(audio_data) > slice_bytes else audio_data
+        input_generation = self._asr_input_generation
         text = self._transcribe_interrupt(audio, sample_rate)
-        if not text:
+        if (not text or not self._asr_enabled or self._mic_stop.is_set()
+                or self._asr_input_generation != input_generation):
             return
         # 否定词拦截（必须在关键词匹配之前）："不要停/别停止"等 → 视为不打断
         for neg in self._INTERRUPT_NEGATIONS:
@@ -579,29 +604,48 @@ class VoiceRuntime:
             return 0
         return int(sum(abs(s) for s in samples) / len(samples))
 
-    def _process_speech(self, audio_data: bytes, sample_rate: int):
+    def _process_speech(self, audio_data: bytes, sample_rate: int, input_generation=None):
         """处理一段语音（主 ASR 链：转写 → 意图 → 命令执行）。
 
         打断候选段的时长过滤已移除：TTS 播放期间的段走独立旁路
         （_interrupt_queue + _interrupt_worker），主队列不再区分。
         """
-        if not self._asr_enabled:
-            return
-
-        # ASR 识别
         _t0 = time.monotonic()
-        generation = self._asr_generation
-        running = self._running
-        text = self.asr.transcribe(audio_data, sample_rate)
+        operation_id = current_operation_id()
+        with self._feedback_lock:
+            generation = self._asr_generation
+            input_generation = self._asr_input_generation if input_generation is None else input_generation
+            running = self._running
+            if not self._asr_enabled or self._asr_input_generation != input_generation:
+                if operation_id:
+                    get_notification_center().update(operation_id, title="本次识别已结束",
+                                                     status="warning", phase="done")
+                return
+
+        def current():
+            return (generation == self._asr_generation and input_generation == self._asr_input_generation
+                    and self._asr_enabled and (not running or self._running))
+
+        if callable(getattr(type(self.asr), "transcribe_result", None)):
+            result = self.asr.transcribe_result(audio_data, sample_rate)
+        else:  # Legacy implementations still expose the string API.
+            result = ASRResult.from_text(self.asr.transcribe(audio_data, sample_rate))
         _t_asr = time.monotonic()
-        if generation != self._asr_generation or (running and not self._running):
-            print("[Voice] stale ASR result ignored")
-            get_notification_center().update(current_operation_id(), title="本次识别已结束",
-                                             status="warning", phase="done")
-            return
-        if not text or not text.strip():
-            self._record_input_failure("没有识别到清晰语音，请靠近麦克风并说完整的一条指令")
-            return
+        with self._feedback_lock:
+            if not current():
+                print("[Voice] stale ASR result ignored")
+                if operation_id:
+                    get_notification_center().update(operation_id, title="本次识别已结束",
+                                                     status="warning", phase="done")
+                return
+            if result.status is ASRStatus.EMPTY:
+                self._record_input_failure("没有识别到清晰语音，请靠近麦克风并说完整的一条指令")
+                return
+            if result.status is not ASRStatus.TEXT:
+                self._record_input_failure("音乐和电影仍可正常使用。",
+                                           title=_ASR_FAILURE_TITLES[result.status])
+                return
+        text = result.text
         if audio_data:
             signature = (sample_rate, hashlib.sha256(audio_data).digest())
             with self._feedback_lock:
@@ -639,7 +683,7 @@ class VoiceRuntime:
             stage("observation_submit", lambda: self._observations.submit((text_event,
                 Event(event_type=EventType.VOICE_INTENT_PARSED,
                     data={"intent": intent.to_dict(), "original_text": original_text}, source="voice"))))
-            if generation != self._asr_generation or (running and not self._running):
+            if not current():
                 return
             # Late input is not permission to execute an old command. This guard
             # applies to user input only, never to normal game reminders.
@@ -707,21 +751,23 @@ class VoiceRuntime:
             print(f"[Voice] _real_paused exception: {e!r}")
             return None
 
-    def _record_input_failure(self, message):
+    def _record_input_failure(self, message, *, title=None):
         with self._feedback_lock:
-            self._activity = {"heard": "", "intent": "", "feedback": message,
+            self._activity = {"heard": "", "intent": "",
+                              "feedback": f"{title}，{message}" if title else message,
                               "speech_status": "none"}
             self._activity_speech = None
         microphone = message.startswith("麦克风")
         center = get_notification_center()
+        status = "failed" if title or microphone else "warning"
+        dedup_key = title or ("microphone-unavailable" if microphone else "voice-input-failed")
+        title = title or ("麦克风暂时不可用" if microphone else "没有听清楚，请再说一次")
         if current_operation_id() and not microphone:
-            center.update(current_operation_id(), title="没有听清楚，请再说一次", message=message,
-                          status="warning", phase="done")
+            center.update(current_operation_id(), title=title, message=message, status=status, phase="done")
         else:
-            operation_id = center.post("麦克风暂时不可用" if microphone else "没有听清楚，请再说一次",
-                                       message, status="failed" if microphone else "warning",
+            operation_id = center.post(title, message, status=status,
                                        source="microphone" if microphone else "voice", phase="done",
-                                       dedup_key="microphone-unavailable" if microphone else "voice-input-failed")
+                                       dedup_key=dedup_key)
             if microphone:
                 center.focus(operation_id)
 
@@ -1573,7 +1619,10 @@ class VoiceRuntime:
 
     def set_asr_enabled(self, enabled: bool):
         """设置 ASR 是否启用"""
-        self._asr_enabled = enabled
+        with self._feedback_lock:
+            self._asr_enabled = enabled
+            if not enabled:
+                self._asr_input_generation += 1
         self.state_store.set(StateNamespace.VOICE, "asr_enabled", enabled)
 
     def is_listening(self) -> bool:

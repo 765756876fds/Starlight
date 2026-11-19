@@ -8,9 +8,33 @@
 ASREngine 是统一接口，以后可以直接换模型。
 """
 import abc
+from dataclasses import dataclass
+from enum import Enum
 import threading
 import time
 from typing import Any
+
+from .asr_health import model_list_ready, read_model_list
+
+
+class ASRStatus(str, Enum):
+    TEXT = "text"
+    EMPTY = "empty"
+    UNAVAILABLE = "unavailable"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+
+
+@dataclass(frozen=True)
+class ASRResult:
+    status: ASRStatus
+    text: str = ""
+
+    @classmethod
+    def from_text(cls, text):
+        if not isinstance(text, str):
+            return cls(ASRStatus.ERROR)
+        return cls(ASRStatus.TEXT, text) if text.strip() else cls(ASRStatus.EMPTY)
 
 
 class ASREngine(abc.ABC):
@@ -28,6 +52,9 @@ class ASREngine(abc.ABC):
         Returns:
             识别出的文字
         """
+
+    def transcribe_result(self, audio_data: bytes, sample_rate: int = 16000) -> ASRResult:
+        return ASRResult.from_text(self.transcribe(audio_data, sample_rate))
 
     @abc.abstractmethod
     def is_available(self) -> bool:
@@ -60,7 +87,7 @@ class Qwen3ASR(ASREngine):
         self._lock = threading.Lock()
         self._loaded = False
 
-    def load(self):
+    def load(self, retry_seconds: float = 0.0):
         """加载模型"""
         if self._loaded:
             return
@@ -88,11 +115,14 @@ class Qwen3ASR(ASREngine):
             print(f"[ASR] Qwen3-ASR 加载失败: {e}")
 
     def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
-        """转录音频"""
-        if not self._loaded or not self._model:
-            return ""
+        return self.transcribe_result(audio_data, sample_rate).text
 
+    def transcribe_result(self, audio_data: bytes, sample_rate: int = 16000) -> ASRResult:
+        """转录音频"""
         with self._lock:
+            model = self._model
+            if not self._loaded or model is None:
+                return ASRResult(ASRStatus.UNAVAILABLE)
             try:
                 # Qwen3-ASR 使用多模态方式输入音频
                 # 将音频数据编码为 base64 data URL
@@ -114,17 +144,17 @@ class Qwen3ASR(ASREngine):
                     }
                 ]
 
-                response = self._model.create_chat_completion(
+                response = model.create_chat_completion(
                     messages=messages,
                     temperature=0.0,
                     max_tokens=512,
                 )
 
-                text = response["choices"][0]["message"]["content"].strip()
-                return text
+                text = response["choices"][0]["message"]["content"]
+                return ASRResult.from_text(text.strip() if isinstance(text, str) else text)
             except Exception as e:
-                print(f"[ASR] 转录失败: {e}")
-                return ""
+                print(f"[ASR] 转录失败: {type(e).__name__}")
+                return ASRResult(ASRStatus.ERROR)
 
     def is_available(self) -> bool:
         return self._loaded and self._model is not None
@@ -164,85 +194,96 @@ class Qwen3ServerASR(ASREngine):
         announced_waiting = False
         while True:
             try:
-                import requests
-                resp = requests.get(f"{self.base_url}/models", timeout=0.5)
-                if resp.status_code == 200:
+                if retry_seconds > 0:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                else:
+                    remaining = 0.5
+                status, payload = read_model_list(self.base_url, min(0.5, remaining))
+                if status == 200 and model_list_ready(payload, self.model):
                     self._loaded = True
                     if announced_waiting:
                         print(f"[ASR] llama-server 已恢复连接: {self.base_url}")
                     else:
                         print(f"[ASR] llama-server 已连接: {self.base_url}")
                     return
-                # HTTP 非 200，计为一次失败
                 if not announced_waiting:
-                    print(f"[ASR] llama-server 连接中… HTTP {resp.status_code}（后续轮询静默）")
+                    print(f"[ASR] llama-server 模型未就绪（HTTP {status}）（后续轮询静默）")
                     announced_waiting = True
             except Exception:
                 if not announced_waiting:
                     print(f"[ASR] llama-server 连接中…（{self.base_url} 暂不可达，后续轮询静默）")
                     announced_waiting = True
-            if retry_seconds <= 0 or time.monotonic() >= deadline:
-                if announced_waiting and not self._loaded:
-                    print("[ASR] llama-server 在等待窗口内未就绪，ASR 暂不可用"
-                          "（不影响音乐/电影/LoL）")
-                self._loaded = False
-                return
-            time.sleep(2)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(2, remaining))
+        self._loaded = False
+        if announced_waiting:
+            print("[ASR] llama-server 在等待窗口内未就绪，ASR 暂不可用"
+                  "（不影响音乐/电影/LoL）")
 
     def transcribe(self, audio_data: bytes, sample_rate: int = 16000,
                    timeout: float | None = None) -> str:
-        """转录音频。
+        """String compatibility for callers such as the TTS interrupt path."""
+        return self.transcribe_result(audio_data, sample_rate, timeout).text
 
-        timeout：本次请求超时（秒）。None = 用实例默认 self.timeout（30s）。
-        旁路打断识别可传更短超时（如 2s）独立控制，不影响主 ASR 请求。
-        """
+    def transcribe_result(self, audio_data: bytes, sample_rate: int = 16000,
+                          timeout: float | None = None) -> ASRResult:
         if not self._loaded:
-            return ""
+            return ASRResult(ASRStatus.UNAVAILABLE)
+
+        import requests
+        from urllib3.exceptions import ReadTimeoutError
 
         try:
             import io
+            import re
             import wave
 
-            import requests
-
-            # 构造 WAV 文件
             buf = io.BytesIO()
-            with wave.open(buf, 'wb') as wf:
+            with wave.open(buf, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
                 wf.setframerate(sample_rate)
                 wf.writeframes(audio_data)
-            wav_bytes = buf.getvalue()
 
-            files = {'file': ('audio.wav', wav_bytes, 'audio/wav')}
-            data = {'model': self.model}
-
-            resp = requests.post(
+            response = requests.post(
                 f"{self.base_url}/audio/transcriptions",
-                files=files,
-                data=data,
+                files={"file": ("audio.wav", buf.getvalue(), "audio/wav")},
+                data={"model": self.model},
                 timeout=self.timeout if timeout is None else timeout,
             )
 
-            if resp.status_code == 200:
-                result = resp.json()
-                text = result.get('text', '')
-                # 提取 <asr_text> 内容
-                import re
-                match = re.search(r'<asr_text>(.*?)(?:</asr_text>|$)', text)
-                if match:
-                    text = match.group(1).strip()
-                return text
-            else:
-                hint = ("（服务器未加载任何模型——请检查安装目录 models/ 下模型文件，"
-                        "或查看启动日志 [ASR] 模型缺失/警告行）"
-                        if resp.status_code == 400 else "")
-                print(f"[ASR] 转录失败: HTTP {resp.status_code}{hint}")
-                return ""
+            if response.status_code != 200:
+                print(f"[ASR] 转录失败: HTTP {response.status_code}")
+                if response.status_code == 503:
+                    return ASRResult(ASRStatus.UNAVAILABLE)
+                if response.status_code in (408, 504):
+                    return ASRResult(ASRStatus.TIMEOUT)
+                return ASRResult(ASRStatus.ERROR)
 
+            payload = response.json()
+            text = payload.get("text") if isinstance(payload, dict) and "error" not in payload else None
+            if not isinstance(text, str):
+                print("[ASR] 转录响应缺少有效的 text 字段")
+                return ASRResult(ASRStatus.ERROR)
+            match = re.search(r"<asr_text>(.*?)(?:</asr_text>|$)", text, re.DOTALL)
+            return ASRResult.from_text(match.group(1).strip() if match else text)
+        except requests.Timeout:
+            print("[ASR] 转录超时")
+            return ASRResult(ASRStatus.TIMEOUT)
+        except requests.ConnectionError as e:
+            # Requests wraps urllib3 read timeouts after response headers as ConnectionError.
+            if e.args and isinstance(e.args[0], ReadTimeoutError):
+                print("[ASR] 转录超时")
+                return ASRResult(ASRStatus.TIMEOUT)
+            print("[ASR] 转录服务无法连接")
+            return ASRResult(ASRStatus.UNAVAILABLE)
         except Exception as e:
-            print(f"[ASR] 转录异常: {e}")
-            return ""
+            print(f"[ASR] 转录异常: {type(e).__name__}")
+            return ASRResult(ASRStatus.ERROR)
 
     def is_available(self) -> bool:
         return self._loaded
@@ -325,45 +366,45 @@ class ASRManager:
         for engine in self.engines:
             if not engine.is_available():
                 engine.load(retry_seconds=30.0 if initial else 0.0)
-                if engine.is_available():
-                    self._active_engine = engine
-                    return True
+            if engine.is_available():
+                self._active_engine = engine
+                return True
         return False
 
     def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
-        """
-        转录音频
+        return self.transcribe_result(audio_data, sample_rate).text
 
-        优先使用当前引擎，失败时自动切换。
-        """
+    def transcribe_result(self, audio_data: bytes, sample_rate: int = 16000) -> ASRResult:
+        """Keep the result with this request, including when another engine is tried."""
         with self._lock:
-            # 无 active 引擎，或 active 引擎失联（服务中途挂掉/恢复）：
-            # 重新走加载链——单次探测（retry_seconds=0，不阻塞调用线程），
-            # 成功则继续转写；失败返回空串，下次调用再试（不永久失效）。
             if not self._active_engine or not self._active_engine.is_available():
                 if not self._load_next_engine():
-                    return ""
+                    return ASRResult(ASRStatus.UNAVAILABLE)
 
-            try:
-                text = self._active_engine.transcribe(audio_data, sample_rate)
-                if text:
-                    return text
-            except Exception as e:
-                print(f"[ASR] 引擎转录失败，尝试切换: {e}")
-
-            # 尝试切换引擎
+            active = self._active_engine
+            assert active is not None
+            result = self._transcribe(active, audio_data, sample_rate)
+            if result.status in (ASRStatus.TEXT, ASRStatus.EMPTY):
+                return result
             for engine in self.engines:
-                if engine != self._active_engine:
-                    if not engine.is_available():
-                        engine.load()
-                    if engine.is_available():
+                if engine is active:
+                    continue
+                if not engine.is_available():
+                    engine.load()
+                if engine.is_available():
+                    alternate = self._transcribe(engine, audio_data, sample_rate)
+                    if alternate.status in (ASRStatus.TEXT, ASRStatus.EMPTY):
                         self._active_engine = engine
-                        try:
-                            return engine.transcribe(audio_data, sample_rate)
-                        except Exception:
-                            continue
+                        return alternate
+            return result
 
-            return ""
+    @staticmethod
+    def _transcribe(engine, audio_data, sample_rate):
+        try:
+            return engine.transcribe_result(audio_data, sample_rate)
+        except Exception as e:
+            print(f"[ASR] 引擎转录失败: {type(e).__name__}")
+            return ASRResult(ASRStatus.ERROR)
 
     def is_available(self) -> bool:
         return self._active_engine is not None and self._active_engine.is_available()

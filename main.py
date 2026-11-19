@@ -215,40 +215,22 @@ class Application:
         except Exception as _e:
             logger.info(f"[ASR] asr_bootstrap 异常，回退内置拉起逻辑: {_e}")
         # 以下为旧逻辑（bootstrap_enabled=False 或 asr_bootstrap 异常时执行）
-        import socket
         import subprocess
         import time
 
+        from app.voice.asr_bootstrap import PORT, _is_server_up, _port_in_use
+
         asr_config = self.config_data.get("asr", {})
-        server_config = asr_config.get("server", {})
-        base_url = server_config.get("base_url", "http://127.0.0.1:8080/v1")
-        port = 8080
+        port = PORT
         host = "127.0.0.1"
 
-        # 检查端口是否可用
-        def _port_in_use():
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(1)
-                result = s.connect_ex((host, port))
-                s.close()
-                return result == 0
-            except Exception:
-                return False
-
         if _port_in_use():
-            # 端口占用 ≠ 就绪：可能是其他服务，也可能是 llama-server 刚监听未加载模型。
-            # 与 bootstrap 同一标准：/v1/models 返回 200 且 data 非空。
-            try:
-                import requests as _rq2
-                resp = _rq2.get(f"http://{host}:{port}/v1/models", timeout=1.5)
-                if resp.status_code == 200 and resp.json().get("data"):
-                    logger.info(f"[ASR] 端口 {port} 已有可用 ASR 服务，直接连接")
-                    return True
-                logger.info(f"[ASR] 端口 {port} 被占用但非可用 ASR（data 空），继续尝试拉起")
-            except Exception as e:
-                logger.info(f"[ASR] 端口 {port} 被占用但健康检查失败: {e}")
-            return False
+            ready = _is_server_up(timeout=1.5)
+            if ready:
+                logger.info(f"[ASR] 端口 {port} 已有可用 ASR 服务，直接连接")
+            else:
+                logger.info(f"[ASR] 端口 {port} 已被占用，模型未就绪")
+            return ready
 
         # 需要启动 ASR
         model_path = asr_config.get("qwen3_asr_model", "")
@@ -322,23 +304,15 @@ class Application:
             self.logger.error(f"[ASR] 启动 llama-server 失败: {e}")
             return False
 
-        # 等待 ASR 就绪（最多 60 秒）：轮询 /models 返回 200 且 data 非空才算就绪。
-        # 与 asr_bootstrap._is_server_up 同一标准——避免 router 模式（-m ""）下
-        # HTTP 200 但 data 为空被误判为就绪。
-        import requests as _rq
-        for i in range(60):
-            time.sleep(1)
-            try:
-                resp = _rq.get(f"http://{host}:{port}/v1/models", timeout=1)
-                if resp.status_code == 200:
-                    payload = resp.json()
-                    if payload.get("data"):
-                        logger.info(f"[ASR] 就绪（等待 {i+1} 秒）")
-                        return True
-            except Exception:
-                pass
-            if i % 10 == 0:
-                logger.info(f"[ASR] 等待中... ({i}s)")
+        deadline = time.monotonic() + 60
+        while proc.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if _is_server_up(timeout=min(1, remaining)):
+                logger.info("[ASR] 模型已就绪")
+                return True
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
 
         logger.info("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
         return False

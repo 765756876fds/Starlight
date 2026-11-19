@@ -139,6 +139,10 @@ class TestEnsureAssets:
 
 
 class TestEnsureAndLaunch:
+    @pytest.fixture(autouse=True)
+    def no_live_port_check(self, monkeypatch):
+        monkeypatch.setattr(ab, "_port_in_use", lambda: False)
+
     def test_disabled_by_switch(self, monkeypatch):
         assert ab.ensure_and_launch({"bootstrap_enabled": False}) is None
 
@@ -206,7 +210,7 @@ class TestEnsureAndLaunch:
             def json(self):
                 return {"data": [{"id": "m"}]}
 
-        monkeypatch.setattr(ab.requests, "get", lambda *a, **k: R())
+        monkeypatch.setattr(ab, "read_model_list", lambda *a, **k: (200, R().json()))
         proc, _ = ab._try_start_backend({"backend": "cpu", "exe": server}, model, mm, 8192)
         assert proc is not None
         args = calls["args"]

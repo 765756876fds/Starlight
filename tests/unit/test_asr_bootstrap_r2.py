@@ -24,6 +24,9 @@ class TestAsrBootendFallbacks(unittest.TestCase):
     """ASR 双后端回退逻辑测试。"""
 
     def setUp(self):
+        listener = patch.object(ab, "_port_in_use", return_value=False)
+        self.port_in_use = listener.start()
+        self.addCleanup(listener.stop)
         """每个测试前重置全局状态。"""
         ab._server_proc = None
         ab._server_backend = ""
@@ -49,12 +52,11 @@ class TestAsrBootendFallbacks(unittest.TestCase):
     @patch.object(ab, '_is_server_up')
     @patch.object(ab, 'ensure_assets')
     @patch.object(ab.subprocess, 'Popen')
-    @patch.object(ab.requests, 'get')
     @patch.object(ab.os.path, 'isfile')
-    def test_vulkan_success(self, mock_isfile, mock_get, mock_popen, mock_assets, mock_up, mock_cands):
+    def test_vulkan_success(self, mock_isfile, mock_popen, mock_assets, mock_up, mock_cands):
         """场景 1: Vulkan 启动成功 → 直接返回，不试 CPU。"""
         mock_assets.return_value = True
-        mock_up.return_value = False  # 8080 无服务
+        mock_up.side_effect = [False, True]  # 无服务 → 自有进程就绪
         mock_isfile.return_value = True  # 模型文件存在（mock）
         mock_cands.return_value = [
             {"backend": "vulkan", "exe": "/fake/vulkan/llama-server.exe"},
@@ -62,12 +64,6 @@ class TestAsrBootendFallbacks(unittest.TestCase):
         ]
         # Popen 返回存活进程
         mock_popen.return_value = self._make_proc(exit_code=None)
-        # 健康检查：200 + data 非空
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"data": [{"id": "model1"}]}
-        mock_get.return_value = mock_resp
-
         cfg = {"bootstrap_enabled": True, "llama_ctx": 8192,
                "qwen3_asr_model": "/fake/model.gguf", "qwen3_asr_mmproj": "/fake/mmproj.gguf"}
         # resolve_model_paths 需要 mock（文件存在）
@@ -86,9 +82,8 @@ class TestAsrBootendFallbacks(unittest.TestCase):
     @patch.object(ab, '_is_server_up')
     @patch.object(ab, 'ensure_assets')
     @patch.object(ab.subprocess, 'Popen')
-    @patch.object(ab.requests, 'get')
     @patch.object(ab.os.path, 'isfile')
-    def test_vulkan_fail_cpu_fallback(self, mock_isfile, mock_get, mock_popen, mock_assets, mock_up, mock_cands):
+    def test_vulkan_fail_cpu_fallback(self, mock_isfile, mock_popen, mock_assets, mock_up, mock_cands):
         """场景 2: Vulkan 启动失败（立即退出）→ CPU 回退成功。"""
         mock_assets.return_value = True
         mock_up.return_value = False
@@ -97,16 +92,11 @@ class TestAsrBootendFallbacks(unittest.TestCase):
             {"backend": "vulkan", "exe": "/fake/vulkan/llama-server.exe"},
             {"backend": "cpu", "exe": "/fake/cpu/llama-server.exe"},
         ]
+        mock_up.side_effect = [False, True]
         # 第一次 Popen（vulkan）立即退出；第二次（cpu）存活
         vulkan_proc = self._make_proc(exit_code=1)  # 立即退出
         cpu_proc = self._make_proc(exit_code=None)
         mock_popen.side_effect = [vulkan_proc, cpu_proc]
-        # 健康检查都 OK
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"data": [{"id": "model1"}]}
-        mock_get.return_value = mock_resp
-
         cfg = {"bootstrap_enabled": True, "llama_ctx": 8192}
         with patch.object(ab, 'resolve_model_paths', return_value=("/fake/model.gguf", "/fake/mmproj.gguf")):
             proc = ab.ensure_and_launch(cfg)
@@ -151,34 +141,19 @@ class TestAsrBootendFallbacks(unittest.TestCase):
 
         self.assertIsNone(proc, "已有服务复用时应返回 None（不拉起新进程）")
         mock_popen.assert_not_called()
+        mock_assets.assert_not_called()
 
-    @patch.object(ab, 'find_llama_backend_candidates')
-    @patch.object(ab, '_is_server_up')
+    @patch.object(ab, 'time')
+    @patch.object(ab, '_is_server_up', return_value=False)
     @patch.object(ab, 'ensure_assets')
     @patch.object(ab.subprocess, 'Popen')
-    @patch.object(ab.requests, 'get')
-    @patch.object(ab.os.path, 'isfile')
-    def test_external_port_occupied(self, mock_isfile, mock_get, mock_popen, mock_assets, mock_up, mock_cands):
-        """场景 6: 8080 外部占用（200 但 data 空）→ _is_server_up 返回 False，继续尝试拉起。"""
-        mock_assets.return_value = True
-        mock_isfile.return_value = True
-        # _is_server_up 返回 False（data 空）
-        mock_up.return_value = False
-        mock_cands.return_value = [{"backend": "cpu", "exe": "/fake/cpu/llama-server.exe"}]
-        mock_popen.return_value = self._make_proc(exit_code=None)
-        # 健康检查：data 非空才算就绪
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"data": [{"id": "model1"}]}
-        mock_get.return_value = mock_resp
-
-        cfg = {"bootstrap_enabled": True}
-        with patch.object(ab, 'resolve_model_paths', return_value=("/fake/model.gguf", "/fake/mmproj.gguf")):
-            proc = ab.ensure_and_launch(cfg)
-
-        self.assertIsNotNone(proc)
-        # 不杀外部进程（我们只 terminate 自己拉起的 proc）
-        # 这里 mock 的 proc 是我们自己 Popen 的，不涉及外部进程
+    def test_external_port_occupied(self, mock_popen, mock_assets, mock_up, mock_time):
+        """端口上持续有未就绪服务时，不拉起第二个进程，也不准备模型。"""
+        self.port_in_use.return_value = True
+        self.assertIsNone(ab.ensure_and_launch({}))
+        self.assertEqual(mock_up.call_count, 4)
+        mock_assets.assert_not_called()
+        mock_popen.assert_not_called()
 
     def test_cleanup_kills_own_proc(self):
         """场景 7: atexit 清理只杀自己拉起的进程。"""

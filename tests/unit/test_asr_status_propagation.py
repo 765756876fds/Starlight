@@ -54,9 +54,7 @@ def test_bootstrap_raises_falls_back_to_legacy_and_returns_false(app):
     """ensure_and_launch 抛异常 → 走 legacy 路径；端口空闲且模型为空 → False。"""
     app.config_data = {"asr": {"qwen3_asr_model": ""}}
     with patch("app.voice.asr_bootstrap.ensure_and_launch", side_effect=RuntimeError("boom")), \
-         patch("socket.socket") as mock_sock:
-        # 端口空闲
-        mock_sock.return_value.connect_ex.return_value = 1
+         patch("app.voice.asr_bootstrap._port_in_use", return_value=False):
         ok = app._ensure_asr_running()
     assert ok is False
 
@@ -64,12 +62,8 @@ def test_bootstrap_raises_falls_back_to_legacy_and_returns_false(app):
 def test_legacy_port_in_use_returns_true(app):
     """legacy 路径：端口已占用且 /v1/models data 非空 → True。"""
     app.config_data = {"asr": {"bootstrap_enabled": False}}
-    fake_resp = MagicMock()
-    fake_resp.status_code = 200
-    fake_resp.json.return_value = {"data": [{"id": "qwen-asr"}]}
-    with patch("socket.socket") as mock_sock, \
-         patch("requests.get", return_value=fake_resp):
-        mock_sock.return_value.connect_ex.return_value = 0
+    with patch("app.voice.asr_bootstrap._port_in_use", return_value=True), \
+         patch("app.voice.asr_bootstrap._is_server_up", return_value=True):
         ok = app._ensure_asr_running()
     assert ok is True
 

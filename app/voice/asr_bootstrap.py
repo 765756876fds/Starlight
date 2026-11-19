@@ -8,8 +8,10 @@ R2/R3（2026-10-26）：
 - 8080 被外部占用（非本应用 ASR）→ 不拉起、不杀外部进程、降级。
 """
 import atexit
+import http.client
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -23,6 +25,7 @@ from app.core.path_resolve import (
     USER_DATA_DIR,
     find_llama_backend_candidates,
 )
+from .asr_health import model_list_ready, read_model_list
 
 # 用户可写模型目录：固定用 %LOCALAPPDATA%\Starlight\models（纯 ASCII 路径）。
 # 原因：llama-server 在 Windows 下打开含中文/非 ASCII 的模型路径会失败
@@ -38,7 +41,6 @@ USER_MODEL_DIR = _resolve_user_model_dir()
 SEED_MODEL_DIR = PROJECT_ROOT / "models"
 
 PORT = 8080
-HEALTH_URL = f"http://127.0.0.1:{PORT}/v1/models"
 
 # 国内直连镜像（hf-mirror.com = HuggingFace 官方镜像站，直连免代理）
 _MODEL_REPO = "ggml-org/Qwen3-ASR-0.6B-GGUF"
@@ -57,18 +59,24 @@ _lock = threading.Lock()
 
 
 def _is_server_up(timeout: float = 0.8) -> bool:
-    """8080 是否已有可用 llama-server（外部常驻服务 → 直接复用不重复拉起）。
-    必须 /v1/models 的 data 非空才算就绪——llama-server 在 router 模式（-m ""）
-    下 HTTP 200 但 data 为空，若只看 200 会误判复用坏服务。
-    """
+    """Check for a loaded model on the local endpoint, without touching model files."""
     try:
-        r = requests.get(HEALTH_URL, timeout=timeout)
-        if r.status_code != 200:
-            return False
-        payload = r.json()
-        return bool(payload.get("data") or [])
-    except Exception:
+        status, payload = read_model_list(f"http://127.0.0.1:{PORT}/v1", timeout)
+        return status == 200 and model_list_ready(payload)
+    except (OSError, ValueError, http.client.HTTPException, requests.RequestException):
         return False
+
+
+def _port_in_use() -> bool:
+    """Check ownership even on Windows where an unused loopback port may time out."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            sock.bind(("127.0.0.1", PORT))
+        return False
+    except OSError:
+        return True  # Occupied or unsafe to claim.
 
 
 def _seed_models_if_needed() -> None:
@@ -217,14 +225,12 @@ def _try_start_backend(candidate: dict, model: str, mmproj: str, ctx: int,
     # 健康检查：data 非空才算就绪
     for _ in range(6):
         time.sleep(2)
-        try:
-            r = requests.get(HEALTH_URL, timeout=3)
-            if r.status_code == 200 and r.json().get("data"):
-                print(f"[ASR] 后端 {backend} 模型已加载就绪")
-                err_fp.close()
-                return proc, ""
-        except Exception:
-            continue
+        if proc.poll() is not None:
+            break
+        if _is_server_up(timeout=3):
+            print(f"[ASR] 后端 {backend} 模型已加载就绪")
+            err_fp.close()
+            return proc, ""
     err_fp.close()
     tail = _read_stderr_tail(err_path, n=30)
     print(f"[ASR] 后端 {backend} 启动但模型未在窗口期内就绪，终止该进程。最后日志:")
@@ -255,21 +261,31 @@ def _read_stderr_tail(path: str, n: int = 30) -> str:
 def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
     """自举总入口：
 
-    1. ensure_assets（种子迁移 + 必要时下载模型）
-    2. 8080 已有可用 ASR 服务 → 直接复用
+    1. 检查已有服务，若占用端口则短暂等待就绪。
+    2. 空闲端口才准备模型（种子迁移 + 必要时下载）。
     3. 按 vulkan→cpu 顺序尝试启动后端，首个成功即返回
     4. 全部失败 → 返回 None（语音功能降级，不影响其他）
     """
     global _server_proc, _server_backend, _atexit_registered
     if not (asr_config or {}).get("bootstrap_enabled", True):
         return None
-    if not ensure_assets(asr_config):
-        return None
     if _is_server_up():
         return None  # 外部已有可用 ASR，直接复用
+    if _port_in_use():
+        for _ in range(3):
+            time.sleep(0.25)
+            if _is_server_up(timeout=0.4):
+                return None
+            if not _port_in_use():
+                break
+        else:
+            print("[ASR] 本地端口有监听服务，但模型尚未就绪，暂不启动新进程。")
+            return None
     with _lock:
         if _server_proc is not None and _server_proc.poll() is None:
-            return _server_proc  # 防重入
+            return _server_proc
+    if not ensure_assets(asr_config):
+        return None
     model, mmproj = resolve_model_paths(asr_config)
     if not model or not os.path.isfile(model):
         print(f"[ASR] 模型缺失，跳过启动 llama-server")
@@ -289,6 +305,10 @@ def ensure_and_launch(asr_config: dict) -> subprocess.Popen | None:
     # 自动准备一个 ASCII 用户目录副本作为回退路径。
     fallback_model, fallback_mm = _ascii_fallback_paths(model, mmproj)
     with _lock:
+        if _server_proc is not None and _server_proc.poll() is None:
+            return _server_proc
+        if _port_in_use():  # 模型准备过程中可能出现了外部服务。
+            return None
         tried = set()
         for cand in candidates:
             key = (cand["exe"], model)

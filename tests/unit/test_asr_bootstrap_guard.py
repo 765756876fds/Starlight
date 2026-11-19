@@ -27,6 +27,7 @@ class TestBootstrapGuard:
         monkeypatch.setattr(ab, "find_llama_backend_candidates",
                             lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda: False)
+        monkeypatch.setattr(ab, "_port_in_use", lambda: False)
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab, "subprocess", None)  # 若误走到 Popen 会 AttributeError
 
@@ -50,17 +51,15 @@ class TestBootstrapGuard:
                 return None
 
         fake_subprocess = SimpleNamespace(Popen=FakePopen, DEVNULL=-3, CREATE_NO_WINDOW=0)
-        fake_response = SimpleNamespace(status_code=200,
-                                        json=lambda: {"data": [{"id": "m"}]})
         monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: (model, mmproj))
         monkeypatch.setattr(ab, "find_llama_backend_candidates",
                             lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
-        monkeypatch.setattr(ab, "_is_server_up", lambda: False)
+        monkeypatch.setattr(ab, "_is_server_up", lambda timeout=None: timeout == 3)
+        monkeypatch.setattr(ab, "_port_in_use", lambda: False)
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab.os.path, "isfile", lambda p: True)
         monkeypatch.setattr(ab, "subprocess", fake_subprocess)
         monkeypatch.setattr(ab, "_server_proc", None)
-        monkeypatch.setattr(ab.requests, "get", lambda *a, **k: fake_response)
 
         proc = ab.ensure_and_launch({"bootstrap_enabled": True})
         assert proc is not None
@@ -75,6 +74,7 @@ class TestBootstrapGuard:
         monkeypatch.setattr(ab, "find_llama_backend_candidates",
                             lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda: False)
+        monkeypatch.setattr(ab, "_port_in_use", lambda: False)
         monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
         monkeypatch.setattr(ab, "subprocess", None)
 
@@ -84,9 +84,9 @@ class TestBootstrapGuard:
 
 
 class TestAsr400Hint:
-    """转录 HTTP 400 时给出"未加载模型"提示。"""
+    """HTTP 400 和 500 都是服务异常，错误码本身不说明模型缺失。"""
 
-    def test_400_hint(self, monkeypatch, capsys):
+    def test_400_does_not_guess_model_state(self, monkeypatch, capsys):
         import requests as requests_mod
         from app.voice.asr import Qwen3ServerASR
 
@@ -107,7 +107,8 @@ class TestAsr400Hint:
         text = asr.transcribe(b"audio")
         out = capsys.readouterr().out
         assert text == ""
-        assert "未加载任何模型" in out
+        assert "HTTP 400" in out
+        assert "未加载任何模型" not in out
 
     def test_500_no_hint(self, monkeypatch, capsys):
         import requests as requests_mod

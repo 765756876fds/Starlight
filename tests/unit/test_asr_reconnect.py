@@ -27,10 +27,8 @@ CONFIG = {
 _AUDIO = b"\x00" * 3200  # 1600 samples @16k ≈ 0.1s
 
 
-def _ok_models_response(*a, **k):
-    class R:
-        status_code = 200
-    return R()
+def _ok_models_response(*args, **kwargs):
+    return 200, {"data": [{"id": "qwen-asr"}]}
 
 
 def _ok_transcribe_response(*a, **k):
@@ -51,7 +49,7 @@ def _down_transcribe(*a, **k):
 
 
 def test_transcribe_empty_when_server_down(monkeypatch):
-    monkeypatch.setattr(requests, "get", _ok_models_response)
+    monkeypatch.setattr("app.voice.asr.read_model_list", _ok_models_response)
     monkeypatch.setattr(requests, "post", _down_transcribe)
     mgr = ASRManager(CONFIG)
     mgr.initialize()
@@ -61,7 +59,7 @@ def test_transcribe_empty_when_server_down(monkeypatch):
 
 
 def test_auto_reconnect_after_server_down(monkeypatch):
-    monkeypatch.setattr(requests, "get", _ok_models_response)
+    monkeypatch.setattr("app.voice.asr.read_model_list", _ok_models_response)
     monkeypatch.setattr(requests, "post", _down_transcribe)
     mgr = ASRManager(CONFIG)
     mgr.initialize()
@@ -75,13 +73,13 @@ def test_auto_reconnect_after_server_down(monkeypatch):
 
 
 def test_reconnect_failure_returns_empty(monkeypatch):
-    monkeypatch.setattr(requests, "get", _ok_models_response)
+    monkeypatch.setattr("app.voice.asr.read_model_list", _ok_models_response)
     monkeypatch.setattr(requests, "post", _down_transcribe)
     mgr = ASRManager(CONFIG)
     mgr.initialize()
     # 模拟失联后服务彻底不可用：load 探测失败 → 返回 ""，不阻塞
     mgr._active_engine._loaded = False
-    monkeypatch.setattr(requests, "get", _down_models)
+    monkeypatch.setattr("app.voice.asr.read_model_list", _down_models)
     assert mgr.transcribe(_AUDIO) == ""
     assert mgr._active_engine.is_available() is False
 

@@ -18,11 +18,6 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 
-class FakeResp:
-    def __init__(self, status_code):
-        self.status_code = status_code
-
-
 # ---------- 改动 2：ASR load 重试 ----------
 
 def _engine():
@@ -33,8 +28,8 @@ def _engine():
 def test_load_retries_until_200():
     """/models 先 503 后 200 → load(retry_seconds>0) 重试成功"""
     engine = _engine()
-    with mock.patch("requests.get") as m, mock.patch("time.sleep"):
-        m.side_effect = [FakeResp(503), FakeResp(200)]
+    with mock.patch("app.voice.asr.read_model_list") as m, mock.patch("time.sleep"):
+        m.side_effect = [(503, None), (200, {"data": [{"id": "qwen-asr"}]})]
         engine.load(retry_seconds=10.0)
     assert engine._loaded is True
     assert m.call_count == 2
@@ -44,21 +39,21 @@ def test_load_gives_up_after_timeout():
     """一直 503 → 重试超时返回失败（_loaded=False）。
 
     不 mock time.sleep：重试等待必须真实推进单调钟，deadline 才会到达（探测1(0s) →
-    sleep2 → 探测2(2.0s 超时) → 结束）。
+    sleep2 → 到期结束）。
     """
     engine = _engine()
-    with mock.patch("requests.get") as m:
-        m.side_effect = [FakeResp(503)] * 10
+    with mock.patch("app.voice.asr.read_model_list") as m:
+        m.side_effect = [(503, None)] * 10
         engine.load(retry_seconds=2.0)
     assert engine._loaded is False
-    assert m.call_count == 2
+    assert m.call_count == 1
 
 
 def test_load_single_probe_by_default():
     """转写路径：默认 retry_seconds=0 → 单次探测，503 即败，不阻塞"""
     engine = _engine()
-    with mock.patch("requests.get") as m:
-        m.return_value = FakeResp(503)
+    with mock.patch("app.voice.asr.read_model_list") as m:
+        m.return_value = (503, None)
         engine.load()
     assert engine._loaded is False
     assert m.call_count == 1
