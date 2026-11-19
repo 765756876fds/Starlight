@@ -198,3 +198,69 @@ def test_premature_eof_report_does_not_mark_complete_or_advance(sessions, clips)
             assert load.call_count == 1 and s.ctl.playback_phase() == "failed"
     finally:
         s.ctl.close()
+
+
+def test_startup_receipts_measure_native_progress_and_error(sessions, routes):
+    from app.movie.playback_startup import StartupEvidence
+
+    s = sessions("startup-receipts")
+    urls, _, _ = routes
+    missing = [url.replace("movie.m3u8", "missing.m3u8") for url in urls]
+    try:
+        for bad in missing:
+            assert s.ctl.play(dict(vod_name="Generated", first_url=bad, _source_id="record"))
+            assert s.ctl.playback_startup().state == "accepted"
+            until(lambda: (s.ctl.tick(), s.ctl.playback_startup().state == "startup_failed")[1])
+        assert s.ctl.startup_evidence.rank("record") == 1
+        assert not s.ctl.get_history()
+        s.ctl.startup_evidence = StartupEvidence()
+        for url in urls:
+            assert s.ctl.play(dict(vod_name="Generated", first_url=url, _source_id="record"))
+            until(lambda: (s.ctl.tick(), s.ctl.playback_startup().state == "started")[1])
+        assert s.ctl.startup_evidence.rank("record") == -1
+        assert s.ctl.get_history()
+    finally:
+        s.ctl.close()
+        assert not s.mpv.is_running()
+
+
+def test_native_lost_load_reply_prevents_second_load_until_explicit_stop(sessions, clips):
+    s = sessions("lost-startup-reply")
+    initial = dict(vod_name="Generated", first_url=str(clips[0]), _source_id="record")
+    later = dict(initial, first_url=str(clips[1]))
+    send = s.mpv.loadfile
+
+    def lose_reply(url):
+        assert send(url)["error"] == "success"
+        return None
+
+    try:
+        with patch.object(s.mpv, "loadfile", side_effect=lose_reply) as load:
+            assert not s.ctl.play(initial)
+            assert s.ctl.playback_startup().state == "load_unknown"
+            assert not s.ctl.play(later)
+            assert not s.ctl.get_history()
+            load.assert_called_once_with(str(clips[0]))
+        assert s.ctl.stop()
+        assert s.ctl.play(later)
+        until(lambda: (s.ctl.tick(), s.ctl.playback_startup().state == "started")[1])
+    finally:
+        s.ctl.close()
+        assert not s.mpv.is_running()
+
+
+def test_native_episode_with_lost_reply_keeps_selection_and_does_not_skip_again(sessions, clips):
+    s = sessions("episode-startup-unknown")
+    try:
+        assert s.ctl.play(item(*clips))
+        until(lambda: (s.ctl.tick(), s.ctl.playback_startup().state == "started")[1])
+        with patch.object(s.mpv, "loadfile", return_value=None) as load:
+            assert not s.ctl.next_episode()
+            assert s.ctl._current_index == 0
+            assert s.ctl.playback_startup().state == "load_unknown"
+            assert s.ctl.playback_startup().episode == 1
+            assert not s.ctl.next_episode()
+            load.assert_called_once_with(str(clips[1]))
+    finally:
+        s.ctl.close()
+        assert not s.mpv.is_running()

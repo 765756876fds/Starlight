@@ -94,6 +94,7 @@ class ProgressiveMovieSearch(QObject):
         self.pool.available.connect(self._pump, Qt.QueuedConnection)
         self.clock = clock
         self.health = SearchHealth(clock)
+        self.playback_rank = lambda _: 0
         self.serial = 0
         self.request = None
         self.manager = None
@@ -136,10 +137,14 @@ class ProgressiveMovieSearch(QObject):
         active = self.manager.get_active_name()
         explicit = getattr(self.manager, "get_explicit_search_source", lambda: None)()
         evidence = any(self.health.rank(s["identity"])[0] == 0 for s in sources)
-        # Explicit selection leads; otherwise fresh availability can avoid repeated dead sources.
-        return sorted(sources, key=lambda s: (0 if s["name"] == explicit else 1,
-                                             self.health.rank(s["identity"]) if evidence else (1, 0., 0.),
-                                             0 if s["name"] == active else 1 if s["name"] == "极速资源" else 2))
+        def rank(source):
+            identity = source["identity"]
+            tier, failures, latency = self.health.rank(identity) if evidence else (1, 0., 0.)
+            default = 0 if source["name"] == active else 1 if source["name"] == "极速资源" else 2
+            # Native playback evidence only breaks ties within comparable search availability.
+            return (source["name"] != explicit, tier, failures, self.playback_rank(identity), latency, default)
+
+        return sorted(sources, key=rank)
 
     def start(self, keyword):
         self.invalidate()
@@ -316,6 +321,7 @@ class ProgressiveMovieSearch(QObject):
         self.probe_timer.stop()
         self.manager = None
         self.idle = lambda: False
+        self.playback_rank = lambda _: 0
 
     def close(self):
         self.closed = True

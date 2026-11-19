@@ -270,3 +270,33 @@ def test_real_http_children_memory_and_cancel_reap_are_bounded(cms, record_prope
     record_property('request_children_rss_bytes', memory)
     record_property('cancel_real_http_children_seconds', time.monotonic()-started)
     gate.set()
+
+
+def test_playback_evidence_only_changes_future_order_within_search_health_tier():
+    from types import SimpleNamespace
+    from app.movie.playback_startup import StartupEvidence
+    from app.movie.progressive_search import ProgressiveMovieSearch
+
+    now = [0.]
+    evidence = StartupEvidence(lambda: now[0])
+    search = SimpleNamespace(manager=SimpleNamespace(get_active_name=lambda: "A",
+                             get_explicit_search_source=lambda: None),
+                             playback_rank=evidence.rank)
+    from app.movie.progressive_search import SearchHealth
+    search.health = SearchHealth(lambda: now[0])
+    rows = [dict(name=name, identity=name) for name in ("A", "B")]
+    def order():
+        return ProgressiveMovieSearch._ordered(search, rows)
+    evidence.observe("A", "same", False)
+    evidence.observe("A", "same", False)
+    assert order() == rows
+    evidence.observe("A", "other", False)
+    assert order() == rows[::-1]
+    assert rows[0]["name"] == "A"
+    search.manager.get_explicit_search_source = lambda: "A"
+    assert order() == rows
+    search.manager.get_explicit_search_source = lambda: None
+    search.health.observe("A", {"status": "ok", "elapsed_ms": 10})
+    assert order() == rows
+    now[0] = 601
+    assert order() == rows

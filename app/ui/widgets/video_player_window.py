@@ -664,6 +664,10 @@ class VideoPlayerWindow(QWidget):
 
     def play(self, item, index=None):
         """注入容器 winId → 控制器播放 → 接管轮询/overlay/侧栏。"""
+        blocked = getattr(self._movie, "playback_block_message", lambda *_: "")(item, index)
+        if isinstance(blocked, str) and blocked:
+            self._show_recover_label(blocked)
+            return False
         self.switch_trial.reset()
         self._load_generation = None  # Even an unconfirmed new attempt invalidates old feedback.
         self._load_notice_sent = True
@@ -1041,6 +1045,9 @@ class VideoPlayerWindow(QWidget):
         phase = update["phase"]
         if phase == "switch_unconfirmed":
             self.quality_notice.reset()
+            receipt = movie.playback_startup()
+            if receipt and receipt.state in ("load_unknown", "load_exception"):
+                self.playback_status.emit(update["generation"], "LOAD_UNKNOWN", movie.playback_failure_message())
             return
         if not update["playing"]:
             if self._playing and update["crashed"]:
@@ -1062,7 +1069,8 @@ class VideoPlayerWindow(QWidget):
                 if phase in ("failed", "unconfirmed"):
                     message = ("未能播放所选影片或集数。" if phase == "failed"
                                else "播放器已空闲，播放结束原因未确认。")
-                    self.playback_status.emit(update["generation"], "FAILED", message)
+                    status = "FAILED" if phase == "failed" else "UNCONFIRMED"
+                    self.playback_status.emit(update["generation"], status, message)
             return
         sample = update["sample"]
         index = update["index"]

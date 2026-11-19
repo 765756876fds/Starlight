@@ -275,3 +275,49 @@ def test_voice_takeover_replaces_sidebar_candidate_before_next_episode(candidate
     s.panel._video_win.play_next()
     s.mpv.loadfile.assert_called_once_with('https://media-2.invalid/two')
     assert s.controller.current_item()['_source'] == '极速资源'
+
+
+@pytest.mark.parametrize("identity", ["same_work", "title_only", "different_episode"])
+def test_failed_candidate_recovery_only_after_user_action(candidates, cms, identity):
+    screen = candidates
+    panel = screen.panel
+    for idx in range(3):
+        row = cms.modes[f"/s{idx}"]["rows"][0]
+        row.update(vod_year="2024", type_name="电影")
+        if identity != "title_only":
+            row["imdb_id"] = "tt1234567"
+        if identity == "different_episode" and idx != 1:
+            row["vod_play_url"] = f"第2集$https://media-{idx}.invalid/movie.m3u8"
+    rows = found(screen)
+    screen.mpv.loadfile.return_value = {"error": "loading failed"}
+    panel._on_item_activated(rows["非凡资源"])
+    wait(lambda: not panel.btn_retry_startup.isHidden())
+    screen.mpv.loadfile.assert_called_once_with("https://media-1.invalid/movie.m3u8")
+    assert not panel.btn_back_to_results.isHidden()
+    assert panel.btn_alternate_startup.isHidden() == (identity != "same_work")
+    if identity == "same_work":
+        panel.btn_alternate_startup.click()
+        wait(lambda: screen.mpv.loadfile.call_count == 2)
+        assert screen.mpv.loadfile.call_args.args[0] in (
+            "https://media-0.invalid/movie.m3u8", "https://media-2.invalid/movie.m3u8")
+    else:
+        panel.btn_retry_startup.click()
+        wait(lambda: screen.mpv.loadfile.call_count == 2)
+        assert screen.mpv.loadfile.call_args.args[0] == "https://media-1.invalid/movie.m3u8"
+    panel.edit_kw.setText("Another title")
+    panel._do_search()
+    assert panel.btn_retry_startup.isHidden() and panel.btn_alternate_startup.isHidden()
+
+
+@pytest.mark.parametrize("response", [None, {"error": "success"}])
+def test_double_activation_does_not_reissue_pending_or_unknown_load(candidates, response):
+    screen = candidates
+    panel = screen.panel
+    row = found(screen)["非凡资源"]
+    screen.mpv.loadfile.return_value = response
+    panel._on_item_activated(row)
+    panel._on_item_activated(row)
+    wait(lambda: screen.mpv.loadfile.called)
+    panel._on_item_activated(row)
+    screen.mpv.loadfile.assert_called_once_with("https://media-1.invalid/movie.m3u8")
+    assert panel.btn_retry_startup.isHidden() and panel.btn_alternate_startup.isHidden()

@@ -6,6 +6,7 @@
 - mpv 独立实例（video=True 出视频窗口，taskkill=False 不杀音乐实例）。
 - 剧集选集 + 自动连播（idle 上升沿检测）+ Assrt 字幕（搜索/下载/解压/加载）。
 """
+import hashlib
 import os
 import re
 import shutil
@@ -38,6 +39,7 @@ from .cms_parser import (
 )
 from .source_manager import MovieSourceManager, _SingleSourceManager
 from .history import MovieHistory
+from .playback_startup import PlaybackStartup, StartupEvidence
 
 logger = get_logger()
 
@@ -144,6 +146,8 @@ class MovieController:
         # V2-2：播放会话代次，每次加载新片递增；全局暂停快照据此判断会话是否变化
         self._playback_gen: int = 0
         self._film_session = None
+        self._startup = None
+        self.startup_evidence = StartupEvidence()
         self._film_phase = "stopped"
         self._film_sample = {}
         self._media_action_lock = threading.RLock()
@@ -448,6 +452,7 @@ class MovieController:
         service = shared_search_service()
         if service is not None:
             # Conservative cached ownership only; never probe IPC on the GUI thread.
+            service.playback_rank = self.startup_evidence.rank
             service.configure(self._source_manager,
                               lambda: self._current is None and not self._external_url_mode)
         return service
@@ -689,21 +694,74 @@ class MovieController:
 
     # ---- 播放 ----
 
+    @staticmethod
+    def playback_candidate_tag(item, index):
+        source = item.get("_source_id") or item.get("_source") or "unknown"
+        key = (source, item.get("vod_id"), item.get("play_url"), item.get("first_url"), 0 if index is None else index)
+        return hashlib.sha256(repr(key).encode("utf8")).hexdigest()[:12]
+
     def _play_feedback(self, item, index, status, message="", *, media_url=None):
-        import hashlib
         source = str(item.get("_source_id") or item.get("_source") or "unknown")
-        key = repr((source, item.get("vod_id"), item.get("play_url"), item.get("first_url"), index))
-        ref = hashlib.sha256(key.encode("utf8")).hexdigest()[:12]
-        self._last_play_feedback = (ref, status, message)
+        ref = self.playback_candidate_tag(item, index)
         media_tag = hashlib.sha256(str(media_url or "").encode("utf8")).hexdigest()[:12]
+        episode = 0 if index is None else index
+        self._startup = PlaybackStartup(getattr(self, "_play_attempt", 0), getattr(self, "_playback_gen", 0),
+                                        episode, status, media_tag, ref)
+        self._last_play_feedback = (ref, status, message)
         logger.info("[MoviePlay] attempt=%s generation=%s source_tag=%s candidate_tag=%s media_tag=%s episode=%s result=%s",
                     getattr(self, "_play_attempt", 0), getattr(self, "_playback_gen", 0),
                     hashlib.sha256(source.encode("utf8")).hexdigest()[:12], ref, media_tag, index, status)
         return False
 
     def playback_failure_message(self):
+        blocked = getattr(self, "_play_blocked_message", "")
+        if blocked:
+            return blocked
         feedback = getattr(self, "_last_play_feedback", None)
         return feedback[2] if feedback and feedback[2] else "播放未成功，请检查该片源或选择其他候选。"
+
+    def playback_startup(self):
+        return getattr(self, "_startup", None)
+
+    def playback_block_message(self, item, index):
+        receipt = self.playback_startup()
+        if not self.mpv.is_running():
+            return ""
+        if self._unsettled_load():
+            return "播放器加载结果未确认，请先停止播放，再选择重试。"
+        episode = 0 if index is None else index
+        episodes = self.episodes(item)
+        url = episodes[episode][1] if 0 <= episode < len(episodes) else item.get("first_url", "")
+        if (item.get("_source_id") and receipt and receipt.state == "accepted" and self._current is not None
+                and receipt.generation == getattr(self, "_playback_gen", 0)
+                and receipt.candidate_tag == self.playback_candidate_tag(item, index) and url
+                and receipt.media_tag == hashlib.sha256(str(url).encode()).hexdigest()[:12]):
+            return "这条线路正在加载，请等待起播确认。"
+        return ""
+
+    def _unsettled_load(self):
+        receipt = self.playback_startup()
+        return (getattr(self, "_switch_unsettled", False)
+                or bool(receipt and receipt.state in ("load_unknown", "load_exception", "startup_unknown")))
+
+    def _unconfirmed_load(self, item, episode, status, url):
+        self._film_phase = "switch_unconfirmed"
+        self._film_sample = {}
+        return self._play_feedback(item, episode, status,
+                                   "播放器加载结果未确认，请先停止播放，再选择重试。", media_url=url)
+
+    def _observe_startup(self, session, state):
+        receipt = self.playback_startup()
+        if (receipt is None or receipt.state != "accepted" or receipt.generation != session["generation"]
+                or receipt.attempt != getattr(self, "_play_attempt", 0)
+                or receipt.episode != self._current_index):
+            return
+        item = self._current or {}
+        self._play_feedback(item, receipt.episode, state, media_url=session["url"])
+        source = item.get("_source_id")
+        evidence = getattr(self, "startup_evidence", None)
+        if evidence is not None and isinstance(source, str) and source and state in ("started", "startup_failed"):
+            evidence.observe(source, receipt.media_tag, state == "started")
 
     @_serialized_media
     def play(self, item, index=None):
@@ -711,10 +769,15 @@ class MovieController:
         index=None → 取 first_url（现状不变）；index=N → 取第 N 集 URL。失败返回 False。
         内嵌：embed 开且有播放窗口注入 winId → mpv --wid 渲染进 Qt 容器；
         否则（embed 关 / 窗口未建）→ 独立 mpv 窗口（现状，安全回退）。"""
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or getattr(self, "_media_voice_closed", False):
             return False
         if "$$$" in str(item.get("vod_play_url") or item.get("play_url") or ""):
             item = normalise_playback(item)
+        blocked = self.playback_block_message(item, index)
+        if blocked:
+            self._play_blocked_message = blocked
+            return False
+        self._play_blocked_message = ""
         self._play_attempt = getattr(self, "_play_attempt", 0) + 1
         self._play_feedback(item, index, "selected")
         resume_guard = item.get("_resume_guard") or getattr(getattr(self, "_play_guard_local", None), "current", None)
@@ -739,6 +802,7 @@ class MovieController:
             url = eps[0][1]
         if not url:
             return self._play_feedback(item, index, "no_address", "该来源未提供播放地址，请选择其他候选。")
+        self._play_feedback(item, idx, "address_present", media_url=url)
         self._remember_view(force=True)
         # 音乐互斥由 tick 确认实际起播后处理；加载失败不打断音乐。
         # 内嵌 wid：embed 开且窗口已注入 → 传 --wid；否则 None（独立窗口，现状）
@@ -763,10 +827,10 @@ class MovieController:
             resp = self.mpv.loadfile(url)
         except Exception as e:
             logger.error("[Movie] loadfile 异常: type=%s", type(e).__name__)
-            return self._play_feedback(item, index, "load_exception", "播放器加载异常，请检查该片源后重试。", media_url=url)
+            return self._unconfirmed_load(item, idx, "load_exception", url)
         if resp is None:
             logger.error("[Movie] loadfile 结果未确认（IPC 超时/无响应）")
-            return self._play_feedback(item, index, "load_unknown", "播放器加载结果未确认，请勿重复点击；请查看播放窗口。", media_url=url)
+            return self._unconfirmed_load(item, idx, "load_unknown", url)
         if not isinstance(resp, dict) or resp.get("error") != "success":
             err = resp.get("error") if isinstance(resp, dict) else resp
             logger.error("[Movie] loadfile 失败: error_type=%s", type(err).__name__)
@@ -1019,7 +1083,7 @@ class MovieController:
             return False, "字幕状态调整失败，请稍后重试"
 
     def _remember_view(self, now_idle=None, *, force=False, sample=None):
-        if getattr(self, "_switch_unsettled", False):
+        if self._unsettled_load():
             return
         if not hasattr(self, "film_memory") or not self._current or getattr(self, "_external_url_mode", False):
             return
@@ -1339,7 +1403,8 @@ class MovieController:
     def tick(self, current=None):
         """Collect playback state and advance only a confirmed native EOF.
         Legacy non-native adapters retain their idle polling contract."""
-        if getattr(self, "_switch_unsettled", False):
+        receipt = self.playback_startup()
+        if getattr(self, "_switch_unsettled", False) or (receipt and receipt.state in ("load_unknown", "load_exception")):
             return
         self._apply_pending_local_subtitle()
         # 外部 URL 模式：播完 idle 上升沿 → 写 playing=False，不连播。
@@ -1416,6 +1481,7 @@ class MovieController:
         self._pending_history = (dict(self._current), str(url))
         self._film_last_sample = self._resume_pending = None
         self._film_saved_at = 0
+        self._play_feedback(self._current, self._current_index, "accepted", media_url=url)
 
     def _finish_film_session(self, phase):
         self._film_phase = phase
@@ -1454,18 +1520,27 @@ class MovieController:
                 session["previous"] = None
             self._restore_online_position(False)
             if session["advanced"]:
-                self._film_phase = ("buffering" if sample.get("paused-for-cache") is True else
-                                    "paused" if sample.get("pause") is True else "playing")
-                self._last_idle = False
-                self._pause_music_after_start(False)
-                self._remember_view(False, sample=sample)
-                self._record_history_if_started(False)
+                video = sample.get("video-params") or {}
+                if video.get("w") and video.get("h"):
+                    self._observe_startup(session, "started")
+                startup = self.playback_startup()
+                awaiting_video = (startup and startup.state == "accepted"
+                                  and startup.generation == session["generation"]
+                                  and (self._current or {}).get("_source_id"))
+                if not awaiting_video:
+                    self._film_phase = ("buffering" if sample.get("paused-for-cache") is True else
+                                        "paused" if sample.get("pause") is True else "playing")
+                    self._last_idle = False
+                    self._pause_music_after_start(False)
+                    self._remember_view(False, sample=sample)
+                    self._record_history_if_started(False)
         reason = self.mpv.film_end_reason(session["entry"])
         if getattr(self, "_media_voice_closed", False) or (current is not None and not current()):
             return
         if reason is None or reason == "redirect":
             if (not sample and time.monotonic() - session["started_at"] >= 15
                     and read_sample(self.mpv.ipc_pipe, expected_path="", allow_idle=True).get("idle-active") is True):
+                self._observe_startup(session, "startup_unknown")
                 self._finish_film_session("unconfirmed")
             return
         # MPV can report EOF for a truncated stream. Require the last validated
@@ -1478,11 +1553,16 @@ class MovieController:
         if reason == "eof" and reached_end:
             self._remember_view(True)
             if self._auto_next and self._current_index + 1 < len(self.episodes(self._current)):
-                if not self._advance_episode():
+                if not self._advance_episode() and not self._unsettled_load():
                     self._finish_film_session("failed")
             else:
                 self._finish_film_session("ended")
         else:
+            decisive = reason == "error" and session["entry"] is not None and not session["advanced"]
+            if decisive:
+                self._observe_startup(session, "startup_failed")
+            elif reason not in ("stop", "quit"):
+                self._observe_startup(session, "startup_unknown")
             startup_error = (reason == "error" and session["entry"] is not None and not session["advanced"]
                              and self.source_quality_trial_enabled())
             identity = (self._playback_gen, self._play_attempt, self._current_index, id(self._current)) if startup_error else None
@@ -1508,7 +1588,7 @@ class MovieController:
     def _advance_episode(self):
         """切到下一集；无下一集 → 末集停（不循环）。返回 True=已切，False=已停/加载失败（不推进索引）。"""
         item = self._current
-        if item is None:
+        if item is None or self._unsettled_load():
             return False
         eps = self.episodes(item)
         nxt = (self._current_index or 0) + 1
@@ -1529,11 +1609,11 @@ class MovieController:
             requested_at = time.monotonic()
             resp = self.mpv.loadfile(url)
         except Exception as e:
-            logger.error(f"[Movie] 自动连播 loadfile 异常: {e!r}")
-            return False
+            logger.error("[Movie] 自动连播 loadfile 异常: type=%s", type(e).__name__)
+            return self._unconfirmed_load(item, nxt, "load_exception", url)
         if resp is None:
             logger.error("[Movie] 自动连播 loadfile 结果未确认（IPC 超时/无响应）")
-            return False
+            return self._unconfirmed_load(item, nxt, "load_unknown", url)
         if not isinstance(resp, dict) or resp.get("error") != "success":
             err = resp.get("error") if isinstance(resp, dict) else resp
             logger.error(f"[Movie] 自动连播 loadfile 失败: error={err}")
@@ -1565,7 +1645,7 @@ class MovieController:
     def prev_episode(self) -> bool:
         """语音切上一集；首集返回 False。"""
         item = self._current
-        if item is None:
+        if item is None or self._unsettled_load():
             return False
         cur = self._current_index or 0
         if cur <= 0:
@@ -1581,10 +1661,11 @@ class MovieController:
             requested_at = time.monotonic()
             resp = self.mpv.loadfile(url)
         except Exception as e:
-            logger.error(f"[Movie] 切上一集 loadfile 异常: {e!r}")
-            return False
+            logger.error("[Movie] 切上一集 loadfile 异常: type=%s", type(e).__name__)
+            return self._unconfirmed_load(item, prev, "load_exception", url)
         if resp is None:
-            return False
+            logger.error("[Movie] 切上一集 loadfile 结果未确认（IPC 超时/无响应）")
+            return self._unconfirmed_load(item, prev, "load_unknown", url)
         if not isinstance(resp, dict) or resp.get("error") != "success":
             return False
         self._current_index = prev
@@ -1597,7 +1678,7 @@ class MovieController:
     def _save_local_progress(self):
         """Best-effort native checkpoint while the local media is still loaded."""
         item = self._current
-        if not isinstance(item, dict) or not item.get("local_file"):
+        if self._unsettled_load() or not isinstance(item, dict) or not item.get("local_file"):
             return
         try:
             if not self.mpv.is_running():
@@ -1660,6 +1741,8 @@ class MovieController:
                 self._last_idle = True
                 self._write_state(playing=False, paused=False)
             self._switch_unsettled = False
+            self._startup = None
+            self._play_blocked_message = ""
             self._film_phase = "stopped"
             self._film_session = None
             self._film_sample = {}
