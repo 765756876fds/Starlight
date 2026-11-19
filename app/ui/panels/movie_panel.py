@@ -558,6 +558,7 @@ class MoviePanel(QWidget):
         if self._progressive_search is not None:
             self._progressive_search.batch.connect(self._progressive_batch, Qt.QueuedConnection)
             self._progressive_search.completed.connect(self._progressive_finished, Qt.QueuedConnection)
+            self._progressive_search.progress.connect(self._progressive_progress, Qt.QueuedConnection)
         self._items_by_row = []
         # 榜单 QThread：同一时刻只持一个引用，运行中绝不覆盖（QThread 崩溃教训）
         self._rank_thread = None
@@ -862,6 +863,8 @@ class MoviePanel(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        if hasattr(self, "_progressive_search"):
+            self._freeze_progressive()
         service = getattr(getattr(self, "_movie", None), "recommendations", None)
         if service is not None:
             service.cancel()
@@ -955,7 +958,7 @@ class MoviePanel(QWidget):
             self._progressive_frozen = False
             self._progressive_playback_generation = self._movie._playback_gen
             self._progressive_serial = self._progressive_search.start(kw)
-            self._progressive_ui_timer.start(35000)
+            self._progressive_ui_timer.start(self._progressive_search.request["budget_ms"] + 5000)
             def remember(current):
                 try:
                     memory = getattr(self._movie, "film_memory", None)
@@ -1181,6 +1184,13 @@ class MoviePanel(QWidget):
         logger.info("[MovieSearch] stage=progressive_batch serial=%s rows=%s done=%s total=%s",
                     serial, len(rows), result["done"], result["total"])
 
+    def _progressive_progress(self, serial, result):
+        if not self._progressive_is_current(serial):
+            return
+        n = self.list_posters.count()
+        self.lbl_status.setText(
+            f"已找到{n}条，继续补充较慢来源" if n else "首批查询较慢，继续查询其他来源…")
+
     def _progressive_finished(self, serial, result):
         if not self._progressive_is_current(serial):
             return
@@ -1198,6 +1208,8 @@ class MoviePanel(QWidget):
             text = f"搜索完成，共{n}条" + ("；部分来源不可用，已有结果可使用。" if result["failed"] else "。")
         else:
             text = "没有匹配影片；部分来源不可用。" if result["failed"] else "没有匹配影片，请换个片名重试。"
+        text += (f"（已完成{result['done']}/{result['total']}，失败{result.get('errors', result['failed'])}，"
+                 f"超时{result.get('timed_out', 0)}，尚未尝试{result.get('unattempted', 0)}）")
         if result["limited"]:
             text += " 已限制本次候选数量。"
         self.lbl_status.setText(text)
@@ -1614,6 +1626,7 @@ class MoviePanel(QWidget):
                 self._ensure_video_win()
             if self._video_win is None:
                 return
+            self._freeze_progressive()
             self._video_win.show_for_playback()
             QTimer.singleShot(0, self._video_win.raise_topmost)
             self._video_win.attach_current()

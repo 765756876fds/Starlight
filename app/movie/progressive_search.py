@@ -78,7 +78,10 @@ class SearchHealth:
 class ProgressiveMovieSearch(QObject):
     batch = Signal(int, object)
     completed = Signal(int, object)
-    BUDGET_MS = 30000
+    progress = Signal(int, object)
+    FIRST_BATCH_MS = 30000
+    BUDGET_MS = 120000  # Absolute cap, including the supplementary phase.
+    REAP_MARGIN_MS = 2000
     SOURCE_MS = 10000
     PROBE_MS = 6000
     PROBE_INTERVAL_MS = 20*60*1000
@@ -103,6 +106,9 @@ class ProgressiveMovieSearch(QObject):
         self.deadline_timer = QTimer(self)
         self.deadline_timer.setSingleShot(True)
         self.deadline_timer.timeout.connect(self._expire)
+        self.phase_timer = QTimer(self)
+        self.phase_timer.setSingleShot(True)
+        self.phase_timer.timeout.connect(self._supplement)
         self.probe_timer = QTimer(self)
         self.probe_timer.setSingleShot(True)
         self.probe_timer.timeout.connect(self.probe)
@@ -141,12 +147,17 @@ class ProgressiveMovieSearch(QObject):
         self._probe_queue.clear()
         self.probe_timer.stop()
         sources = self._ordered(self._sources())
+        budget = min(self.BUDGET_MS, max(self.FIRST_BATCH_MS,
+                     ((len(sources) + self.pool.MAX_ACTIVE - 1) // self.pool.MAX_ACTIVE)
+                     * self.SOURCE_MS + self.REAP_MARGIN_MS))
         self.request = dict(serial=self.serial, keyword=keyword, stamp=self._stamp(),
-                            deadline=self.clock()+self.BUDGET_MS/1000, queue=deque(sources),
-                            total=len(sources), done=0, failed=0, empty=0, shown=0,
+                            deadline=self.clock()+budget/1000, budget_ms=budget, queue=deque(sources),
+                            total=len(sources), attempted=0, timed_out=0, done=0, failed=0, empty=0, shown=0,
                             seen=set(), groups=Counter(), limited=False)
         self.alternatives = []
-        self.deadline_timer.start(self.BUDGET_MS)
+        self.deadline_timer.start(budget)
+        if budget > self.FIRST_BATCH_MS:
+            self.phase_timer.start(self.FIRST_BATCH_MS)
         QTimer.singleShot(0, self._pump)  # Let the UI retain the returned generation first.
         return self.serial
 
@@ -154,6 +165,7 @@ class ProgressiveMovieSearch(QObject):
         self.serial += 1
         self.request = None
         self.deadline_timer.stop()
+        self.phase_timer.stop()
         self.pool.cancel()  # Count old processes until finished, even after kill().
 
     def _pump(self):
@@ -191,6 +203,8 @@ class ProgressiveMovieSearch(QObject):
         if not self.pool.start(token, dict(url=source["url"], keyword=keyword, mode=mode,
                                            budget=budget/1000), budget):
             self._jobs.pop(token, None)
+        elif mode == "search" and self.request and self.request["serial"] == serial:
+            self.request["attempted"] += 1
 
     def _returned(self, token, result):
         job = self._jobs.pop(token, None)
@@ -210,6 +224,8 @@ class ProgressiveMovieSearch(QObject):
         self.health.observe(job["source"]["identity"], result)
         req["done"] += 1
         req["failed"] += result["status"] == "failed"
+        req["timed_out"] += result.get("error") in (
+            "Timeout", "ConnectTimeout", "ReadTimeout", "ReadTimeoutError", "TimeoutError")
         req["empty"] += result["status"] == "empty"
         req["limited"] |= bool(result.get("limited"))
         rows = []
@@ -239,7 +255,20 @@ class ProgressiveMovieSearch(QObject):
                                            source_name=job["source"]["name"], items=rows,
                                            status=result["status"], error=result.get("error"),
                                            elapsed_ms=result.get("elapsed_ms"),
-                                           done=req["done"], total=req["total"], failed=req["failed"]))
+                                           **self._counts(req)))
+
+    @staticmethod
+    def _counts(req):
+        return dict(done=req["done"], total=req["total"], failed=req["failed"],
+                    attempted=req["attempted"], timed_out=req["timed_out"],
+                    errors=req["failed"]-req["timed_out"],
+                    unattempted=req["total"]-req["attempted"],
+                    in_flight=req["attempted"]-req["done"])
+
+    def _supplement(self):
+        req = self.request
+        if req and req["stamp"] == self._stamp():
+            self.progress.emit(req["serial"], dict(phase="supplement", **self._counts(req)))
 
     def _expire(self):
         if self.request:
@@ -250,11 +279,14 @@ class ProgressiveMovieSearch(QObject):
         req, self.request = self.request, None
         if req:
             self.deadline_timer.stop()
+            self.phase_timer.stop()
             if reason == "changed":
                 self.pool.cancel()
+            counts = self._counts(req)
+            if reason == "budget":
+                counts["timed_out"] += counts["in_flight"]
             self.completed.emit(req["serial"], dict(reason=reason, shown=req["shown"],
-                                                     failed=req["failed"], done=req["done"],
-                                                     total=req["total"], limited=req["limited"]))
+                                                     empty=req["empty"], limited=req["limited"], **counts))
             self.probe_timer.start(self.PROBE_INTERVAL_MS)
 
     def probe(self):
