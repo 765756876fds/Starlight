@@ -45,7 +45,7 @@ class MovieSourceDialog(GlassDialog):
         root = self.body_layout
 
         tip = QLabel("电影源（苹果 CMS V10 接口）。勾选启用、双击行切换；"
-                     "测试为三合一（连通 / 搜索有结果 / m3u8 可播）")
+                     "测试仅检查连通、搜索结果和播放清单可读，不代表视频能持续流畅播放。")
         tip.setWordWrap(True)
         root.addWidget(tip)
 

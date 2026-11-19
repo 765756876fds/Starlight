@@ -70,6 +70,11 @@ def _mpv_buffer_args(config) -> list:
         "--network-timeout=" + str(b.get("network_timeout", 15)),
         "--demuxer-thread=yes",
     ]
+    # Optional upper selection bound for multi-variant HLS, in bits/second.
+    # Absent/invalid preserves MPV's existing max selection and cache defaults.
+    cap = b.get("hls_bitrate")
+    if type(cap) is int and 64000 <= cap <= 100000000:
+        args.append(f"--hls-bitrate={cap}")
     return args
 
 
@@ -784,6 +789,8 @@ class MovieController:
         self._pending_local_subtitle = None
         if item.get("local_file"):
             self._load_local_subtitle(str(url))
+        self._start_playback_diagnostics("local" if item.get("local_file") else "cms",
+                                         item.get("_source"))
         self._play_feedback(item, idx, "accepted", media_url=url)  # loadfile accepted is not decoded playback.
         return True
 
@@ -1107,7 +1114,37 @@ class MovieController:
         self._film_last_sample = None
         self._external_url_seen_active = False  # 缓冲期保护
         self._write_state(playing=True, paused=False)
+        self._start_playback_diagnostics("external", str(url))
         return True
+
+    def _start_playback_diagnostics(self, mode, source=None):
+        """Explicit opt-in observer; no UI-thread IPC and no player commands."""
+        config = getattr(self, "_config", None)
+        if config is None or config.get("movie.playback_diagnostics", False) is not True:
+            return
+        try:
+            process = getattr(self.mpv, "_process", None)
+            pipe = getattr(self.mpv, "ipc_pipe", None)
+            if process is None or not isinstance(pipe, str):
+                return
+            import json
+            import weakref
+            from .playback_diagnostics import MoviePlaybackMonitor
+            monitor = getattr(self, "_playback_monitor", None)
+            if monitor is None:
+                monitor = self._playback_monitor = MoviePlaybackMonitor(
+                    lambda data: logger.info("[MoviePerf] " + json.dumps(data, separators=(",", ":"))))
+            owner = weakref.ref(self)
+            generation = self._playback_gen
+            def current():
+                controller = owner()
+                return (controller is not None
+                        and not getattr(controller, "_media_voice_closed", False)
+                        and controller._playback_gen == generation
+                        and controller.mpv._process is process and process.poll() is None)
+            monitor.start(pipe, generation, current, mode, source)
+        except Exception as error:
+            logger.warning(f"[MoviePerf] observer_unavailable type={type(error).__name__}")
 
     # ---- 自动连播 ----
 
@@ -1592,6 +1629,9 @@ class MovieController:
 
     def close(self):
         self._media_voice_closed = True
+        monitor = getattr(self, "_playback_monitor", None)
+        if monitor is not None:
+            monitor.close()
         worker = getattr(self, "_ownership_worker", None)
         if worker is not None and worker is not threading.current_thread():
             worker.join(.25)

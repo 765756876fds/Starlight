@@ -140,6 +140,7 @@ def _resp(status=200, text="{}"):
 
 def _hls_resp():
     r = MagicMock()
+    r.status_code = 200
     r.iter_content.return_value = iter([b"#EXTM3U\n#EXT-X-STREAM-INF:1\nhttp://x/a.m3u8\n"])
     return r
 
@@ -201,6 +202,7 @@ def test_test_source_empty_url():
 
 def test_check_hls_non_hls():
     r = MagicMock()
+    r.status_code = 200
     r.iter_content.return_value = iter([b"<html>not hls</html>"])
     with patch("app.movie.source_manager.requests.get", return_value=r):
         assert _check_hls("https://x/a.m3u8", timeout=5) is False

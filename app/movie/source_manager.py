@@ -40,21 +40,25 @@ def _default_settings_path() -> str:
 
 
 def _check_hls(url: str, timeout: float) -> bool:
-    """GET m3u8 前 1KB，含 HLS 标记即视为可播。"""
+    """Only validates an accessible HLS header, not segments or sustained playback."""
+    r = None
     try:
         r = requests.get(url, timeout=timeout, headers=UA, stream=True,
                          allow_redirects=True)
+        if r.status_code != 200:
+            return False
         head = b""
         for chunk in r.iter_content(2048):
             head += chunk
             if len(head) >= 1024:
                 break
-        r.close()
-        text = head.decode("utf-8", "ignore")
-        return ("#EXTM3U" in text or "#EXT-X-STREAM-INF" in text
-                or ".m3u8" in text)
+        text = head.decode("utf-8-sig", "ignore").lstrip()
+        return bool(text) and text.splitlines()[0].strip() == "#EXTM3U"
     except Exception:
         return False
+    finally:
+        if r is not None:
+            r.close()
 
 
 class MovieSourceManager:
@@ -202,7 +206,7 @@ class MovieSourceManager:
 
     @staticmethod
     def test_source(src: dict[str, Any], timeout: float = 8.0):
-        """三合一：L1 连通 / L2 搜索有结果 / L3 首条 m3u8 可播。返回 (ok, detail)。"""
+        """L1 连通 / L2 搜索有结果 / L3 清单可读；不证明持续播放。返回 (ok, detail)。"""
         url = (src or {}).get("url", "")
         if not url:
             return False, "无 URL"
