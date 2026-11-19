@@ -67,6 +67,7 @@ class MovieSourceManager:
         self._sources: list[dict[str, Any]] = []
         self._active: str | None = None
         self._search_revision = 0  # Process-local; never written to settings.
+        self._explicit_search_source = None
         self._load()
 
     # ---- 加载/保存 ----
@@ -74,6 +75,7 @@ class MovieSourceManager:
     def _load(self):
         data = self._read_yaml()
         self._search_revision += 1
+        self._explicit_search_source = None
         m = data.get("movie") or {}
         stored = m.get("sources")
         if isinstance(stored, list) and stored:
@@ -140,6 +142,10 @@ class MovieSourceManager:
         return self._search_revision
 
 
+    def get_explicit_search_source(self):
+        """Current-process manual choice; an initial default is not an explicit override."""
+        return self._explicit_search_source
+
     def get_active_name(self) -> str | None:
         if self._active:
             return self._active
@@ -188,6 +194,7 @@ class MovieSourceManager:
     def set_active(self, name: str):
         if any(s["name"] == name for s in self._sources):
             self._search_revision += 1
+            self._explicit_search_source = name
             self._active = name
             self._save()
 

@@ -547,6 +547,16 @@ class MoviePanel(QWidget):
         self._film_search.completed.connect(self._film_search_finished)
         self._search_posters = SearchPosterLoader(_POSTER_DIR / "search-v2", self)
         self._search_posters.ready.connect(self._on_search_poster_done)
+        self._progressive_search = (self._movie.progressive_search_service()
+                                    if isinstance(self._movie, MovieController) else None)
+        self._progressive_serial = None
+        self._progressive_frozen = False
+        self._progressive_ui_timer = QTimer(self)
+        self._progressive_ui_timer.setSingleShot(True)
+        self._progressive_ui_timer.timeout.connect(self._progressive_ui_timeout)
+        if self._progressive_search is not None:
+            self._progressive_search.batch.connect(self._progressive_batch, Qt.QueuedConnection)
+            self._progressive_search.completed.connect(self._progressive_finished, Qt.QueuedConnection)
         self._items_by_row = []
         # 榜单 QThread：同一时刻只持一个引用，运行中绝不覆盖（QThread 崩溃教训）
         self._rank_thread = None
@@ -881,6 +891,9 @@ class MoviePanel(QWidget):
         self._search_posters.close()
         self._movie._recommendation_ready = None
         self._film_search.cancel()
+        if self._progressive_search is not None:
+            self._progressive_frozen = True
+            self._progressive_search.detach()
         self.movie_home.shutdown()
         try:
             # 退出清理（QThread 崩溃修复）：先 cancel（循环快速停）→ 对仍运行的
@@ -932,6 +945,25 @@ class MoviePanel(QWidget):
         self.list_posters.clear()
         self._items_by_row = []
         selected = dict(self._selected_discovery_work) if self._selected_discovery_work else None
+        if self._progressive_search is not None:
+            self._film_search.invalidate()
+            self._last_search_result = []
+            self._progressive_frozen = False
+            self._progressive_playback_generation = self._movie._playback_gen
+            self._progressive_serial = self._progressive_search.start(kw)
+            self._progressive_ui_timer.start(35000)
+            def remember(current):
+                try:
+                    memory = getattr(self._movie, "film_memory", None)
+                    if current() and memory is not None:
+                        memory.record_action("search", kw)
+                        if selected:
+                            memory.record_action("select", kw, work=selected)
+                except Exception as exc:
+                    logger.warning("movie_search_history result=failed type=%s", type(exc).__name__)
+                return {"progressive_history": True}
+            self._film_search.submit(kw, remember, guarded=True)
+            return
         deadline = time.monotonic() + 30
         def read(current):
             if not current():
@@ -946,6 +978,8 @@ class MoviePanel(QWidget):
         self._film_search.submit(kw, read, guarded=True)
 
     def _film_search_finished(self, keyword, result, error):
+        if self._progressive_search is not None:
+            return  # History-only task; the network owner supplies final search status.
         # Log delivery and label assignment separately from task completion.
         # task_serial is the current UI generation (expiry invalidates the old one).
         logger.info("[MovieSearch] stage=ui_received task_serial=%s count=%s error_type=%s",
@@ -982,6 +1016,7 @@ class MoviePanel(QWidget):
 
     def _show_movie_home(self):
         self._film_search.invalidate()
+        self._freeze_progressive()
         self._search_posters.begin()
         self.stack_results.setCurrentWidget(self.movie_home)
         if not self._return_to_movie_browse:
@@ -1018,6 +1053,7 @@ class MoviePanel(QWidget):
 
     def _do_clear(self):
         self._film_search.invalidate()
+        self._freeze_progressive()
         self._search_posters.begin()
         self.edit_kw.clear()
         self.list_results.clear()
@@ -1031,42 +1067,7 @@ class MoviePanel(QWidget):
         self.list_posters.clear()
         self._items_by_row = []
         self._last_search_result = list(result or [])
-        poster_jobs = []
-        for it in self._filtered_content_results(result):
-            selected = self._selected_discovery_work
-            if selected:
-                from ...movie.library import title_key
-                year = str(it.get("vod_year") or "")
-                same_year = not selected.get("year") or str(selected["year"]) == year
-                if title_key(it.get("vod_name", "")) == title_key(selected["title"]) and same_year:
-                    it = dict(it, _starlight_work=selected)
-            name = it.get("vod_name", "") or ""
-            remarks = it.get("vod_remarks", "") or ""
-            # 列表视图
-            label = f"{name}  [{remarks}]" if remarks else name
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, it)
-            item.setToolTip(self._poster_tip(it))
-            self.list_results.addItem(item)
-            # 海报视图（竖版 2:3，占位先行，下载后替换）
-            pit = QListWidgetItem()
-            pit.setData(Qt.UserRole, it)
-            pit.setToolTip(self._poster_tip(it))
-            pit.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
-            self.list_posters.addItem(pit)
-            self._items_by_row.append(it)
-            pic = it.get("vod_pic") or ""
-            key = self._search_poster_key(it)
-            pit.setData(Qt.UserRole + 82, key)
-            pix = self._search_posters.cached(key)
-            if pix is not None:
-                pit.setIcon(QIcon(pix))
-            else:
-                pit.setIcon(QIcon(_make_poster_placeholder(name)))
-                if key:
-                    poster_jobs.append((key, pic))
-        if poster_jobs:
-            self._start_poster_jobs(poster_jobs)
+        self._append_search_results(result)
         n = len(self._filtered_content_results(result))
         if n == 0:
             err = getattr(self._movie, "last_search_error", "") or ""
@@ -1097,6 +1098,115 @@ class MoviePanel(QWidget):
             return category
         except Exception:
             return "未知"
+
+    def _append_search_results(self, result):
+        # Append without replacing selected rows, scroll state or active poster generation.
+        saved = [(widget, widget.currentItem(), widget.verticalScrollBar().value())
+                 for widget in (self.list_results, self.list_posters)]
+        poster_jobs = []
+        for it in self._filtered_content_results(result):
+            selected = self._selected_discovery_work
+            if selected:
+                from ...movie.library import title_key
+                year = str(it.get("vod_year") or "")
+                same_year = not selected.get("year") or str(selected["year"]) == year
+                if title_key(it.get("vod_name", "")) == title_key(selected["title"]) and same_year:
+                    it = dict(it, _starlight_work=selected)
+            name = it.get("vod_name", "") or ""
+            remarks = it.get("vod_remarks", "") or ""
+            # 列表视图
+            label = f"{name}  [{remarks}]" if remarks else name
+            if it.get("_source_id"):
+                label += " · " + str(it.get("_source") or "")
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, it)
+            item.setToolTip(self._poster_tip(it) + ("\n来源：" + str(it.get("_source")) if it.get("_source_id") else ""))
+            self.list_results.addItem(item)
+            # 海报视图（竖版 2:3，占位先行，下载后替换）
+            pit = QListWidgetItem()
+            pit.setData(Qt.UserRole, it)
+            pit.setToolTip(self._poster_tip(it) + ("\n来源：" + str(it.get("_source")) if it.get("_source_id") else ""))
+            pit.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            self.list_posters.addItem(pit)
+            self._items_by_row.append(it)
+            pic = it.get("vod_pic") or ""
+            key = self._search_poster_key(it)
+            pit.setData(Qt.UserRole + 82, key)
+            pix = self._search_posters.cached(key)
+            if pix is not None:
+                pit.setIcon(QIcon(pix))
+            else:
+                pit.setIcon(QIcon(_make_poster_placeholder(name)))
+                if key:
+                    poster_jobs.append((key, pic))
+        if poster_jobs:
+            self._start_poster_jobs(poster_jobs)
+        for widget, selected, position in saved:
+            if selected is not None:
+                widget.setCurrentItem(selected)
+            widget.verticalScrollBar().setValue(position)
+
+    def _freeze_progressive(self):
+        self._progressive_ui_timer.stop()
+        if self._progressive_search is not None:
+            self._progressive_frozen = True
+            self._progressive_serial = None
+            self._progressive_search.invalidate()
+            self._progressive_search.probe_timer.start(self._progressive_search.PROBE_INTERVAL_MS)
+
+    def _progressive_is_current(self, serial):
+        if (self._recommendation_closed or self._progressive_frozen
+                or serial != self._progressive_serial):
+            return False
+        if self._movie._playback_gen != self._progressive_playback_generation:
+            self._freeze_progressive()
+            return False
+        return True
+
+    def _progressive_batch(self, serial, result):
+        if not self._progressive_is_current(serial):
+            return
+        rows = result["items"]
+        self._last_search_result.extend(rows)
+        self._append_search_results(rows)
+        n = self.list_posters.count()
+        suffix = "；部分来源不可用，已有结果可使用" if result["failed"] and n else ""
+        self.lbl_status.setText(
+            f"已找到{n}条，正在补充其他来源（{result['done']}/{result['total']}）{suffix}"
+            if n else "正在搜索第一批结果…")
+        logger.info("[MovieSearch] stage=progressive_batch serial=%s rows=%s done=%s total=%s",
+                    serial, len(rows), result["done"], result["total"])
+
+    def _progressive_finished(self, serial, result):
+        if not self._progressive_is_current(serial):
+            return
+        self._progressive_ui_timer.stop()
+        n = self.list_posters.count()
+        if result["reason"] == "changed":
+            text = "片源设置已更改，请重新搜索。"
+        elif result["reason"] == "budget":
+            text = f"搜索时间已到，已找到{n}条；部分来源尚未完成，可使用已有结果或重试。"
+        elif not result["total"]:
+            text = "没有启用的可用片源，请在片源管理中检查。"
+        elif result["failed"] == result["total"]:
+            text = "所有来源搜索失败，请检查网络或更换片源后重试。"
+        elif n:
+            text = f"搜索完成，共{n}条" + ("；部分来源不可用，已有结果可使用。" if result["failed"] else "。")
+        else:
+            text = "没有匹配影片；部分来源不可用。" if result["failed"] else "没有匹配影片，请换个片名重试。"
+        if result["limited"]:
+            text += " 已限制本次候选数量。"
+        self.lbl_status.setText(text)
+        logger.info("[MovieSearch] stage=progressive_settled serial=%s result=%s count=%s",
+                    serial, result["reason"], n)
+        notify("影片搜索已结束", text, source="movie", status="success" if n else "warning")
+
+    def _progressive_ui_timeout(self):
+        if self._progressive_serial is None or self._progressive_frozen:
+            return
+        self._freeze_progressive()
+        self.lbl_status.setText("搜索超时；已有结果可以使用，请稍后重试或更换片源。")
+        notify("影片搜索超时", self.lbl_status.text(), source="movie", status="warning")
 
     def _filtered_content_results(self, result):
         selected = self.combo_content_filter.currentText() if hasattr(self, "combo_content_filter") else "全部"
@@ -1224,6 +1334,7 @@ class MoviePanel(QWidget):
         return True
 
     def _on_item_activated(self, item):
+        self._freeze_progressive()
         # 双击 → 直接播放（先取消单击详情定时器，防双击误触详情页）
         self._click_timer.stop()
         it = item.data(Qt.UserRole)
@@ -1425,6 +1536,7 @@ class MoviePanel(QWidget):
         if self._recommendation_closed or self.movie_home._closed or not current():
             return
         self._film_search.invalidate()
+        self._freeze_progressive()
         self.stack_results.setCurrentWidget(self.movie_home)
         self.movie_home.present_recommendations(batch)
         parent = self.parentWidget()
@@ -1612,6 +1724,8 @@ class MoviePanel(QWidget):
             self._search_posters.request(key, url)
 
     def _search_poster_key(self, item):
+        if item.get("_source_id"):
+            return poster_key(["cms", item["_source_id"]], item.get("vod_id"), item.get("vod_pic"))
         name = item.get("_source") or getattr(self._movie, "last_search_source", "")
         name = name if isinstance(name, str) else ""
         manager = getattr(self._movie, "_source_manager", None)
@@ -1638,6 +1752,9 @@ class MoviePanel(QWidget):
 
 
     def closeEvent(self, event):
+        self._freeze_progressive()
+        if self._progressive_search is not None:
+            self._progressive_search.detach()
         self._search_posters.close()
         super().closeEvent(event)
 
@@ -1678,6 +1795,7 @@ class MoviePanel(QWidget):
         try:
             if callable(is_current) and not is_current():
                 return
+            self._freeze_progressive()
             if self._video_win is not None:
                 # P0 卡死修复（宿主窗口系统同步高危）：显示序列延后一拍——
                 # 删 raise_()/activateWindow()（show 已置顶；前台锁宿主无效），

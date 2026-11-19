@@ -431,6 +431,18 @@ class MovieController:
 
     # ---- 搜索 ----
 
+    def progressive_search_service(self):
+        """Optional source-only manual UI channel; legacy voice/search stays synchronous."""
+        if not isinstance(self._source_manager, MovieSourceManager):
+            return None
+        from .progressive_search import shared_search_service
+        service = shared_search_service()
+        if service is not None:
+            # Conservative cached ownership only; never probe IPC on the GUI thread.
+            service.configure(self._source_manager,
+                              lambda: self._current is None and not self._external_url_mode)
+        return service
+
     def search_for_ui(self, keyword, is_current, deadline):
         """Cooperative UI cancellation; reuses the original sequential search."""
         if not is_current() or time.monotonic() >= deadline:
