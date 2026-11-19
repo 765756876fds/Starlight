@@ -204,8 +204,14 @@ from ..theme.tokens import Tokens
 from ..widgets.icon_utils import lucide_icon
 
 
+def _search_source_name(data):
+    name = str(data.get("_source") or "").strip()
+    # Only display the configured label, never fall back to a URL or source ID.
+    return name if "://" not in name else ""
+
+
 class _PosterWallDelegate(QStyledItemDelegate):
-    """在线搜索结果海报墙：海报（圆角缩略）+ 电影名 14 主色 + 备注 12 次色。
+    """在线搜索结果海报墙：海报、片名、版本备注与来源。
     item 数据：UserRole=dict（vod_name/vod_remarks/...），DecorationRole=QIcon。"""
 
     _GRID = (170, 292)          # 海报 140×210 + 名行 + 备注行
@@ -241,25 +247,39 @@ class _PosterWallDelegate(QStyledItemDelegate):
             painter.setClipPath(clip)
             painter.drawPixmap(px, py, pm)
             painter.setClipping(False)
-        # 电影名 14 主色（加粗 + 省略号）
-        name = str(data.get("vod_name") or "")
-        f1 = QFont()
-        f1.setPixelSize(Tokens.FONT_SIZE_BODY)
-        f1.setBold(True)
-        fm1 = QFontMetrics(f1)
-        el = fm1.elidedText(name, Qt.ElideRight, rect.width() - 12)
-        painter.setFont(f1)
-        painter.setPen(QColor(Tokens.TEXT_PRIMARY))
-        painter.drawText(px + 6, py + ph + fm1.ascent() + 6, el)
-        # 备注 12 次色
-        remarks = str(data.get("vod_remarks") or "")
-        f2 = QFont()
-        f2.setPixelSize(Tokens.FONT_SIZE_SUB)
-        fm2 = QFontMetrics(f2)
-        el2 = fm2.elidedText(remarks, Qt.ElideRight, rect.width() - 12)
-        painter.setFont(f2)
-        painter.setPen(QColor(Tokens.TEXT_SECONDARY))
-        painter.drawText(px + 6, py + ph + fm1.height() + 6 + fm2.ascent(), el2)
+        # Captions use the card's full interior and preserve the version line.
+        caption = rect.adjusted(6, self._TOP + ph + 6, -6, 0)
+        painter.setClipRect(caption, Qt.IntersectClip)
+        y = caption.top()
+        rows = (
+            (str(data.get("vod_name") or ""), Tokens.FONT_SIZE_BODY, True, Tokens.TEXT_PRIMARY),
+            (str(data.get("vod_remarks") or ""), Tokens.FONT_SIZE_SUB, False, Tokens.TEXT_SECONDARY),
+            (_search_source_name(data), Tokens.FONT_SIZE_SUB, False, Tokens.TEXT_SECONDARY),
+        )
+        year = str(data.get("vod_year") or "")
+        for row, (label, size, bold, color) in enumerate(rows):
+            year_on_row = year if row == 2 else ""
+            if not (label or year_on_row):
+                continue
+            font = QFont()
+            font.setPixelSize(size)
+            font.setBold(bold)
+            painter.setFont(font)
+            metrics = painter.fontMetrics()
+            if y + metrics.height() > caption.bottom() + 1:
+                break
+            painter.setPen(QColor(color))
+            baseline = y + metrics.ascent()
+            width = caption.width()
+            if year_on_row:
+                year_on_row = metrics.elidedText(year_on_row, Qt.ElideRight, width // 2)
+                year_width = metrics.horizontalAdvance(year_on_row)
+                painter.drawText(caption.right() + 1 - year_width, baseline, year_on_row)
+                width -= year_width + 6
+            if label and width > 0:
+                painter.drawText(caption.left(), baseline,
+                                 metrics.elidedText(label, Qt.ElideRight, width))
+            y += metrics.height() + 2
         painter.restore()
 
 
@@ -1208,16 +1228,19 @@ class MoviePanel(QWidget):
             remarks = it.get("vod_remarks", "") or ""
             # 列表视图
             label = f"{name}  [{remarks}]" if remarks else name
-            if it.get("_source_id"):
-                label += " · " + str(it.get("_source") or "")
+            source = _search_source_name(it)
+            tooltip = self._poster_tip(it)
+            if source:
+                label += " · " + source
+                tooltip += "\n来源：" + source
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, it)
-            item.setToolTip(self._poster_tip(it) + ("\n来源：" + str(it.get("_source")) if it.get("_source_id") else ""))
+            item.setToolTip(tooltip)
             self.list_results.addItem(item)
             # 海报视图（竖版 2:3，占位先行，下载后替换）
             pit = QListWidgetItem()
             pit.setData(Qt.UserRole, it)
-            pit.setToolTip(self._poster_tip(it) + ("\n来源：" + str(it.get("_source")) if it.get("_source_id") else ""))
+            pit.setToolTip(tooltip)
             pit.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
             self.list_posters.addItem(pit)
             self._items_by_row.append(it)

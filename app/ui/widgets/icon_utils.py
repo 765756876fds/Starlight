@@ -26,6 +26,8 @@ _LUCIDE = {
     "circle-alert": '<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
     "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
     "play": '<path d="m6 3 14 9-14 9V3z"/>',
+    "heart": ('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0l-1 1-1-1a5.5 5.5 0 0 0-7.8 7.8'
+              'l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8Z"/>'),
     "pause": '<line x1="9" x2="9" y1="4" y2="20"/><line x1="15" x2="15" y1="4" y2="20"/>',
     "square": '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>',
     "skip-back": ('<polygon points="19 20 9 12 19 4 19 20"/>'
@@ -99,12 +101,12 @@ _FALLBACK_CHAR = {
 
 
 def lucide_icon(name: str, size: int = 20, color: str | None = None,
-                stroke_width: float = 2.0) -> QIcon:
+                stroke_width: float = 2.0, *, filled: bool = False) -> QIcon:
     """生成指定颜色/尺寸的线性图标 QIcon（线程无关，主线程调用）。"""
     body = _LUCIDE.get(name)
     if body is None:  # pragma: no cover
         body = _LUCIDE["music"]
-    return semantic_svg_icon(body, color=color, fill=name == "play", stroke_width=stroke_width)
+    return semantic_svg_icon(body, color=color, fill=filled or name == "play", stroke_width=stroke_width)
 
 
 _ICON_CACHE = {}

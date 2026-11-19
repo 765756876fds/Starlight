@@ -5,7 +5,7 @@ from ...core.notifications import notify, get_notification_center, current_opera
 import time
 import zlib
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStyledItemDelegate,
     QStackedWidget,
     QTabWidget,
@@ -35,7 +36,9 @@ from ...music.online.models import OnlineTrack
 from ..dialogs.identify_dialog import IdentifyDialog
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
+from ..widgets.current_song_like import CurrentSongLikeButton
 from ..widgets.icon_utils import lucide_icon
+from ..widgets.latest_task import LatestTask
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
 from ..widgets.music_queue_dialog import MusicQueueDialog
 
@@ -158,6 +161,8 @@ class MusicPanel(QWidget):
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
         self._music = music
+        self._playlist_task = LatestTask(self)
+        self._playlist_task.completed.connect(self._apply_playlists)
         self._volume_request_gen = 0
         self._syncing_volume = False
         self._last_ui_tick = None
@@ -282,7 +287,19 @@ class MusicPanel(QWidget):
         self.lbl_track = QLabel("未播放")
         self.lbl_track.setAlignment(Qt.AlignCenter)
         self.lbl_track.setProperty("class", "title")
-        root.addWidget(self.lbl_track)  # 全局播放控制栏：常驻面板底部，不随 Tab 切换
+        self.lbl_track.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.lbl_track.setMinimumWidth(1)
+        self.lbl_track.setMaximumWidth(420)
+        self.lbl_track.setTextFormat(Qt.PlainText)
+        track_row = QHBoxLayout()
+        self.btn_like = CurrentSongLikeButton(music, self)
+        self.btn_like.changed.connect(self._refresh_visible_playlists)
+        self._queue_changed.connect(self.btn_like.sync, Qt.QueuedConnection)
+        track_row.addStretch()
+        track_row.addWidget(self.lbl_track)
+        track_row.addWidget(self.btn_like)
+        track_row.addStretch()
+        root.addLayout(track_row)
 
         # 进度条（律动波形：播放中频谱跳动，暂停低电平）
         from ..widgets.waveform_slider import WaveformSlider
@@ -585,6 +602,9 @@ class MusicPanel(QWidget):
         """关闭时注销事件总线订阅（防内存泄漏/幽灵回调）：
         与 __init__ 中 subscribe 的一一配对注销。"""
         self._queue_refresh_timer.stop()
+        if hasattr(self, "btn_like"):
+            self.btn_like.shutdown()
+            self._playlist_task.cancel()
         if hasattr(self, "discovery"):
             self.discovery.shutdown()
         if self._queue_dialog is not None:
@@ -603,6 +623,8 @@ class MusicPanel(QWidget):
         self._last_ui_tick = None
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.start()
+        if hasattr(self, "btn_like"):
+            self.btn_like.sync()
         self._progress_polling = True
         self._start_progress_poll()
 
@@ -1717,64 +1739,52 @@ class MusicPanel(QWidget):
 
     # ---- 歌单 ----
 
-    def _refresh_playlists(self):
-        """重载左侧歌单列表（保持当前选中）。"""
-        if self._music is None:
-            return
-        try:
-            pls = self._music.get_playlists()
-        except Exception as e:
-            print(f"[MusicPanel] get_playlists error: {e}")
-            pls = []
-        current_id = None
-        it = self.list_playlists.currentItem()
-        if it is not None:
-            d = it.data(Qt.UserRole)
-            if d:
-                current_id = d.get("id")
-        self.list_playlists.clear()
-        for p in pls:
-            item = QListWidgetItem(p.get("name", "?"))
-            item.setData(Qt.UserRole, p)
-            self.list_playlists.addItem(item)
-            if p.get("id") == current_id:
-                self.list_playlists.setCurrentItem(item)
-        if pls and self.list_playlists.currentItem() is None:
-            self.list_playlists.setCurrentRow(0)
-        self._refresh_playlist_songs()
+    def _refresh_visible_playlists(self):
+        if self.tabs.currentIndex() == 3:
+            self._refresh_playlists()
 
-    def _refresh_playlist_songs(self):
-        """渲染选中歌单的歌（按加入时间）。"""
+    def _refresh_playlists(self, *, poll=False):
+        """Read playlist data off the GUI thread, then preserve the current selection."""
+        if self._music is None or (poll and self._playlist_task._running):
+            return
+        listing = self.list_playlists
+        selected = listing.currentItem()
+        current = selected.data(Qt.UserRole)["id"] if selected is not None else None
+        displayed = [listing.item(i).data(Qt.UserRole) for i in range(listing.count())]
+        music = self._music
+
+        def read():
+            playlists = music.get_playlists()
+            if poll and playlists == displayed:
+                return None
+            selected_id = next((p["id"] for p in playlists if p["id"] == current),
+                               playlists[0]["id"] if playlists else None)
+            songs = music.get_playlist_songs(selected_id) if selected_id is not None else []
+            return playlists, selected_id, songs
+
+        self._playlist_task.submit(None, read)
+
+    def _apply_playlists(self, _key, snapshot, error):
+        if error is not None or snapshot is None:
+            return
+        playlists, selected_id, rows = snapshot
+        listing = self.list_playlists
+        displayed = [listing.item(i).data(Qt.UserRole) for i in range(listing.count())]
+        if playlists != displayed:
+            with QSignalBlocker(listing):
+                listing.clear()
+                for p in playlists:
+                    item = QListWidgetItem(p.get("name", "?"))
+                    item.setData(Qt.UserRole, p)
+                    listing.addItem(item)
+                    if p["id"] == selected_id:
+                        listing.setCurrentItem(item)
         self.list_playlist_songs.clear()
-        it = self.list_playlists.currentItem()
-        if it is None:
-            self.lbl_playlist_status.setText("未选择歌单")
-            return
-        p = it.data(Qt.UserRole)
-        if not p:
-            self.lbl_playlist_status.setText("未选择歌单")
-            return
-        try:
-            rows = self._music.get_playlist_songs(p.get("id"))
-        except Exception as e:
-            print(f"[MusicPanel] get_playlist_songs error: {e}")
-            rows = []
-        for i, row in enumerate(rows):
+        for row in rows:
             title = row.get("title", "?") or "?"
             artist = row.get("artist", "") or ""
             st = row.get("source_type", "") or ""
             sn = row.get("source_name", "") or ""
-            # 封面补全兜底：controller 已反查 path/cover_url；此处再兜底并打日志
-            if self._music is not None and hasattr(self._music, "lookup_cover"):
-                try:
-                    row = self._music.lookup_cover(row)
-                except Exception:
-                    pass
-            if i < 3:
-                print(f"[MusicPanel] playlist item#{i}: "
-                      f"title={title!r} artist={artist!r} source_type={st!r} "
-                      f"music_id={row.get('music_id')!r} "
-                      f"cover_url={row.get('cover_url')!r} path={row.get('path')!r}")
             src = "本地" if st == "local" else (sn or "在线")
             item = QListWidgetItem(f"{title} - {artist} [{src}]")
             mid = row.get("music_id") or row.get("id")
@@ -1783,10 +1793,15 @@ class MusicPanel(QWidget):
                 f"{artist} · {src}" if artist else src,
                 f"local:{mid}" if mid else None))
             self.list_playlist_songs.addItem(item)
-        self.lbl_playlist_status.setText(f"{len(rows)} 首")
+        self.lbl_playlist_status.setText(f"{len(rows)} 首" if selected_id is not None else "未选择歌单")
+
+    def _refresh_playlist_songs(self):
+        self._refresh_playlists()
 
     def _on_playlist_selected(self, current, previous):
         """歌单列表选中变化 → 刷新右侧歌曲。"""
+        self.list_playlist_songs.clear()
+        self.lbl_playlist_status.setText("正在读取歌单…" if current is not None else "未选择歌单")
         self._refresh_playlist_songs()
 
     def _on_new_playlist(self):
@@ -2672,6 +2687,10 @@ class MusicPanel(QWidget):
             # 进度滑块/时间由后台轮询线程（_progress_signal → _on_progress）驱动，
             # 主线程绝不同步 IPC 读 mpv——playback-time/duration 响应慢曾造成拖拽窗口卡顿。
             song = self._music.get_current_song()
+            if hasattr(self, "btn_like"):
+                self.btn_like.sync()
+            if not song:
+                self.lbl_track.setText("未播放")
             if song:
                 title = song.get("title") or song.get("name") or ""
                 artist = song.get("artist") or ""
@@ -2718,14 +2737,9 @@ class MusicPanel(QWidget):
                     if self.btn_mode.text() != label:
                         self.btn_mode.setText(label)
                     break
-        # 语音创建歌单后自动刷新列表
-        try:
-            n = len(self._music.get_playlists())
-            if n != getattr(self, "_playlist_count", -1):
-                self._playlist_count = n
-                self._refresh_playlists()
-        except Exception:
-            pass
+        # 语音创建歌单后后台刷新，只在歌单可见时读取。
+        if hasattr(self, "_playlist_task") and self.tabs.currentIndex() == 3:
+            self._refresh_playlists(poll=True)
         try:
             hl = bool(self._music.is_highlight_mode())
         except Exception:

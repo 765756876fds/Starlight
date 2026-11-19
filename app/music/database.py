@@ -15,6 +15,36 @@ from typing import Any
 from app.core.path_resolve import USER_DATA_DIR
 
 
+_LIKED_PLAYLIST = "我喜欢的音乐"
+
+
+def liked_song_identity(song: dict) -> tuple | None:
+    """Use the playlist's persisted identity, including actual online playback rows."""
+    source_type = song.get("source_type")
+    if source_type == "online" or song.get("source") == "online" or song.get("online") is True:
+        source, track = song.get("source_name"), song.get("track_id")
+        if (isinstance(source, str) and source.strip()
+                and isinstance(track, (str, int)) and not isinstance(track, bool)
+                and str(track).strip()):
+            return "online", source, str(track)
+        return None
+    if source_type not in (None, "", "local"):
+        return None
+    music_id = song.get("music_id") or song.get("id")
+    if isinstance(music_id, bool) or not isinstance(music_id, (str, int)):
+        return None
+    try:
+        music_id = int(music_id)
+    except ValueError:
+        return None
+    return ("local", music_id) if music_id > 0 else None
+
+
+def _liked_song_filter(identity: tuple) -> str:
+    fields = "music_id=?" if identity[0] == "local" else "source_name=? AND track_id=?"
+    return "source_type=? AND " + fields
+
+
 class MusicDatabase:
     """音乐数据库管理"""
 
@@ -616,12 +646,31 @@ class MusicDatabase:
             self._conn.commit()
             return True
 
+    def is_liked_song(self, song: dict[str, Any]) -> bool | None:
+        """False is a confirmed absence. None means the identity or read was unavailable."""
+        identity = liked_song_identity(song)
+        if identity is None or not self._lock.acquire(timeout=.15):
+            return None
+        try:
+            if self._conn is None:
+                return None
+            return self._conn.execute(
+                "SELECT 1 FROM playlist_songs WHERE playlist_id="
+                "(SELECT id FROM playlists WHERE name=?) AND " + _liked_song_filter(identity)
+                + " LIMIT 1", (_LIKED_PLAYLIST, *identity)).fetchone() is not None
+        except (sqlite3.Error, OSError):
+            return None
+        finally:
+            self._lock.release()
+
     def save_liked_song(self, song: dict[str, Any], is_current=None) -> bool:
-        """Atomic fixed-playlist save; no file operation or playback lock held."""
-        st = song.get("source_type") or "local"
-        mid = int(song.get("music_id") or song.get("id") or 0)
-        sn, tid = str(song.get("source_name") or ""), str(song.get("track_id") or "")
-        if not song.get("title") or st not in ("local", "online") or (st == "local" and mid <= 0) or (st == "online" and (not sn or not tid)):
+        """Compatibility entry for voice saves, including guarded rollback."""
+        return self.set_liked_song(song, True, is_current)
+
+    def set_liked_song(self, song: dict[str, Any], liked: bool, is_current=None) -> bool:
+        """Set one exact membership in the existing liked playlist, without file operations."""
+        identity = liked_song_identity(song)
+        if identity is None or (liked and not song.get("title")):
             return False
         if not self._lock.acquire(timeout=.15):
             return False
@@ -632,16 +681,26 @@ class MusicDatabase:
             old_timeout = self._conn.execute("PRAGMA busy_timeout").fetchone()[0]
             self._conn.execute("PRAGMA busy_timeout=150")
             self._conn.execute("BEGIN IMMEDIATE")
-            self._conn.execute("INSERT OR IGNORE INTO playlists(name,created_at) VALUES(?,?)", ("我喜欢的音乐", time.time()))
-            pid = self._conn.execute("SELECT id FROM playlists WHERE name=?", ("我喜欢的音乐",)).fetchone()[0]
-            duplicate = self._conn.execute(
-                "SELECT 1 FROM playlist_songs WHERE playlist_id=? AND source_type=? AND "
-                + ("music_id=?" if st == "local" else "source_name=? AND track_id=?"),
-                (pid, st, mid) if st == "local" else (pid, st, sn, tid)).fetchone()
-            if not duplicate:
-                self._conn.execute("""INSERT INTO playlist_songs
-                    (playlist_id,title,artist,source_type,source_name,track_id,music_id,added_at)
-                    VALUES(?,?,?,?,?,?,?,?)""", (pid, song["title"], song.get("artist") or "", st, sn, tid, mid, time.time()))
+            if liked:
+                self._conn.execute("INSERT OR IGNORE INTO playlists(name,created_at) VALUES(?,?)",
+                                   (_LIKED_PLAYLIST, time.time()))
+            playlist = self._conn.execute(
+                "SELECT id FROM playlists WHERE name=?", (_LIKED_PLAYLIST,)).fetchone()
+            if playlist is not None:
+                pid = playlist[0]
+                condition = " WHERE playlist_id=? AND " + _liked_song_filter(identity)
+                params = (pid, *identity)
+                if not liked:
+                    self._conn.execute("DELETE FROM playlist_songs" + condition, params)
+                elif not self._conn.execute("SELECT 1 FROM playlist_songs" + condition,
+                                            params).fetchone():
+                    st = identity[0]
+                    sn, tid = identity[1:] if st == "online" else ("", "")
+                    mid = identity[1] if st == "local" else 0
+                    self._conn.execute("""INSERT INTO playlist_songs
+                        (playlist_id,title,artist,source_type,source_name,track_id,music_id,added_at)
+                        VALUES(?,?,?,?,?,?,?,?)""",
+                        (pid, song["title"], song.get("artist") or "", st, sn, tid, mid, time.time()))
             if is_current is not None and not is_current():
                 self._conn.rollback()
                 return False

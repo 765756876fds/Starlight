@@ -1066,6 +1066,12 @@ class MusicController:
             logger.error(f"[Music] add_to_playlist error: {e}")
             return False
 
+    def is_liked_song(self, song: dict) -> bool | None:
+        return self.db.is_liked_song(song)
+
+    def set_liked_song(self, song: dict, liked: bool) -> bool:
+        return self.db.set_liked_song(song, liked)
+
     def remove_from_playlist(self, playlist_id: int, song_id: int) -> bool:
         """从歌单移除（song_id = playlist_songs.id）。"""
         try:
