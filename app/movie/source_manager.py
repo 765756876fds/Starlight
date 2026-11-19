@@ -17,7 +17,7 @@ import yaml
 
 from app.core.path_resolve import PROJECT_ROOT
 
-UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+from .cms_parser import CMS_HEADERS as UA, CMS_PROBE_KEYWORD as _TEST_KW
 
 # 实测可用源（2026-10-16 探针：17 源里 9 个通过三合一）——量子置顶
 DEFAULT_SOURCES: list[dict[str, Any]] = [
@@ -31,9 +31,6 @@ DEFAULT_SOURCES: list[dict[str, Any]] = [
     {"name": "360资源", "url": "https://360zy.com/api.php/provide/vod/", "enabled": True},
     {"name": "电影天堂", "url": "http://caiji.dyttzyapi.com/api.php/provide/vod/from/dyttm3u8/", "enabled": True},
 ]
-
-_TEST_KW = "流浪地球2"
-
 
 def _default_settings_path() -> str:
     return str(PROJECT_ROOT / "config" / "settings.yaml")

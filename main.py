@@ -3,10 +3,17 @@
 import os
 import sys
 
-# Run before configuration, log redirection, Qt windows or business services.
-if __name__ == "__main__" and "--self-check" in sys.argv:
-    from app.core.self_check import main as self_check_main
-    raise SystemExit(self_check_main(sys.argv[sys.argv.index("--self-check") + 1:]))
+# Dispatch before configuration, log redirection, Qt or business services.
+if __name__ == "__main__":
+    arguments = sys.argv[1:]
+    if "--movie-search-worker" in arguments:
+        if arguments != ["--movie-search-worker"]:
+            raise SystemExit(2)
+        from app.movie.search_worker import main as search_worker_main
+        raise SystemExit(search_worker_main())
+    if "--self-check" in arguments:
+        from app.core.self_check import main as self_check_main
+        raise SystemExit(self_check_main(arguments[arguments.index("--self-check") + 1:]))
 
 # Force UTF-8 stdout/stderr so Chinese prints correctly in cmd.
 try:

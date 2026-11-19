@@ -1,27 +1,28 @@
 """One CMS request on stdin, one bounded JSON response on stdout; no user stores."""
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import json
-from pathlib import Path
+import os
 import sys
 import time
 
-import requests
+from .cms_parser import CMS_HEADERS, CMS_PROBE_KEYWORD, normalise_playback, parse_cms_response
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from app.movie.cms_parser import normalise_playback, parse_cms_response  # noqa: E402
-from app.movie.source_manager import UA, _TEST_KW  # noqa: E402
-
+MAX_INPUT = 64 * 1024
+MAX_OUTPUT = 4 * 1024 * 1024
 MAX_BODY = 2_000_000
 
 
 def fetch(payload):
+    import requests
+
     started = time.monotonic()
     budget = min(10., max(.01, float(payload["budget"])))
     deadline = started + budget
-    query = _TEST_KW if payload.get("mode") == "probe" else payload["keyword"].strip()
+    query = CMS_PROBE_KEYWORD if payload.get("mode") == "probe" else payload["keyword"].strip()
     response = None
     try:
         response = requests.get(payload["url"], params={"ac": "videolist", "wd": query},
-                                headers=UA, timeout=(min(2., budget), budget), stream=True)
+                                headers=CMS_HEADERS, timeout=(min(2., budget), budget), stream=True)
         response.raise_for_status()
         body = bytearray()
         while time.monotonic() < deadline:
@@ -61,17 +62,66 @@ def fetch(payload):
             response.close()
 
 
-if __name__ == "__main__":
+def _pipe(stack, stream, *, reading):
+    binary = getattr(stream, "buffer", None)
+    if binary is not None:
+        return binary
+    if os.name != "nt":
+        raise OSError("missing worker stream")
+
+    # PyInstaller windowed builds may leave the Python streams unset even
+    # with QProcess pipes attached to the OS standard handles.
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_handle = kernel.GetStdHandle
+    get_handle.argtypes = [wintypes.DWORD]
+    get_handle.restype = wintypes.HANDLE
+    file_type = kernel.GetFileType
+    file_type.argtypes = [wintypes.HANDLE]
+    file_type.restype = wintypes.DWORD
+    handle = get_handle(-10 if reading else -11)
+    if not handle or file_type(handle) != 3:  # FILE_TYPE_PIPE
+        raise OSError("missing worker pipe")
+    mode = os.O_RDONLY if reading else os.O_WRONLY
+    fd = msvcrt.open_osfhandle(handle, mode | os.O_BINARY | os.O_NOINHERIT)
+    return stack.enter_context(os.fdopen(fd, "rb" if reading else "wb"))
+
+
+def main():
     try:
-        payload = json.loads(sys.stdin.buffer.read(65537))
-        if payload.get("mode") == "verify_switch":
-            from app.movie.switch_probe import verify
+        with ExitStack() as stack:
+            reader = _pipe(stack, sys.stdin, reading=True)
+            writer = _pipe(stack, sys.stdout, reading=False)
+            quiet = stack.enter_context(open(os.devnull, "w", encoding="utf-8"))
+            with redirect_stdout(quiet), redirect_stderr(quiet):
+                output = _run_one(reader)
+            writer.write(output)
+            writer.flush()
+    except OSError:
+        return 2
+    return 0
+
+
+def _run_one(reader):
+    try:
+        raw = reader.read(MAX_INPUT + 1)
+        if len(raw) > MAX_INPUT:
+            raise ValueError("oversized job")
+        payload = json.loads(raw)
+        mode = payload["mode"]
+        if mode == "verify_switch":
+            from .switch_probe import verify
             result = verify(payload)
-        else:
+        elif mode in ("search", "probe"):
             result = fetch(payload)
+        else:
+            raise ValueError("unexpected job mode")
+        output = json.dumps(result, ensure_ascii=False).encode("utf-8")
     except Exception:
-        result = dict(status="failed", items=[], error="WorkerInput")
-    output = json.dumps(result, ensure_ascii=False).encode("utf8")
-    if len(output) > 4*1024*1024:
-        output = b'{"status":"failed","items":[],"error":"ResponseTooLarge"}'
-    sys.stdout.buffer.write(output)
+        return b'{"status":"failed","items":[],"error":"WorkerInput"}'
+    if len(output) > MAX_OUTPUT:
+        return b'{"status":"failed","items":[],"error":"ResponseTooLarge"}'
+    return output

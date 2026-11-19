@@ -16,10 +16,16 @@ class SearchProcessPool(QObject):
     def __init__(self, parent=None, command=None):
         super().__init__(parent)
         executable = Path(sys.executable)
-        if sys.platform == "win32" and executable.with_name("pythonw.exe").is_file():
-            executable = executable.with_name("pythonw.exe")
-        self.command = command or [str(executable), "-B", "-u",
-                                   str(Path(__file__).with_name("search_worker.py"))]
+        frozen = getattr(sys, "frozen", False)
+        self.working_directory = executable.parent if frozen else Path(__file__).resolve().parents[2]
+        if frozen:
+            worker_command = [str(executable), "--movie-search-worker"]
+        else:
+            if sys.platform == "win32" and executable.with_name("pythonw.exe").is_file():
+                executable = executable.with_name("pythonw.exe")
+            worker_command = [str(executable), "-B", "-u", str(self.working_directory / "main.py"),
+                              "--movie-search-worker"]
+        self.command = command or worker_command
         self.active = {}
         self.closed = False
         self.peak = 0
@@ -42,7 +48,7 @@ class SearchProcessPool(QObject):
         timer.timeout.connect(lambda: self._kill(token, "Timeout"))
         process.setProgram(self.command[0])
         process.setArguments(self.command[1:])
-        process.setWorkingDirectory(str(Path(__file__).resolve().parents[2]))
+        process.setWorkingDirectory(str(self.working_directory))
         timer.start(max(1, timeout_ms))  # Includes Python startup, DNS and response parsing.
         process.start()
         return True

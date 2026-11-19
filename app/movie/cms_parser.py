@@ -2,6 +2,9 @@
 
 import json
 
+CMS_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+CMS_PROBE_KEYWORD = "流浪地球2"
+
 
 def parse_cms_response(text):
     """苹果 CMS 响应解析。

@@ -332,9 +332,11 @@ class ProgressiveMovieSearch(QObject):
 def shared_search_service():
     """One application owner: two slots across all UI generations and probes."""
     app = QCoreApplication.instance()
-    if (app is None or getattr(sys, "frozen", False)
-            or (sys.platform == "win32" and not Path(sys.executable).with_name("pythonw.exe").is_file())):
-        return None  # Frozen launcher needs a separately verified worker entry, never relaunch GUI.
+    if app is None:
+        return None
+    if (not getattr(sys, "frozen", False) and sys.platform == "win32"
+            and not Path(sys.executable).with_name("pythonw.exe").is_file()):
+        return None
     service = getattr(app, "_movie_progressive_search", None)
     if service is None:
         service = ProgressiveMovieSearch(app)

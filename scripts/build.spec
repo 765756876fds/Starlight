@@ -59,6 +59,9 @@ hiddenimports = [
     'dateutil',
     'websocket',
     'requests',
+    # Explicit worker entry and the existing optional media probe share this bundle.
+    'app.movie.search_worker',
+    'app.movie.switch_probe',
     'edge_tts',
     'certifi',      # P0-A: overlay_assets.py 显式用 certifi.where() 做 SSL CA bundle
 ] + pyside_hidden + shazam_hidden + pydantic_hidden + pydantic_core_hidden
