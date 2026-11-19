@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import time
 
 import pytest
+from PySide6.QtCore import QTimer
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
@@ -16,6 +17,10 @@ class SpeedPanel(MusicPanel):
     def __init__(self, controller):
         QWidget.__init__(self)
         self._music = controller
+        # Keep the lifecycle resources that MusicPanel.closeEvent owns.
+        self._queue_refresh_timer = QTimer(self)
+        self._queue_refresh_timer.setSingleShot(True)
+        self._queue_dialog = None
         self._speed_steps = list(MusicController.SPEED_STEPS)
         self._speed_idx = 2
         self.btn_speed = QPushButton("倍速 1x", self)
@@ -70,6 +75,8 @@ def test_speed_ui_signal_tracks_confirmed_failed_and_unknown_results(gui, respon
             assert controller.get_speed() == 1.0
             controller.state_store.set.assert_not_called()
     finally:
-        panel.close()
+        panel._queue_refresh_timer.start(1000)
+        assert panel.close()
+        assert not panel._queue_refresh_timer.isActive()
         panel.deleteLater()
         gui.processEvents()
