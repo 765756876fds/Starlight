@@ -421,11 +421,32 @@ class TestPanelEmbed:
             _flush(qapp)                       # singleShot(0) 延后回调
             assert fake.plays == [it]
             assert panel._embed_playing is True
-            assert panel.lbl_now.text().startswith("播放中")
+            assert panel.lbl_now.text().startswith("加载中")
         finally:
             panel._timer.stop()
             if panel._video_win is not None:
                 panel._video_win._timer.stop()
+
+    def test_failed_episode_selection_does_not_claim_playback(self, qapp):
+        from unittest.mock import Mock
+        from PySide6.QtWidgets import QListWidgetItem
+        fake = _PanelFakeCtl()
+        fake.play_ok = False
+        panel = MoviePanel(movie=fake)
+        try:
+            row = QListWidgetItem("第 1 集")
+            row.setData(Qt.UserRole, 0)
+            dialog = Mock()
+            panel._on_episode_picked(row, {"vod_name": "Public example"}, [("第 1 集", "x")], dialog)
+            dialog.accept.assert_called_once()
+            assert not panel.lbl_now.text().startswith("播放中")
+            _flush(qapp)
+            assert fake.plays and not panel._embed_playing
+            assert not panel.lbl_now.text().startswith("播放中")
+            assert "无法播放" in panel.lbl_status.text()
+        finally:
+            panel._timer.stop()
+            panel._video_win._timer.stop()
 
     def test_panel_video_stopped_clears_state(self, qapp):
         """播放窗口 stopped 信号 → 面板清 embed 播放态（连播/进度让位窗口）。"""
@@ -497,7 +518,7 @@ class TestPanelEmbedDeferred:
             _flush(qapp)
             assert fake.plays == [it]
             assert panel._embed_playing is True
-            assert panel.lbl_now.text().startswith("播放中")
+            assert panel.lbl_now.text().startswith("加载中")
         finally:
             panel._timer.stop()
             if panel._video_win is not None:

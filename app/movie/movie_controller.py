@@ -85,7 +85,7 @@ def _serialized_media(method):
         lock = getattr(self, "_media_action_lock", None)
         if lock is None:
             lock = self._media_action_lock = threading.RLock()
-        if not lock.acquire(timeout=0 if method.__name__ == "tick" else .2):
+        if not lock.acquire(timeout=0 if method.__name__ in ("tick", "poll_film_ui") else .2):
             return False
         try:
             if guard is not None and not guard():
@@ -143,6 +143,9 @@ class MovieController:
         self._current_index = None
         # V2-2：播放会话代次，每次加载新片递增；全局暂停快照据此判断会话是否变化
         self._playback_gen: int = 0
+        self._film_session = None
+        self._film_phase = "stopped"
+        self._film_sample = {}
         self._media_action_lock = threading.RLock()
         self._music_pause_generation = None
         self._ownership_attempts = (None, 0)
@@ -778,6 +781,7 @@ class MovieController:
         self._current = item
         self._current_index = idx
         self._playback_gen += 1  # V2-2：新片加载，会话代次递增
+        self._begin_film_session(resp, url)
         self._last_idle = False  # 新播放开始，等播完再触发连播
         self._external_url_mode = False  # 切回正常剧集模式
         self._external_url_seen_active = False
@@ -1014,7 +1018,7 @@ class MovieController:
             logger.warning(f"[Movie] subtitle visibility failed: {type(e).__name__}")
             return False, "字幕状态调整失败，请稍后重试"
 
-    def _remember_view(self, now_idle=None, *, force=False):
+    def _remember_view(self, now_idle=None, *, force=False, sample=None):
         if getattr(self, "_switch_unsettled", False):
             return
         if not hasattr(self, "film_memory") or not self._current or getattr(self, "_external_url_mode", False):
@@ -1024,8 +1028,10 @@ class MovieController:
             idle = self.mpv.get_property("idle-active", timeout=.15) if now_idle is None else now_idle
             identity = (self._playback_gen, self._current_index)
             if idle is False:
-                position = self.mpv.get_property("time-pos", timeout=.15)
-                duration = self.mpv.get_property("duration", timeout=.15)
+                position = (sample.get("time-pos") if sample is not None
+                            else self.mpv.get_property("time-pos", timeout=.15))
+                duration = (sample.get("duration") if sample is not None
+                            else self.mpv.get_property("duration", timeout=.15))
                 if type(position) not in (int, float) or type(duration) not in (int, float) or duration <= 0:
                     return
                 self._film_last_sample = (identity, position, duration)
@@ -1122,6 +1128,9 @@ class MovieController:
         self._playback_gen = getattr(self, "_playback_gen", 0) + 1
         self._film_last_sample = None
         self._external_url_seen_active = False  # 缓冲期保护
+        self._film_session = None
+        self._film_phase = "loading"
+        self._film_sample = {}
         self._write_state(playing=True, paused=False)
         self._start_playback_diagnostics("external", str(url), media_url=str(url),
                                          requested_at=requested_at)
@@ -1313,9 +1322,9 @@ class MovieController:
         self._ownership_worker.start()
 
     @_serialized_media
-    def tick(self):
-        """供面板轮询调用（500ms）：检测 mpv idle 上升沿 → 播完自动下一集。
-        手动 stop（_current=None）/ 开关关 → 不连播；末集播完 → 停（不循环）。"""
+    def tick(self, current=None):
+        """Collect playback state and advance only a confirmed native EOF.
+        Legacy non-native adapters retain their idle polling contract."""
         if getattr(self, "_switch_unsettled", False):
             return
         self._apply_pending_local_subtitle()
@@ -1339,6 +1348,9 @@ class MovieController:
             self._last_idle = self.mpv.get_idle_active()
             return
         if not self.mpv.is_running():
+            return
+        if self.native_film_state():
+            self._tick_film_session(current)
             return
         now_idle = self.mpv.get_idle_active()
         self._pause_music_after_start(now_idle)
@@ -1366,6 +1378,112 @@ class MovieController:
             # 播完一集（idle 上升沿）→ 连播下一集
             self._advance_episode()
         self._last_idle = now_idle
+
+    def native_film_state(self):
+        return callable(getattr(type(self.mpv), "film_end_reason", None))
+
+    def playback_phase(self):
+        return self._film_phase
+
+    def _begin_film_session(self, response, url):
+        data = response.get("data")
+        entry = data.get("playlist_entry_id") if isinstance(data, dict) else None
+        entry = entry if type(entry) is int else None
+        self._film_session = dict(generation=self._playback_gen, entry=entry, url=url,
+                                  started_at=time.monotonic(),
+                                  process=getattr(self.mpv, "_process", None),
+                                  previous=None, advanced=False)
+        self._film_phase = "loading"
+        self._film_sample = {}
+
+    def _accept_episode(self, response, url):
+        self._playback_gen += 1
+        self._begin_film_session(response, url)
+        self._pending_history = (dict(self._current), str(url))
+        self._film_last_sample = self._resume_pending = None
+        self._film_saved_at = 0
+
+    def _finish_film_session(self, phase):
+        self._film_phase = phase
+        self._film_session = None
+        self._film_sample = {}
+        self._pending_history = self._resume_pending = self._film_last_sample = None
+        self._current = self._current_index = None
+        self._last_idle = True
+        self._quality_transition(suspend=True)
+        self._write_state(playing=False, paused=False)
+
+    def _tick_film_session(self, current=None):
+        from .playback_diagnostics import read_sample
+        session = getattr(self, "_film_session", None)
+        if (not session or session["generation"] != self._playback_gen
+                or session["process"] is not self.mpv._process):
+            return
+        sample = read_sample(self.mpv.ipc_pipe, expected_path=session["url"],
+                             expected_entry=session["entry"])
+        if getattr(self, "_media_voice_closed", False) or (current is not None and not current()):
+            return
+        if sample and sample.get("idle-active") is False:
+            self._film_sample = sample
+            pos = sample.get("time-pos")
+            prior = session["previous"]
+            moving = all(sample.get(k) is False for k in ("pause", "seeking", "paused-for-cache", "core-idle"))
+            now = time.monotonic()
+            if moving and pos is not None:
+                if prior is not None:
+                    previous, sampled_at = prior
+                    speed = sample.get("speed") or 1
+                    if .02 < pos - previous <= (now - sampled_at) * speed + .5:
+                        session["advanced"] = True
+                session["previous"] = pos, now
+            else:
+                session["previous"] = None
+            self._restore_online_position(False)
+            if session["advanced"]:
+                self._film_phase = ("buffering" if sample.get("paused-for-cache") is True else
+                                    "paused" if sample.get("pause") is True else "playing")
+                self._last_idle = False
+                self._pause_music_after_start(False)
+                self._remember_view(False, sample=sample)
+                self._record_history_if_started(False)
+        reason = self.mpv.film_end_reason(session["entry"])
+        if getattr(self, "_media_voice_closed", False) or (current is not None and not current()):
+            return
+        if reason is None or reason == "redirect":
+            if (not sample and time.monotonic() - session["started_at"] >= 15
+                    and read_sample(self.mpv.ipc_pipe, expected_path="", allow_idle=True).get("idle-active") is True):
+                self._finish_film_session("unconfirmed")
+            return
+        # MPV can report EOF for a truncated stream. Require the last validated
+        # sample to be near its declared end before advancing or marking watched.
+        last = self._film_sample
+        pos, duration = last.get("time-pos"), last.get("duration")
+        tolerance = min(3., max(.75, (last.get("speed") or 1)*.75))
+        reached_end = (session["advanced"] and pos is not None and duration is not None
+                       and duration > 0 and -.5 <= duration-pos <= tolerance)
+        if reason == "eof" and reached_end:
+            self._remember_view(True)
+            if self._auto_next and self._current_index + 1 < len(self.episodes(self._current)):
+                if not self._advance_episode():
+                    self._finish_film_session("failed")
+            else:
+                self._finish_film_session("ended")
+        else:
+            self._finish_film_session("stopped" if reason in ("stop", "quit") else "failed")
+
+    @_serialized_media
+    def poll_film_ui(self, current=None):
+        """Called by the Qt poll worker. The controller owns the read and tick."""
+        if getattr(self, "_media_voice_closed", False):
+            return None
+        self.tick(current)
+        sample = getattr(self, "_film_sample", {})
+        if self._external_url_mode and self.mpv.is_running():
+            from .playback_diagnostics import read_sample
+            sample = read_sample(self.mpv.ipc_pipe)
+        return dict(generation=self._playback_gen, item=self._current, index=self._current_index,
+                    phase=self._film_phase, sample=sample,
+                    crashed=self.is_crashed(), playing=self.is_playing())
 
     def _advance_episode(self):
         """切到下一集；无下一集 → 末集停（不循环）。返回 True=已切，False=已停/加载失败（不推进索引）。"""
@@ -1401,6 +1519,7 @@ class MovieController:
             logger.error(f"[Movie] 自动连播 loadfile 失败: error={err}")
             return False
         self._current_index = nxt
+        self._accept_episode(resp, url)
         self._start_playback_diagnostics("cms", item.get("_source"), media_url=str(url),
                                          requested_at=requested_at)
         return True
@@ -1449,6 +1568,7 @@ class MovieController:
         if not isinstance(resp, dict) or resp.get("error") != "success":
             return False
         self._current_index = prev
+        self._accept_episode(resp, url)
         self._start_playback_diagnostics("cms", item.get("_source"), media_url=str(url),
                                          requested_at=requested_at)
         logger.info(f"[Movie] 切到上一集: {name}")
@@ -1520,6 +1640,9 @@ class MovieController:
                 self._last_idle = True
                 self._write_state(playing=False, paused=False)
             self._switch_unsettled = False
+            self._film_phase = "stopped"
+            self._film_session = None
+            self._film_sample = {}
             return True
         finally:
             self._stopping = False
@@ -1576,7 +1699,10 @@ class MovieController:
             idx = self._current_index or 0
             eps = self.episodes(item)
             url = eps[idx][1] if 0 <= idx < len(eps) else (item.get("first_url") or "")
-            pos = self.get_position()      # 进程死 → 回退最后成功轮询缓存（≤500ms 滞后）
+            if self.native_film_state():
+                pos = getattr(self, "_film_sample", {}).get("time-pos") or self.mpv.get_current_time()
+            else:
+                pos = self.get_position()
             wid_snap = wid if wid is not None else self._embed_wid
         threading.Thread(
             target=self._restart_worker,
@@ -1631,6 +1757,7 @@ class MovieController:
         except Exception as e:
             logger.error(f"[Movie] 崩溃恢复 seek 异常: {e!r}")
             return
+        self._begin_film_session(resp, url)
         self._last_idle = False      # 恢复播放：重置连播基线（防误判 idle 上升沿）
         self._write_state(playing=True, paused=False)
         print("[Movie] mpv 崩溃恢复完成（wid 重传 + loadfile 续播）")

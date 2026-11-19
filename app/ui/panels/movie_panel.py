@@ -850,6 +850,10 @@ class MoviePanel(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
+        self._native_poll = None
+        if getattr(self._movie, "native_film_state", lambda: False)() is True:
+            self._native_poll = LatestTask(self)
+            self._native_poll.completed.connect(self._apply_film_poll)
         self._timer.start()
         # 海报磁盘缓存上限清理（启动时一次；超 500 张删最旧）
         self._cleanup_poster_cache()
@@ -1942,7 +1946,7 @@ class MoviePanel(QWidget):
             ok = self._movie.play(it, index=index)
             if ok:
                 name = it.get("vod_name", "") or ""
-                self.lbl_now.setText(f"播放中: {name}")
+                self.lbl_now.setText(f"加载中: {name}")
                 self.lbl_status.setText("播放器已接收加载，等待起播确认。")
                 self.slider_pos.setEnabled(True)
                 self._sync_toggle_icon()
@@ -1979,7 +1983,7 @@ class MoviePanel(QWidget):
                 if trial is not None and trial.enabled and service is not None:
                     trial.prepare(service, service.switch_candidates(it))
                 name = it.get("vod_name", "") or ""
-                self.lbl_now.setText(f"播放中: {name}")
+                self.lbl_now.setText(f"加载中: {name}")
                 self.lbl_status.setText("播放器已接收加载，等待起播确认。")
                 self._embed_playing = True
                 self._sync_toggle_icon()
@@ -1994,6 +1998,12 @@ class MoviePanel(QWidget):
         if self._recommendation_closed or generation != getattr(self._movie, "_playback_gen", None):
             return
         self.lbl_status.setText(message)
+        if status in ("PROGRESS", "PENDING"):
+            item = self._movie.current_item() or {}
+            prefix = "播放中" if status == "PROGRESS" else "加载中"
+            self.lbl_now.setText(f"{prefix}: {item.get('vod_name') or ''}")
+        elif status == "FAILED":
+            self.lbl_now.setText("播放失败")
         self._refresh_source_label()
 
     def _on_video_stopped(self):
@@ -2047,12 +2057,40 @@ class MoviePanel(QWidget):
             row, state["item"], state["eps"], dlg))
         dlg.exec()
 
+    def _apply_film_poll(self, _, update, error):
+        if error or not update or self._embed_playing or self._recommendation_closed:
+            return
+        if update["generation"] != self._movie._playback_gen or update["item"] is not self._movie.current_item():
+            return
+        phase = update["phase"]
+        if not update["playing"]:
+            self.lbl_res.clear()
+            if phase in ("failed", "unconfirmed"):
+                message = ("未能播放所选影片或集数。" if phase == "failed"
+                           else "播放器已空闲，播放结束原因未确认。")
+                if self.lbl_status.text() != message:
+                    self._on_playback_status(update["generation"], "FAILED", message)
+            elif phase == "ended":
+                self.lbl_now.setText("未播放")
+            return
+        if phase == "loading":
+            return
+        item, sample = update["item"] or {}, update["sample"]
+        self.lbl_now.setText(f"播放中: {item.get('vod_name') or ''}")
+        pos, dur = sample.get("time-pos"), sample.get("duration")
+        if pos is not None and dur is not None and dur > 0:
+            if not self.slider_pos.isSliderDown():
+                self.slider_pos.setValue(int(min(1., max(0., pos/dur))*1000))
+            self.lbl_time.setText(f"{_fmt(pos)} / {_fmt(dur)}")
+        video = sample.get("video-params") or {}
+        if video.get("w") and video.get("h"):
+            self.lbl_res.setText(f"{int(video['w'])}×{int(video['h'])}")
+
     def _on_episode_picked(self, itm, it, eps, dlg):
         row = itm.data(Qt.UserRole) if itm.data(Qt.UserRole) is not None else 0
         if 0 <= row < len(eps):
             dlg.accept()
             self._play_item(it, index=row)
-            self.lbl_now.setText(f"播放中: {it.get('vod_name', '')} - {eps[row][0] or f'第{row+1:02d}集'}")
 
     def _maybe_auto_subtitle(self, it):
         """配置 movie.auto_subtitle 开时：每片只自动搜一次（不重复，配额 20/分钟）。
@@ -2233,6 +2271,11 @@ class MoviePanel(QWidget):
         dlg.exec()
 
     def _tick(self):
+        if self._native_poll is not None:
+            if not self._embed_playing and not self._native_poll._running:
+                if self._movie.mpv.is_running():
+                    self._native_poll.submit("film", self._movie.poll_film_ui)
+            return
         try:
             # V2-4.6.5：同步语音/外部修改的电影音量到滑块
             try:

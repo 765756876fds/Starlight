@@ -644,6 +644,12 @@ class VideoPlayerWindow(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
+        self._native_poll = None
+        self._close_after_poll = False
+        if getattr(controller, "native_film_state", lambda: False)() is True:
+            from .latest_task import LatestTask
+            self._native_poll = LatestTask(self)
+            self._native_poll.completed.connect(self._apply_film_poll)
 
         # S3 鼠标浮现/隐藏：窗口级鼠标跟踪 + 3s 静止隐藏定时器（B站式）
         self.setMouseTracking(True)
@@ -961,6 +967,12 @@ class VideoPlayerWindow(QWidget):
     # ---- 轮询（连播检测 + 进度/overlay 刷新；异常静默降级） ----
 
     def _tick(self):
+        if self._native_poll is not None:
+            if not self.switch_trial.busy and not self._close_after_poll and not self._native_poll._running:
+                def poll(current):
+                    return self._movie.poll_film_ui(lambda: current() and not self._close_after_poll)
+                self._native_poll.submit("film", poll, guarded=True)
+            return
         try:
             # V2-4.6.8：同步语音/外部修改的电影音量到播放窗口 overlay 滑块
             try:
@@ -1012,6 +1024,62 @@ class VideoPlayerWindow(QWidget):
             self.overlay.refresh(pos, dur)
         except Exception:
             pass
+
+    def _apply_film_poll(self, _, update, error):
+        if self._close_after_poll:
+            self._close_after_poll = False
+            self.close()
+            return
+        if error or not update or self.switch_trial.busy:
+            return
+        movie = self._movie
+        if update["generation"] != movie._playback_gen or update["item"] is not movie.current_item():
+            return
+        if self._recovering:
+            self._recover_poll()
+            return
+        phase = update["phase"]
+        if not update["playing"]:
+            if self._playing and update["crashed"]:
+                self._start_recover()
+            else:
+                self._on_stopped()
+                if phase in ("failed", "unconfirmed"):
+                    message = ("未能播放所选影片或集数。" if phase == "failed"
+                               else "播放器已空闲，播放结束原因未确认。")
+                    self.playback_status.emit(update["generation"], "FAILED", message)
+            return
+        sample = update["sample"]
+        index = update["index"]
+        if update["generation"] != self._load_generation:
+            self._load_generation = update["generation"]
+            self._load_started_at = time.monotonic()
+            self._load_notice_sent = False
+            self._switching = True
+            self._current_item, self._current_index = update["item"], index
+            self.sidebar.set_episodes(movie.episodes(update["item"]), index)
+            self.overlay.set_next_enabled(index + 1 < self.sidebar.episode_count())
+            self._load_status("PENDING", "正在加载影片或集数。")
+        self._poll_quality_notice()
+        vol = sample.get("volume")
+        if vol is not None:
+            slider = self.overlay.slider_vol
+            old = slider.blockSignals(True)
+            slider.setValue(int(vol))
+            slider.blockSignals(old)
+        if phase == "loading":
+            if not self._load_notice_sent and time.monotonic()-self._load_started_at >= 15:
+                self._load_notice_sent = True
+                self._load_status("PENDING", "播放器仍在加载，尚未确认起播。")
+            return
+        if self._switching:
+            self._switching = False
+            self._load_status("PROGRESS", "已确认播放。")
+        pos, dur = sample.get("time-pos"), sample.get("duration")
+        if pos is not None and dur is not None:
+            name = str(update["item"].get("vod_name") or "")[:20]
+            self.setWindowTitle(f"{name}  {_fmt(pos)}/{_fmt(dur)} - {self._title_base}")
+            self.overlay.refresh(pos, dur)
 
     # ---- S8：mpv 崩溃自愈（检测 → 提示 → controller 重启 → 轮询恢复结果） ----
 
@@ -1132,6 +1200,8 @@ class VideoPlayerWindow(QWidget):
         if self._quality_sources_dialog is not None:
             self._quality_sources_dialog.close()
         self._timer.stop()
+        if self._native_poll is not None:
+            self._native_poll.invalidate()
         self._hide_timer.stop()
         self._overlay_hover = False
         self.overlay.hide()
@@ -1266,6 +1336,12 @@ class VideoPlayerWindow(QWidget):
     # ---- 窗口事件：关窗=停播（隐藏保留 winId）/ Esc ----
 
     def closeEvent(self, event):
+        if self._native_poll is not None and self._native_poll._running:
+            # Finish the owned poll before stop tries to acquire its media lock.
+            self._close_after_poll = True
+            self.hide()
+            event.ignore()
+            return
         if self.switch_trial.busy:
             self._close_after_switch = True
             self.switch_trial.reset()

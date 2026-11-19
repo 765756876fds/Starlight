@@ -87,7 +87,8 @@ def test_loopback_requires_explicit_isolated_probe_permission():
     from app.movie.switch_probe import verify
     result = verify({"original": "http://127.0.0.1:1/test.m3u8",
                      "candidate": "http://127.0.0.1:2/test.m3u8"})
-    assert result == {"status": "failed", "items": [], "error": "UnverifiedMedia", "bytes": 0}
+    assert result == {"status": "failed", "items": [], "error": "UnverifiedMedia",
+                      "reason": "unsupported_origin", "bytes": 0}
 
 
 def test_late_manual_control_never_rolls_back_or_adopts_a_new_source(monkeypatch):

@@ -83,3 +83,65 @@ def test_prompt_requires_verified_better_candidate_and_is_single_use(scene, choi
     assert not window.quality_notice.isVisible()
     assert controller.switch_verified_source.call_count == int(choice == "confirm")
     pool.start.assert_called_once()
+
+
+def test_missing_match_is_counted_once_and_only_during_a_stall(scene, caplog):
+    window, controller = scene.window, scene.controller
+    controller._current = item()
+    controller._current_index = 0
+    controller.mpv._process = SimpleNamespace(poll=lambda: None)
+    trial = window.switch_trial
+    trial.enabled = True
+    pool = Pool()
+    trial.prepare(SimpleNamespace(pool=pool, request=None, manager=SimpleNamespace(
+        get_search_revision=lambda: 1, get_enabled_sources=lambda: [])), [])
+    controller.source_quality_snapshot = Mock(return_value={"current": SimpleNamespace(
+        state="STABLE", sustained_transport_wait=False)})
+    assert not trial.poll(True)
+    assert not trial.reason_counts
+
+    controller.source_quality_snapshot.return_value["current"] = SimpleNamespace(
+        state="BUFFERING", sustained_transport_wait=True)
+    with caplog.at_level("INFO", logger="app.ui.widgets.movie_switch_trial"):
+        for _ in range(20):
+            assert not trial.poll(True)
+    assert dict(trial.reason_counts) == {"no_candidate": 1}
+    assert [record.getMessage() for record in caplog.records] == ["movie_switch_check result=no_candidate count=1"]
+    pool.start.assert_not_called()
+
+
+def test_close_during_native_poll_defers_stop_and_invalidates_poll(scene):
+    import threading
+    from app.ui.widgets.latest_task import LatestTask
+
+    window, controller = scene.window, scene.controller
+    started, release = threading.Event(), threading.Event()
+    observed = []
+
+    def poll(current):
+        started.set()
+        if release.wait(2):
+            observed.append(current())
+        return None
+
+    window._native_poll = LatestTask(window)
+    window._native_poll.completed.connect(window._apply_film_poll)
+    window._playing = True
+    controller.poll_film_ui = poll
+    controller.stop = Mock()
+    try:
+        window._tick()
+        assert started.wait(.5)
+        window.close()
+        assert window._close_after_poll
+        controller.stop.assert_not_called()
+        release.set()
+        for _ in range(50):
+            if controller.stop.called:
+                break
+            QTest.qWait(10)
+        assert observed == [False]
+        controller.stop.assert_called_once()
+        assert not window._playing
+    finally:
+        release.set()

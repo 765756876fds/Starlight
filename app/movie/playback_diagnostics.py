@@ -27,7 +27,7 @@ def source_tag(value):
 PROPERTIES = (
     "paused-for-cache", "demuxer-cache-duration", "cache-speed",
     "demuxer-cache-state", "frame-drop-count", "decoder-frame-drop-count",
-    "hwdec-current", "time-pos", "pause", "seeking", "core-idle", "eof-reached", "speed", "duration", "video-params", "demuxer-cache-idle", "idle-active",
+    "hwdec-current", "time-pos", "pause", "seeking", "core-idle", "eof-reached", "speed", "duration", "video-params", "demuxer-cache-idle", "idle-active", "volume",
 )
 STATE_NUMBERS = ("fw-bytes", "raw-input-rate", "cache-end", "reader-pts")
 
@@ -59,7 +59,7 @@ def sanitize(values):
     return result
 
 
-def read_sample(pipe_name, timeout=.3, *, expected_path=None, allow_idle=False):
+def read_sample(pipe_name, timeout=.3, *, expected_path=None, allow_idle=False, expected_entry=None):
     """Separate Windows IPC client: one batch, total deadline, bounded response.
 
     Does not acquire MpvController's shared command lock. A missing/busy/broken
@@ -75,12 +75,14 @@ def read_sample(pipe_name, timeout=.3, *, expected_path=None, allow_idle=False):
     peek.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
                      ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p)
     peek.restype = wintypes.BOOL
-    keys = ("_before", *PROPERTIES, "_after")
+    entry_keys = ("_entry_before", "_entry_after") if expected_entry is not None else ()
+    keys = ("_before", *entry_keys[:1], *PROPERTIES, *entry_keys[1:], "_after")
     deadline = time.monotonic() + min(max(timeout, .01), .5)
     try:
         with open(pipe_name, "r+b", buffering=0) as pipe:
             packet = b"".join((json.dumps({
-                "command": ["get_property", "path" if k.startswith("_") else k],
+                "command": ["get_property", "playlist/0/id" if k in entry_keys
+                            else "path" if k.startswith("_") else k],
                 "request_id": i,
             }) + "\n").encode() for i, k in enumerate(keys, 1))
             pipe.write(packet)
@@ -114,6 +116,8 @@ def read_sample(pipe_name, timeout=.3, *, expected_path=None, allow_idle=False):
                     or found["_before"] != found["_after"]
                     or (expected_path is not None
                         and found["_after"] != expected_path and not (expected_path == "" and idle))):
+                return {}
+            if expected_entry is not None and any(found[k] != expected_entry for k in entry_keys):
                 return {}
             return sanitize(found)
     except (OSError, ValueError, TypeError):

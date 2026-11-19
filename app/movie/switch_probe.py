@@ -15,6 +15,10 @@ MAX_SEGMENTS = 24
 MANIFEST_BYTES = 32 * 1024
 
 
+class ProbeRejected(ValueError):
+    """Enumerated diagnostics safe to return from the probe worker."""
+
+
 def origin(url):
     parts = urlsplit(url)
     if (parts.scheme not in ("http", "https") or not parts.hostname
@@ -26,30 +30,32 @@ def origin(url):
 def playlist(body, url):
     lines = [line.strip() for line in body.decode("utf-8-sig").splitlines() if line.strip()]
     if not lines or lines[0] != "#EXTM3U" or lines[-1] != "#EXT-X-ENDLIST":
-        raise ValueError("finite VOD required")
+        raise ProbeRejected("unsupported_hls")
     segments, duration = [], None
     for line in lines[1:-1]:
         if line.startswith("#EXTINF:"):
             if duration is not None:
-                raise ValueError("missing segment")
+                raise ProbeRejected("timeline_mismatch")
             duration = float(line[8:].partition(",")[0])
             if not math.isfinite(duration) or not 0 < duration <= 20:
-                raise ValueError("invalid duration")
+                raise ProbeRejected("timeline_mismatch")
         elif line in ("#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-INDEPENDENT-SEGMENTS"):
             continue
         elif re.fullmatch(r"#EXT-X-(?:VERSION|TARGETDURATION|MEDIA-SEQUENCE):[0-9]+", line):
             continue
         elif line.startswith("#"):
-            raise ValueError("unsupported tag")
+            raise ProbeRejected("unsupported_hls")
         else:
             target = urljoin(url, line)
             if (duration is None or origin(target) != origin(url)
                     or not urlsplit(target).path.lower().endswith(".ts")):
-                raise ValueError("unsupported segment")
+                raise ProbeRejected("unsupported_hls")
             segments.append((duration, target))
             duration = None
-    if duration is not None or not 2 <= len(segments) <= MAX_SEGMENTS:
-        raise ValueError("segment count")
+    if len(segments) > MAX_SEGMENTS:
+        raise ProbeRejected("budget_exceeded")
+    if duration is not None or len(segments) < 2:
+        raise ProbeRejected("unsupported_hls")
     return segments
 
 
@@ -65,7 +71,7 @@ def verify(payload):
         nonlocal remaining
         left_s = deadline - time.monotonic()
         if left_s <= 0 or remaining <= 0:
-            raise ValueError("budget")
+            raise ProbeRejected("budget_exceeded")
         limit = min(limit, remaining)
         started = time.monotonic()
         scheme, host, port = origin(url)
@@ -75,7 +81,7 @@ def verify(payload):
             addresses = [ipaddress.ip_address(addr[4][0])
                          for addr in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
             if not addresses or not all(ip.is_global or (loopback and ip.is_loopback) for ip in addresses):
-                raise ValueError("nonpublic media origin")
+                raise ProbeRejected("unsupported_origin")
             ip = str(addresses[0])  # Numeric destination pins the DNS check to the actual connection.
             pool = (urllib3.HTTPSConnectionPool(ip, port, cert_reqs="CERT_REQUIRED",
                                                 assert_hostname=host, server_hostname=host)
@@ -85,47 +91,55 @@ def verify(payload):
         resource = (parts.path or "/") + ("?" + parts.query if parts.query else "")
         left_s = deadline - time.monotonic()
         if left_s <= 0:
-            raise ValueError("deadline")
+            raise ProbeRejected("budget_exceeded")
         with pool.urlopen("GET", resource, redirect=False, retries=False, preload_content=False,
                           timeout=urllib3.Timeout(connect=min(left_s, 1.5), read=min(left_s, 1.5)),
                           headers={"Accept-Encoding": "identity", "Host": parts.netloc,
                                    "User-Agent": "StarlightMediaProbe/1"}) as response:
             if response.status != 200 or response.headers.get("Content-Encoding", "identity") != "identity":
-                raise ValueError("unsupported response")
+                raise ProbeRejected("source_unavailable")
             length = response.headers.get("Content-Length", "")
-            if not length.isdecimal() or not 0 < int(length) <= limit:
-                raise ValueError("unbounded response")
+            if not length.isdecimal() or int(length) <= 0:
+                raise ProbeRejected("source_unavailable")
+            if int(length) > limit:
+                raise ProbeRejected("budget_exceeded")
             data = bytearray()
             expected = int(length)
             while len(data) < expected:
                 if time.monotonic() >= deadline:
-                    raise ValueError("deadline")
+                    raise ProbeRejected("budget_exceeded")
                 chunk = response.read1(min(32768, expected - len(data)))
                 if not chunk:
-                    raise ValueError("truncated segment")
+                    raise ProbeRejected("source_unavailable")
                 remaining -= len(chunk)
                 data.extend(chunk)
         return data, time.monotonic() - started
 
     try:
         if origin(left) == origin(right):
-            raise ValueError("same origin")
+            raise ProbeRejected("unsupported_origin")
         manifests = [playlist(fetch(url, MANIFEST_BYTES)[0], url) for url in (left, right)]
         durations = [d for d, _ in manifests[0]]
         if durations != [d for d, _ in manifests[1]]:
-            raise ValueError("different timeline")
+            raise ProbeRejected("timeline_mismatch")
         for (duration, original), (_, candidate) in zip(*manifests):
             # Segment deadline headroom is relative to the encoded time, not a Mbps threshold.
             data, elapsed = fetch(candidate, MAX_BYTES)
-            if elapsed >= duration * .7 or len(data) < 376 or data[0] != 0x47 or data[188] != 0x47:
-                raise ValueError("candidate transfer or format")
+            if elapsed >= duration * .7:
+                raise ProbeRejected("candidate_too_slow")
+            if len(data) < 376 or data[0] != 0x47 or data[188] != 0x47:
+                raise ProbeRejected("unsupported_hls")
             if hashlib.sha256(data).digest() != hashlib.sha256(fetch(original, MAX_BYTES)[0]).digest():
-                raise ValueError("different encoded media")
+                raise ProbeRejected("content_mismatch")
         if time.monotonic() >= deadline:
-            raise ValueError("deadline")
+            raise ProbeRejected("budget_exceeded")
         return dict(status="ok", items=[], duration=sum(durations), bytes=MAX_BYTES-remaining)
+    except ProbeRejected as failure:
+        return dict(status="failed", items=[], error="UnverifiedMedia", reason=failure.args[0],
+                    bytes=MAX_BYTES-remaining)
     except (ValueError, OSError, urllib3.exceptions.HTTPError):
-        return dict(status="failed", items=[], error="UnverifiedMedia", bytes=MAX_BYTES-remaining)
+        return dict(status="failed", items=[], error="UnverifiedMedia", reason="source_unavailable",
+                    bytes=MAX_BYTES-remaining)
     finally:
         for pool in connections.values():
             pool.close()

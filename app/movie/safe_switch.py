@@ -21,14 +21,17 @@ class SwitchContext:
     target: str
 
 
+def _feature_episode(episodes):
+    return len(episodes) == 1 and episodes[0][0].casefold() in {"正片", "全片", "hd", "movie"}
+
+
 def _film_url(item):
     kind = str(item.get("type_name") or item.get("vod_type") or "").strip().casefold()
     if kind not in {"电影", "movie", "动作片", "喜剧片", "科幻片", "剧情片", "爱情片",
                     "恐怖片", "战争片", "纪录片", "动画电影", "悬疑片", "犯罪片"}:
         return None
     episodes = episode_eps(item)
-    if (len(episodes) != 1 or episodes[0][0].casefold() not in {"正片", "全片", "hd", "movie"}
-            or len(item.get("_playback_lines") or ()) > 1):
+    if not _feature_episode(episodes) or len(item.get("_playback_lines") or ()) > 1:
         return None
     url = episodes[0][1]
     try:
@@ -42,26 +45,37 @@ def _film_url(item):
     return None
 
 
-def context_for(controller, group):
+def assess_context(controller, group):
     current = controller.current_item()
-    if not current or controller._current_index != 0 or not current.get("_source_id"):
-        return None
-    work = work_identity(current)
+    if not current or not current.get("_source_id") or not (work := work_identity(current)):
+        return None, "identity_insufficient"
+    if controller._current_index != 0 or not _feature_episode(episode_eps(current)):
+        return None, "episode_mismatch"
     original = _film_url(current)
     process = getattr(controller.mpv, "_process", None)
-    if not work or not original or process is None:
-        return None
+    if not original or process is None:
+        return None, "unsupported_hls"
+    reason = "no_candidate"
     for row in group:
-        if (not row.get("_source_id") or row["_source_id"] == current["_source_id"]
-                or work_identity(row) != work):
+        if not row.get("_source_id") or row["_source_id"] == current["_source_id"]:
+            continue
+        if work_identity(row) != work:
+            reason = "identity_insufficient"
             continue
         alternative = normalise_playback(row)
         target = _film_url(alternative)
+        if not target:
+            reason = "episode_mismatch" if not _feature_episode(episode_eps(alternative)) else "unsupported_hls"
+            continue
         if target and origin(original) != origin(target):
             return SwitchContext(generation=controller._playback_gen, index=0,
                                  attempt=controller._play_attempt, process=process,
-                                 item=current, original=original, alternative=alternative, target=target)
-    return None
+                                 item=current, original=original, alternative=alternative, target=target), None
+    return None, reason
+
+
+def context_for(controller, group):
+    return assess_context(controller, group)[0]
 
 
 def context_current(controller, context):
@@ -160,6 +174,9 @@ def handoff(controller, context, duration, permit):
         if current():
             controller._current = context.alternative
             controller._playback_gen += 1
+            controller._begin_film_session(reply, context.target)
+            controller._film_session["advanced"] = True
+            controller._film_phase = "playing"
             controller._resume_pending = None
             controller._pending_history = None
             controller._film_last_sample = None
@@ -180,6 +197,9 @@ def handoff(controller, context, duration, permit):
         if isinstance(reply, dict) and reply.get("error") == "success":
             if _progress(mpv, context.original, position, duration, time.monotonic()+2, current):
                 controller._switch_unsettled = False
+                controller._begin_film_session(reply, context.original)
+                controller._film_session["advanced"] = True
+                controller._film_phase = "playing"
                 controller._start_playback_diagnostics("cms", context.item.get("_source"), media_url=context.original)
                 return "restored"
             return "restore_requested"
