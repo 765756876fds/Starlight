@@ -1217,6 +1217,7 @@ class MovieController:
             logger.warning(f"[MoviePerf] observer_unavailable type={type(error).__name__}")
 
     def _quality_transition(self, *, suspend=False):
+        self._failed_switch_start = None
         self._switch_control_revision = getattr(self, "_switch_control_revision", 0) + 1
         if suspend:
             self._source_quality_context = None
@@ -1275,6 +1276,19 @@ class MovieController:
         except (OSError, ValueError, ConnectionError):
             self._switch_unsettled = True
             return "unknown"
+
+    @_serialized_media
+    def restart_verified_line(self, context, duration, permit):
+        from .safe_switch import restart_line
+        try:
+            result = restart_line(self, context, duration, permit)
+        except (OSError, ValueError, ConnectionError):
+            self._switch_unsettled = True
+            result = "unknown"
+        if result == "unknown":
+            self._film_phase = "switch_unconfirmed"
+            self._film_sample = {}
+        return result
 
     # ---- 自动连播 ----
 
@@ -1469,7 +1483,13 @@ class MovieController:
             else:
                 self._finish_film_session("ended")
         else:
+            startup_error = (reason == "error" and session["entry"] is not None and not session["advanced"]
+                             and self.source_quality_trial_enabled())
+            identity = (self._playback_gen, self._play_attempt, self._current_index, id(self._current)) if startup_error else None
             self._finish_film_session("stopped" if reason in ("stop", "quit") else "failed")
+            if identity:
+                self._failed_switch_start = (*identity, self._switch_control_revision, time.monotonic() + 22)
+
 
     @_serialized_media
     def poll_film_ui(self, current=None):

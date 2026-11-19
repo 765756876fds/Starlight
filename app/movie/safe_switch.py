@@ -124,6 +124,29 @@ def context_for(controller, group):
     return assess_context(controller, group)[0]
 
 
+def record_master(context):
+    """Consider at most one publisher index from the selected CMS record."""
+    if context.line_binding is None:
+        return None
+    for line in context.line_binding[2].split("$$$"):
+        url = _film_url(dict(context.item, play_url=line))
+        if url and url != context.original and origin(url) == origin(context.original):
+            return url
+    return None
+
+
+def failed_start_current(controller, context):
+    receipt = getattr(controller, "_failed_switch_start", None)
+    return bool(isinstance(receipt, tuple) and context and context.line_binding and
+                receipt[:4] == (context.generation, context.attempt, context.index, id(context.item))
+                and receipt[4] == controller._switch_control_revision and time.monotonic() < receipt[5]
+                and controller.current_item() is None and controller.playback_phase() == "failed"
+                and controller._playback_gen == context.generation and controller._play_attempt == context.attempt
+                and controller.mpv._process is context.process and context.process.poll() is None
+                and not getattr(controller, "_media_voice_closed", False)
+                and _line_binding(context.item) == context.line_binding)
+
+
 def context_current(controller, context):
     return (not getattr(controller, "_media_voice_closed", False)
             and controller._playback_gen == context.generation
@@ -149,10 +172,11 @@ def _load_at(mpv, url, position, current):
         mpv._pipe_lock.release()
 
 
-def _progress(mpv, url, position, duration, deadline, current):
+def _progress(mpv, url, position, duration, deadline, current, *, entry=None):
     last = None
     while current() and time.monotonic() < deadline:
-        sample = read_sample(mpv.ipc_pipe, timeout=.15, expected_path=url)
+        options = {"expected_entry": entry} if entry is not None else {}
+        sample = read_sample(mpv.ipc_pipe, timeout=.15, expected_path=url, **options)
         pos = number(sample.get("time-pos"))
         seen_duration = number(sample.get("duration"))
         size = sample.get("video-params") or {}
@@ -166,6 +190,90 @@ def _progress(mpv, url, position, duration, deadline, current):
                 last = pos
         time.sleep(.05)
     return False
+
+
+def _track_rejection(mpv):
+    if not mpv._pipe_lock.acquire(timeout=.02):
+        return "rejected"
+    try:
+        reply = mpv._send_command("get_property", ["track-list"], timeout=.15, _locked=True)
+    finally:
+        mpv._pipe_lock.release()
+    tracks = reply.get("data") if isinstance(reply, dict) else None
+    if not isinstance(tracks, list) or any(t.get("external") or t.get("type") == "sub" for t in tracks):
+        return "unsupported_tracks"
+    audio = [t for t in tracks if t.get("type") == "audio"]
+    if len(audio) > 1 or (audio and audio[0].get("selected") is not True):
+        return "unsupported_tracks"
+    return None
+
+
+def restart_line(controller, context, duration, permit):
+    """One explicit load from zero. Unknown writes never trigger rollback or retry."""
+    if not context.line_binding or not permit() or getattr(controller, "_switch_unsettled", False):
+        return "stale"
+    mpv = controller.mpv
+    from_failure = failed_start_current(controller, context)
+    if from_failure:
+        idle = read_sample(mpv.ipc_pipe, timeout=.2, expected_path="", allow_idle=True)
+        if idle.get("idle-active") is not True:
+            return "stale"
+    else:
+        if not context_current(controller, context):
+            return "stale"
+        session = getattr(controller, "_film_session", None) or {}
+        sample = read_sample(mpv.ipc_pipe, timeout=.2, expected_path=context.original,
+                             expected_entry=session.get("entry"))
+        if (sample.get("paused-for-cache") is not True or sample.get("pause") is not False
+                or sample.get("seeking") is not False):
+            return "rejected"
+        rejection = _track_rejection(mpv)
+        if rejection:
+            return rejection
+        controller._remember_view(False, force=True, sample=sample)
+
+    revision = controller._switch_control_revision
+
+    def current():
+        owned = failed_start_current if from_failure else context_current
+        return controller._switch_control_revision == revision and owned(controller, context)
+
+    if not current() or not permit():
+        return "stale"
+    requested_at = time.monotonic()
+    controller._switch_unsettled = True
+    reply = _load_at(mpv, context.target, 0, lambda: current() and permit())
+    if isinstance(reply, dict) and reply.get("error") in ("busy", "stale"):
+        controller._switch_unsettled = False
+        return "rejected"
+    if not isinstance(reply, dict) or reply.get("error") != "success":
+        return "unknown"
+    data = reply.get("data")
+    entry = data.get("playlist_entry_id") if isinstance(data, dict) else None
+    if type(entry) is not int:
+        return "unknown"
+    if _progress(mpv, context.target, 0, duration, time.monotonic()+3, current, entry=entry) and current():
+        controller._quality_transition(suspend=True)
+        controller._current = context.alternative
+        controller._current_index = context.index
+        controller._accept_episode(reply, context.target)
+        controller._film_session["advanced"] = True
+        controller._film_phase = "playing"
+        controller._last_idle = False
+        controller._switch_unsettled = False
+        if from_failure:
+            controller._record_history_if_started(False)
+        else:
+            controller._pending_history = None
+        controller._start_playback_diagnostics("cms", context.alternative.get("_source"),
+                                               media_url=context.target, requested_at=requested_at)
+        controller._write_state(playing=True, paused=False)
+        return "started"
+    if current() and mpv.film_end_reason(entry) == "error":
+        controller._finish_film_session("failed")
+        controller._switch_unsettled = False
+        return "restart_failed"
+    return "unknown"
 
 
 def handoff(controller, context, duration, permit):

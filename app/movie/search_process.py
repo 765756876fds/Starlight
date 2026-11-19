@@ -31,7 +31,7 @@ class SearchProcessPool(QObject):
         timer = QTimer(process)
         timer.setSingleShot(True)
         state = dict(process=process, timer=timer, data=bytearray(), cancelled=False,
-                     failure=None, token=token, started=time.monotonic())
+                     switch_probe=payload.get("mode") == "verify_switch", failure=None, token=token, started=time.monotonic())
         self.active[token] = state
         self.peak = max(self.peak, len(self.active))
         process.readyReadStandardOutput.connect(lambda: self._read(token))
@@ -95,7 +95,8 @@ class SearchProcessPool(QObject):
         if not state["failure"] and state["process"].exitCode() == 0:
             try:
                 value = json.loads(state["data"])
-                if (isinstance(value, dict) and value.get("status") in ("ok", "empty", "failed")
+                statuses = ("ok", "empty", "failed", "restart_available") if state["switch_probe"] else ("ok", "empty", "failed")
+                if (isinstance(value, dict) and value.get("status") in statuses
                         and isinstance(value.get("items"), list)
                         and all(isinstance(i, dict) for i in value["items"])):
                     result = value

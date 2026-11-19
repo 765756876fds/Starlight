@@ -1039,9 +1039,24 @@ class VideoPlayerWindow(QWidget):
             self._recover_poll()
             return
         phase = update["phase"]
+        if phase == "switch_unconfirmed":
+            self.quality_notice.reset()
+            return
         if not update["playing"]:
             if self._playing and update["crashed"]:
                 self._start_recover()
+            elif phase == "failed" and self.switch_trial.enabled and self.switch_trial.context:
+                from app.movie.safe_switch import failed_start_current
+                trial = self.switch_trial
+                if failed_start_current(movie, trial.context):
+                    self._poll_quality_notice()
+                    if trial.token is not None or trial.proof is not None:
+                        if not self._load_notice_sent:
+                            self._load_notice_sent = True
+                            self.playback_status.emit(update["generation"], "FAILED", "当前线路起播失败。")
+                        return
+                self._on_stopped()
+                self.playback_status.emit(update["generation"], "FAILED", "未能播放所选影片或集数。")
             else:
                 self._on_stopped()
                 if phase in ("failed", "unconfirmed"):
@@ -1146,6 +1161,9 @@ class VideoPlayerWindow(QWidget):
         if result == "started" and self._movie.current_item() is context.alternative:
             self.attach_current()
             self.playback_status.emit(context.generation + 1, "PROGRESS", "已换源并确认播放推进。")
+        elif result in ("restart_failed", "unknown", "rejected") and self._movie._playback_gen == context.generation and self._movie.current_item() is None:
+            self.playback_status.emit(context.generation, "UNCONFIRMED" if result == "unknown" else "FAILED",
+                                      "备用线路未确认起播。" if result == "unknown" else "备用线路未能起播。")
         elif result in ("unknown", "restore_requested", "restored", "rejected", "unsupported_tracks") and self._movie.current_item() is context.item:
             self.playback_status.emit(context.generation, "UNCONFIRMED", {
                 "unknown": "换源结果未确认，已保留原播放记录，请检查播放窗口。",
@@ -1160,7 +1178,7 @@ class VideoPlayerWindow(QWidget):
         if self.switch_trial.enabled:
             visible = self._playing and not self._recovering and self.isVisible() and not self.isMinimized()
             if self.switch_trial.poll(visible):
-                self.quality_notice.show_switch_offer()
+                self.quality_notice.show_switch_offer(restart=self.switch_trial.restart)
             else:
                 self.quality_notice.reset()
             self._quality_idle.hide()

@@ -31,8 +31,9 @@ class MovieQualityNotice(QFrame):
         self.close_button.clicked.connect(self.dismiss)
         self.hide()
 
-    def show_switch_offer(self):
-        self.message.setText("备用来源已核对内容及读取速度。是否换源？")
+    def show_switch_offer(self, *, restart=False):
+        self.message.setText("备用线路可能可用，换源可能从头播放。" if restart else
+                             "备用来源已核对内容及读取速度。是否换源？")
         self.view_button.setText("换源")
         self.close_button.setText("继续观看")
         self.show()

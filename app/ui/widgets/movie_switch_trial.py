@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject, Signal
 
 from app.movie.playback_diagnostics import number
 from app.movie.progressive_search import source_identity
-from app.movie.safe_switch import assess_context, context_current
+from app.movie.safe_switch import assess_context, context_current, failed_start_current, record_master
 from app.movie.switch_probe import PROBE_MS
 from .latest_task import LatestTask
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _REASONS = frozenset({"no_candidate", "identity_insufficient", "episode_mismatch",
                       "unsupported_hls", "unsupported_origin", "timeline_mismatch",
                       "source_unavailable", "candidate_too_slow", "budget_exceeded",
-                      "content_mismatch", "verified"})
+                      "content_mismatch", "verified", "restart_available"})
 
 
 class MovieSwitchTrial(QObject):
@@ -31,6 +31,7 @@ class MovieSwitchTrial(QObject):
         self._task.completed.connect(self._finished)
         self.service = self.context = self.token = self.proof = None
         self.source_revision = None
+        self.restart = False
         self.expires = 0.
         self._tried_generation = None
         self._switched_generation = None
@@ -59,6 +60,7 @@ class MovieSwitchTrial(QObject):
             token, self.token = self.token, None
             self.service.pool.cancel(lambda key: key is token)
         self.context = self.proof = self._context_rejection = None
+        self.restart = False
         self.expires = 0.
 
     def _record_reason(self, reason):
@@ -72,12 +74,13 @@ class MovieSwitchTrial(QObject):
         return bool(report and report.sustained_transport_wait and report.state == "BUFFERING")
 
     def _sustained(self):
-        if not self.enabled or self.context is None or not context_current(self.controller, self.context):
+        if not self.enabled or self.context is None:
             return False
         manager = self.service.manager
         if manager is None or self.source_revision != manager.get_search_revision():
             return False
-        return self._sustained_report()
+        return (failed_start_current(self.controller, self.context) or
+                (context_current(self.controller, self.context) and self._sustained_report()))
 
     def poll(self, visible):
         generation = getattr(self.controller, "_playback_gen", None)
@@ -113,19 +116,25 @@ class MovieSwitchTrial(QObject):
             loopback = ((len(sources) >= 2 or own_local_record) and all(urlsplit(s["url"]).hostname in local_hosts for s in sources)
                         and all(urlsplit(u).hostname in local_hosts for u in (context.original, context.target)))
             if not service.pool.start(self.token, dict(mode="verify_switch", loopback=loopback,
-                                                       original=context.original, candidate=context.target), PROBE_MS):
+                                                       original=context.original, candidate=context.target,
+                                                       same_record=own_record, record_master=record_master(context),
+                                                       startup_error=failed_start_current(self.controller, context)), PROBE_MS):
                 self.token = None
         return False
 
     def _verified(self, token, result):
-        if token is not self.token:
+        if token is None or token is not self.token:
             return
         self.token = None
         duration = number(result.get("duration"))
-        if result.get("status") != "ok":
+        restart = result.get("status") == "restart_available"
+        accepted = (restart and self.context is not None and self.context.line_binding is not None
+                    or result.get("status") == "ok" and not failed_start_current(self.controller, self.context))
+        if not accepted:
             self._record_reason("budget_exceeded" if result.get("error") == "Timeout" else result.get("reason"))
-        if result.get("status") == "ok" and duration is not None and duration > 4 and self._sustained():
-            self._record_reason("verified")
+        if accepted and duration is not None and duration > 4 and self._sustained():
+            self._record_reason("restart_available" if restart else "verified")
+            self.restart = restart
             self.proof = duration
             self.expires = time.monotonic() + 10
 
@@ -137,12 +146,15 @@ class MovieSwitchTrial(QObject):
             self.decline()
             return
         context, duration, expires = self.context, self.proof, self.expires
+        restart = self.restart
         self.decline()
 
         def switch(valid):
             def permit():
                 return (valid() and self.enabled and self.context is context
                         and time.monotonic() < expires and self._sustained())
+            if restart:
+                return self.controller.restart_verified_line(context, duration, permit)
             return self.controller.switch_verified_source(context, duration, permit)
         self._task.submit(context, switch, guarded=True)
 

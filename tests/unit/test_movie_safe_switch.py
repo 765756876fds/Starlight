@@ -146,3 +146,29 @@ def test_line_candidates_belong_to_exact_current_cms_record(change):
     elif change == "different_item":
         controller.current_item.return_value = dict(row)
     assert context_current(controller, context) == (change == "none")
+
+
+def test_unconfirmed_restart_sends_one_load_from_zero_and_preserves_checkpoint(monkeypatch):
+    from threading import Lock
+    from app.movie import safe_switch
+    from app.movie.cms_parser import normalise_playback
+
+    controller = fake_controller()
+    controller._switch_unsettled = False
+    controller._switch_control_revision = 2
+    controller._film_session = {"entry": 16}
+    controller.mpv._pipe_lock = Lock()
+    row = normalise_playback(dict(item(), vod_play_url="正片$https://a.example/v.m3u8$$$正片$https://b.example/v.m3u8"))
+    controller.current_item.return_value = row
+    context = context_for(controller, [])
+    assert context and context.line_binding
+    monkeypatch.setattr(safe_switch, "read_sample", lambda *a, **k: {
+        "paused-for-cache": True, "pause": False, "seeking": False, "time-pos": 93., "duration": 200.})
+    controller.mpv._send_command.side_effect = [{"data": [{"type": "video"}]}, None]
+    assert safe_switch.restart_line(controller, context, 196, lambda: True) == "unknown"
+    assert safe_switch.restart_line(controller, context, 196, lambda: True) == "stale"
+    calls = controller.mpv._send_command.call_args_list
+    assert [c.args[0] for c in calls] == ["get_property", "loadfile"]
+    assert calls[-1].args[1] == [context.target, "replace", -1, {"start": "0"}]
+    assert controller.current_item() is row and controller._switch_unsettled
+    assert controller._remember_view.call_args.kwargs["sample"]["time-pos"] == 93.

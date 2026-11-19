@@ -28,7 +28,7 @@ def origin(url):
     return parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
 
 
-def playlist(body, url):
+def playlist(body, url, *, restart=False):
     lines = [line.strip() for line in body.decode("utf-8-sig").splitlines() if line.strip()]
     if not lines or lines[0] != "#EXTM3U" or lines[-1] != "#EXT-X-ENDLIST":
         raise ProbeRejected("unsupported_hls")
@@ -76,11 +76,32 @@ def playlist(body, url):
             duration = None
     if packed and (version is None or version < 4 or "#EXT-X-PLAYLIST-TYPE:VOD" not in lines):
         raise ProbeRejected("unsupported_hls")
-    if len(segments) > (MAX_PACKED_SEGMENTS if packed else MAX_SEGMENTS):
+    if len(segments) > (MAX_PACKED_SEGMENTS if packed or restart else MAX_SEGMENTS):
         raise ProbeRejected("budget_exceeded")
     if duration is not None or len(segments) < 2:
         raise ProbeRejected("unsupported_hls")
     return segments
+
+
+def _common_presentation(body, master, left, right):
+    """Only a plain publisher variant index, with both exact CMS media URIs."""
+    lines = [line.strip() for line in body.decode("utf-8-sig").splitlines() if line.strip()]
+    if not lines or lines.pop(0) != "#EXTM3U":
+        return False
+    variants = set()
+    pending = False
+    for line in lines:
+        if pending:
+            if line.startswith("#"):
+                return False
+            variants.add(urljoin(master, line))
+            pending = False
+        elif re.fullmatch(r"#EXT-X-STREAM-INF:BANDWIDTH=[1-9][0-9]{0,9}"
+                          r'(?:,(?:RESOLUTION=[0-9]+x[0-9]+|CODECS="[A-Za-z0-9., -]+"))*', line):
+            pending = True
+        elif not (re.fullmatch(r"#EXT-X-VERSION:[0-9]{1,3}", line) or line == "#EXT-X-INDEPENDENT-SEGMENTS"):
+            return False
+    return not pending and variants == {left, right}
 
 
 def verify(payload):
@@ -92,8 +113,11 @@ def verify(payload):
     loopback = payload.get("loopback") is True
     left, right = payload["original"], payload["candidate"]
 
+    master_hint = None
+    manifests_seen = {}
+
     def fetch(url, limit, byte_range=None):
-        nonlocal remaining
+        nonlocal remaining, master_hint
         left_s = deadline - time.monotonic()
         if left_s <= 0 or remaining <= 0:
             raise ProbeRejected("budget_exceeded")
@@ -128,6 +152,11 @@ def verify(payload):
                           headers=headers) as response:
             if response.status != (206 if byte_range else 200) or response.headers.get("Content-Encoding", "identity") != "identity":
                 raise ProbeRejected("source_unavailable")
+            if url == left and payload.get("same_record") is True:
+                # Trust only an index declared by the original publisher, on its own origin.
+                up = re.fullmatch(r'<([^<>\s]{1,2048})>;\s*rel="up"', response.headers.get("Link", ""))
+                if up:
+                    master_hint = urljoin(left, up[1])
             length = response.headers.get("Content-Length", "")
             if not length.isdecimal() or int(length) <= 0:
                 raise ProbeRejected("source_unavailable")
@@ -153,10 +182,13 @@ def verify(payload):
                 data.extend(chunk)
         return data, time.monotonic() - started
 
-    try:
-        if origin(left) == origin(right):
-            raise ProbeRejected("unsupported_origin")
-        manifests = [playlist(fetch(url, MANIFEST_BYTES)[0], url) for url in (left, right)]
+    def manifest(url):
+        if url not in manifests_seen:
+            manifests_seen[url] = fetch(url, MANIFEST_BYTES)[0]
+        return manifests_seen[url]
+
+    def exact():
+        manifests = [playlist(manifest(url), url) for url in (left, right)]
         timeline = [(duration, size) for duration, _, size in manifests[0]]
         if timeline != [(duration, size) for duration, _, size in manifests[1]]:
             raise ProbeRejected("timeline_mismatch")
@@ -197,6 +229,43 @@ def verify(payload):
         if time.monotonic() >= deadline:
             raise ProbeRejected("budget_exceeded")
         return dict(status="ok", items=[], duration=sum(durations), bytes=MAX_BYTES-remaining)
+    def restart():
+        master = payload.get("record_master")
+        if not master and left not in manifests_seen:
+            manifest(left)
+        master = master or master_hint
+        if (not master or master in (left, right) or origin(master) != origin(left)
+                or not urlsplit(master).path.lower().endswith(".m3u8")
+                or not _common_presentation(manifest(master), master, left, right)):
+            raise ProbeRejected("identity_insufficient")
+        segments = playlist(manifest(right), right, restart=True)
+        duration, first, size = segments[0]
+        if size is not None:
+            raise ProbeRejected("unsupported_hls")
+        data, elapsed = fetch(first, 256 * 1024)
+        if (len(data) < 3 * 188 or len(data) % 188 or any(data[i] != 0x47 for i in range(0, len(data), 188))
+                or not any(data[i+1] & 0x1f == 0 and data[i+2] == 0 for i in range(0, len(data), 188))):
+            raise ProbeRejected("unsupported_hls")
+        if elapsed >= duration or time.monotonic() >= deadline:
+            raise ProbeRejected("candidate_too_slow")
+        return dict(status="restart_available", items=[], duration=sum(row[0] for row in segments),
+                    bytes=MAX_BYTES-remaining)
+
+    try:
+        if origin(left) == origin(right):
+            raise ProbeRejected("unsupported_origin")
+        eligible = (payload.get("same_record") is True and
+                    (loopback or all(origin(url)[0] == "https" for url in (left, right))))
+        if payload.get("startup_error") is True:
+            if not eligible:
+                raise ProbeRejected("identity_insufficient")
+            return restart()
+        try:
+            return exact()
+        except ProbeRejected as failure:
+            if not eligible or failure.args[0] not in ("content_mismatch", "timeline_mismatch", "budget_exceeded"):
+                raise
+            return restart()
     except ProbeRejected as failure:
         return dict(status="failed", items=[], error="UnverifiedMedia", reason=failure.args[0],
                     bytes=MAX_BYTES-remaining)

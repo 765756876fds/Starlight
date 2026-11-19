@@ -43,6 +43,12 @@ def routes(media, tmp_path):
         class Handler(SimpleHTTPRequestHandler):
             def log_message(self, *_):
                 pass
+            def end_headers(self):
+                hint = directory / "publisher-link.txt"
+                if i == 0 and self.path == "/movie.m3u8" and hint.is_file():
+                    self.send_header("Link", hint.read_text(encoding="utf8"))
+                super().end_headers()
+
             def do_GET(self):
                 if flags[i] == "stall":
                     if self.path == "/010.ts" and "StarlightMediaProbe" not in self.headers.get("User-Agent", ""):
@@ -231,3 +237,142 @@ def test_real_stall_verified_then_explicitly_switch_to_local_mirror(qapp, routes
         pool.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         assert not s.mpv.is_running()
+
+
+def restart_record(routes, media, bad_start=False):
+    """Two real encodes and a publisher's index on the original media origin."""
+    from app.movie.cms_parser import normalise_playback
+    from app.movie.progressive_search import source_identity
+    urls, flags, directory = routes
+    left = urls[0].replace("movie.m3u8", "offline.m3u8") if bad_start else urls[0]
+    right = urls[1]
+    master = urls[0].replace("movie.m3u8", "edition.m3u8")
+    (directory / "edition.m3u8").write_text(
+        f"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=150000\n{left}\n#EXT-X-STREAM-INF:BANDWIDTH=80000\n{right}\n",
+        encoding="utf8")
+    # Same generated black picture, different rendition geometry and boundaries.
+    alt = directory.parent / "alternate"
+    ffmpeg = media[0].parents[1] / "ffmpeg/ffmpeg.exe"
+    subprocess.run([str(ffmpeg), "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=black:s=128x72:r=10:d=28", "-an", "-c:v", "mpeg2video", "-threads", "2",
+                    "-bf", "0", "-g", "30", "-sc_threshold", "0", "-hls_time", "3", "-hls_playlist_type", "vod",
+                    "-hls_segment_filename", str(alt / "rendition%03d.ts"), str(alt / "movie.m3u8")],
+                   check=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True)
+    cms = urls[0] + "/cms"
+    row = normalise_playback(dict(item(), _source_id=source_identity(cms),
+                                  vod_play_url="$$$".join("正片$" + u for u in (left, right, master))))
+    return row, cms, left, right, master
+
+
+@pytest.mark.parametrize("case", ["stall", "initial_error", "decline", "expired_source", "superseded"])
+def test_real_restart_requires_user_and_starts_at_zero(qapp, routes, media, sessions, case):
+    from types import SimpleNamespace
+    from app.ui.theme.manager import get_theme_manager
+    from app.ui.widgets.movie_switch_trial import MovieSwitchTrial
+    from app.movie.safe_switch import failed_start_current
+
+    get_theme_manager(qapp)
+    failed = case != "stall"
+    row, cms, left, right, _ = restart_record(routes, media, failed)
+    if not failed:
+        routes[1][0] = "stall"
+    s = sessions("restart-" + case)
+    s.mpv.extra_video_args.remove("--no-audio")
+    s.mpv.extra_video_args += ["--cache=yes", "--demuxer-max-bytes=256KiB", "--demuxer-readahead-secs=2",
+                               "--cache-secs=2", "--cache-pause-initial=yes", "--cache-pause-wait=0.5"]
+    pool = SearchProcessPool(qapp)
+    trial = MovieSwitchTrial(s.ctl, qapp)
+    trial.enabled = True
+    outcomes = []
+    receipts = []
+    pool.returned.connect(lambda key, result: receipts.append(result))
+    trial.completed.connect(outcomes.append)
+    try:
+        assert s.ctl.set_source_quality_trial(True)
+        assert s.ctl.play(row)
+        trial.prepare(SimpleNamespace(pool=pool, request=None, manager=SimpleNamespace(
+            get_search_revision=lambda: 1, get_enabled_sources=lambda: [dict(url=cms)])), [])
+        context = trial.context
+        assert context and context.original == left and context.target == right
+
+        def offer():
+            if failed:
+                s.ctl.tick()
+            return trial.poll(True)
+
+        try:
+            wait(qapp, offer, seconds=30 if not failed else 8)
+        except pytest.fail.Exception:
+            print("offer deadline", s.ctl.playback_phase(), trial.reason_counts, receipts)
+            raise
+        assert trial.restart and receipts[-1]["status"] == "restart_available"
+        assert 0 < receipts[-1]["bytes"] <= 8 * 1024 * 1024
+        if failed:
+            assert failed_start_current(s.ctl, context) and not s.ctl.is_playing()
+        else:
+            assert read_sample(s.mpv.ipc_pipe, expected_path=left)["time-pos"] >= 8
+        if case == "decline":
+            trial.decline()
+            assert not trial.poll(True) and not s.ctl.is_playing()
+            return
+        if case == "superseded":
+            s.ctl.stop()
+            trial.confirm()
+            assert not trial.busy and not trial.poll(True)
+            return
+        if case == "expired_source":
+            routes[1][1] = True
+        trial.confirm()
+        wait(qapp, lambda: outcomes, seconds=8)
+        if case == "expired_source":
+            assert outcomes[0][1] in ("restart_failed", "unknown")
+            assert s.ctl.current_item() is None and not trial.poll(True)
+        else:
+            assert outcomes[0][1] == "started"
+            sample = read_sample(s.mpv.ipc_pipe, expected_path=right)
+            assert 0 < sample["time-pos"] < 3 and sample["video-params"]["w"] == 128
+            assert s.ctl.current_item()["_playback_line_index"] == 1
+            if failed:
+                assert len(s.ctl.get_history()) == 1
+        print("restart evidence", case, outcomes[0][1], receipts[-1]["bytes"])
+        assert len(receipts) == pool.peak == 1
+    finally:
+        trial.reset()
+        pool.shutdown()
+        s.ctl.close()
+        s.mpv.stop_process()
+        trial.deleteLater()
+        pool.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        assert not s.mpv.is_running()
+
+
+@pytest.mark.parametrize("fault", ["no_master", "wrong_work", "episode", "missing_media", "unusable_manifest"])
+def test_no_restart_with_incomplete_presentation_or_media(routes, media, fault):
+    row, cms, left, right, master = restart_record(routes, media)
+    source = routes[2]
+    alt = source.parent / "alternate"
+    if fault in ("wrong_work", "episode"):
+        path = source / "edition.m3u8"
+        path.write_text(path.read_text(encoding="utf8").replace(right, right + "?other=" + fault), encoding="utf8")
+    elif fault == "unusable_manifest":
+        (alt / "movie.m3u8").write_text("<html>Unavailable</html>", encoding="utf8")
+    elif fault == "missing_media":
+        (alt / "rendition000.ts").write_bytes(b"Not a video")
+    options = dict(original=left, candidate=right, same_record=True, startup_error=True, loopback=True)
+    if fault != "no_master":
+        options["record_master"] = master
+    result = verify(options)
+    assert result["status"] == "failed" and 0 <= result["bytes"] <= 8 * 1024 * 1024
+
+def test_two_lines_require_original_publisher_for_restart_proof(routes, media):
+    row, cms, left, right, master = restart_record(routes, media)
+    options = dict(original=left, candidate=right, loopback=True, same_record=True)
+    hint = routes[2] / "publisher-link.txt"
+    hint.write_text(f'<{master}>; rel="up"', encoding="utf8")
+    result = verify(options)
+    assert result["status"] == "restart_available" and result["duration"] == 28
+    print("two-line probe bytes", result["bytes"])
+    hint.write_text(f'<{right.replace("movie.m3u8", "edition.m3u8")}>; rel="up"', encoding="utf8")
+    assert verify(options)["reason"] == "identity_insufficient"
+    assert verify(dict(options, same_record=False))["reason"] == "timeline_mismatch"

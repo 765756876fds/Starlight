@@ -170,3 +170,38 @@ def test_removed_cms_record_cannot_start_a_same_record_probe(scene):
     assert not trial.poll(True) and not trial.poll(True)
     assert trial.reason_counts["source_unavailable"] == 1
     pool.start.assert_not_called()
+
+
+def test_failed_start_offer_is_scoped_and_declining_does_not_load(scene):
+    import time
+    from app.movie.cms_parser import normalise_playback
+    from app.movie.progressive_search import source_identity
+    ctl, window = scene.controller, scene.window
+    cms = "https://one.example/cms"
+    row = normalise_playback(dict(item(), _source_id=source_identity(cms),
+                                  vod_play_url="正片$https://a.example/v.m3u8$$$正片$https://b.example/v.m3u8"))
+    ctl._current, ctl._current_index, ctl._play_attempt = row, 0, 4
+    ctl.mpv._process = SimpleNamespace(poll=lambda: None)
+    pool = Pool()
+    trial = window.switch_trial
+    trial.enabled = True
+    assert ctl.set_source_quality_trial(True)
+    trial.prepare(SimpleNamespace(pool=pool, request=None, manager=SimpleNamespace(
+        get_search_revision=lambda: 1, get_enabled_sources=lambda: [dict(url=cms)])), [])
+    context = trial.context
+    ctl._finish_film_session("failed")
+    ctl._failed_switch_start = (context.generation, 4, 0, id(row), ctl._switch_control_revision, time.monotonic()+22)
+    ctl.restart_verified_line = Mock()
+    window._playing = True
+    window._load_notice_sent = False
+    window.show()
+    update = dict(generation=context.generation, item=None, phase="failed", playing=False, crashed=False)
+    window._apply_film_poll(None, update, None)
+    assert trial.token is not None and not window.quality_notice.isVisible()
+    pool.returned.emit(trial.token, dict(status="restart_available", duration=28))
+    window._apply_film_poll(None, update, None)
+    assert window.quality_notice.isVisible() and "可能从头播放" in window.quality_notice.message.text()
+    window.quality_notice.close_button.click()
+    window._apply_film_poll(None, update, None)
+    assert not window.quality_notice.isVisible() and not window._playing
+    ctl.restart_verified_line.assert_not_called()
