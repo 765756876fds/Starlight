@@ -3,12 +3,13 @@ import functools
 import json
 import threading
 import time
-from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import QSettings, QTimer
 
-from app.ui.widgets.video_player_window import VideoPlayerWindow
+from PySide6.QtWidgets import QListWidget
+
+from app.ui.panels.movie_panel import MoviePanel
 from tests.integration.test_movie_resume_mpv import (
     media as media, qapp as qapp, sessions as sessions,
 )
@@ -17,7 +18,7 @@ from tools.movie_playback_lab import Handler, Server, generate
 pytestmark = pytest.mark.integration
 
 
-def test_runtime_notice_and_readonly_sources_preserve_owned_playback(
+def test_runtime_notice_and_candidates_preserve_owned_playback(
     sessions, media, qapp, tmp_path, monkeypatch,
 ):
     monkeypatch.setattr("app.ui.settings_store.UI_PREFS_PATH", str(tmp_path / "prefs.json"))
@@ -38,11 +39,14 @@ def test_runtime_notice_and_readonly_sources_preserve_owned_playback(
         "--cache=yes", "--demuxer-max-bytes=256KiB", "--demuxer-readahead-secs=2",
         "--cache-secs=2", "--cache-pause-initial=yes", "--cache-pause-wait=0.5",
     ]
-    manager = Mock()
-    manager.get_all_sources.return_value = [{"name": "Isolated source", "enabled": True}]
-    manager.get_active_name.return_value = "Isolated source"
-    s.ctl._source_manager = manager
-    w = VideoPlayerWindow(s.ctl)
+    from app.ui.widgets.movie_home import MovieHome
+    monkeypatch.setattr(MovieHome, "refresh_local", lambda *_: None)
+    monkeypatch.setattr(MovieHome, "refresh_boards", lambda *_: None)
+    monkeypatch.setattr(s.ctl, "embed_enabled", lambda: True)
+    monkeypatch.setattr(s.ctl, "progressive_search_service", lambda: None)
+    panel = MoviePanel(movie=s.ctl)
+    panel._timer.stop()
+    w = panel._video_win
     s.windows.append(w)
     w._timer.stop()
     w._hide_timer.stop()
@@ -68,7 +72,13 @@ def test_runtime_notice_and_readonly_sources_preserve_owned_playback(
     try:
         assert not s.ctl.source_quality_trial_enabled()
         url = f"http://127.0.0.1:{server.server_port}/high/index.m3u8"
-        assert s.ctl.play({"vod_name": "Generated HLS", "first_url": url, "_source": "isolated"})
+        original = {"vod_name": "Generated HLS", "first_url": url, "vod_id": "1",
+                    "_source": "甲来源", "_source_id": "first"}
+        alternate = dict(original, first_url=url.replace("/high/", "/low/"),
+                         _source="乙来源", _source_id="second")
+        panel._on_search_done([original, alternate])
+        panel.stack_results.setCurrentWidget(panel.list_results)
+        panel._on_item_activated(panel.list_results.item(0))
         wait_until(lambda: (s.mpv.get_property("time-pos", timeout=.2) or 0) > .3, 6)
         assert getattr(s.ctl, "_playback_monitor", None) is None
         process = s.mpv._process
@@ -90,9 +100,12 @@ def test_runtime_notice_and_readonly_sources_preserve_owned_playback(
         wait_until(lambda: w.quality_notice.isVisible(), 1)
         assert stalled.state == "BUFFERING" and stalled.wait_lower_s >= 3
         w.quality_notice.view_button.click()
-        assert w._quality_sources_dialog.isVisible()
-        assert w._quality_sources_dialog._view_only
-        assert manager.method_calls == [("get_active_name", (), {}), ("get_all_sources", (), {})]
+        candidates = panel._candidate_view[0]
+        assert candidates.isVisible() and not candidates.isModal()
+        assert "乙来源" in candidates.findChild(QListWidget).item(0).text()
+        assert panel.list_results.count() == 2
+        assert s.mpv.get_property("path", timeout=.3) == url
+        candidates.reject()
         assert s.mpv._process is process
         assert s.mpv.get_property("playlist-entry-id", timeout=.3) == entry
         assert s.mpv.get_property("pause", timeout=.3) is False
@@ -112,7 +125,7 @@ def test_runtime_notice_and_readonly_sources_preserve_owned_playback(
         (tmp_path / "runtime-result.json").write_text(json.dumps({
             "generated_bps": rates, "verified_progress_s": stalled.progress_s,
             "wait_lower_s": stalled.wait_lower_s, "waits": stalled.waits,
-            "notice_shown": True, "readonly_dialog": True,
+            "notice_shown": True, "candidate_dialog": True,
             "same_process_and_playlist_entry": True, "late_startup_unknown": True,
             "qt_gap_ms_max": max(gaps) * 1000, "local_http_bytes": server.transferred,
         }), encoding="utf-8")
@@ -121,6 +134,8 @@ def test_runtime_notice_and_readonly_sources_preserve_owned_playback(
         w._playing = False
         w._on_stopped()
         w.close()
+        panel._on_app_quit()
+        panel.close()
         s.ctl.close()
         monitor = getattr(s.ctl, "_playback_monitor", None)
         if monitor is not None:

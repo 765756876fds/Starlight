@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QLabel, QLineEdit, QListWidget, QPushButton, QWidget
 
 from app.movie.source_quality import QualityEvidence
 from tests.ui.test_movie_voice_window import scene as scene
@@ -121,33 +121,144 @@ def test_stale_new_session_off_and_recovery_hide_notice(scene, monkeypatch):
     assert not notice.isVisible()
 
 
-def test_view_sources_is_existing_nonmodal_read_only_and_does_not_play(scene, monkeypatch):
-    row, notice = prepare(scene, monkeypatch)
-    manager = Mock()
-    manager.get_active_name.return_value = "One"
-    manager.get_all_sources.return_value = [
-        {"name": "One", "url": "https://synthetic.invalid/api?token=secret", "enabled": True},
-        {"name": "Two", "url": "https://another.invalid/api", "enabled": True},
-    ]
-    scene.controller._source_manager = manager
-    scene.window._poll_quality_notice()
-    scene.mpv.reset_mock()
+def play_search_result(scene):
+    s = scene
+    original = dict(vod_id="1", vod_name="测试电影", vod_year="2024",
+                    vod_play_url="正片$https://first.invalid/a.m3u8",
+                    _source="甲来源", _source_id="first")
+    alternate = dict(original, _source="乙来源", _source_id="second",
+                     vod_play_url="正片$https://second.invalid/b.m3u8", vod_remarks="高清版")
+    unrelated = dict(alternate, vod_id="2", vod_name="其他电影")
+    old_version = dict(alternate, vod_id="3", vod_year="1999")
+    s.panel._on_search_done([original, alternate, unrelated, old_version])
+    s.panel.stack_results.setCurrentWidget(s.panel.list_results)
+    s.panel._on_item_activated(s.panel.list_results.item(0))
+    wait_for(lambda: s.controller.current_item() is not None)
+    s.window._timer.stop()
+    return original, alternate
+
+
+def test_candidate_list_only_shows_matching_search_rows_and_waits_for_choice(scene, monkeypatch):
+    s = scene
+    _, alternate = play_search_result(s)
+    _, notice = prepare(s, monkeypatch)
+    s.window._poll_quality_notice()
+    s.mpv.reset_mock()
+    before = s.controller.current_item()
+    selection = s.panel.list_results.currentItem()
     notice.view_button.click()
-    dialog = scene.window._quality_sources_dialog
-    assert dialog.isVisible() and not dialog.isModal()
-    assert dialog.windowModality() == Qt.NonModal
-    assert dialog.list_widget.count() == 2 and dialog._test_thread is None
-    assert not hasattr(dialog, "btn_set_active")
-    assert [b.text() for b in dialog.findChildren(QPushButton) if b.text() == "设为当前"] == []
-    item = dialog.list_widget.item(1)
-    assert not (item.flags() & Qt.ItemIsUserCheckable)
-    assert "secret" not in item.text()
-    dialog.list_widget.itemDoubleClicked.emit(item)
-    scene.mpv.loadfile.assert_not_called()
-    scene.mpv.stop.assert_not_called()
-    assert manager.method_calls == [
-        ("get_active_name", (), {}), ("get_all_sources", (), {}),
-    ]
+    dialog = s.panel._candidate_view[0]
+    assert "影片候选" in notice.view_button.text()
+    assert dialog.isVisible() and dialog.windowModality() == Qt.NonModal
+    rows = dialog.findChild(QListWidget)
+    assert rows.count() == 1 and "乙来源" in rows.item(0).text()
+    assert "2024" in rows.item(0).text() and "高清版" in rows.item(0).text()
+    assert s.panel.list_results.count() == 4
+    assert s.panel.list_results.currentItem() is selection
+    assert s.controller.current_item() is before
+    choose = next(b for b in dialog.findChildren(QPushButton) if b.text() == "打开所选候选")
+    rows.setCurrentRow(0)
+    s.mpv.loadfile.assert_not_called()
+    s.mpv.stop.assert_not_called()
+    choose.click()
+    wait_for(lambda: s.mpv.loadfile.called)
+    s.mpv.loadfile.assert_called_once_with(alternate["vod_play_url"].split("$")[1])
+    assert s.controller.current_item()["_source"] == "乙来源"
+
+
+def test_candidate_is_rechecked_at_the_player_after_a_late_media_change(scene, monkeypatch):
+    s = scene
+    play_search_result(s)
+    _, notice = prepare(s, monkeypatch)
+    s.window._poll_quality_notice()
+    notice.view_button.click()
+    dialog = s.panel._candidate_view[0]
+    dialog.findChild(QListWidget).setCurrentRow(0)
+    choose = next(b for b in dialog.findChildren(QPushButton) if b.text() == "打开所选候选")
+    previous_generation = s.controller._playback_gen
+    before_play = s.window.play
+
+    def play_after_new_episode(item, index=None):
+        # This happens after the queued UI check, before MovieController.play.
+        s.controller._accept_episode({"data": {"playlist_entry_id": 99}}, "https://first.invalid/new.m3u8")
+        return before_play(item, index=index)
+
+    monkeypatch.setattr(s.window, "play", play_after_new_episode)
+    s.mpv.reset_mock()
+    choose.click()
+    wait_for(lambda: s.controller._playback_gen > previous_generation)
+    s.mpv.loadfile.assert_not_called()
+    s.mpv.stop.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["new_search", "voice", "close", "episode", "reject"])
+def test_old_candidate_view_cannot_play_after_context_changes(scene, monkeypatch, change):
+    s = scene
+    play_search_result(s)
+    _, notice = prepare(s, monkeypatch)
+    s.window._poll_quality_notice()
+    notice.view_button.click()
+    dialog = s.panel._candidate_view[0]
+    rows = dialog.findChild(QListWidget)
+    rows.setCurrentRow(0)
+    choose = next(b for b in dialog.findChildren(QPushButton) if b.text() == "打开所选候选")
+    if change == "new_search":
+        s.panel.edit_kw.setText("新关键词")
+        s.panel._do_search()
+    elif change == "voice":
+        from tests.ui.test_movie_voice_window import voice_command
+        assert s.bus.execute(voice_command()) is True
+    elif change == "episode":
+        # Same series object, but a different accepted native playback generation.
+        s.controller._accept_episode({"data": {"playlist_entry_id": 55}}, "https://first.invalid/ep2.m3u8")
+        s.panel._on_playback_status(s.controller._playback_gen, "PENDING", "正在加载")
+    elif change == "close":
+        s.window.close()
+    else:
+        dialog.reject()
+    s.mpv.reset_mock()
+    if change == "voice":
+        # Before queued Qt attach, the controller has already accepted new media.
+        choose.click()
+    wait_for(lambda: s.panel._candidate_view is None)
+    s.mpv.loadfile.assert_not_called()
+    s.mpv.stop.assert_not_called()
+
+
+def test_no_bound_candidates_gives_precise_search_hint(scene, monkeypatch):
+    s = scene
+    play_search_result(s)
+    s.panel._do_clear()
+    _, notice = prepare(s, monkeypatch)
+    s.window._poll_quality_notice()
+    s.mpv.reset_mock()
+    notice.view_button.click()
+    dialog = s.panel._candidate_view[0]
+    assert dialog.isVisible() and dialog.findChild(QListWidget) is None
+    labels = [label.text() for label in dialog.findChildren(QLabel)]
+    assert any("重新搜索《测试电影》" in label for label in labels)
+    s.mpv.loadfile.assert_not_called()
+    s.mpv.stop.assert_not_called()
+
+
+def test_switch_trial_can_show_plain_reason_and_manual_candidates(scene, monkeypatch):
+    s = scene
+    play_search_result(s)
+    row, notice = prepare(s, monkeypatch)
+    assert not s.window.switch_trial.enabled
+    s.window.switch_trial.enabled = True
+    row[0] = evidence(state="STABLE")
+    s.window._poll_quality_notice()
+    assert not notice.isVisible()
+    row[0] = evidence(sustained_transport_wait=True, advisory_eligible=False)
+    s.window._poll_quality_notice()
+    assert notice.isVisible() and "没有通过验证" in notice.message.text()
+    s.mpv.reset_mock()
+    notice.view_button.click()
+    assert s.panel._candidate_view[0].findChild(QListWidget).count() == 1
+    assert s.window.switch_trial.proof is None
+    s.mpv.loadfile.assert_not_called()
+    s.mpv.stop.assert_not_called()
 
 
 def test_old_notice_button_cannot_open_sources_after_seek_or_off(scene, monkeypatch):
@@ -155,11 +266,11 @@ def test_old_notice_button_cannot_open_sources_after_seek_or_off(scene, monkeypa
     scene.window._poll_quality_notice()
     row[0] = evidence(state="EXCLUDED", reason="seek")
     notice.view_button.click()
-    assert scene.window._quality_sources_dialog is None
+    assert scene.panel._candidate_view is None
     row[0] = evidence()
     scene.panel.quality_trial_action.trigger()
     notice.view_button.click()
-    assert scene.window._quality_sources_dialog is None
+    assert scene.panel._candidate_view is None
 
 
 def test_stop_and_recovery_do_not_leave_new_prompts(scene, monkeypatch):

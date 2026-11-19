@@ -607,14 +607,12 @@ class VideoPlayerWindow(QWidget):
         quality_layout.addWidget(self._quality_idle, 0, 0)
         self.quality_notice = MovieQualityNotice(controller, self._quality_slot)
         quality_layout.addWidget(self.quality_notice, 0, 0)
-        self.quality_notice.view_sources_requested.connect(self._view_quality_sources)
         from .movie_switch_trial import MovieSwitchTrial
         self.switch_trial = MovieSwitchTrial(controller, self)
         self.switch_trial.completed.connect(self._switch_completed)
-        self.quality_notice.view_button.clicked.connect(self._confirm_switch)
+        self.quality_notice.switch_requested.connect(self._confirm_switch)
         self.quality_notice.close_button.clicked.connect(self.switch_trial.decline)
         self._close_after_switch = False
-        self._quality_sources_dialog = None
         self._quality_slot.hide()
         lay.addWidget(self._quality_slot)
         self.container = VideoContainer(self)
@@ -675,6 +673,9 @@ class VideoPlayerWindow(QWidget):
         self._movie.set_embed_wid(self.container.native_id())
         ok = self._movie.play(item, index=index)
         if ok:
+            self.quality_notice.reset()
+            if "_resume_guard" in item:
+                item = {key: value for key, value in item.items() if key != "_resume_guard"}
             self._load_generation = getattr(self._movie, "_playback_gen", None)
             self._load_started_at = time.monotonic()
             self._load_notice_sent = False
@@ -726,6 +727,7 @@ class VideoPlayerWindow(QWidget):
         self._load_generation = None
         self._load_notice_sent = True
         self._hide_recover_label()
+        self.quality_notice.reset()
         current = self._movie.current_item()
         if isinstance(current, dict):
             from app.movie.cms_parser import episode_eps
@@ -1188,7 +1190,9 @@ class VideoPlayerWindow(QWidget):
             if self.switch_trial.poll(visible):
                 self.quality_notice.show_switch_offer(restart=self.switch_trial.restart)
             else:
-                self.quality_notice.reset()
+                unavailable = self.switch_trial.candidate_unavailable()
+                self.quality_notice.poll(presentation_allowed=visible and unavailable,
+                                         no_verified_candidate=unavailable)
             self._quality_idle.hide()
             return
         self.quality_notice.poll(presentation_allowed=(
@@ -1201,30 +1205,12 @@ class VideoPlayerWindow(QWidget):
         self._quality_slot.setVisible(enabled and (not self.switch_trial.enabled
                                      or self._playing))
 
-    def _view_quality_sources(self):
-        # User-initiated, nonmodal READ-ONLY reuse of the existing source dialog.
-        # No search, source mutation, player call or progress mapping.
-        from ..dialogs.movie_source_dialog import MovieSourceDialog
-        manager = getattr(self._movie, "_source_manager", None)
-        if manager is None:
-            self.quality_notice.message.setText("片源列表暂不可用，请从电影页查看。")
-            return
-        dialog = self._quality_sources_dialog
-        if dialog is None:
-            dialog = self._quality_sources_dialog = MovieSourceDialog(
-                self, manager=manager, view_only=True)
-        else:
-            dialog._refresh_list()
-        dialog.show()
-
     def _on_stopped(self):
         """停播（播完/停止/异常）：停轮询 + 隐藏 overlay/侧栏 + 通知面板。"""
         self._invalidate_subtitle_menu()
         self._playing = False
         self.switch_trial.reset()
         self.quality_notice.reset()
-        if self._quality_sources_dialog is not None:
-            self._quality_sources_dialog.close()
         self._timer.stop()
         if self._native_poll is not None:
             self._native_poll.invalidate()

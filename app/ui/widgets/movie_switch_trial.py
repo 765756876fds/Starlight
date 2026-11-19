@@ -36,7 +36,7 @@ class MovieSwitchTrial(QObject):
         self._tried_generation = None
         self._switched_generation = None
         self._diagnosed_generation = None
-        self._context_rejection = None
+        self._context_rejection = self._rejected_generation = None
         self.reason_counts = Counter()
 
     @property
@@ -59,7 +59,7 @@ class MovieSwitchTrial(QObject):
         if self.token is not None:
             token, self.token = self.token, None
             self.service.pool.cancel(lambda key: key is token)
-        self.context = self.proof = self._context_rejection = None
+        self.context = self.proof = self._context_rejection = self._rejected_generation = None
         self.restart = False
         self.expires = 0.
 
@@ -67,6 +67,13 @@ class MovieSwitchTrial(QObject):
         reason = reason if isinstance(reason, str) and reason in _REASONS else "source_unavailable"
         self.reason_counts[reason] = min(65535, self.reason_counts[reason]+1)
         logger.info("movie_switch_check result=%s count=%d", reason, self.reason_counts[reason])
+        if reason not in ("verified", "restart_available"):
+            self._rejected_generation = self.controller._playback_gen
+
+    def candidate_unavailable(self):
+        """Only for an advisory. Do not override an in-flight or declined offer."""
+        return (self.enabled and not self.busy and self.token is None and self.proof is None
+                and (self.context is None or self._rejected_generation == self.controller._playback_gen))
 
     def _sustained_report(self):
         observation = self.controller.source_quality_snapshot()
