@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-from PySide6.QtCore import QObject, QRect, QSize, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -548,6 +548,12 @@ class MoviePanel(QWidget):
         self._film_search.completed.connect(self._film_search_finished)
         self._search_posters = SearchPosterLoader(_POSTER_DIR / "search-v2", self)
         self._search_posters.ready.connect(self._on_search_poster_done)
+        self._poster_refill_timer = QTimer(self)
+        self._poster_refill_timer.setSingleShot(True)
+        self._poster_refill_timer.timeout.connect(self._prioritise_search_posters)
+        self._poster_overflow = False
+        self._poster_retry_row = 0
+        self._search_posters.capacity_available.connect(self._poster_capacity_available)
         self._progressive_search = (self._movie.progressive_search_service()
                                     if isinstance(self._movie, MovieController) else None)
         self._progressive_serial = None
@@ -667,6 +673,9 @@ class MoviePanel(QWidget):
         self.list_posters.setWordWrap(True)
         self.list_posters.setItemDelegate(_PosterWallDelegate(self.list_posters))
         self.list_posters.setMouseTracking(True)
+        self.list_posters.viewport().installEventFilter(self)
+        self.list_posters.verticalScrollBar().valueChanged.connect(lambda _: self._poster_refill_timer.start(0))
+        self.list_posters.verticalScrollBar().rangeChanged.connect(lambda *_: self._poster_refill_timer.start(0))
         self.stack_results.addWidget(self.list_results)
         self.stack_results.addWidget(self.list_posters)
         # 榜单视图（第 3 页）：左上平台选择 + 左标签竖列 + 右海报网格（对齐豆瓣 App 榜单页）
@@ -895,6 +904,7 @@ class MoviePanel(QWidget):
 
     def _on_app_quit(self):
         self._recommendation_closed = True
+        self._poster_refill_timer.stop()
         self._search_posters.close()
         self._movie._recommendation_ready = None
         self._film_search.cancel()
@@ -943,7 +953,7 @@ class MoviePanel(QWidget):
         if not kw:
             self.lbl_status.setText("请输入片名")
             return
-        self._search_posters.begin()
+        self._begin_search_posters()
         self._return_to_movie_browse = False
         self.btn_home.setText("电影首页")
         self.lbl_status.setText("正在搜索；可继续输入新的片名…")
@@ -1024,7 +1034,7 @@ class MoviePanel(QWidget):
     def _show_movie_home(self):
         self._film_search.invalidate()
         self._freeze_progressive()
-        self._search_posters.begin()
+        self._begin_search_posters()
         self.stack_results.setCurrentWidget(self.movie_home)
         if not self._return_to_movie_browse:
             self.movie_home.show_category("all")
@@ -1061,7 +1071,7 @@ class MoviePanel(QWidget):
     def _do_clear(self):
         self._film_search.invalidate()
         self._freeze_progressive()
-        self._search_posters.begin()
+        self._begin_search_posters()
         self.edit_kw.clear()
         self.list_results.clear()
         self.list_posters.clear()
@@ -1069,7 +1079,7 @@ class MoviePanel(QWidget):
         self.lbl_status.setText("")
 
     def _on_search_done(self, result: list):
-        self._search_posters.begin()
+        self._begin_search_posters()
         self.list_results.clear()
         self.list_posters.clear()
         self._items_by_row = []
@@ -1142,6 +1152,7 @@ class MoviePanel(QWidget):
             pix = self._search_posters.cached(key)
             if pix is not None:
                 pit.setIcon(QIcon(pix))
+                pit.setData(Qt.UserRole + 83, True)
             else:
                 pit.setIcon(QIcon(_make_poster_placeholder(name)))
                 if key:
@@ -1740,10 +1751,64 @@ class MoviePanel(QWidget):
         self.lbl_status.setText("链接解析失败")
         glass_info(self, "解析失败", f"请检查链接或稍后再试。\n\n{err}")
 
+    def _begin_search_posters(self):
+        self._poster_refill_timer.stop()
+        self._poster_overflow = False
+        self._poster_retry_row = 0
+        return self._search_posters.begin()
+
     def _start_poster_jobs(self, jobs):
-        """One persistent two-slot loader owns both old and new search batches."""
+        """Recover overflow from existing rows, without another unbounded URL list."""
         for key, url in jobs:
-            self._search_posters.request(key, url)
+            accepted = self._search_posters.request(key, url)
+            if not accepted and len(self._search_posters._deferred) >= self._search_posters.MAX_DEFERRED:
+                self._poster_overflow = True
+        self._poster_refill_timer.start(0)
+
+    def _poster_capacity_available(self, generation):
+        if generation == self._search_posters._generation and self._poster_overflow:
+            self._poster_refill_timer.start(0)
+
+    def eventFilter(self, watched, event):
+        if (hasattr(self, "list_posters") and watched is self.list_posters.viewport()
+                and event.type() in (QEvent.Resize, QEvent.Show)):
+            self._poster_refill_timer.start(0)
+        return super().eventFilter(watched, event)
+
+    def _prioritise_search_posters(self):
+        if self._recommendation_closed or self._search_posters._closed:
+            return
+        view = self.list_posters
+        width, height = view.gridSize().width(), view.gridSize().height()
+        rows = set()
+        for y in range(0, view.viewport().height(), max(1, height // 2)):
+            for x in range(0, view.viewport().width(), max(1, width // 2)):
+                index = view.indexAt(QPoint(x, y))
+                if index.isValid():
+                    rows.add(index.row())
+        self._search_posters.prioritise(
+            [view.item(row).data(Qt.UserRole + 82) for row in sorted(rows)])
+        if not self._poster_overflow:
+            return
+        # At most 64 rows per GUI turn; the regular 2000-candidate search fits
+        # in the loader's metadata cap. Larger legacy results remain recoverable.
+        end = min(view.count(), self._poster_retry_row + 64)
+        while self._poster_retry_row < end:
+            item = view.item(self._poster_retry_row)
+            key = item.data(Qt.UserRole + 82)
+            if key and not item.data(Qt.UserRole + 83):
+                if (len(self._search_posters._deferred) >= self._search_posters.MAX_DEFERRED
+                        and key not in self._search_posters._deferred
+                        and key not in self._search_posters._pending):
+                    return
+                data = item.data(Qt.UserRole) or {}
+                self._search_posters.request(key, data.get("vod_pic") or "")
+            self._poster_retry_row += 1
+        if end < view.count():
+            self._poster_refill_timer.start(0)
+        else:
+            self._poster_overflow = False
+            self._poster_retry_row = 0
 
     def _search_poster_key(self, item):
         if item.get("_source_id"):
@@ -1771,12 +1836,14 @@ class MoviePanel(QWidget):
             item = self.list_posters.item(index)
             if item.data(Qt.UserRole + 82) == key:
                 item.setIcon(QIcon(pixmap))
+                item.setData(Qt.UserRole + 83, True)
 
 
     def closeEvent(self, event):
         self._freeze_progressive()
         if self._progressive_search is not None:
             self._progressive_search.detach()
+        self._poster_refill_timer.stop()
         self._search_posters.close()
         super().closeEvent(event)
 

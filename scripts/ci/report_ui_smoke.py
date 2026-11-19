@@ -9,7 +9,7 @@ import re
 import xml.etree.ElementTree as ET
 
 GROUPS = ("harness", "theme", "notifications", "movie-cards", "queue",
-          "movie-search-coverage")
+          "movie-search-coverage", "movie-poster-backlog")
 
 
 def junit_report(path: Path, group: str) -> tuple[ET.Element, dict]:

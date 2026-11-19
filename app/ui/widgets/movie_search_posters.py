@@ -31,7 +31,9 @@ class SearchPosterLoader(QObject):
     MAX_BYTES = 4 * 1024 * 1024
     MAX_EDGE = 4096
     MAX_PIXELS = 4_000_000
+    capacity_available = Signal(int)
     MAX_PENDING = 100
+    MAX_DEFERRED = 2000  # Metadata only; the search itself admits at most 2000 candidates.
     MAX_MEMORY = 128
     IDLE_MS = 8000
     TOTAL_MS = 12000
@@ -45,6 +47,7 @@ class SearchPosterLoader(QObject):
         self._closed = False
         self._changing = False
         self._queue = deque()
+        self._deferred = OrderedDict()
         self._pending = set()
         self._active = {}
         self._memory = OrderedDict()
@@ -58,6 +61,7 @@ class SearchPosterLoader(QObject):
         self._generation += 1
         self._changing = True
         self._queue.clear()
+        self._deferred.clear()
         self._pending.clear()
         for reply in tuple(self._active):
             reply.abort()
@@ -118,25 +122,53 @@ class SearchPosterLoader(QObject):
 
     def request(self, key, url):
         if not key or self._closed:
-            return
+            return False
         try:
             self._path(key)
         except ValueError:
-            return
+            return False
         url = url.strip()
         cached = self.cached(key)
         if cached is not None:
             self.ready.emit(self._generation, key, cached)
-            return
+            return True
         failed_until = self._failures.get(key, 0)
-        if self._clock() < failed_until or key in self._pending or len(self._queue) >= self.MAX_PENDING:
-            return
+        if key in self._pending or key in self._deferred:
+            return True
+        if self._clock() < failed_until:
+            return False
+        if len(self._queue) >= self.MAX_PENDING:
+            if len(self._deferred) >= self.MAX_DEFERRED:
+                return False
+            self._deferred[key] = (self._generation, key, url)
+            return True
         self._failures.pop(key, None)
         self._pending.add(key)
         self._queue.append((self._generation, key, url))
         self._pump()
+        return True
+
+    def prioritise(self, keys):
+        """Reorder waiting metadata only; never interrupt either active transfer."""
+        waiting = OrderedDict((job[1], job) for job in self._queue)
+        waiting.update(self._deferred)
+        ordered = []
+        for key in keys:
+            job = waiting.pop(key, None)
+            if job is not None:
+                ordered.append(job)
+        ordered.extend(waiting.values())
+        self._queue = deque(ordered[:self.MAX_PENDING])
+        self._deferred = OrderedDict((job[1], job) for job in ordered[self.MAX_PENDING:])
+        self._pending = {state["key"] for state in self._active.values()
+                         if state["generation"] == self._generation}
+        self._pending.update(job[1] for job in self._queue)
 
     def _pump(self):
+        while self._deferred and len(self._queue) < self.MAX_PENDING:
+            key, job = self._deferred.popitem(last=False)
+            self._pending.add(key)
+            self._queue.append(job)
         while (not self._closed and not self._changing and self._queue
                and len(self._active) < self.MAX_ACTIVE):
             generation, key, url = self._queue.popleft()
@@ -209,6 +241,8 @@ class SearchPosterLoader(QObject):
                 self._pending.discard(state["key"])
             reply.deleteLater()
             self._pump()
+            if not self._closed:
+                self.capacity_available.emit(self._generation)
 
     def _complete_reply(self, reply, state):
         state["timer"].stop()

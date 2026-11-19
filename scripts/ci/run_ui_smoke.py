@@ -17,6 +17,7 @@ GROUPS = {
     "movie-cards": "tests/ui/test_movie_card_interactions.py",
     "queue": "tests/ui/test_music_queue_view.py",
     "movie-search-coverage": "tests/ui/test_movie_search_coverage.py",
+    "movie-poster-backlog": "tests/ui/test_movie_poster_backlog.py",
 }
 
 
