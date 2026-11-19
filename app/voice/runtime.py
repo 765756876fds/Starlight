@@ -19,6 +19,7 @@ from ..core.command_bus import Command, CommandType, get_command_bus
 from ..core.operation_result import media_result, OperationResult, OperationStatus
 from ..core.event_bus import Event, EventType, get_event_bus
 from ..core.state_store import StateNamespace, get_state_store
+from .alarm_dispatch import ALARM_INTENT_EVENTS, dispatch_alarm_intent
 from .asr import ASRManager, ASRResult, ASRStatus
 from .intent import Intent, IntentRouter, RuleBasedIntent
 from .registry import parameter_issue
@@ -1513,50 +1514,8 @@ class VoiceRuntime:
                 source="voice",
             ))
 
-        # GameAlarm 命令
-        elif intent_type == "alarm.flash":
-            champion = params.get("champion", "")
-            if champion:
-                # 通过事件触发
-                self.event_bus.publish(Event(
-                    event_type="alarm.create_flash",
-                    data={"champion": champion},
-                    source="voice"
-                ))
-
-        elif intent_type == "alarm.spell":
-            champion = params.get("champion", "")
-            spell = params.get("spell", "")
-            if champion and spell:
-                self.event_bus.publish(Event(
-                    event_type="alarm.create_spell",
-                    data={"champion": champion, "spell": spell},
-                    source="voice"
-                ))
-
-        elif intent_type == "alarm.ward":
-            location = params.get("location", "当前位置")
-            self.event_bus.publish(Event(
-                event_type="alarm.create_ward",
-                data={"location": location},
-                source="voice"
-            ))
-
-        elif intent_type == "alarm.custom":
-            duration = params.get("duration", 120)
-            title = params.get("title", "自定义提醒")
-            self.event_bus.publish(Event(
-                event_type="alarm.create_custom",
-                data={"title": title, "duration": duration, "content": params.get("content", "")},
-                source="voice"
-            ))
-
-        elif intent_type in ("alarm.list", "alarm.remaining", "alarm.cancel_last"):
-            self.event_bus.publish(Event(
-                event_type=intent_type,
-                data=dict(params),
-                source="voice"
-            ))
+        elif intent_type in ALARM_INTENT_EVENTS:
+            dispatch_alarm_intent(self.event_bus, intent_type, params)
 
         elif intent_type in ("cooldown.start", "cooldown.query",
                              "cooldown.cancel", "cooldown.cancel_all", "cooldown.list"):
