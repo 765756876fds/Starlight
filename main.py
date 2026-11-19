@@ -1268,7 +1268,7 @@ class Application:
         # UI 模式：主线程跑 Qt（QApplication 必须在主线程创建）
         try:
             from PySide6.QtWidgets import QApplication
-            from app.ui.main_window import MainWindow
+            from app.ui.main_window import ApplicationQuitFilter, MainWindow
             from app.ui.tray import TrayIcon
         except Exception as e:
             logger.info(f"[UI] PySide6 未安装，使用 headless: {e}")
@@ -1313,6 +1313,9 @@ class Application:
         # 回放窗口创建前缓存的模块状态
         self.replay_module_status()
 
+        quit_filter = ApplicationQuitFilter(app, window)
+        app.installEventFilter(quit_filter)
+
         state = {"done": False, "error": None, "switched": False}
 
         def backend():
@@ -1348,9 +1351,13 @@ class Application:
                     self.stop()
                 except Exception:
                     logger.error("[Run] 启动失败后清理出错", exc_info=True)
+                quit_filter.startup_finished()
                 return
             if state["done"] and not state["switched"]:
                 state["switched"] = True
+                quit_filter.startup_finished()
+                if quit_filter.pending:
+                    return
                 logger.info("[Run] switching to tabs")
                 try:
                     self._switch_to_tabs(window)
@@ -1371,6 +1378,8 @@ class Application:
         try:
             rc = app.exec()
         finally:
+            app.removeEventFilter(quit_filter)
+            quit_filter.deleteLater()
             self.stop()
         return rc
 

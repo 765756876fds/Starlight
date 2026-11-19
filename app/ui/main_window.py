@@ -10,7 +10,7 @@ try:
 except Exception:
     _WIN32 = False
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
@@ -72,6 +72,30 @@ def _nchit_edge(lx: int, ly: int, w: int, h: int, border: int = _RESIZE_BORDER_P
     if bottom:
         return _HT_BOTTOM
     return _HT_CLIENT
+
+
+class ApplicationQuitFilter(QObject):
+    """Handle confirmed application exit independently of hide-on-close windows."""
+
+    def __init__(self, app, window):
+        super().__init__(app)
+        self.window = window
+        self.pending = False
+        self.ready = False
+
+    def eventFilter(self, obj, event):
+        if obj is self.parent() and event.type() == QEvent.Quit:
+            if (_WIN32 and event.spontaneous()) or self.window._force_quit:
+                self.pending = True
+                if self.ready:
+                    QApplication.exit(0)
+                return True
+        return False
+
+    def startup_finished(self):
+        self.ready = True
+        if self.pending:
+            QApplication.exit(0)
 
 
 class MainWindow(QMainWindow):
