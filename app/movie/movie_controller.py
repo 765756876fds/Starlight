@@ -774,6 +774,7 @@ class MovieController:
             self.mpv._properties["pause"] = False
         except Exception:
             pass
+        self._switch_unsettled = False
         self._current = item
         self._current_index = idx
         self._playback_gen += 1  # V2-2：新片加载，会话代次递增
@@ -1014,6 +1015,8 @@ class MovieController:
             return False, "字幕状态调整失败，请稍后重试"
 
     def _remember_view(self, now_idle=None, *, force=False):
+        if getattr(self, "_switch_unsettled", False):
+            return
         if not hasattr(self, "film_memory") or not self._current or getattr(self, "_external_url_mode", False):
             return
         from .recommendation import item_work
@@ -1205,6 +1208,7 @@ class MovieController:
             logger.warning(f"[MoviePerf] observer_unavailable type={type(error).__name__}")
 
     def _quality_transition(self, *, suspend=False):
+        self._switch_control_revision = getattr(self, "_switch_control_revision", 0) + 1
         if suspend:
             self._source_quality_context = None
         monitor = getattr(self, "_playback_monitor", None)
@@ -1253,6 +1257,15 @@ class MovieController:
                    and 0 <= now - latest[1].observed_at <= 5
                    and monitor.quality_current(latest[0]) else None)
         return {"current": current, "history": history.snapshot(now)}
+
+    @_serialized_media
+    def switch_verified_source(self, context, duration, permit):
+        from .safe_switch import handoff
+        try:
+            return handoff(self, context, duration, permit)
+        except (OSError, ValueError, ConnectionError):
+            self._switch_unsettled = True
+            return "unknown"
 
     # ---- 自动连播 ----
 
@@ -1303,6 +1316,8 @@ class MovieController:
     def tick(self):
         """供面板轮询调用（500ms）：检测 mpv idle 上升沿 → 播完自动下一集。
         手动 stop（_current=None）/ 开关关 → 不连播；末集播完 → 停（不循环）。"""
+        if getattr(self, "_switch_unsettled", False):
+            return
         self._apply_pending_local_subtitle()
         # 外部 URL 模式：播完 idle 上升沿 → 写 playing=False，不连播。
         # 缓冲期保护：loadfile 成功 ≠ 媒体已播放，先观察到 idle=False 才认可"正在播"。
@@ -1504,6 +1519,7 @@ class MovieController:
                 self._current_index = None
                 self._last_idle = True
                 self._write_state(playing=False, paused=False)
+            self._switch_unsettled = False
             return True
         finally:
             self._stopping = False
@@ -1528,6 +1544,7 @@ class MovieController:
         → loadfile 当前集 URL → seek 回崩溃前位置（续播，位置取最后一次成功轮询缓存）。
         返回 True=已调度恢复；False=超限放弃或无可恢复上下文（调用方直接收尾）。
         """
+        self._switch_unsettled = False
         self._quality_transition(suspend=True)
         self._ipc_fail_streak = 0
         self._mpv_start_ts = time.time()

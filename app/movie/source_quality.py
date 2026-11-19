@@ -36,6 +36,9 @@ class QualityEvidence:
     startup_s: float | None = None
     input_bps_median: float | None = None
     advisory_eligible: bool = False
+    cache_seconds: float | None = None
+    resolution: tuple[int, int] | None = None
+    sustained_transport_wait: bool = False
 
 
 class SourceQualitySession:
@@ -82,12 +85,17 @@ class SourceQualitySession:
         self._wait_lower = 0.
         self._wait_confirmed = False
 
-    def _report(self, now, state, reason, advisory=False):
+    def _report(self, now, state, reason, advisory=False, *, sample=None, transport=False):
+        observed = sample or {}
+        params = observed.get("video-params") or {}
+        width, height = (number(params.get(key)) for key in ("w", "h"))
+        size = (int(width), int(height)) if width and height and width > 0 and height > 0 else None
         return QualityEvidence(
             self.source, self.origin, self.session, now, state, reason,
             round(self._progress_s, 3), self._wait_count,
             round(self._completed_wait_lower + self._wait_lower, 3), self._startup_s,
             statistics.median(self._rates) if self._rates else None, advisory,
+            number(observed.get("demuxer-cache-duration")), size, transport,
         )
 
     def observe(self, sample, now, epoch=0):
@@ -147,12 +155,18 @@ class SourceQualitySession:
                 self._wait_confirmed = True
                 self._wait_count += 1
                 self._events.append(self._wait_start)
+            # A full buffer or an advancing position contradicts transport starvation.
+            cache_state = sample.get("demuxer-cache-state") or {}
+            depleted = (0 <= cache < 1 if cache is not None
+                        else number(cache_state.get("fw-bytes")) == 0)
+            transport = (depleted and sample.get("demuxer-cache-idle") is not True
+                         and self._wait_lower >= 3 and abs(delta) < .1)
             eligible = (self._wait_lower >= 3 or len(self._events) >= 2)
             advisory = eligible and now - self._last_advisory >= 120
             if advisory:
                 self._last_advisory = now
             return self._report(now, "BUFFERING" if self._wait_confirmed else "OBSERVING",
-                                "continuous_cache_wait", advisory)
+                                "continuous_cache_wait", advisory, sample=sample, transport=transport)
         if self._wait_start is not None:
             self._warm_s = 0.
         self._finish_wait()
@@ -165,7 +179,7 @@ class SourceQualitySession:
             if self._startup_allowed and self._startup_s is None:
                 self._startup_s = round(now - self.started_at, 3)
             return self._report(now, "STABLE" if self._warm_s >= 30 and not self._events else "OBSERVING",
-                                "verified_progress")
+                                "verified_progress", sample=sample)
         self._warm_s = 0.
         return self._report(now, "UNKNOWN", "no_verified_progress")
 

@@ -64,7 +64,11 @@ def fetch(payload):
 if __name__ == "__main__":
     try:
         payload = json.loads(sys.stdin.buffer.read(65537))
-        result = fetch(payload)
+        if payload.get("mode") == "verify_switch":
+            from app.movie.switch_probe import verify
+            result = verify(payload)
+        else:
+            result = fetch(payload)
     except Exception:
         result = dict(status="failed", items=[], error="WorkerInput")
     output = json.dumps(result, ensure_ascii=False).encode("utf8")

@@ -639,6 +639,9 @@ class MoviePanel(QWidget):
         self.quality_trial_action.setToolTip(
             "默认关闭；观察网络电影缓冲，不自动切换片源或恢复跨源进度。")
         self.quality_trial_action.toggled.connect(self._toggle_quality_trial)
+        self.switch_trial_action = more_menu.addAction("实验：智能换源（本次运行）")
+        self.switch_trial_action.setCheckable(True)
+        self.switch_trial_action.toggled.connect(self._toggle_switch_trial)
         self.btn_more.setMenu(more_menu)
         search_row.addWidget(self.btn_more)
         root.addLayout(search_row)
@@ -876,8 +879,27 @@ class MoviePanel(QWidget):
         self._video_win = None
         self._ensure_video_win()
 
+    def _toggle_switch_trial(self, enabled):
+        window = self._video_win
+        if enabled and (window is None or self._progressive_search is None):
+            self.switch_trial_action.blockSignals(True)
+            self.switch_trial_action.setChecked(False)
+            self.switch_trial_action.blockSignals(False)
+            self.lbl_status.setText("智能换源需要内嵌播放窗口和渐进搜索。")
+            return
+        if window is not None:
+            window.switch_trial.enabled = enabled
+            window.quality_notice.reset()
+            if not enabled:
+                window.switch_trial.reset()
+            self._movie.set_source_quality_trial(enabled or self.quality_trial_action.isChecked())
+            if enabled and self._movie.current_item():
+                service = self._progressive_search
+                window.switch_trial.prepare(service, service.switch_candidates(self._movie.current_item()))
+            window._sync_quality_slot()
+
     def _toggle_quality_trial(self, enabled):
-        accepted = self._movie.set_source_quality_trial(enabled)
+        accepted = self._movie.set_source_quality_trial(enabled or self.switch_trial_action.isChecked())
         if accepted is not True:
             self.quality_trial_action.blockSignals(True)
             self.quality_trial_action.setChecked(False)
@@ -1952,6 +1974,10 @@ class MoviePanel(QWidget):
             QTimer.singleShot(0, self._video_win.raise_topmost)
             ok = self._video_win.play(it, index=index)
             if ok:
+                trial = getattr(self._video_win, "switch_trial", None)
+                service = self._progressive_search
+                if trial is not None and trial.enabled and service is not None:
+                    trial.prepare(service, service.switch_candidates(it))
                 name = it.get("vod_name", "") or ""
                 self.lbl_now.setText(f"播放中: {name}")
                 self.lbl_status.setText("播放器已接收加载，等待起播确认。")

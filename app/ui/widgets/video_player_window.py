@@ -608,6 +608,12 @@ class VideoPlayerWindow(QWidget):
         self.quality_notice = MovieQualityNotice(controller, self._quality_slot)
         quality_layout.addWidget(self.quality_notice, 0, 0)
         self.quality_notice.view_sources_requested.connect(self._view_quality_sources)
+        from .movie_switch_trial import MovieSwitchTrial
+        self.switch_trial = MovieSwitchTrial(controller, self)
+        self.switch_trial.completed.connect(self._switch_completed)
+        self.quality_notice.view_button.clicked.connect(self._confirm_switch)
+        self.quality_notice.close_button.clicked.connect(self.switch_trial.decline)
+        self._close_after_switch = False
         self._quality_sources_dialog = None
         self._quality_slot.hide()
         lay.addWidget(self._quality_slot)
@@ -652,6 +658,7 @@ class VideoPlayerWindow(QWidget):
 
     def play(self, item, index=None):
         """注入容器 winId → 控制器播放 → 接管轮询/overlay/侧栏。"""
+        self.switch_trial.reset()
         self._load_generation = None  # Even an unconfirmed new attempt invalidates old feedback.
         self._load_notice_sent = True
         self._invalidate_subtitle_menu()
@@ -964,6 +971,8 @@ class VideoPlayerWindow(QWidget):
                 pass
             # 连播检测先行：播完一集 idle 上升沿 → 下一集（is_playing 恢复 True）。
             # 若先查 is_playing，播完瞬间会误判"停播"直接收尾，连播永远起不来。
+            if self.switch_trial.busy:
+                return
             self._movie.tick()
             # S8 崩溃自愈状态机：
             if self._recovering:
@@ -1055,8 +1064,39 @@ class VideoPlayerWindow(QWidget):
     def _hide_recover_label(self):
         self._recover_label.hide()
 
+    def _confirm_switch(self):
+        if self.switch_trial.enabled:
+            self.quality_notice.reset()
+            self.switch_trial.confirm()
+
+    def _switch_completed(self, outcome):
+        context, result = outcome
+        if self._close_after_switch:
+            self._close_after_switch = False
+            self.close()
+            return
+        if result == "started" and self._movie.current_item() is context.alternative:
+            self.attach_current()
+            self.playback_status.emit(context.generation + 1, "PROGRESS", "已换源并确认播放推进。")
+        elif result in ("unknown", "restore_requested", "restored", "rejected", "unsupported_tracks") and self._movie.current_item() is context.item:
+            self.playback_status.emit(context.generation, "UNCONFIRMED", {
+                "unknown": "换源结果未确认，已保留原播放记录，请检查播放窗口。",
+                "restored": "备用来源未顺利起播，已恢复原来源。",
+                "restore_requested": "备用来源未顺利起播，已请求恢复原来源。",
+                "rejected": "播放器未接受换源，已保留原播放。",
+                "unsupported_tracks": "当前音轨或字幕需要保留，已继续原来源。",
+            }[result])
+
     def _poll_quality_notice(self):
         self._sync_quality_slot()
+        if self.switch_trial.enabled:
+            visible = self._playing and not self._recovering and self.isVisible() and not self.isMinimized()
+            if self.switch_trial.poll(visible):
+                self.quality_notice.show_switch_offer()
+            else:
+                self.quality_notice.reset()
+            self._quality_idle.hide()
+            return
         self.quality_notice.poll(presentation_allowed=(
             self._playing and not self._recovering and self.isVisible()
             and not self.isMinimized()))
@@ -1064,7 +1104,8 @@ class VideoPlayerWindow(QWidget):
 
     def _sync_quality_slot(self):
         enabled = getattr(self._movie, "source_quality_trial_enabled", lambda: False)() is True
-        self._quality_slot.setVisible(enabled)
+        self._quality_slot.setVisible(enabled and (not self.switch_trial.enabled
+                                     or self._playing))
 
     def _view_quality_sources(self):
         # User-initiated, nonmodal READ-ONLY reuse of the existing source dialog.
@@ -1086,6 +1127,7 @@ class VideoPlayerWindow(QWidget):
         """停播（播完/停止/异常）：停轮询 + 隐藏 overlay/侧栏 + 通知面板。"""
         self._invalidate_subtitle_menu()
         self._playing = False
+        self.switch_trial.reset()
         self.quality_notice.reset()
         if self._quality_sources_dialog is not None:
             self._quality_sources_dialog.close()
@@ -1224,6 +1266,12 @@ class VideoPlayerWindow(QWidget):
     # ---- 窗口事件：关窗=停播（隐藏保留 winId）/ Esc ----
 
     def closeEvent(self, event):
+        if self.switch_trial.busy:
+            self._close_after_switch = True
+            self.switch_trial.reset()
+            self.hide()
+            event.ignore()
+            return
         # 尺寸记忆：关窗（停播隐藏）时保存当前宽高，下次打开恢复
         try:
             self._qs.setValue("size", self.size())

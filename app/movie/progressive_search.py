@@ -103,6 +103,7 @@ class ProgressiveMovieSearch(QObject):
         self._token = 0
         self._jobs = {}
         self.alternatives = []
+        self._work_candidates = {}
         self.deadline_timer = QTimer(self)
         self.deadline_timer.setSingleShot(True)
         self.deadline_timer.timeout.connect(self._expire)
@@ -155,6 +156,7 @@ class ProgressiveMovieSearch(QObject):
                             total=len(sources), attempted=0, timed_out=0, done=0, failed=0, empty=0, shown=0,
                             seen=set(), groups=Counter(), limited=False)
         self.alternatives = []
+        self._work_candidates.clear()
         self.deadline_timer.start(budget)
         if budget > self.FIRST_BATCH_MS:
             self.phase_timer.start(self.FIRST_BATCH_MS)
@@ -241,6 +243,8 @@ class ProgressiveMovieSearch(QObject):
                 break
             req["seen"].add(identity)
             work = work_identity(item)
+            if work:
+                self._work_candidates.setdefault(work, []).append(item)
             if work and req["groups"][work] >= 3:
                 self.alternatives.append(item)
                 continue
@@ -256,6 +260,14 @@ class ProgressiveMovieSearch(QObject):
                                            status=result["status"], error=result.get("error"),
                                            elapsed_ms=result.get("elapsed_ms"),
                                            **self._counts(req)))
+
+    def switch_candidates(self, item):
+        group = self._work_candidates.get(work_identity(item), ())
+        if not any(row.get("_source_id") == item.get("_source_id")
+                   and row.get("vod_id") == item.get("vod_id")
+                   and row.get("vod_play_url") == item.get("vod_play_url") for row in group):
+            return ()
+        return tuple(group)
 
     @staticmethod
     def _counts(req):

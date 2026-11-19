@@ -27,7 +27,7 @@ def source_tag(value):
 PROPERTIES = (
     "paused-for-cache", "demuxer-cache-duration", "cache-speed",
     "demuxer-cache-state", "frame-drop-count", "decoder-frame-drop-count",
-    "hwdec-current", "time-pos", "pause", "seeking", "core-idle", "eof-reached", "speed",
+    "hwdec-current", "time-pos", "pause", "seeking", "core-idle", "eof-reached", "speed", "duration", "video-params", "demuxer-cache-idle", "idle-active",
 )
 STATE_NUMBERS = ("fw-bytes", "raw-input-rate", "cache-end", "reader-pts")
 
@@ -44,20 +44,22 @@ def sanitize(values):
         if key == "demuxer-cache-state":
             state = value if isinstance(value, dict) else {}
             result[key] = {k: number(state[k]) for k in STATE_NUMBERS if k in state}
+        elif key == "video-params":
+            result[key] = {k: number(value.get(k)) for k in ("w", "h")} if isinstance(value, dict) else {}
         elif key == "hwdec-current":
             result[key] = value if value in (
                 "no", "d3d11va", "d3d11va-copy", "dxva2", "dxva2-copy",
                 "nvdec", "nvdec-copy", "cuda", "vaapi", "videotoolbox",
                 "vulkan", "vulkan-copy",
             ) else None
-        elif key in ("pause", "seeking", "core-idle", "paused-for-cache", "eof-reached"):
+        elif key in ("pause", "seeking", "core-idle", "paused-for-cache", "eof-reached", "demuxer-cache-idle", "idle-active"):
             result[key] = value if type(value) is bool else None
         else:
             result[key] = number(value)
     return result
 
 
-def read_sample(pipe_name, timeout=.3):
+def read_sample(pipe_name, timeout=.3, *, expected_path=None, allow_idle=False):
     """Separate Windows IPC client: one batch, total deadline, bounded response.
 
     Does not acquire MpvController's shared command lock. A missing/busy/broken
@@ -106,8 +108,12 @@ def read_sample(pipe_name, timeout=.3):
                         found[keys[request_id - 1]] = (
                             message.get("data") if message.get("error") == "success" else None
                         )
-            if (len(found) != len(keys) or not found.get("_before")
-                    or found["_before"] != found["_after"]):
+            idle = (allow_idle and found.get("idle-active") is True
+                    and found.get("_before") is None and found.get("_after") is None)
+            if (len(found) != len(keys) or (not found.get("_before") and not idle)
+                    or found["_before"] != found["_after"]
+                    or (expected_path is not None
+                        and found["_after"] != expected_path and not (expected_path == "" and idle))):
                 return {}
             return sanitize(found)
     except (OSError, ValueError, TypeError):

@@ -31,6 +31,12 @@ class MovieQualityNotice(QFrame):
         self.close_button.clicked.connect(self.dismiss)
         self.hide()
 
+    def show_switch_offer(self):
+        self.message.setText("备用来源已核对内容及读取速度。是否换源？")
+        self.view_button.setText("换源")
+        self.close_button.setText("继续观看")
+        self.show()
+
     def reset(self):
         self._session = None
         self.hide()
@@ -51,6 +57,8 @@ class MovieQualityNotice(QFrame):
 
     def poll(self, *, presentation_allowed=True):
         """Called by the EXISTING playback window timer on the GUI thread."""
+        self.view_button.setText("查看其他片源")
+        self.close_button.setText("关闭")
         try:
             report = self._current() if presentation_allowed else None
             now = self._clock()
