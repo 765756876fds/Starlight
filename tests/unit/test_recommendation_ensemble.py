@@ -1,12 +1,14 @@
 """Both real controllers and stores share one bus; sources/players are offline adapters."""
 from contextlib import closing
 import hashlib
+from queue import Queue
 import sqlite3
 import threading
 import time
 
 import pytest
 
+from app.core.command_bus import CommandType
 from app.core.operation_result import OperationStatus
 from app.movie.preferences import FilmMemory
 from app.music.preferences import PreferenceStore
@@ -220,23 +222,73 @@ def test_one_unavailable_store_never_breaks_other_domain(ensemble, tmp_path, dom
 
 
 def test_new_film_voice_invalidates_older_music_recommendation(ensemble, monkeypatch):
-    music, _, picture, _, say, presented, workers = ensemble
-    entered, release = threading.Event(), threading.Event()
+    music, cinema, picture, _, say, presented, workers = ensemble
+    service = music.recommendations
+    assert service._catalog is None  # This test holds a cold catalog read.
+
+    # Finish unrelated SQLite setup before starting the cancellation scenario.
+    history = music.db.get_history(limit=100)
+    service.memory.import_history_once(history)
+    monkeypatch.setattr(music.db, "get_history", lambda *, limit: history[:limit])
+    monkeypatch.setattr(service.memory, "import_history_once", lambda rows: None)
+
+    events = Queue()
+    release = threading.Event()
     read = music.online_manager.get_top_lists
+    submit = music.command_bus.execute_async
+
+    def capture_music_result(command, on_done=None):
+        if command.command_type != CommandType.MUSIC_RECOMMEND:
+            return submit(command, on_done=on_done)
+
+        def done(result, error):
+            events.put(("finished", (result, error)))
+            if on_done is not None:
+                on_done(result, error)
+
+        return submit(command, on_done=done)
+
     def delayed():
-        entered.set()
-        assert release.wait(3)
+        events.put(("reading", None))
+        assert release.wait(3), "catalog read was not released after the film command"
         return read()
+
+    monkeypatch.setattr(music.command_bus, "execute_async", capture_music_result)
     monkeypatch.setattr(music.online_manager, "get_top_lists", delayed)
+    film_url = "https://fixture.invalid/film"
     try:
         say("我想听歌了", wait=False)
-        assert entered.wait(1)
+        stage, outcome = events.get(timeout=3)
+        assert stage == "reading", f"recommendation finished before reading the cold catalog: {outcome!r}"
+        old_command, = music.command_bus.get_history(1)
+        assert old_command.command_type == CommandType.MUSIC_RECOMMEND
+        assert old_command.is_current()
+
         say("我想看电影了")
         assert presented[-1][0].rows
+        assert not old_command.is_current()
+        assert not picture.loads
+        assert cinema.play({"vod_name": "隔离影片", "first_url": film_url})
+        assert picture.get_idle_active() is False
+        picture.set_property("time-pos", 1.0)  # The offline player has begun advancing.
+        assert picture.get_property("pause") is False
+        assert not music.mpv.loaded
+        assert workers[0].is_alive(), "the old catalog read must still be held"
     finally:
         release.set()
         for worker in workers:
             worker.join(3)
             assert not worker.is_alive()
-    assert not music.mpv.loaded and not picture.loads
+
+    stage, (result, error) = events.get_nowait()
+    assert stage == "finished" and error is None
+    assert result.status is OperationStatus.UNKNOWN
+    assert not music.mpv.loaded and picture.loads == [film_url]
+    assert picture.get_idle_active() is False
+    assert picture.get_property("time-pos") == 1.0
+    assert picture.get_property("pause") is False
     assert music.queue.is_empty() and music.recommendations.session is None
+
+    assert music.play_online(music.online_manager.tracks[0])
+    assert music.mpv.loaded == ["https://fixture.invalid/0"]
+    assert picture.get_property("pause") is True
