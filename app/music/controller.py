@@ -942,8 +942,9 @@ class MusicController:
                 self._play_song(song)
 
     @_cancel_switch_on_user_action
-    def play_song(self, song: dict[str, Any]):
+    def play_song(self, song: dict[str, Any], *, _intent_ns=None):
         """播放指定歌曲"""
+        intent_ns = time.perf_counter_ns() if _intent_ns is None else _intent_ns
         # 打点：意图入口（实际记录在锁内）
         _t_enter = time.perf_counter() if (self._trace and self._trace.enabled) else None
         if not self._mpv_available:
@@ -956,27 +957,31 @@ class MusicController:
                 self._record_intent(
                     "play_song", song,
                     round((time.perf_counter() - _t_enter) * 1000, 2))
-            self._play_selected_song(song)
+            return self._play_selected_song(song, _intent_ns=intent_ns)
 
-    def _play_selected_song(self, song, *, _admission=None):
+    def _play_selected_song(self, song, *, _admission=None, _intent_ns=None):
         """Shared locked commit; legacy play_song keeps its existing semantics."""
+        intent_ns = time.perf_counter_ns() if _intent_ns is None else _intent_ns
         if self._mpv_restart_pending:
             logger.info("[Music] mpv 重启中，忽略播放请求")
             return
-        self._invalidate_highlight()
+        if not self._movie_permits_request(intent_ns):
+            return False
+        all_songs = []
         if self.queue.size() == 0 and not song.get("online"):
             try:
                 all_songs = self.db.get_all_songs(limit=1000)
-                if all_songs:
-                    self.queue.add_all(all_songs)
             except Exception as e:
                 logger.error(f"加载本地队列失败: {e}")
+        # The catalog read can finish after a newer film has taken playback.
+        if not self._movie_permits_request(intent_ns):
+            return False
+        self._invalidate_highlight()
+        if all_songs:
+            self.queue.add_all(all_songs)
         self.queue.add(song)
         self.queue.play_at(self.queue.size() - 1)
-        if _admission is None:
-            self._play_song(song)
-        else:
-            self._play_song(song, _admission=_admission)
+        self._play_song(song, _admission=_admission, _intent_ns=intent_ns)
 
     def get_history(self, limit: int = 200) -> list:
         """播放历史（最近在前）。封面补全：本地反查 path，在线查最近封面缓存。"""
@@ -1317,8 +1322,9 @@ class MusicController:
                     return True
         return False
 
-    def _play_vague_local(self):
+    def _play_vague_local(self, *, _intent_ns=None):
         """泛化播放指令：从本地库随机挑一首播放；本地空则明确提示，不走在线兜底。"""
+        intent_ns = time.perf_counter_ns() if _intent_ns is None else _intent_ns
         try:
             all_songs = self.db.get_all_songs(limit=1000)
         except Exception as e:
@@ -1330,7 +1336,8 @@ class MusicController:
         import random as _rnd
         song = _rnd.choice(all_songs)
         logger.info(f"[Music] 泛化播放指令 → 本地随机: {song.get('title','?')} - {song.get('artist','')}")
-        self.play_song(song)
+        if self.play_song(song, _intent_ns=intent_ns) is False:
+            return None
         return song
 
     @_cancel_switch_on_user_action
@@ -1349,11 +1356,12 @@ class MusicController:
             return None
         # 泛化播放指令：不走本地搜索/在线兜底，直接本地随机
         if self._is_vague_play_query(query):
-            return self._play_vague_local()
+            return self._play_vague_local(_intent_ns=intent_ns)
         # 代际号由 _play_song（唯一咽喉）统一递增；本地命中路径经 play_song 覆盖。
         results = self.search.search(query, limit=10)
         if results and 0 <= index < len(results):
-            self.play_song(results[index])
+            if self.play_song(results[index], _intent_ns=intent_ns) is False:
+                return None
             return results[index]
 
         # 本地搜索失败，尝试在线fallback
@@ -1723,14 +1731,14 @@ class MusicController:
                     if self._play_request_id == req_before:
                         self._is_switching_track = False
 
-    def _play_song(self, song: dict[str, Any], *, _admission=None):
+    def _play_song(self, song: dict[str, Any], *, _admission=None, _intent_ns=None):
         """实际播放歌曲（唯一咽喉：play_song/next/prev/_auto_next/在线队列全部汇入）"""
         if not song:
             return
         if _admission is not None and not _admission.guard():
             return
         if self._current_origin() == "user":
-            self._play_intent_ns = time.perf_counter_ns()
+            self._play_intent_ns = time.perf_counter_ns() if _intent_ns is None else _intent_ns
         intent_ns = self.music_play_intent()
         if not self._movie_permits_request(intent_ns):
             return

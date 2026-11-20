@@ -90,6 +90,35 @@ def test_new_film_rejects_music_request_held_in_resolver(ensemble, monkeypatch):
     assert picture.get_property("pause") is True
 
 
+def test_old_local_request_cannot_take_over_after_catalog_load(ensemble, monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    music, cinema, picture, _, _, _, _ = ensemble
+    entered, release = threading.Event(), threading.Event()
+    path = tmp_path / "song.wav"
+    path.touch()
+    song = {"id": 1, "title": "Test audio", "path": str(path)}
+    before = music.queue.snapshot()
+
+    def catalog(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return [song]
+
+    monkeypatch.setattr(music.db, "get_all_songs", catalog)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(music.play_song, song)
+        try:
+            assert entered.wait(2)
+            assert cinema.play({"vod_name": "隔离影片", "first_url": "https://fixture.invalid/film"})
+        finally:
+            release.set()
+        assert pending.result(2) is False
+    assert not music.mpv.loaded
+    assert picture.get_property("pause") is False
+    assert music.queue.snapshot() == before
+
+
 def test_music_film_and_context_share_bus_without_losing_collections(ensemble, monkeypatch):
     music, cinema, picture, runtime, say, presented, _ = ensemble
     say("我想听歌了")
