@@ -1403,8 +1403,9 @@ class MovieController:
                 request = getattr(music, "_play_request_id", None)
                 music_intent = getattr(music, "music_play_intent", lambda: 0)
                 def current():
+                    intent = music_intent()
                     return (self._playback_gen == generation and self._last_idle is False
-                        and music_intent() <= film_intent
+                        and (type(intent) is not int or intent <= film_intent)
                         and not getattr(self, "_media_voice_closed", False)
                         and not self._stopping and (self._current is not None or self._external_url_mode)
                         and getattr(music, "_play_request_id", None) == request)
