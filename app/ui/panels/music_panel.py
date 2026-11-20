@@ -41,6 +41,7 @@ from ..widgets.icon_utils import lucide_icon
 from ..widgets.latest_task import LatestTask
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
 from ..widgets.music_queue_dialog import MusicQueueDialog
+from .music_search_order import rank_manual_search
 
 logger = logging.getLogger(__name__)
 
@@ -462,6 +463,7 @@ class MusicPanel(QWidget):
         ol.addLayout(search_row)
         self._results_requested = False
         self._last_online_result = None
+        self._last_online_query = ""
         self.online_stack = QStackedWidget()
         from ..widgets.music_discovery import MusicDiscovery
         self.discovery = MusicDiscovery(music, online)
@@ -1329,9 +1331,9 @@ class MusicPanel(QWidget):
     @Slot()
     def _request_search(self):
         """Qt clicked(bool) 不进入业务完成回调参数。"""
-        self._do_search()
+        self._do_search(rank_for_display=True)
 
-    def _do_search(self, *, on_done=None, on_failed=None):
+    def _do_search(self, *, on_done=None, on_failed=None, rank_for_display=False):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
@@ -1353,7 +1355,7 @@ class MusicPanel(QWidget):
         else:
             operation_id = center.post("正在搜索歌曲", f"搜索：{kw}", source="music")
         self._search_notice_ids = {self._search_generation: operation_id}
-        request = (self._search_generation, kw, on_done, on_failed)
+        request = (self._search_generation, kw, on_done, on_failed, kw if rank_for_display else "")
         self.list_results.clear()
         self._tracks_by_row = []
         self.lbl_status.setText("搜索中...")
@@ -1364,7 +1366,7 @@ class MusicPanel(QWidget):
         self._start_search(request)
 
     def _start_search(self, request):
-        generation, kw, _, _ = request
+        generation, kw, _, _, _ = request
         self._active_search = request
         # 搜索前同步一次音源列表（插件导入/刷新后无需重启即生效；
         # 保留选中项，失效自动回退「全部」，不影响正在播放的音乐）
@@ -1389,7 +1391,7 @@ class MusicPanel(QWidget):
         request = self._active_search
         if (request is not None and request[0] == generation
                 and request[1] == self.edit_kw.text().strip()):
-            self._on_search_done(result, generation, request[2], request[3])
+            self._on_search_done(result, generation, request[2], request[3], display_query=request[4])
 
     @Slot(int, str)
     def _on_search_worker_failed(self, generation, error):
@@ -1422,50 +1424,52 @@ class MusicPanel(QWidget):
         return "请重试或更换音源；若持续失败，请在设置中检查插件和网络"
 
     def _on_search_done(self, result: dict, search_generation=None, on_done=None,
-                        on_failed=None):
+                        on_failed=None, *, display_query=""):
         if search_generation is not None and search_generation != self._search_generation:
             return
         self._last_online_result = result
+        self._last_online_query = display_query
         if getattr(self, "_results_requested", False):
             self.online_stack.setCurrentWidget(self.results_page)
         self._voice_generation = None   # 手动搜索 → 重置语音候选代际
         self.list_results.clear()
-        tracks_for_search = []
         source_filter = self.cb_source.currentData()
-        n = 0
-        for src, tracks in result.items():
-            if source_filter and src != source_filter:
-                continue
-            for t in tracks:
-                version_filter = self.cb_search_filter.currentIndex() if hasattr(self, "cb_search_filter") else 0
-                markers = ("现场", "live") if version_filter == 1 else ("翻唱", "cover")
-                if version_filter and not any(mark in t.title.casefold() for mark in markers):
-                    continue
-                # 显示具体插件源名（t.source_name = 插件 platform，如"酷我音乐"），
-                # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
-                item = QListWidgetItem(f"[{t.source_name}] {t.title} - {t.artist}")
-                sub = " · ".join(str(value) for value in (t.artist, t.album, t.source_name) if value)
-                # 登记在线封面 → 历史/歌单缺字段时补全
-                if self._music is not None and hasattr(self._music, "remember_cover"):
-                    try:
-                        self._music.remember_cover(
-                            title=t.title or "", artist=t.artist or "",
-                            source_name=t.source_name or "",
-                            track_id=t.track_id or "",
-                            cover_url=getattr(t, "cover_url", None) or "")
-                    except Exception:
-                        pass
-                item.setData(Qt.UserRole, self._card_data({
-                    "title": t.title,
-                    "artist": t.artist,
-                    "album": t.album,
-                    "source_name": t.source_name,
-                    "track_id": t.track_id,
-                    "cover_url": getattr(t, "cover_url", None) or None,
-                }, sub, f"net:{t.track_id}" if t.track_id else None))
-                self.list_results.addItem(item)
-                tracks_for_search.append(t)
-                n += 1
+        version_filter = self.cb_search_filter.currentIndex() if hasattr(self, "cb_search_filter") else 0
+        markers = ("现场", "live") if version_filter == 1 else ("翻唱", "cover")
+        tracks_for_search = [
+            track
+            for source, tracks in result.items()
+            if not source_filter or source == source_filter
+            for track in tracks
+            if not version_filter or any(mark in track.title.casefold() for mark in markers)
+        ]
+        if display_query:
+            tracks_for_search = rank_manual_search(tracks_for_search, display_query)
+        n = len(tracks_for_search)
+        for t in tracks_for_search:
+            # 显示具体插件源名（t.source_name = 插件 platform，如"酷我音乐"），
+            # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
+            item = QListWidgetItem(f"[{t.source_name}] {t.title} - {t.artist}")
+            sub = " · ".join(str(value) for value in (t.artist, t.album, t.source_name) if value)
+            # 登记在线封面 → 历史/歌单缺字段时补全
+            if self._music is not None and hasattr(self._music, "remember_cover"):
+                try:
+                    self._music.remember_cover(
+                        title=t.title or "", artist=t.artist or "",
+                        source_name=t.source_name or "",
+                        track_id=t.track_id or "",
+                        cover_url=getattr(t, "cover_url", None) or "")
+                except Exception:
+                    pass
+            item.setData(Qt.UserRole, self._card_data({
+                "title": t.title,
+                "artist": t.artist,
+                "album": t.album,
+                "source_name": t.source_name,
+                "track_id": t.track_id,
+                "cover_url": getattr(t, "cover_url", None) or None,
+            }, sub, f"net:{t.track_id}" if t.track_id else None))
+            self.list_results.addItem(item)
         self._tracks_by_row = tracks_for_search
         errors = {src: error for src, error in getattr(result, "errors", {}).items()
                   if not source_filter or src == source_filter}
@@ -1585,7 +1589,7 @@ class MusicPanel(QWidget):
 
     def _apply_online_filter(self, *_):
         if self._last_online_result is not None:
-            self._on_search_done(self._last_online_result)
+            self._on_search_done(self._last_online_result, display_query=self._last_online_query)
 
     def _play_discovery_history(self, row):
         item = QListWidgetItem()

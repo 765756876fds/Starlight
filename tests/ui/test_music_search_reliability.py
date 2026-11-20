@@ -3,11 +3,12 @@ import sys
 import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
-from PySide6.QtCore import QThread
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QPushButton
 
 from app.music.online.models import OnlineTrack
 from app.ui.panels.music_panel import MusicPanel
@@ -257,4 +258,136 @@ def test_legacy_invalid_result_is_visible_failure_not_gui_exception(panel, inval
     wait_until(lambda: "失败" in p.lbl_status.text())
     assert "有效搜索结果" in p.lbl_status.text()
     assert "超时" not in p.lbl_status.text()
+    assert errors == []
+
+
+@pytest.mark.parametrize("cards", [False, True], ids=["list", "cards"])
+def test_ranked_result_actions_use_clicked_provider_and_track(panel, monkeypatch, cards):
+    p, music, errors = panel
+    first = OnlineTrack("来源甲", "shared", "星桥", "远舟")
+    live = OnlineTrack("来源甲", "live", "星桥（Live）", "纸鸢乐队")
+    exact = OnlineTrack("来源乙", "shared", "星桥", "纸鸢乐队", extra={"raw": {"asset": "fixture"}})
+    music.search_online = lambda keyword: {"fake": [first, live, exact]}
+    music.get_playlists = lambda: [{"id": 12, "name": "我喜欢的音乐"}]
+    music.is_downloaded = lambda title, artist: False
+    music.play_online = Mock(return_value=True)
+    music.add_next = Mock(return_value=True)
+    music.add_to_playlist = Mock(return_value=True)
+    music.download_song = Mock()
+    p.resize(1180, 760)
+    p.show()
+    p.tabs.setCurrentIndex(1)
+    p.edit_kw.setText("星桥 纸鸢乐队")
+    p.btn_search.click()
+    wait_until(lambda: p._thread is None and p.list_results.count() == 3)
+
+    p._toggle_view_mode(not cards)
+    p._toggle_view_mode(cards)
+    assert p._tracks_by_row == [exact, live, first]
+    item = p.list_results.item(0)
+    assert "来源乙" in item.text()
+    assert "来源乙" in item.data(Qt.UserRole)["_sub"]
+    assert "Live" in p.list_results.item(1).text()
+    p.list_results.scrollToItem(item)
+    QApplication.processEvents()
+    point = p.list_results.visualItemRect(item).center()
+    assert p.list_results.itemAt(point) == item
+
+    p.list_results.itemDoubleClicked.emit(item)
+    wait_until(lambda: "正在播放" in p.lbl_status.text())
+    music.play_online.assert_called_once_with(exact)
+    assert music.play_online.call_args.args[0] is exact
+
+    def invoke_actions(menu, _position):
+        actions = {action.text(): action for action in menu.actions()}
+        actions["下一首播放"].trigger()
+        playlist_menu = actions["添加到歌单 ▸"].menu()
+        next(action for action in playlist_menu.actions() if action.text() == "我喜欢的音乐").trigger()
+        actions["下载到本地"].trigger()
+
+    monkeypatch.setattr(QMenu, "exec_", invoke_actions)
+    p._on_online_context_menu(point)
+
+    assert music.add_next.call_count == music.add_to_playlist.call_count == music.download_song.call_count == 1
+    playlist_id, saved = music.add_to_playlist.call_args.args
+    assert playlist_id == 12
+    for song in (music.add_next.call_args.args[0], saved, music.download_song.call_args.args[0]):
+        assert (song["source_name"], song["track_id"], song["artist"]) == ("来源乙", "shared", "纸鸢乐队")
+    assert music.download_song.call_args.args[0]["extra"] == exact.extra
+    assert errors == []
+
+
+def test_ranked_filters_use_submitted_query_and_original_provider_groups(panel):
+    from app.music.online.models import SearchResults
+
+    p, music, errors = panel
+    other = OnlineTrack("来源甲", "1", "星桥（Live）", "远舟")
+    exact = OnlineTrack("来源乙", "2", "星桥（Live）", "纸鸢乐队")
+    cover = OnlineTrack("来源乙", "3", "星桥（翻唱）", "纸鸢乐队")
+    result = SearchResults()
+    result.update(fake=[other], bridge=[exact, cover], offline=[])
+    result.successful_sources.update(("fake", "bridge"))
+    result.errors["offline"] = "network"
+    music.get_online_sources = lambda: ["fake", "bridge", "offline"]
+    music.search_online = lambda keyword: result
+    p.edit_kw.setText("星桥 Live 纸鸢乐队")
+    p.edit_kw.returnPressed.emit()
+    wait_until(lambda: p._thread is None and p.list_results.count() == 3)
+    assert p._tracks_by_row == [exact, other, cover]
+    assert "部分音源失败" in p.lbl_status.text()
+
+    p.edit_kw.setText("星桥 Live 远舟")
+    p.cb_search_filter.setCurrentIndex(1)
+    assert p._tracks_by_row == [exact, other]
+    p.cb_source.setCurrentIndex(p.cb_source.findData("bridge"))
+    p._apply_online_filter()
+    assert p._tracks_by_row == [exact]
+    p.cb_search_filter.setCurrentIndex(2)
+    assert p._tracks_by_row == [cover]
+    assert errors == []
+
+
+def test_identify_and_discovery_keep_source_order_after_ranked_search(panel):
+    p, music, errors = panel
+    first = OnlineTrack("fake", "1", "别的歌曲", "远舟")
+    exact = OnlineTrack("fake", "2", "星桥", "纸鸢乐队")
+    music.search_online = lambda keyword: {"fake": [first, exact]}
+    p.edit_kw.setText("星桥")
+    p.btn_search.click()
+    wait_until(lambda: p._thread is None and p._tracks_by_row == [exact, first])
+
+    music.play_online = Mock(side_effect=[False, True])
+    playback = []
+    p._play_result.connect(lambda ok, message, _label: playback.append((ok, message)))
+    p._on_identify_search("星桥")
+    wait_until(lambda: p._thread is None and bool(playback))
+    assert playback == [(True, "正在播放：星桥")]
+    assert [call.args[0] for call in music.play_online.call_args_list] == [first, exact]
+    p._show_discovered_tracks([first, exact], "榜单")
+    p._apply_online_filter()
+    assert p._tracks_by_row == [first, exact]
+    assert errors == []
+
+
+def test_latest_manual_search_ranks_with_its_own_keyword(panel):
+    p, music, errors = panel
+    first = OnlineTrack("fake", "1", "雨后信箱")
+    latest = OnlineTrack("fake", "2", "星桥")
+
+    def search(keyword):
+        if keyword == first.title:
+            music.entered.set()
+            assert music.release.wait(3)
+        return {"fake": [first, latest]}
+
+    music.search_online = search
+    p.edit_kw.setText(first.title)
+    p.btn_search.click()
+    wait_until(music.entered.is_set)
+    p.edit_kw.setText(latest.title)
+    p.btn_search.click()
+    music.release.set()
+    wait_until(lambda: p._thread is None and bool(p.displays))
+    assert p.displays == [[latest.title, first.title]]
+    assert p._tracks_by_row == [latest, first]
     assert errors == []
