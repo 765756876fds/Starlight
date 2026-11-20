@@ -8,6 +8,7 @@ FakeMpvAdapter），提升测试稳定性与速度。
 方法面 = controller.py 中 self.mpv.xxx 的全部实际调用（含 _properties
 私有属性缓存，controller 在 pause/播放后会同步该字段）。
 """
+from threading import Event
 from typing import Any, Callable, Optional, Protocol
 
 
@@ -16,7 +17,7 @@ class MpvAdapter(Protocol):
 
     # ---- 生命周期 ----
     def start(self, taskkill: bool = True, pipe_timeout: float = 3.0,
-              prop_timeout: float = 0.5) -> bool: ...
+              prop_timeout: float = 0.5, *, cancel: Event | None = None) -> bool: ...
     def stop(self) -> None: ...
     def stop_process(self) -> None: ...
     def is_running(self) -> bool: ...

@@ -61,7 +61,7 @@ class MusicScanner:
         self._highlight_thread: threading.Thread | None = None
         self._highlight_stop = threading.Event()
 
-    def scan(self, full_rescan: bool = False) -> dict[str, int]:
+    def scan(self, full_rescan: bool = False, *, cancel: threading.Event | None = None) -> dict[str, int]:
         """
         执行扫描
 
@@ -83,19 +83,23 @@ class MusicScanner:
         # 第二个调用会再启一个并发 worker，两个 worker 写同一首歌产生重复行。
         # worker 自己在 finally 里复位 _highlight_running。
 
-        all_files = self._collect_files()
+        kwargs = {} if cancel is None else {"cancel": cancel}
+        all_files = self._collect_files(**kwargs)
 
         for filepath in all_files:
+            if cancel is not None and cancel.is_set():
+                break
             self._scanned_count += 1
             try:
-                self._process_file(filepath, full_rescan)
+                self._process_file(filepath, full_rescan, **kwargs)
             except Exception as e:
                 self._error_count += 1
                 print(f"[Scanner] 处理文件失败 {filepath}: {e}")
 
         # 扫描完成：WAL checkpoint，防 -wal 无限膨胀（写放大集中在扫描）
         try:
-            self.db.checkpoint()
+            if cancel is None or not cancel.is_set():
+                self.db.checkpoint()
         except Exception as e:
             print(f"[Scanner] WAL checkpoint 失败: {e}")
 
@@ -108,21 +112,25 @@ class MusicScanner:
             "unplayable": self._unplayable_count,
         }
 
-    def _collect_files(self) -> list[str]:
+    def _collect_files(self, *, cancel: threading.Event | None = None) -> list[str]:
         """收集所有音乐文件"""
         files = []
         for scan_dir in self.scan_dirs:
+            if cancel is not None and cancel.is_set():
+                break
             if not os.path.exists(scan_dir):
                 print(f"[Scanner] 目录不存在: {scan_dir}")
                 continue
             for root, _, filenames in os.walk(scan_dir):
+                if cancel is not None and cancel.is_set():
+                    return files
                 for filename in filenames:
                     ext = os.path.splitext(filename)[1].lower()
                     if ext in self.extensions:
                         files.append(os.path.join(root, filename))
         return files
 
-    def _process_file(self, filepath: str, full_rescan: bool):
+    def _process_file(self, filepath: str, full_rescan: bool, *, cancel: threading.Event | None = None):
         """处理单个文件"""
         try:
             stat = os.stat(filepath)
@@ -141,7 +149,11 @@ class MusicScanner:
                 return
 
         # 可播验证：只对新增/变更文件（mpv 不可用时降级照常入库）
-        if self._verify_mpv_ok and not self._verify_playable(filepath):
+        kwargs = {} if cancel is None else {"cancel": cancel}
+        playable = not self._verify_mpv_ok or self._verify_playable(filepath, **kwargs)
+        if cancel is not None and cancel.is_set():
+            return
+        if not playable:
             self._unplayable_count += 1
             print(f"[Scanner] 不可播文件已跳过入库: {filepath}")
             return
@@ -154,6 +166,8 @@ class MusicScanner:
         song_data["last_modified"] = last_modified
         song_data["format"] = os.path.splitext(filepath)[1].lower().lstrip(".")
 
+        if cancel is not None and cancel.is_set():
+            return
         if existing:
             self.db.update_song(existing["id"], song_data)
             self._updated_count += 1
@@ -177,12 +191,14 @@ class MusicScanner:
         print(f"[Scanner] mpv 不存在: {self.mpv_path}，可播验证降级（照常入库）")
         return False
 
-    def _verify_playable(self, filepath: str) -> bool:
+    def _verify_playable(self, filepath: str, *, cancel: threading.Event | None = None) -> bool:
         """独立 mpv 进程试播验证（--frames=1，绝不碰 controller 的 mpv 实例）。
 
         exit=0 → 可播；非 0 / 超时（VERIFY_TIMEOUT 秒，杀进程）→ 不可播；
         验证本身异常 → 降级返回 True（照常入库，不因验证坏掉扫描）。
         """
+        if cancel is not None and cancel.is_set():
+            return False
         try:
             proc = subprocess.Popen(
                 [self.mpv_path, "--no-config", "--no-video", "--vo=null",
@@ -192,14 +208,24 @@ class MusicScanner:
                 creationflags=subprocess.CREATE_NO_WINDOW,  # 关黑窗：试播 mpv 不弹控制台
             )
             try:
-                rc = proc.wait(timeout=self.VERIFY_TIMEOUT)
+                if cancel is None:
+                    rc = proc.wait(timeout=self.VERIFY_TIMEOUT)
+                else:
+                    deadline = time.monotonic() + self.VERIFY_TIMEOUT
+                    rc = proc.poll()
+                    while rc is None and not cancel.is_set() and time.monotonic() < deadline:
+                        cancel.wait(min(0.05, max(0, deadline - time.monotonic())))
+                        rc = proc.poll()
+                    if rc is None:
+                        raise subprocess.TimeoutExpired("mpv", self.VERIFY_TIMEOUT)
             except subprocess.TimeoutExpired:
                 try:
                     proc.kill()
                     proc.wait(timeout=2.0)
                 except Exception:
                     pass
-                print(f"[Scanner] 可播验证超时({self.VERIFY_TIMEOUT}s)，判定不可播: {filepath}")
+                if cancel is None or not cancel.is_set():
+                    print(f"[Scanner] 可播验证超时({self.VERIFY_TIMEOUT}s)，判定不可播: {filepath}")
                 return False
             if rc == 0:
                 return True
@@ -363,7 +389,7 @@ class MusicScanner:
         parts = self._parse_name_parts(filepath)
         return parts[0]
 
-    def start_highlight_background(self):
+    def start_highlight_background(self, *, cancel: threading.Event | None = None):
         """扫描完成后启动后台线程计算所有未处理歌曲的 highlight。
 
         用 _highlight_start_lock 把"检查 running → 置位 → 起线程"做成临界区，
@@ -372,6 +398,8 @@ class MusicScanner:
         新 worker 误清）。
         """
         with self._highlight_start_lock:
+            if cancel is not None and cancel.is_set():
+                return
             if self._highlight_running:
                 logger.debug("Highlight worker 已在运行，跳过重复启动")
                 return

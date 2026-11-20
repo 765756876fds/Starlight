@@ -159,7 +159,7 @@ class VoiceRuntime:
         self._interrupt_thread: threading.Thread | None = None
         self._interrupt_stop = threading.Event()
 
-    def start(self, bootstrap_result: str = "unknown"):
+    def start(self, bootstrap_result: str = "unknown", *, cancel: threading.Event | None = None):
         """启动语音运行时。
 
         bootstrap_result:
@@ -168,7 +168,7 @@ class VoiceRuntime:
           "disabled"  — asr.enabled=false，完全不初始化 ASR（TTS/其他仍可用）；
           "unknown"   — 旧调用路径（未走 main.py initialize），保持原有行为。
         """
-        if self._running:
+        if self._running or (cancel is not None and cancel.is_set()):
             return
 
         self._observations.reopen()
@@ -181,7 +181,10 @@ class VoiceRuntime:
 
         # 初始化 ASR（加载模型可能需要时间）
         print("[Voice] 正在加载 ASR 模型...")
-        self.asr.initialize(bootstrap_result=bootstrap_result)
+        kwargs = {} if cancel is None else {"cancel": cancel}
+        self.asr.initialize(bootstrap_result=bootstrap_result, **kwargs)
+        if cancel is not None and cancel.is_set():
+            return
 
         # 采集/识别解耦：识别线程随 VoiceRuntime 生命周期（start 创建、stop 退出），
         # toggle_mic 只开关采集线程（识别线程常驻等待队列，无状态）。
@@ -207,6 +210,8 @@ class VoiceRuntime:
                 break
 
         # ③ 代际递增 + 创建新识别线程（捕获 my_gen；旧线程见代际过期自动退出）
+        if cancel is not None and cancel.is_set():
+            return
         self._asr_generation += 1
         self._mic_stop.clear()
         my_gen = self._asr_generation
@@ -216,6 +221,8 @@ class VoiceRuntime:
         self._asr_thread.start()
 
         # ④ 打断旁路检测线程（独立于主 ASR 循环；stop 时经 _interrupt_stop 退出）
+        if cancel is not None and cancel.is_set():
+            return
         self._interrupt_stop.clear()
         self._interrupt_thread = threading.Thread(
             target=self._interrupt_worker, daemon=True, name="voice-interrupt"

@@ -77,15 +77,19 @@ def _nchit_edge(lx: int, ly: int, w: int, h: int, border: int = _RESIZE_BORDER_P
 class ApplicationQuitFilter(QObject):
     """Handle confirmed application exit independently of hide-on-close windows."""
 
-    def __init__(self, app, window):
+    def __init__(self, app, window, *, cancel=None):
         super().__init__(app)
         self.window = window
+        self._cancel = cancel
         self.pending = False
         self.ready = False
 
     def eventFilter(self, obj, event):
         if obj is self.parent() and event.type() == QEvent.Quit:
-            if (_WIN32 and event.spontaneous()) or self.window._force_quit:
+            stopping = self._cancel is not None and self._cancel.is_set()
+            if (_WIN32 and event.spontaneous()) or self.window._force_quit or stopping:
+                if self._cancel is not None:
+                    self._cancel.set()
                 self.pending = True
                 if self.ready:
                     QApplication.exit(0)

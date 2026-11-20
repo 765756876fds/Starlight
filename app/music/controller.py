@@ -245,18 +245,23 @@ class MusicController:
         self.mpv.on_property_change("idle-active", self._on_idle_change)
         self.mpv.on_property_change("eof-reached", self._on_eof)
 
-    def start(self) -> bool:
+    def start(self, *, cancel: threading.Event | None = None) -> bool:
         """启动音乐模块。mpv 不可用 → 降级运行（不抛异常），返回 False。"""
+        if cancel is not None and cancel.is_set():
+            return False
         self.history_recorder.start()
+        kwargs = {} if cancel is None else {"cancel": cancel}
         if self._running:
             return True
 
         # 启动 mpv（失败不抛：mpv 未安装/路径错误 → 模块降级，不崩主程序）
         try:
-            ok = bool(self.mpv.start())
+            ok = bool(self.mpv.start(**kwargs))
         except Exception as e:
             logger.info(f"[Music] mpv 启动异常: {e!r}")
             ok = False
+        if cancel is not None and cancel.is_set():
+            return False
         if not ok:
             self._mpv_available = False
             logger.info("[Music] mpv 不可用，音乐模块降级运行（播放/音量控制禁用）")
@@ -267,12 +272,14 @@ class MusicController:
             self.state_store.set(StateNamespace.MUSIC, "current_song", None)
             # mpv 不可用也要后台算 highlight（不依赖 mpv）
             try:
-                self.scanner.start_highlight_background()
+                self.scanner.start_highlight_background(**kwargs)
             except Exception as e:
                 logger.warning(f"[Music] 启动后台 highlight worker 失败: {e!r}")
             return False
         self._mpv_available = True
         self.mpv.set_volume(self.default_volume)
+        if cancel is not None and cancel.is_set():
+            return False
 
         # 注册事件
         self._running = True
@@ -295,9 +302,10 @@ class MusicController:
 
         def _poll_idle():
             import time as _time
-            while self._running:
+            wait = _time.sleep if cancel is None else cancel.wait
+            while self._running and (cancel is None or not cancel.is_set()):
                 if self._mpv_gave_up:
-                    _time.sleep(2.0)
+                    wait(2.0)
                     continue
                 # 1) 管道健康探测：get_property 连续失败 → 触发重启
                 try:
@@ -334,10 +342,10 @@ class MusicController:
                 except Exception as e:
                     logger.error(f"[Music] idle poll error: {e!r}")
                     self._mpv_fail_streak += 1
-                    if self._mpv_fail_streak >= 3:
+                    if self._mpv_fail_streak >= 3 and (cancel is None or not cancel.is_set()):
                         self._mpv_fail_streak = 0
                         self._try_restart_mpv("pipe-fail")
-                    _time.sleep(0.8)
+                    wait(0.8)
                     continue
                 # 2) 进程存活探测：mpv 进程死亡 → 触发重启
                 try:
@@ -346,8 +354,9 @@ class MusicController:
                     alive = True
                 if not alive:
                     logger.info("[Music] mpv 进程已退出")
-                    self._try_restart_mpv("process-dead")
-                    _time.sleep(0.8)
+                    if cancel is None or not cancel.is_set():
+                        self._try_restart_mpv("process-dead")
+                    wait(0.8)
                     continue
                 # 3) 原逻辑：idle 上升沿 → 自动切歌
                 if now_idle and self._is_seeking:
@@ -355,16 +364,22 @@ class MusicController:
                     # 属正常现象，绝不能误判为播放结束。不消费上升沿（不更新
                     # _last_idle）：seek 结束恢复播放 → 无事发生；seek 后确实
                     # 播完 → 下轮轮询仍命中上升沿正常切歌。
-                    _time.sleep(0.5)
+                    wait(0.5)
                     continue
                 if now_idle and not self._last_idle:
-                    _time.sleep(0.5)  # 等 mpv 稳定
+                    if wait(0.5) or not self._running:  # 等 mpv 稳定
+                        break
                     logger.info("[Music] 检测到播放结束，自动切下一首")
                     self._auto_next()
                 self._last_idle = now_idle
-                _time.sleep(0.8)
+                wait(0.8)
 
-        threading.Thread(target=_poll_idle, daemon=True, name="music-idle-poll").start()
+        if cancel is not None and cancel.is_set():
+            return False
+        idle_thread = threading.Thread(target=_poll_idle, daemon=True, name="music-idle-poll")
+        if cancel is not None:
+            self._idle_thread = idle_thread
+        idle_thread.start()
 
         # 更新状态
         self.state_store.set(StateNamespace.MUSIC, "volume", self.default_volume)
@@ -376,7 +391,7 @@ class MusicController:
         # manual / 已有 pychorus 记录会在 scanner._highlight_worker 内跳过。
         # 失败不影响主程序：worker 内部已 try/except。
         try:
-            self.scanner.start_highlight_background()
+            self.scanner.start_highlight_background(**kwargs)
         except Exception as e:
             logger.warning(f"[Music] 启动后台 highlight worker 失败: {e!r}")
         return True
@@ -540,6 +555,11 @@ class MusicController:
                 pass
         with self._mpv_lifecycle_lock:
             self.mpv.stop_process()
+        thread = getattr(self, "_idle_thread", None)
+        if thread is not None and thread.ident is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.5)
+            if thread.is_alive():
+                logger.warning("[Music] idle poll thread has not stopped")
         logger.info("[Music] 模块已停止")
 
     def _register_commands(self):
@@ -2909,14 +2929,19 @@ class MusicController:
 
     # ===== 扫描 =====
 
-    def rescan(self, full: bool = False) -> dict[str, int]:
+    def rescan(self, full: bool = False, *, cancel: threading.Event | None = None) -> dict[str, int]:
         """重新扫描音乐库"""
+        if cancel is not None and cancel.is_set():
+            return {}
         logger.info(f"[Music] 开始扫描音乐库 (full={full})...")
-        result = self.scanner.scan(full_rescan=full)
+        kwargs = {} if cancel is None else {"cancel": cancel}
+        result = self.scanner.scan(full_rescan=full, **kwargs)
+        if cancel is not None and cancel.is_set():
+            return result
         logger.info(f"[Music] 扫描完成: {result}")
         self.state_store.set(StateNamespace.MUSIC, "song_count", self.db.get_song_count())
         # 扫描完成后后台计算highlight，不阻塞
-        self.scanner.start_highlight_background()
+        self.scanner.start_highlight_background(**kwargs)
         return result
 
     def cleanup_missing(self) -> dict[str, int]:

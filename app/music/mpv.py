@@ -45,7 +45,8 @@ class MpvController:
             self._film_end_reasons = {}
 
     def start(self, taskkill: bool = True, wid: int | None = None,
-              pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
+              pipe_timeout: float = 10.0, prop_timeout: float = 1.0, *,
+              cancel: threading.Event | None = None) -> bool:
         """启动 mpv 进程；成功返回 True，失败返回 False（不抛异常）。
         taskkill=True 时先清场（杀残留 mpv.exe，正常冷启动语义）；
         taskkill=False 供自动重启路径（旧进程已被 stop_process 终止，
@@ -56,6 +57,8 @@ class MpvController:
         因为重启在 controller._lock 内执行，持锁时间必须可控。"""
         # 进程真的活着才复用；窗口被用户关闭（进程自死，poll() 非 None）时
         # _running 标志仍 True，但必须重新 launch——否则 start 被挡死、无法唤醒。
+        if cancel is not None and cancel.is_set():
+            return False
         if (self._running and self._process is not None
                 and self._process.poll() is None):
             return True
@@ -67,9 +70,13 @@ class MpvController:
             # P0-3：不再全局 taskkill（电影/音乐双实例共存，全局杀会杀掉对方实例）。
             # 改为精确终止本实例上次启动的进程（对齐 stop_process 的 terminate/kill）。
             self._kill_own_process()
-            time.sleep(0.3)
+            if cancel is None:
+                time.sleep(0.3)
+            elif cancel.wait(0.3):
+                return False
 
-        return self._launch(wid=wid, pipe_timeout=pipe_timeout, prop_timeout=prop_timeout)
+        kwargs = {} if cancel is None else {"cancel": cancel}
+        return self._launch(wid=wid, pipe_timeout=pipe_timeout, prop_timeout=prop_timeout, **kwargs)
 
     def _resolve_mpv_path(self) -> bool:
         """解析 mpv 可执行文件：先配置路径（isfile），再 PATH（shutil.which）。
@@ -85,7 +92,8 @@ class MpvController:
         return False
 
     def _launch(self, wid: int | None = None,
-                pipe_timeout: float = 10.0, prop_timeout: float = 1.0) -> bool:
+                pipe_timeout: float = 10.0, prop_timeout: float = 1.0, *,
+                cancel: threading.Event | None = None) -> bool:
         """Popen + 等待 IPC 管道就绪。任何一步失败 → 返回 False（不抛）。"""
         if self.video:
             with self._event_lock:
@@ -128,13 +136,16 @@ class MpvController:
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         ]
 
+        if cancel is not None and cancel.is_set():
+            return False
+        kwargs = {} if cancel is None else {"cancel": cancel}
         try:
             self._process = subprocess.Popen(
                 args,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
-            self._wait_for_pipe(timeout=pipe_timeout)
+            self._wait_for_pipe(timeout=pipe_timeout, **kwargs)
         except Exception as e:
             # 进程创建成功但管道等待/连接失败：进程对象必须保留到清理完成，
             # 否则孤儿 mpv 泄漏（无句柄可终止）。清理完成后统一复位状态。
@@ -142,7 +153,10 @@ class MpvController:
             self._cleanup_failed_launch()
             return False
         self._running = True
-        self._init_properties(prop_timeout=prop_timeout)
+        self._init_properties(prop_timeout=prop_timeout, **kwargs)
+        if cancel is not None and cancel.is_set():
+            self._cleanup_failed_launch()
+            return False
         print(f"[mpv] 已启动, PID={self._process.pid}")
         return True
 
@@ -176,7 +190,14 @@ class MpvController:
         self._pipe = None
         self._running = False
 
-    def _wait_for_pipe(self, timeout: float = 10.0):
+    def _wait_for_pipe(self, timeout: float = 10.0, *, cancel: threading.Event | None = None):
+        def delay(seconds):
+            if cancel is None:
+                time.sleep(seconds)
+            elif cancel.wait(seconds):
+                raise InterruptedError("mpv startup cancelled")
+
+        delay(0)
         start = time.time()
         pipe_exists = False
         while time.time() - start < timeout:
@@ -186,10 +207,10 @@ class MpvController:
                     break
             except Exception:
                 pass
-            time.sleep(0.1)
+            delay(0.1)
         if not pipe_exists:
             raise TimeoutError(f"mpv IPC 管道超时未出现: {self.ipc_pipe}")
-        time.sleep(0.3)
+        delay(0.3)
         last_error = None
         for i in range(5):
             try:
@@ -197,12 +218,14 @@ class MpvController:
                 return
             except Exception as e:
                 last_error = e
-                time.sleep(0.2)
+                delay(0.2)
         raise ConnectionError(f"无法连接到 mpv IPC 管道: {last_error}")
 
-    def _init_properties(self, prop_timeout: float = 1.0):
+    def _init_properties(self, prop_timeout: float = 1.0, *, cancel: threading.Event | None = None):
         properties = ["pause", "volume", "idle-active", "filename", "playback-time", "duration"]
         for prop in properties:
+            if cancel is not None and cancel.is_set():
+                return
             try:
                 value = self.get_property(prop, timeout=prop_timeout)
                 if value is not None:

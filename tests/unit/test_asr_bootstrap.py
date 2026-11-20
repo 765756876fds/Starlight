@@ -141,13 +141,15 @@ class TestEnsureAssets:
 class TestEnsureAndLaunch:
     @pytest.fixture(autouse=True)
     def no_live_port_check(self, monkeypatch):
+        monkeypatch.setattr(ab, "_server_proc", None)
+        monkeypatch.setattr(ab, "_server_backend", "")
         monkeypatch.setattr(ab, "_port_in_use", lambda: False)
 
     def test_disabled_by_switch(self, monkeypatch):
         assert ab.ensure_and_launch({"bootstrap_enabled": False}) is None
 
     def test_reuse_external_server(self, monkeypatch):
-        monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
+        monkeypatch.setattr(ab, "ensure_assets", lambda cfg, **kwargs: True)
         monkeypatch.setattr(ab, "_is_server_up", lambda *a, **k: True)
         monkeypatch.setattr(ab, "find_llama_backend_candidates",
                             lambda cfg: [{"backend": "cpu", "exe": "C:/x/llama-server.exe"}])
@@ -160,23 +162,28 @@ class TestEnsureAndLaunch:
         model = _touch(tmp_path / "Qwen3-ASR-0.6B-Q8_0.gguf")
         mm = _touch(tmp_path / "mmproj.gguf")
         server = _touch(tmp_path / "llama-server.exe")
-        monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
+        monkeypatch.setattr(ab, "ensure_assets", lambda cfg, **kwargs: True)
         monkeypatch.setattr(ab, "_is_server_up", lambda *a, **k: False)
         monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: (model, mm))
         monkeypatch.setattr(ab, "find_llama_backend_candidates",
                             lambda cfg: [{"backend": "cpu", "exe": server},
                                          {"backend": "vulkan", "exe": "D:/nope/vulkan.exe"}])
+        monkeypatch.setattr(ab, "_wait", lambda delay, cancel: cancel.is_set())
         started = []
 
         class FakeProc:
             def poll(self):
                 return None
 
-        monkeypatch.setattr(ab, "_try_start_backend",
-                            lambda cand, m, mmproj, ctx, **kw: (started.append(cand) or FakeProc(), ""))
+        def popen(args, **kwargs):
+            started.append(args[0])
+            return FakeProc()
+
+        monkeypatch.setattr(ab.subprocess, "Popen", popen)
+        monkeypatch.setattr(ab, "_is_server_up", lambda timeout=0.8: timeout == 3)
         proc = ab.ensure_and_launch({})
         assert proc is not None
-        assert started and started[0]["backend"] == "cpu"  # 按优先级取第一个候选
+        assert started == [server]  # 按优先级取第一个候选
         assert ab._server_proc is proc
         ab._server_proc = None  # 清理，防 atexit 误杀测试进程
 
@@ -238,7 +245,7 @@ class TestEnsureAndLaunch:
         assert proc is None
 
     def test_no_candidates_returns_none(self, monkeypatch):
-        monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
+        monkeypatch.setattr(ab, "ensure_assets", lambda cfg, **kwargs: True)
         monkeypatch.setattr(ab, "_is_server_up", lambda *a, **k: False)
         monkeypatch.setattr(ab, "resolve_model_paths", lambda cfg: ("C:/m.gguf", ""))
         monkeypatch.setattr(ab, "find_llama_backend_candidates", lambda cfg: [])

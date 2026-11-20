@@ -22,6 +22,7 @@ try:
 except Exception:
     pass
 
+from contextlib import nullcontext
 import signal
 import threading
 import time
@@ -153,6 +154,10 @@ class Application:
         # 状态
         self._running = False
         self._shutdown_event = threading.Event()
+        self._shutdown_lock = threading.Lock()
+        self._startup_thread = None
+        self._startup_entered = False
+        self._cleanup_started = False
         # 模块状态缓存：窗口创建前 _set_module_status 调用先落这里，
         # LoadingPanel 构造后回放。字典读写必须持锁。
         self._module_status: dict[str, str] = {}
@@ -205,7 +210,9 @@ class Application:
         try:
             if self.config_data.get("asr", {}).get("bootstrap_enabled", True):
                 from app.voice.asr_bootstrap import ensure_and_launch, _is_server_up
-                ensure_and_launch(self.config_data.get("asr", {}))
+                ensure_and_launch(self.config_data.get("asr", {}), cancel=self._shutdown_event)
+                if self._shutdown_event.is_set():
+                    return False
                 # ensure_and_launch 返回 None 既可能是"外部已有服务复用"（成功），
                 # 也可能是"全部后端失败"（失败）。用 _is_server_up() 区分。
                 try:
@@ -219,6 +226,9 @@ class Application:
         import time
 
         from app.voice.asr_bootstrap import PORT, _is_server_up, _port_in_use
+
+        if self._shutdown_event.is_set():
+            return False
 
         asr_config = self.config_data.get("asr", {})
         port = PORT
@@ -269,35 +279,17 @@ class Application:
                 _asr_log_dir = os.devnull
             _out_path = os.path.join(_asr_log_dir, "asr_server_out.txt") if _asr_log_dir != os.devnull else os.devnull
             _err_path = os.path.join(_asr_log_dir, "asr_server_err.txt") if _asr_log_dir != os.devnull else os.devnull
-            # 文件句柄由 Popen 接管（子进程退出后关闭）；Popen 失败时需手动关闭
-            _out_fp = open(_out_path, "w")
-            _err_fp = open(_err_path, "w")
-            try:
-                proc = subprocess.Popen(
-                    args,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    stdout=_out_fp,
-                    stderr=_err_fp,
-                )
-            except Exception:
-                _out_fp.close()
-                _err_fp.close()
-                raise
-            # 登记为本进程所有的 legacy llama-server，退出时 terminate。
-            # 外部复用的 ASR（_port_in_use 分支）不走这里，不会被误杀。
-            self._asr_legacy_proc = proc
-            import atexit as _atexit
-            def _kill_legacy_asr(p=proc):
-                try:
-                    if p.poll() is None:
-                        p.terminate()
-                        try:
-                            p.wait(timeout=3)
-                        except Exception:
-                            p.kill()
-                except Exception:
-                    pass
-            _atexit.register(_kill_legacy_asr)
+            # Popen 为子进程复制句柄。父进程使用完成后关闭自己的句柄。
+            with open(_out_path, "w") as out_fp, open(_err_path, "w") as err_fp:
+                if self._shutdown_event.is_set():
+                    return False
+                proc = subprocess.Popen(args, creationflags=subprocess.CREATE_NO_WINDOW,
+                                        stdout=out_fp, stderr=err_fp)
+                # The startup worker owns the handoff until shutdown can run.
+                self._asr_legacy_proc = proc
+            import atexit
+            from app.voice.asr_bootstrap import reap_backend
+            atexit.register(reap_backend, proc)
             logger.info("[ASR] llama-server 已启动，等待就绪...")
         except Exception as e:
             logger.error(f"[ASR] 启动 llama-server 失败: {e}")
@@ -305,19 +297,23 @@ class Application:
             return False
 
         deadline = time.monotonic() + 60
-        while proc.poll() is None:
+        while not self._shutdown_event.is_set() and proc.poll() is None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             if _is_server_up(timeout=min(1, remaining)):
                 logger.info("[ASR] 模型已就绪")
-                return True
-            time.sleep(min(1, max(0, deadline - time.monotonic())))
+                return not self._shutdown_event.is_set()
+            self._shutdown_event.wait(min(1, max(0, deadline - time.monotonic())))
 
-        logger.info("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
+        if not self._shutdown_event.is_set():
+            logger.info("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
         return False
 
     def initialize(self):
+        if self._shutdown_event.is_set():
+            return
+        self._startup_entered = True
         # 类级单例守卫：整个进程内只 initialize 一次。
         # 入口即置 True，而非函数末尾——当前生产代码只有 run() 一个调用点（main.py:1016），
         # 无递归或并发初始化路径（已 grep 确认）。
@@ -341,6 +337,8 @@ class Application:
 
         # 1. 音乐模块
         logger.info("\n[1/5] 初始化音乐模块...")
+        if self._shutdown_event.is_set():
+            return
         self.music = MusicController(self.config.get_section("music"))
         # 注册 online music source
         try:
@@ -375,6 +373,8 @@ class Application:
                 _ms_root = music_sources_dir()
                 _mf = str(_ms_root / "musicfree")
                 _lx = str(_ms_root / "lx")
+                if self._shutdown_event.is_set():
+                    return
                 self._js_source = JSMusicSource(_mf, _lx, user_variables=(self.config_data.get("online_music", {}).get("js_bridge", {}) or {}).get("user_variables") or {})
                 self.online_music_manager.register(self._js_source)
                 self._set_module_status("js", "ok" if self._js_source.available else "fail")
@@ -393,16 +393,22 @@ class Application:
 
         # 2. LoL 模块
         logger.info("[2/5] 初始化 LoL 模块...")
+        if self._shutdown_event.is_set():
+            return
         self.lol = LoLRuntime(self.config_data)
 
         # 3. 语音输出
         logger.info("[3/5] 初始化语音输出(TTS)...")
         tts_config = self.config.get_section("tts")
         tts_config["mpv_path"] = self.config.get("music.mpv_path")
+        if self._shutdown_event.is_set():
+            return
         self.tts = TTSController(tts_config)
 
         # 4. Speech Queue + Judge
         logger.info("[4/5] 初始化语音播放队列(SpeechQueue + SpeechJudge)...")
+        if self._shutdown_event.is_set():
+            return
         self.speech_queue = SpeechQueue(self.tts)
         self.speech_judge = SpeechJudge(
             self.config.get_section("speech_judge"),
@@ -437,6 +443,8 @@ class Application:
         else:
             asr_ok = self._ensure_asr_running()
             self._voice_bootstrap_result = "ok" if asr_ok else "fail"
+        if self._shutdown_event.is_set():
+            return
         self.voice = VoiceRuntime(self.config_data, tts_provider=lambda: self.tts)
         self.voice.speech_queue_provider = lambda: self.speech_queue
         # V2-2：惰性 mpv/控制器 provider（全局暂停/继续实时 IPC 确认用）
@@ -460,6 +468,8 @@ class Application:
                 pass
             return None
         self.voice.movie_mpv_provider = _movie_mpv
+        if self._shutdown_event.is_set():
+            return
         self._assemble_listen_music_trial()
         self._set_module_status("asr", "disabled" if not asr_enabled else ("ok" if asr_ok else "fail"))
         self._set_module_status("intent", "ok")
@@ -482,7 +492,7 @@ class Application:
 
     def start(self):
         """doc"""
-        if self._running:
+        if self._running or self._shutdown_event.is_set():
             return
 
         self._running = True
@@ -493,51 +503,78 @@ class Application:
         self._set_module_status("eventlog", "ok")
 
         # 启动调度器
+        if self._shutdown_event.is_set():
+            return
         self.scheduler.start()
 
         # 启动音乐模块
+        if self._shutdown_event.is_set():
+            return
         try:
-            _music_ok = self.music.start()
+            _music_ok = self.music.start(cancel=self._shutdown_event)
         except Exception as e:
             logger.info(f"[Music] module start failed: {e!r}")
             _music_ok = False
+        if self._shutdown_event.is_set():
+            return
         self._set_module_status("music", "ok" if _music_ok else "fail")
 
         # 扫描音乐库（后台）
-        threading.Thread(target=self._scan_music_library, daemon=True).start()
+        self._music_scan_thread = threading.Thread(
+            target=self._scan_music_library, daemon=True, name="StartupMusicScan",
+        )
+        self._music_scan_thread.start()
 
         # 启动 LoL 模块
+        if self._shutdown_event.is_set():
+            return
         self.lol.start()
         self._set_module_status("lol", "ok")
 
         # OngoingGameService 构造必须在 lcu discovery 之后：
         # 否则 _build_direct_getter / acct._direct 独立直连失效，退化为共享 lcu.get，
         # 游戏内共享连接断连窗口会导致 summoner/ranked/history 全部失败。
+        if self._shutdown_event.is_set():
+            return
         self._register_ongoing()
 
 
         # 启动 OngoingGameService（ChampSelect 加载 10 玩家）
+        if self._shutdown_event.is_set():
+            return
         if hasattr(self, 'ongoing_service') and self.ongoing_service:
             self.ongoing_service.start()
             logger.info("[Ongoing] 加载服务已启动")
 
         # 注册一键连招 ComboManager（依赖 ongoing_service 识别当前英雄）
+        if self._shutdown_event.is_set():
+            return
         self._register_combo()
         # 启动 TTS
+        if self._shutdown_event.is_set():
+            return
         self.tts.start()
         self._set_module_status("tts", "ok")
 
         # 启动 Speech Queue
+        if self._shutdown_event.is_set():
+            return
         self.speech_queue.start()
         self._set_module_status("speech", "ok")
 
         # 启动 Speech Judge
+        if self._shutdown_event.is_set():
+            return
         self.speech_judge.start()
 
         # 启动语音输入
-        self.voice.start(bootstrap_result=self._voice_bootstrap_result)
+        if self._shutdown_event.is_set():
+            return
+        self.voice.start(bootstrap_result=self._voice_bootstrap_result, cancel=self._shutdown_event)
 
         # 发布启动事件
+        if self._shutdown_event.is_set():
+            return
         self.event_bus.publish(Event(
             event_type=EventType.SYSTEM_STARTUP,
             data={"timestamp": time.time()},
@@ -585,7 +622,18 @@ class Application:
             movie._media_action_lock.release()
 
     def stop(self):
-        """doc"""
+        """Request cancellation immediately; the startup worker yields cleanup ownership."""
+        event = getattr(self, "_shutdown_event", None)
+        if event is not None:
+            event.set()
+        startup = getattr(self, "_startup_thread", None)
+        if startup is not None and startup.is_alive():
+            # run() will call stop again on the owning thread after startup unwinds.
+            return
+        with getattr(self, "_shutdown_lock", nullcontext()):
+            if getattr(self, "_cleanup_started", False):
+                return
+            self._cleanup_started = True
         single_instance = getattr(self, "_single_instance", None)
         if single_instance is not None:
             try:
@@ -600,7 +648,7 @@ class Application:
                 trial.adapter.close()
             except Exception:
                 logger.error("[Shutdown] listen_music_trial close failed", exc_info=True)
-        if not self._running:
+        if not self._running and not getattr(self, "_startup_entered", False):
             return
 
         logger.info("\n现在停止系统...")
@@ -634,6 +682,11 @@ class Application:
             if self.automation:
                 _safe("automation.stop", self.automation.stop)
             _safe("lol.stop", self.lol.stop)
+        scan = getattr(self, "_music_scan_thread", None)
+        if scan is not None and scan is not threading.current_thread():
+            scan.join(timeout=3)
+            if scan.is_alive():
+                logger.warning("[Shutdown] music scan has not finished its current I/O")
         if self.music:
             _safe("music.stop", self.music.stop)
 
@@ -649,18 +702,8 @@ class Application:
         proc = getattr(self, "_asr_legacy_proc", None)
         if proc is not None:
             self._asr_legacy_proc = None  # 幂等：atexit 兜底再调时 poll()=None 已结束
-            def _kill(p=proc):
-                if p.poll() is None:
-                    p.terminate()
-                    try:
-                        p.wait(timeout=3)
-                    except Exception:
-                        p.kill()
-                        try:
-                            p.wait(timeout=3)
-                        except Exception:
-                            pass
-            _safe("legacy_asr.terminate", _kill)
+            from app.voice.asr_bootstrap import reap_backend
+            _safe("legacy_asr.terminate", lambda: reap_backend(proc))
 
         # 批次N-2：主动回收 bootstrap 路径拉起的 llama-server（与 legacy 并列）。
         # 复用 asr_bootstrap 的锁与进程存活判断，不复制终止逻辑；幂等，
@@ -694,7 +737,7 @@ class Application:
         """doc"""
         try:
             logger.info("...")
-            result = self.music.rescan()
+            result = self.music.rescan(cancel=self._shutdown_event)
             logger.info(f"[Music] 扫描完成: 共 {result.get('total', 0)} 首, "
                   f"新增 {result.get('added', 0)}, 更新 {result.get('updated', 0)}")
         except Exception as e:
@@ -1147,8 +1190,7 @@ class Application:
         """initialize()/start() 在 QApplication 创建前同步执行失败时的兜底。
 
         - 完整 traceback 写日志（不弹到用户界面）。
-        - 尽力回收已创建的子系统（stop() 只在 _running=True 时才跑，
-          而 initialize 中途失败时 _running 还是 False，这里强制置位后再调）。
+        - 尽力回收已创建的子系统，包括初始化中途失败时已持有的资源。
         - 清理本身再抛异常不能覆盖原始启动异常。
         - 非 headless 模式弹 QMessageBox；headless 或 GUI 也起不来就退到 stderr。
         """
@@ -1161,10 +1203,9 @@ class Application:
             print("[Startup] initialize/start 失败:", file=sys.stderr)
             print(err_text, file=sys.stderr)
 
-        # 尽力清理。stop() 入口检查 _running，初始化中途失败时为 False，
-        # 这里临时置位让它走完整 teardown；清理解包在 try 里，不覆盖原异常。
+        # 清理初始化中途已经创建的资源，保留原异常。
         try:
-            self._running = True
+            self._startup_entered = True
             self.stop()
         except Exception:
             try:
@@ -1197,8 +1238,12 @@ class Application:
     def run(self) -> int:
         """返回进程退出码：0 正常，1 启动失败。"""
         def _do_startup():
+            if self._shutdown_event.is_set():
+                return
+            self._startup_entered = True
             self.initialize()
-            self.start()
+            if not self._shutdown_event.is_set():
+                self.start()
 
         def _on_startup_failure(exc):
             try:
@@ -1223,21 +1268,27 @@ class Application:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        # headless 模式：无 GUI，同步初始化
-        if "--headless" in sys.argv:
+        def run_headless():
+            self._startup_thread = threading.current_thread()
             try:
-                _do_startup()
+                try:
+                    _do_startup()
+                finally:
+                    self._startup_thread = None
             except Exception as e:
                 _on_startup_failure(e)
                 return 1
             try:
-                while not self._shutdown_event.is_set():
-                    time.sleep(0.5)
+                while not self._shutdown_event.wait(0.5):
+                    pass
             except KeyboardInterrupt:
                 pass
             finally:
                 self.stop()
             return 0
+
+        if "--headless" in sys.argv:
+            return run_headless()
 
         # UI 模式：主线程跑 Qt（QApplication 必须在主线程创建）
         try:
@@ -1246,17 +1297,7 @@ class Application:
             from app.ui.tray import TrayIcon
         except Exception as e:
             logger.info(f"[UI] PySide6 未安装，使用 headless: {e}")
-            try:
-                _do_startup()
-            except Exception as e2:
-                _on_startup_failure(e2)
-                return 1
-            try:
-                while not self._shutdown_event.is_set():
-                    time.sleep(0.5)
-            finally:
-                self.stop()
-            return 0
+            return run_headless()
 
         app = QApplication.instance() or QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
@@ -1287,7 +1328,7 @@ class Application:
         # 回放窗口创建前缓存的模块状态
         self.replay_module_status()
 
-        quit_filter = ApplicationQuitFilter(app, window)
+        quit_filter = ApplicationQuitFilter(app, window, cancel=self._shutdown_event)
         app.installEventFilter(quit_filter)
 
         state = {"done": False, "error": None, "switched": False}
@@ -1303,12 +1344,22 @@ class Application:
                 traceback.print_exc()
                 state["error"] = f"{type(e).__name__}: {e}"
 
-        import threading
-        threading.Thread(target=backend, daemon=True, name="StartupBackend").start()
+        startup = threading.Thread(target=backend, daemon=True, name="StartupBackend")
+        with self._shutdown_lock:
+            self._startup_thread = startup
+            if not self._shutdown_event.is_set():
+                startup.start()
 
         from PySide6.QtCore import QTimer
 
         def check():
+            if startup.is_alive() or state["switched"]:
+                return
+            if self._shutdown_event.is_set():
+                timer.stop()
+                # An explicit stop, OS quit or signal must not attach late startup results.
+                QApplication.exit(0)
+                return
             if state["error"] and not state["switched"]:
                 state["switched"] = True
                 logger.error(f"[Run] backend error: {state['error']}")
@@ -1317,11 +1368,7 @@ class Application:
                 except Exception:
                     pass
                 # 不切页，停留在 LoadingPanel 显示错误。
-                # P0 修复：立即回收已构造的子系统。stop() 入口检查 _running，
-                # 而 initialize 失败时 _running=False（start() 未跑），这里强制置位再 stop，
-                # 与 _handle_startup_failure 的做法一致；不弹 QMessageBox（错误已在面板上）。
                 try:
-                    self._running = True
                     self.stop()
                 except Exception:
                     logger.error("[Run] 启动失败后清理出错", exc_info=True)
@@ -1352,6 +1399,12 @@ class Application:
         try:
             rc = app.exec()
         finally:
+            self._shutdown_event.set()
+            timer.stop()
+            # Confirmed GUI quits reach here only after check() sees startup exit.
+            # Also preserve ownership on exceptional exits that bypass the Qt filter.
+            if startup.ident is not None:
+                startup.join()
             app.removeEventFilter(quit_filter)
             quit_filter.deleteLater()
             self.stop()

@@ -11,7 +11,7 @@ from app.voice import asr_bootstrap as ab
 def _isolate_ab_state(monkeypatch):
     """每个用例前后重置 asr_bootstrap 的全局进程句柄，并免掉真实 sleep。"""
     monkeypatch.setattr(ab, "_server_proc", None)
-    monkeypatch.setattr(ab.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(ab, "_wait", lambda delay, cancel: cancel is not None and cancel.is_set())
     yield
     # 用例结束后清掉可能残留的 FakePopen 引用
     ab._server_proc = None
@@ -28,7 +28,7 @@ class TestBootstrapGuard:
                             lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda: False)
         monkeypatch.setattr(ab, "_port_in_use", lambda: False)
-        monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
+        monkeypatch.setattr(ab, "ensure_assets", lambda cfg, **kwargs: True)
         monkeypatch.setattr(ab, "subprocess", None)  # 若误走到 Popen 会 AttributeError
 
         result = ab.ensure_and_launch({"bootstrap_enabled": True})
@@ -56,7 +56,7 @@ class TestBootstrapGuard:
                             lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda timeout=None: timeout == 3)
         monkeypatch.setattr(ab, "_port_in_use", lambda: False)
-        monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
+        monkeypatch.setattr(ab, "ensure_assets", lambda cfg, **kwargs: True)
         monkeypatch.setattr(ab.os.path, "isfile", lambda p: True)
         monkeypatch.setattr(ab, "subprocess", fake_subprocess)
         monkeypatch.setattr(ab, "_server_proc", None)
@@ -75,7 +75,7 @@ class TestBootstrapGuard:
                             lambda cfg: [{"backend": "cpu", "exe": "server.exe"}])
         monkeypatch.setattr(ab, "_is_server_up", lambda: False)
         monkeypatch.setattr(ab, "_port_in_use", lambda: False)
-        monkeypatch.setattr(ab, "ensure_assets", lambda cfg: True)
+        monkeypatch.setattr(ab, "ensure_assets", lambda cfg, **kwargs: True)
         monkeypatch.setattr(ab, "subprocess", None)
 
         ab.ensure_and_launch({"bootstrap_enabled": True})

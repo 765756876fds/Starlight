@@ -305,7 +305,7 @@ class ASRManager:
         self._active_engine: ASREngine | None = None
         self._lock = threading.Lock()
 
-    def initialize(self, bootstrap_result: str = "unknown"):
+    def initialize(self, bootstrap_result: str = "unknown", *, cancel: threading.Event | None = None):
         """初始化所有引擎。
 
         bootstrap_result:
@@ -315,6 +315,8 @@ class ASRManager:
                       引擎单次探测，不做 30s 无意义等待。
           "unknown" — 旧调用路径：保持原有行为（再跑一次 ensure_and_launch + 30s 等待）。
         """
+        if cancel is not None and cancel.is_set():
+            return
         engine_type = self.config.get("engine", "qwen3_server")
 
         # 主引擎：Qwen3-ASR llama-server（HTTP API）
@@ -327,7 +329,10 @@ class ASRManager:
             if bootstrap_result == "unknown":
                 try:
                     from app.voice.asr_bootstrap import ensure_and_launch
-                    ensure_and_launch(self.config)
+                    if cancel is None:
+                        ensure_and_launch(self.config)
+                    else:
+                        ensure_and_launch(self.config, cancel=cancel)
                 except Exception as e:
                     print(f"[ASR] 自举异常（ASR 仍可用外部 llama-server）: {e}")
             else:
@@ -355,7 +360,8 @@ class ASRManager:
         # 加载第一个可用引擎。
         # bootstrap_result != "unknown" 时服务状态已由 main.py 确认，用单次探测（0s）；
         # 否则保留首次长等待（30s）。
-        self._load_next_engine(initial=(bootstrap_result == "unknown"))
+        if cancel is None or not cancel.is_set():
+            self._load_next_engine(initial=(bootstrap_result == "unknown"))
 
     def _load_next_engine(self, initial: bool = False) -> bool:
         """加载下一个可用引擎。
