@@ -83,6 +83,8 @@ class MusicController:
 
     def __init__(self, config: dict[str, Any], mpv_adapter: MpvAdapter | None = None):
         self._movie_pauser = None  # 注入：电影暂停确认回调
+        self._movie_allows_music = None
+        self._play_intent_ns = 0
         """mpv_adapter: 可选注入的播放器替身（满足 MpvAdapter 协议）。
         注入时 controller 不再实例化真实 MpvController——测试可挂
         不发真声音的 Fake，构造/播放全程无 IPC、无子进程。"""
@@ -519,11 +521,14 @@ class MusicController:
             if restart_req_id is not None and restart_req_id != self._play_request_id:
                 logger.info("[Music] 重启窗口内已发起新播放（代次变化），放弃恢复旧歌")
                 return
+            if not self._movie_permits_request():
+                return
             path = restart_song.get("path") or ""
             if path.startswith(("http://", "https://")):
                 self._last_idle = False
                 return
-            self._play_song(restart_song)
+            with self._origin_ctx("auto"):
+                self._play_song(restart_song)
 
     def stop(self):
         """停止音乐模块"""
@@ -649,14 +654,18 @@ class MusicController:
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return False
+        intent_ns = time.perf_counter_ns()
         # 优先控制落雪
         if self.lx_connected:
             try:
+                if not self._movie_permits_request(intent_ns):
+                    return False
                 if self.lx_client.play():
+                    self._play_intent_ns = intent_ns
                     # 落雪播放同样算"音乐开始播放"→ 通知消费方（电影互斥暂停）
                     self.event_bus.publish(Event(
                         event_type=EventType.MUSIC_PLAY,
-                        data={},
+                        data={"intent_ns": intent_ns},
                         source="music",
                     ))
                     return True
@@ -701,12 +710,15 @@ class MusicController:
             else:
                 # 恢复播放与起播同类副作用（unpause），与 pause 等持锁操作互斥。
                 with self._lock:
+                    if not self._movie_permits_request(intent_ns):
+                        return False
+                    self._play_intent_ns = intent_ns
                     self.mpv.play()
                     self._update_state(playing=True)
                     # 继续播放同一首歌 → 通知其他消费方（电影互斥暂停）；换歌路径由 TRACK_CHANGED 覆盖
                     self.event_bus.publish(Event(
                         event_type=EventType.MUSIC_PLAY,
-                        data={},
+                        data={"intent_ns": intent_ns},
                         source="music",
                     ))
                 return True
@@ -750,6 +762,7 @@ class MusicController:
     @_cancel_switch_on_user_action
     def resume(self, _voice_guard=None):
         """继续播放"""
+        intent_ns = time.perf_counter_ns()
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("resume", self._current_song, 0)
         if not self._mpv_available:
@@ -763,6 +776,9 @@ class MusicController:
                 return False
             if _voice_guard is not None and not _voice_guard():
                 return False
+            if not self._movie_permits_request(intent_ns):
+                return False
+            self._play_intent_ns = intent_ns
             self.mpv.play()
             self._paused_snapshot = False
             # 实时同步状态
@@ -774,7 +790,7 @@ class MusicController:
             # 继续播放 → 通知其他消费方（电影互斥暂停）
             self.event_bus.publish(Event(
                 event_type=EventType.MUSIC_PLAY,
-                data={},
+                data={"intent_ns": intent_ns},
                 source="music",
             ))
 
@@ -870,8 +886,10 @@ class MusicController:
         if self._current_origin() == "auto" and getattr(self, "_last_idle", True):
             logger.info("[Music] auto_next 拦截：停止已生效，不作废旧上升沿")
             return
-        self._invalidate_highlight()
         is_auto = (self._current_origin() == "auto")
+        if is_auto and not self._movie_permits_request():
+            return
+        self._invalidate_highlight()
         record_collection(self, "next", "natural" if is_auto else "manual")
         song = self.queue.next(auto=is_auto)
         if song:
@@ -1325,6 +1343,7 @@ class MusicController:
         # 打点：意图入口（搜索路径不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_search_result", self._current_song, 0,
                             extra={"query": str(query)[:20], "index": int(index)})
+        intent_ns = time.perf_counter_ns()
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return None
@@ -1396,11 +1415,14 @@ class MusicController:
                             if req_id != self._play_request_id:
                                 logger.info("[Music] 在线 fallback 已过期（期间已切歌），丢弃结果")
                                 return None
+                            self._play_intent_ns = intent_ns
                             online_song = self._apply_stream(
                                 chosen, play_url, play_result.get("headers"))
+                        if online_song is None:
+                            return None
                         self.event_bus.publish(Event(
                             event_type=EventType.MUSIC_TRACK_CHANGED,
-                            data={"song": online_song},
+                            data={"song": online_song, "intent_ns": intent_ns},
                             source="music"
                         ))
                         _t_total_ms = int((time.time() - _t_online_start) * 1000)
@@ -1505,7 +1527,10 @@ class MusicController:
                 online_song = self._apply_stream(
                     chosen_track, url,
                     headers if headers is not None else play_result.get("headers"))
-                if online_song is not None and hasattr(self, "music_memory"):
+                if online_song is None:
+                    self._is_switching_track = False
+                    return
+                if hasattr(self, "music_memory"):
                     recommended = bool(song.get("extra", {}).get("_starlight_recommended"))
                     if recommended:
                         online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
@@ -1536,6 +1561,8 @@ class MusicController:
         的"校验紧贴 loadfile"原子需求，校验与 loadfile 之间无耗时 IPC）。
         返回构造好的 online_song（_current_song/_update_state 已更新）；放弃返回 None。
         """
+        if not self._movie_permits_request():
+            return None
         hdr = _pick_play_headers(headers)
         src_name = (getattr(track, "source_name", "") or "").lower()
         need_kw_header = ("kw" in src_name or "酷我" in src_name
@@ -1702,6 +1729,11 @@ class MusicController:
             return
         if _admission is not None and not _admission.guard():
             return
+        if self._current_origin() == "user":
+            self._play_intent_ns = time.perf_counter_ns()
+        intent_ns = self.music_play_intent()
+        if not self._movie_permits_request(intent_ns):
+            return
         # 播放请求代际号（request_id 契约）：一切新播放意图在此递增，作废在途的
         # 在线解析结果——旧网络请求（_resolve_online_worker）锁内校验不过，绝不 loadfile。
         self._play_request_id += 1
@@ -1860,7 +1892,7 @@ class MusicController:
         # 发布事件
         self.event_bus.publish(Event(
             event_type=EventType.MUSIC_TRACK_CHANGED,
-            data={"song": song},
+            data={"song": song, "intent_ns": intent_ns},
             source="music"
         ))
 
@@ -2154,6 +2186,7 @@ class MusicController:
 
             start_source = cands[idx].source_name
             gen_snapshot = self._candidate_generation
+            intent_ns = time.perf_counter_ns()
 
             def _try_switch():
                 try:
@@ -2180,7 +2213,10 @@ class MusicController:
                                 return
                             if gen_snapshot != self._candidate_generation:
                                 return
-                            ok = self.play_online(c, _before_load=lambda: my_token == self._candidate_switch_token)
+                            if not self._movie_permits_request(intent_ns):
+                                return
+                            ok = self.play_online(c, _before_load=lambda: my_token == self._candidate_switch_token,
+                                                  _intent_ns=intent_ns)
                             if not ok:
                                 continue
                             if my_token != self._candidate_switch_token:
@@ -2275,8 +2311,11 @@ class MusicController:
                 self._is_switching_track = False
 
     def play_online(self, track, _before_load=None, *, _on_loaded=None, _resolved=None,
-                    _expected_request=None, _recommendation=False) -> bool:
+                    _expected_request=None, _recommendation=False, _intent_ns=None) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
+        intent_ns = time.perf_counter_ns() if _intent_ns is None else _intent_ns
+        if not self._movie_permits_request(intent_ns):
+            return False
         # 打点：意图入口（不持锁，lock_wait_ms 记为 0）
         self._record_intent("play_online", track, 0)
         if not _recommendation and hasattr(self, 'recommendations'):
@@ -2320,6 +2359,7 @@ class MusicController:
                 if req_id != self._play_request_id:
                     logger.info("[Music] play_online 已过期（期间已切歌），丢弃结果")
                     return False
+                self._play_intent_ns = intent_ns
                 # 统一流设置（DRY）：header 重设 + before_load 紧贴 loadfile（保持
                 # "校验→loadfile"原子）+ loadfile + pause + 状态落库。
                 online_song = self._apply_stream(
@@ -2400,7 +2440,8 @@ class MusicController:
         admission = getattr(self, "_goal_admission", None)
         if admission is not None:
             admission.user_action(params.get("is_current"))
-        result = self.recommendations.play(**params)
+        media_order = ({"intent_ns": time.perf_counter_ns()} if getattr(self, "_movie_allows_music", None) else {})
+        result = self.recommendations.play(**params, **media_order)
         if result.status in (OperationStatus.CONFIRMED, OperationStatus.ACCEPTED):
             self.event_bus.publish(Event(event_type="music.recommendation_changed",
                 data={"message": result.message}, source="music"))
@@ -2550,9 +2591,17 @@ class MusicController:
         """UI 榜单加载成功后调用，供语音播放榜单第N首。"""
         self._voice_rank_tracks = tracks or []
 
-    def set_movie_pauser(self, fn):
-        """注入电影暂停确认回调：fn() -> bool（True=确认已暂停）。"""
+    def set_movie_pauser(self, fn, *, allows_music=None):
+        """Bind the movie pause acknowledgement and read-only playback order check."""
         self._movie_pauser = fn
+        self._movie_allows_music = allows_music
+
+    def music_play_intent(self) -> int:
+        return getattr(self, "_play_intent_ns", 0)
+
+    def _movie_permits_request(self, intent_ns=None) -> bool:
+        allows = getattr(self, "_movie_allows_music", None)
+        return allows is None or allows(self.music_play_intent() if intent_ns is None else intent_ns)
 
     def _cmd_play_playlist(self, command: Command) -> bool:
         name = command.params.get("name", "")

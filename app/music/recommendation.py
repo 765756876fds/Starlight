@@ -228,7 +228,8 @@ class RecommendationService:
                 ordered.append(selected[2])
         return ordered
 
-    def play(self, *, style="", change_chart=False, change_style=False, is_current=None, expected_request=None):
+    def play(self, *, style="", change_chart=False, change_style=False, is_current=None,
+             expected_request=None, intent_ns=None):
         with self._lock:
             if self._closed or self._busy:
                 return OperationResult(OperationStatus.UNAVAILABLE, "推荐仍在处理中，请稍候再试")
@@ -240,8 +241,10 @@ class RecommendationService:
         manager = controller.online_manager
         revision = source_revision(manager)
         deadline = time.monotonic() + 45
+        media_order = {} if intent_ns is None else {"_intent_ns": intent_ns}
         def current():
-            return (self._current(generation, is_current) and time.monotonic() < deadline
+            return ((intent_ns is None or controller._movie_permits_request(intent_ns))
+                    and self._current(generation, is_current) and time.monotonic() < deadline
                     and controller.online_manager is manager and source_revision(manager) == revision)
         try:
             if expected_request is not None and original_request != expected_request:
@@ -290,7 +293,7 @@ class RecommendationService:
 
                 if controller.play_online(track, _before_load=current, _on_loaded=loaded,
                                           _resolved=result, _expected_request=original_request,
-                                          _recommendation=True):
+                                          _recommendation=True, **media_order):
                     # IPC acknowledgement alone is not proof of decoded audio.
                     playback_deadline = time.monotonic() + 2
                     while current() and time.monotonic() < playback_deadline:

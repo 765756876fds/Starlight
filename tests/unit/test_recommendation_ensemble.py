@@ -22,7 +22,10 @@ def ensemble(controller, movie, monkeypatch):
     monkeypatch.setattr("app.core.command_bus.get_command_bus", lambda: bus)
     cinema._register_commands()
     cinema._music = controller
-    controller.set_movie_pauser(cinema.pause_and_confirm)
+    controller.set_movie_pauser(
+        lambda: cinema.pause_and_confirm(music_intent=controller.music_play_intent()),
+        allows_music=cinema.music_can_continue,
+    )
     monkeypatch.setattr(controller.mpv, "is_running", lambda: bool(controller.mpv.loaded), raising=False)
     for player in (controller.mpv, picture):
         monkeypatch.setattr(player, "pause", lambda p=player: p.set_property("pause", True), raising=False)
@@ -54,6 +57,37 @@ def ensemble(controller, movie, monkeypatch):
     for worker in workers:
         worker.join(3)
         assert not worker.is_alive()
+
+
+def test_new_film_rejects_music_request_held_in_resolver(ensemble, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from app.music.online.models import OnlineTrack
+
+    music, cinema, picture, _, _, _, _ = ensemble
+    entered, release = threading.Event(), threading.Event()
+    url = "https://fixture.invalid/audio"
+
+    def resolve(_track):
+        entered.set()
+        assert release.wait(2)
+        return {"url": url}
+
+    monkeypatch.setattr(music.online_manager, "get_play_url", resolve)
+    track = OnlineTrack("fixture", "song-1", "Test audio")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(music.play_online, track)
+        try:
+            assert entered.wait(2)
+            assert cinema.play({"vod_name": "隔离影片", "first_url": "https://fixture.invalid/film"})
+        finally:
+            release.set()
+        assert pending.result(2) is False
+    assert not music.mpv.loaded
+    assert picture.get_property("pause") is False
+
+    assert music.play_online(track) is True
+    assert music.mpv.loaded == [url]
+    assert picture.get_property("pause") is True
 
 
 def test_music_film_and_context_share_bus_without_losing_collections(ensemble, monkeypatch):

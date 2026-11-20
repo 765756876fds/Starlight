@@ -145,6 +145,7 @@ class MovieController:
         self._current_index = None
         # V2-2：播放会话代次，每次加载新片递增；全局暂停快照据此判断会话是否变化
         self._playback_gen: int = 0
+        self._play_intent_ns = 0
         self._film_session = None
         self._startup = None
         self.startup_evidence = StartupEvidence()
@@ -434,8 +435,22 @@ class MovieController:
         except Exception as e:
             logger.error(f"[Movie] 订阅音乐事件失败: {e}")
 
+    def music_can_continue(self, intent_ns: int) -> bool:
+        """A delayed music request cannot take playback from a newer film."""
+        if intent_ns >= getattr(self, "_play_intent_ns", 0):
+            return True
+        return not (self._current is not None or getattr(self, "_external_url_mode", False)
+                    or self._unsettled_load())
+
+    @_serialized_media
     def _on_music_playing(self, event):
-        """音乐开始播放（换歌或继续）→ 电影暂停（保留进度）。幂等 + 守卫防循环。"""
+        intent_ns = event.get("intent_ns")
+        if intent_ns is not None and not self.music_can_continue(intent_ns):
+            # A local music load may already have reached MPV. Its caller still
+            # holds the music lock; let the film observer retry after it releases.
+            self._ownership_attempts = (self._playback_gen, 0)
+            self._music_pause_generation = None
+            return
         self.pause()
 
     def _on_shutdown(self, event):
@@ -802,6 +817,7 @@ class MovieController:
             url = eps[0][1]
         if not url:
             return self._play_feedback(item, index, "no_address", "该来源未提供播放地址，请选择其他候选。")
+        self._play_intent_ns = time.perf_counter_ns()
         self._play_feedback(item, idx, "address_present", media_url=url)
         self._remember_view(force=True)
         # 音乐互斥由 tick 确认实际起播后处理；加载失败不打断音乐。
@@ -1164,6 +1180,7 @@ class MovieController:
         """
         if not url:
             return False
+        self._play_intent_ns = time.perf_counter_ns()
         self._remember_view(force=True)
         if hasattr(self, "recommendations"):
             self.recommendations.cancel()
@@ -1376,6 +1393,7 @@ class MovieController:
             return
         self._ownership_attempts = generation, attempts + 1
         self._music_pause_generation = generation
+        film_intent = getattr(self, "_play_intent_ns", 0)
         def pause_music():
             confirmed = False
             try:
@@ -1383,8 +1401,10 @@ class MovieController:
                     return
                 music = self._music
                 request = getattr(music, "_play_request_id", None)
+                music_intent = getattr(music, "music_play_intent", lambda: 0)
                 def current():
                     return (self._playback_gen == generation and self._last_idle is False
+                        and music_intent() <= film_intent
                         and not getattr(self, "_media_voice_closed", False)
                         and not self._stopping and (self._current is not None or self._external_url_mode)
                         and getattr(music, "_play_request_id", None) == request)
@@ -1887,17 +1907,19 @@ class MovieController:
         finally:
             self._pausing = False
 
-    def pause_and_confirm(self, timeout: float = 1.0) -> bool:
-        """暂停并确认 mpv 已进入暂停态。返回 True=确认暂停成功。"""
-        if self._pausing:
-            return True
+    @_serialized_media
+    def pause_and_confirm(self, timeout: float = 1.0, *, music_intent=None) -> bool:
+        """Pause only the current permitted film and verify the native state."""
+        if music_intent is not None and not self.music_can_continue(music_intent):
+            return False
+        if self._pausing or self._unsettled_load():
+            return False
         self._pausing = True
         try:
-            if self._current is None or not self.mpv.is_running():
-                return True  # 电影未运行，视为已暂停
+            if not self.mpv.is_running() or (self._current is None and not self._external_url_mode):
+                return True
             self._quality_transition()
             self.mpv.pause()
-            self._write_state(paused=True)
             # 轮询确认
             import time as _t
             deadline = _t.perf_counter() + timeout
@@ -1905,6 +1927,7 @@ class MovieController:
                 try:
                     p = self.mpv.get_property("pause", timeout=0.2)
                     if p is True:
+                        self._write_state(paused=True)
                         return True
                 except Exception:
                     pass

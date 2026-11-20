@@ -122,6 +122,36 @@ def env():
         yield stack
 
 
+def test_delayed_music_event_cannot_pause_new_film(tmp_path, env):
+    player = MovieFakeMpv()
+    movie, state, bus = make_movie_controller(env, player, _make_movie_config(tmp_path))
+    old_music = Event(event_type=EventType.MUSIC_TRACK_CHANGED,
+                      data={"intent_ns": time.perf_counter_ns()}, source="music")
+    assert movie.play({"vod_name": "隔离影片", "first_url": "http://fixture.invalid/film"})
+    generation = movie._playback_gen
+    bus.publish(old_music)
+    assert ("pause",) not in player.calls
+    assert player.get_property("pause") is False
+    assert movie._ownership_attempts == (generation, 0)
+
+    # An explicit music action captured after the film still claims playback.
+    bus.publish(Event(event_type=EventType.MUSIC_PLAY,
+                      data={"intent_ns": time.perf_counter_ns()}, source="music"))
+    assert player.calls.count(("pause",)) == 1
+    assert state.data[(StateNamespace.MOVIE, "paused")] is True
+    assert movie._playback_gen == generation
+
+
+def test_movie_pause_timeout_does_not_publish_confirmed_state(tmp_path, env):
+    player = MovieFakeMpv()
+    movie, state, _ = make_movie_controller(env, player, _make_movie_config(tmp_path))
+    assert movie.play({"vod_name": "隔离影片", "first_url": "http://fixture.invalid/film"})
+    player.get_property = lambda *_args, **_kwargs: None
+    assert movie.pause_and_confirm(timeout=0.01) is False
+    assert ("pause",) in player.calls
+    assert state.data[(StateNamespace.MOVIE, "paused")] is False
+
+
 def test_music_event_after_stop_is_noop(tmp_path, env):
     """电影 stop 明确成功后，后续音乐播放事件必须 no-op：
     不调 mpv.pause、不写 paused、不改变停止终态（旧事件不覆盖新状态）。"""

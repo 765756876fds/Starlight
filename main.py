@@ -1540,7 +1540,10 @@ class Application:
             if self._movie_panel is not None and hasattr(self, "music"):
                 movie_ctrl = getattr(self._movie_panel, "_movie", None)
                 if movie_ctrl is not None and hasattr(movie_ctrl, "pause_and_confirm"):
-                    self.music.set_movie_pauser(movie_ctrl.pause_and_confirm)
+                    self.music.set_movie_pauser(
+                        lambda: movie_ctrl.pause_and_confirm(music_intent=self.music.music_play_intent()),
+                        allows_music=movie_ctrl.music_can_continue,
+                    )
                     logger.info("[R001] movie pauser injected to music controller")
         except Exception as e:
             logger.warning(f"[R001] movie pauser wiring failed: {e}")
