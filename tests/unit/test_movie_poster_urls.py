@@ -19,3 +19,28 @@ def test_public_poster_http_urls_are_upgraded_without_changing_the_image(domain,
 def test_untrusted_or_non_network_poster_urls_remain_rejected(value):
     assert BilibiliRank.cover_url(value) == ""
     assert image_url(value, "qpic.cn") == ""
+
+
+@pytest.mark.parametrize("domain", ["hdslb.com", "iqiyipic.com"])
+@pytest.mark.parametrize("address", ["https://[broken/poster.jpg", "https://[::1/poster.jpg",
+                                     "https://pic.{domain}:wrong/poster.jpg",
+                                     "https://pic.{domain}:99999/poster.jpg"])
+def test_malformed_poster_address_becomes_a_missing_poster(domain, address):
+    read = BilibiliRank.cover_url if domain == "hdslb.com" else lambda v: image_url(v, domain)
+    assert read(address.format(domain=domain)) == ""
+
+
+@pytest.mark.parametrize("domain", ["hdslb.com", "iqiyipic.com"])
+@pytest.mark.parametrize("prefix", ["http://", "https://", "//"])
+def test_poster_address_outer_whitespace_is_normalized(domain, prefix):
+    read = BilibiliRank.cover_url if domain == "hdslb.com" else lambda v: image_url(v, domain)
+    assert read(" \t" + prefix + "pic." + domain + "/same.jpg\n") == "https://pic." + domain + "/same.jpg"
+
+
+def test_one_invalid_cover_does_not_discard_otherwise_valid_bilibili_entries():
+    provider = BilibiliRank(fetch=lambda _: {"code": 0, "data": {"list": [
+        {"title": "生成条目", "season_id": 1, "url": "https://www.bilibili.com/bangumi/play/ss1",
+         "cover": "https://[broken/poster.jpg"}]}})
+    rows = provider.read("anime")
+    assert len(rows) == 1 and rows[0]["title"] == "生成条目"
+    assert rows[0]["cover_url"] == ""

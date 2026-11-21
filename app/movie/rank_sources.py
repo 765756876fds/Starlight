@@ -8,11 +8,16 @@ from . import discovery
 def image_url(value, domain):
     if not isinstance(value, str):
         return ""
+    value = value.strip()
     value = "https:" + value if value.startswith("//") else value
     if value.startswith("http://"):
         value = "https://" + value[7:]
-    parsed = urlsplit(value)
-    host = parsed.hostname or ""
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        _ = parsed.port  # Validate malformed/out-of-range ports as well.
+    except ValueError:
+        return ""
     return value if parsed.scheme == "https" and (host == domain or host.endswith("." + domain)) else ""
 
 

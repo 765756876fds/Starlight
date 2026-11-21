@@ -148,11 +148,16 @@ class BilibiliRank:
     def cover_url(value):
         if not isinstance(value, str):
             return ""
+        value = value.strip()
         value = "https:" + value if value.startswith("//") else value
         if value.startswith("http://"):
             value = "https://" + value[7:]
-        parsed = urlsplit(value)
-        host = parsed.hostname or ""
+        try:
+            parsed = urlsplit(value)
+            host = parsed.hostname or ""
+            _ = parsed.port  # A bad poster must not discard the entire chart.
+        except ValueError:
+            return ""
         return value if parsed.scheme == "https" and (host == "hdslb.com" or host.endswith(".hdslb.com")) else ""
 
 
