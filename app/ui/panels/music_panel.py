@@ -194,6 +194,7 @@ class MusicPanel(QWidget):
     _dl_finish_signal = Signal(str, str)  # (key, 状态: done/fail/exists)：下载回调只 emit，UI 刷新主线程做
     _status_signal = Signal(str)          # 跨线程状态栏消息桥（换源错误等事件，禁直接 setText）
     _sleep_timer_signal = Signal(bool, int)
+    _manual_play_status = Signal(object, object, str)
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
     _progress_signal = Signal(float, float, object)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
     _volume_signal = Signal(int, int)  # gesture generation, volume; worker -> GUI
@@ -226,6 +227,8 @@ class MusicPanel(QWidget):
         self._pending_identify_close = None
         self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
         self._dl_signal.connect(self._on_dl_progress)
+        self._manual_request = None
+        self._manual_play_status.connect(self._on_manual_play_status)
         self._play_result.connect(self._on_play_result)
         self._speed_result.connect(self._after_speed)
         self._playing_card_key = None   # 当前播放卡片 key（由 _refresh 同步到各 Delegate）
@@ -641,6 +644,7 @@ class MusicPanel(QWidget):
     def closeEvent(self, event):
         """关闭时注销事件总线订阅（防内存泄漏/幽灵回调）：
         与 __init__ 中 subscribe 的一一配对注销。"""
+        self._cancel_manual_feedback()
         self._queue_refresh_timer.stop()
         if hasattr(self, "btn_like"):
             self.btn_like.shutdown()
@@ -670,6 +674,7 @@ class MusicPanel(QWidget):
         self._start_progress_poll()
 
     def hideEvent(self, event):
+        self._cancel_manual_feedback()
         super().hideEvent(event)
         # A Qt popup can stay visible after its owning panel has been hidden.
         if hasattr(self, "_mode_menu"):
@@ -1000,7 +1005,7 @@ class MusicPanel(QWidget):
             return
         print(f"[UI] local play: {s.get('title')} id={s.get('id')}")
         self._play_async(self._music.play_song, s,
-                         ok_msg=f"正在播放：{s.get('title', '')}")
+                         title=s.get("title", ""))
 
     def _on_highlight(self, on: bool):
         try:
@@ -1140,6 +1145,7 @@ class MusicPanel(QWidget):
         """切歌意图发出瞬间：UI 立即归零并显示"加载中"（不等后台轮询确认）。
         真正的渲染恢复由 controller._is_switching_track 翻转驱动（_on_progress），
         本方法只负责"立刻"反馈，避免旧歌进度残留在切换窗口内。"""
+        self._cancel_manual_feedback()
         try:
             self.slider_pos.setValue(0)
             self.slider_pos.set_chorus(None)
@@ -1147,28 +1153,59 @@ class MusicPanel(QWidget):
         except Exception:
             pass
 
-    def _play_async(self, target, *args, ok_msg: str = "", fail_msg: str = "该曲目无法播放",
-                    status_label=None) -> None:
-        """播放类操作后台线程化：UI 只发信号，不等待网络/mpv 结果（双击播放不卡窗）。
-        结果经 _play_result 信号回主线程更新状态栏（跨线程 Signal 自动排队）。
-        status_label：失败提示的目标状态栏（默认顶部 lbl_status）。"""
+    def _cancel_manual_feedback(self):
+        request = getattr(self, "_manual_request", None)
+        if request is not None:
+            request[0].set()
+            self._manual_request = None
+
+    def _play_async(self, target, *args, title="", resolving=False,
+                    fail_msg="该曲目无法播放，请重试或选择其他结果", status_label=None):
+        from ...music.next_feedback import observe_manual_play
+
         if self._music is None:
             return
-        self._enter_switching_ui()  # 播放新歌入口统一切换态（归零 + 加载中）
-        lbl = status_label or self.lbl_status
-        if ok_msg:
-            lbl.setText(ok_msg)
+        self._enter_switching_ui()
+        label = status_label or self.lbl_status
+        cancel = threading.Event()
+        self._manual_request = (cancel, label, title, fail_msg, time.perf_counter_ns())
+        label.setText("正在获取播放地址…" if resolving else "正在加载歌曲…")
 
-        def run():
-            try:
-                ok = target(*args)
-                if not ok:
-                    self._play_result.emit(False, fail_msg, lbl)
-            except Exception as e:
-                self._play_result.emit(False, f"播放失败: {e}", lbl)
+        def publish(stage, epoch):
+            if not cancel.is_set():
+                try:
+                    self._manual_play_status.emit(cancel, epoch, stage)
+                except RuntimeError:
+                    cancel.set()  # Widget was destroyed during a slow resolver call.
 
-        threading.Thread(target=run, daemon=True,
-                         name="ui-music-play-async").start()
+        threading.Thread(target=observe_manual_play,
+                         args=(self._music, target, args, cancel, publish),
+                         daemon=True, name="ui-music-play-async").start()
+
+    def _on_manual_play_status(self, cancel, epoch, stage):
+        req = self._manual_request
+        if req is None or req[0] is not cancel or cancel.is_set():
+            return
+        _, label, title, failure, intent = req
+        music = self._music
+        if ((epoch is not None and getattr(music, "_play_request_id", None) != epoch)
+                or (hasattr(music, "_movie_permits_request") and not music._movie_permits_request(intent))):
+            self._cancel_manual_feedback()
+            return
+        if stage == "started" and (not music._running or music._last_loadfile_epoch != epoch):
+            self._cancel_manual_feedback()
+            return
+        messages = {
+            "loading": "正在加载歌曲…",
+            "accepted": "播放器已接收加载，等待起播确认。",
+            "started": f"正在播放：{title}" if title else "歌曲已开始播放。",
+            "unknown": "暂未确认起播，请查看播放器状态。不会自动重试。",
+            "no_url": "未取得播放地址，可重试或选择其他结果。",
+            "failed": failure,
+        }
+        label.setText(messages[stage])
+        if stage not in ("loading", "accepted"):
+            self._cancel_manual_feedback()
 
     def _on_play_result(self, ok: bool, msg: str, lbl) -> None:
         if not ok:
@@ -1806,7 +1843,7 @@ class MusicPanel(QWidget):
         if not row or self._music is None:
             return
         self._play_async(self._music.play_history_item, row,
-                         ok_msg=f"正在播放：{row.get('title', '')}",
+                         title=row.get("title", ""),
                          fail_msg="该歌已不可用")
 
     def _on_clear_history(self):
@@ -1956,7 +1993,7 @@ class MusicPanel(QWidget):
         if not row or self._music is None:
             return
         self._play_async(self._music.play_playlist_item, row,
-                         ok_msg=f"正在播放：{row.get('title', '')}",
+                         title=row.get("title", ""),
                          fail_msg="该歌已不可用")
 
     # ---- 榜单 ----
@@ -2176,7 +2213,7 @@ class MusicPanel(QWidget):
         if idx < 0 or idx >= len(self._rank_tracks):
             idx = 0
         self._play_async(self._music.play_online_list, self._rank_tracks, idx,
-                         ok_msg=f"正在播放：{track.title}",
+                         title=track.title, resolving=True,
                          fail_msg="该曲目无法播放",
                          status_label=self.lbl_rank_status)
 
@@ -2636,14 +2673,14 @@ class MusicPanel(QWidget):
             self.lbl_status.setText("正在换源…")
             self._play_async(self._music.play_online_resume,
                              self._voice_generation, row,
-                             fail_msg="换源失败")
+                             fail_msg="换源失败", resolving=True)
             return
         # 手动搜索路径：后台线程播放（UI 不等待网络/播放器）
         if row >= len(self._tracks_by_row):
             return
         track = self._tracks_by_row[row]
         self._play_async(self._music.play_online, track,
-                         ok_msg=f"正在播放：{track.title}")
+                         title=track.title, resolving=True)
 
     def _on_seek_preview(self, value: int) -> None:
         """拖动进度条（sliderMoved，主线程）：只更新时间标签预览目标位置，

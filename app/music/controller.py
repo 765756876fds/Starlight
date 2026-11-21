@@ -2398,6 +2398,7 @@ class MusicController:
             admission = getattr(self, "_goal_admission", None)
             if admission is not None:
                 admission.bind_epoch(req_id)
+        report_next_feedback(self, "resolve", "started", req_id)
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             self._end_switch_state_if_current(req_id)
@@ -2407,9 +2408,11 @@ class MusicController:
             return False
         result = _resolved if _resolved is not None else self.online_manager.get_play_url(track)
         if not result or not result.get("url"):
+            report_next_feedback(self, "resolve", "no_url", req_id)
             logger.info(f"[Music] online 无 URL: {track.title}")
             self._end_switch_state_if_current(req_id)
             return False
+        report_next_feedback(self, "resolve", "ready", req_id)
         url = result.get("url")
         logger.info(f"[Music] play online: request={req_id}")
         try:

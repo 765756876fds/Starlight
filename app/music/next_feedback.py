@@ -4,6 +4,8 @@ The controller keeps its legacy return contract. Only explicit stage evidence
 and a new MPV playlist entry with advancing time can confirm this operation.
 """
 
+from contextvars import ContextVar
+
 import math
 import os
 import threading
@@ -31,7 +33,17 @@ class Request:
     ready: bool = False
 
 
+# Only callbacks on the thread executing this particular manual play are observed.
+_manual_receipt = ContextVar("manual_music_receipt", default=None)
+
+
 def report(controller, stage, result, epoch=None):
+    callback = _manual_receipt.get()
+    if callback is not None:
+        try:
+            callback(controller, stage, result, epoch)
+        except RuntimeError:
+            pass  # The receiving Qt widget may already have been destroyed.
     admission = getattr(controller, "_goal_admission", None)
     if admission is not None:
         try:
@@ -183,6 +195,27 @@ class NextFeedback:
             self._thread.start()
         self._wake.set()
 
+    def playing_sample(self):
+        """Bounded IPC evidence for the currently selected media; worker thread only."""
+        try:
+            row = self._entry()
+            song = self.controller.get_current_song()
+            expected = song.get("path") if isinstance(song, dict) else None
+            actual = row.get("filename") if row else None
+            if not isinstance(expected, str) or not isinstance(actual, str):
+                return
+            matching = actual == expected or (not expected.startswith(("http:", "https:")) and
+                                              os.path.normcase(actual) == os.path.normcase(expected))
+            if not matching:
+                return
+            idle, paused, pos = (self._property(n) for n in ("idle-active", "pause", "time-pos"))
+            if (idle is not False or paused is not False or type(pos) not in (int, float)
+                    or not math.isfinite(pos) or pos < 0):
+                return
+            return row["id"], pos
+        except Exception:
+            return None
+
     def _advance(self, req):
         c = self.controller
         center = get_notification_center()
@@ -196,20 +229,10 @@ class NextFeedback:
         if not req.accepted:
             return
         try:
-            row = self._entry()
-            song = c.get_current_song()
-            expected = song.get("path") if isinstance(song, dict) else None
-            actual = row.get("filename") if row else None
-            if not isinstance(expected, str) or not isinstance(actual, str):
+            sample = self.playing_sample()
+            if sample is None or sample[0] == req.previous_entry:
                 return
-            matching = actual == expected or (not expected.startswith(("http:", "https:")) and
-                                              os.path.normcase(actual) == os.path.normcase(expected))
-            if not matching or row["id"] == req.previous_entry:
-                return
-            idle, paused, pos = (self._property(n) for n in ("idle-active", "pause", "time-pos"))
-            if (idle is not False or paused is not False or type(pos) not in (int, float)
-                    or not math.isfinite(pos) or pos < 0):
-                return
+            _, pos = sample
             if req.position is not None and pos > req.position:
                 return S.CONFIRMED, "已确认下一首开始播放", pos
             return None, "", pos
@@ -260,3 +283,73 @@ class NextFeedback:
             self._wake.set()
         if thread is not None and thread is not threading.current_thread():
             thread.join(0.5)
+
+
+def observe_manual_play(controller, target, args, cancel, publish, *, budget=8.0):
+    """Observe the existing command on its UI worker. Never load or retry media here."""
+    observer = getattr(controller, "_next_feedback", None)
+    previous_ids = None
+    if isinstance(observer, NextFeedback):
+        try:
+            playlist = observer._property("playlist")
+            if isinstance(playlist, list):
+                previous_ids = {row["id"] for row in playlist}
+        except Exception:
+            pass
+
+    epoch = load_result = None
+
+    def receipt(owner, stage, result, request):
+        nonlocal epoch, load_result
+        if owner is not controller or cancel.is_set():
+            return
+        epoch = request
+        if stage == "resolve" and result == "ready":
+            publish("loading", request)
+        elif stage == "resolve" and result == "no_url":
+            load_result = "no_url"
+        elif stage == "voice_load_failed":
+            load_result = "failed"
+        elif stage == "loadfile":
+            load_result = result
+            if result == "confirmed":
+                publish("accepted", request)
+
+    if cancel.is_set():
+        return
+    token = _manual_receipt.set(receipt)
+    try:
+        result = target(*args)
+    except Exception:
+        result = False
+    finally:
+        _manual_receipt.reset(token)
+    if cancel.is_set():
+        return
+    if load_result != "confirmed":
+        if load_result in ("failed", "no_url") or (load_result is None and result is False):
+            publish("no_url" if load_result == "no_url" else "failed", epoch)
+        else:
+            publish("unknown", epoch)
+        return
+
+    deadline = time.monotonic() + budget
+    last = None
+    while not cancel.is_set() and time.monotonic() < deadline:
+        if controller._play_request_id != epoch or not controller._running or not controller._movie_permits_request():
+            return
+        sample = observer.playing_sample() if previous_ids is not None else None
+        if sample is not None and sample[0] not in previous_ids:
+            now = time.monotonic()
+            # A seek or resume jump alone does not establish continuous playback.
+            if (last is not None and last[0] == sample[0]
+                    and 0 < sample[1] - last[1] <= 4 * (now - last[2]) + .25):
+                publish("started", epoch)
+                return
+            last = (*sample, now)
+        else:
+            last = None
+        if cancel.wait(0.15):
+            return
+    if not cancel.is_set():
+        publish("unknown", epoch)

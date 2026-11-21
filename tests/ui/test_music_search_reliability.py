@@ -294,7 +294,8 @@ def test_ranked_result_actions_use_clicked_provider_and_track(panel, monkeypatch
     assert p.list_results.itemAt(point) == item
 
     p.list_results.itemDoubleClicked.emit(item)
-    wait_until(lambda: "正在播放" in p.lbl_status.text())
+    # A boolean from this stub supplies no player receipt or advancing media.
+    wait_until(lambda: "未确认起播" in p.lbl_status.text())
     music.play_online.assert_called_once_with(exact)
     assert music.play_online.call_args.args[0] is exact
 

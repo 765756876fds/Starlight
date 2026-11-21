@@ -134,7 +134,7 @@ def _activate_online_tab(p: MusicPanel) -> None:
 
 def test_double_click_plays_song(panel, qtbot):
     """用例 A：模拟双击歌曲列表项（click→dblclick 真实鼠标序列），
-    断言状态栏变为“正在播放”，且 play_online 被异步调用。"""
+    确认取址期间显示处理中；替身没有提供实际起播证据。"""
     p, music = panel
     _activate_online_tab(p)
     # 模拟“搜索已完成”状态：_tracks_by_row 已由 _on_search_done 填充
@@ -153,10 +153,10 @@ def test_double_click_plays_song(panel, qtbot):
     qtbot.mouseClick(p.list_results.viewport(), Qt.LeftButton, pos=pos)
     qtbot.mouseDClick(p.list_results.viewport(), Qt.LeftButton, pos=pos)
 
-    # 状态栏立即同步为“正在播放：晴天”（_play_async 主线程同步更新）
-    assert "正在播放" in p.lbl_status.text()
+    assert "正在播放" not in p.lbl_status.text()
+    assert any(word in p.lbl_status.text() for word in ("获取播放地址", "未确认起播"))
     # 异步线程内 play_online 被真实调用
-    qtbot.waitUntil(lambda: music.calls and music.calls[0][0] == "play_online",
+    qtbot.waitUntil(lambda: bool(music.calls) and music.calls[0][0] == "play_online",
                     timeout=3000)
 
 
