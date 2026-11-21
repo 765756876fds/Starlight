@@ -10,6 +10,7 @@ from shiboken6 import isValid
 from .colors import Colors, PALETTES, current_theme, palette_for, set_color_theme
 from .styles import style_template, render_style
 from .tokens import refresh_color_tokens
+from ..widget_snapshot import snapshot_widgets
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class ThemeManager(QObject):
                 logger.warning("theme_preference_save_failed")
         if force or mode != self.mode:
             previous = self.mode
-            widgets = list(self.app.allWidgets())
+            widgets = snapshot_widgets(self.app)
             for widget in widgets:
                 self._capture_style(widget, previous)
             self._updating = True
