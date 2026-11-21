@@ -185,7 +185,7 @@ class OnlineSourceManager:
         if src is not None:
             tried.add(id(src))
             try:
-                r = self._normalize_play_result(self._call_get_url(src, track, quality))
+                r = self._normalize_play_result(self._call_get_url(src, track, quality), src)
                 if r:
                     return r
             except Exception as e:
@@ -200,7 +200,7 @@ class OnlineSourceManager:
                 if acc is None or not acc(track):
                     continue
                 tried.add(id(s))
-                r = self._normalize_play_result(self._call_get_url(s, track, quality))
+                r = self._normalize_play_result(self._call_get_url(s, track, quality), s)
                 if r:
                     return r
             except Exception as e:
@@ -211,7 +211,7 @@ class OnlineSourceManager:
             if id(s) in tried:
                 continue
             try:
-                r = self._normalize_play_result(self._call_get_url(s, track, quality))
+                r = self._normalize_play_result(self._call_get_url(s, track, quality), s)
                 if r:
                     return r
             except Exception:
@@ -219,11 +219,15 @@ class OnlineSourceManager:
         return None
 
     @staticmethod
-    def _normalize_play_result(r):
+    def _normalize_play_result(r, source):
         """str 型源（http/demo/archive）包装成 dict；dict 型（js_bridge）原样。"""
         if not r:
             return None
         if isinstance(r, dict):
+            if "kuwo_rid" in r or "playback_metadata" in r:
+                from .sources.js_source import JSMusicSource
+                if not isinstance(source, JSMusicSource):
+                    return {k: v for k, v in r.items() if k not in {"kuwo_rid", "playback_metadata"}}
             return r
         return {"url": r, "headers": None}
 

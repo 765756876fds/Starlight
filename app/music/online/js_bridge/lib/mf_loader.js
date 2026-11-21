@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const vm = require('vm');
 const https = require('https');
+const qishui = require('./qishui_chorus');
 
 // 预处理 + 沙箱执行插件源码，返回导出模块对象。
 // 与 load() 共用：从文件读 + 预处理 + vm 沙箱（依赖从 js_bridge node_modules 解析）。
@@ -15,7 +16,8 @@ function loadFromSource(src, filePath) {
   const module = { exports: {} };
   const sandbox = {
     module, exports: module.exports,
-    require: (name) => require(name),
+    require: (name) => name === 'axios' && path.basename(filePath) === '开心汽水.js'
+      ? qishui.scopedAxios(require('axios')) : require(name),
     console, process, Buffer,
     global: globalThis,
     env: { prod: false, dev: false, getUserVariables: () => ({}) },
@@ -166,11 +168,27 @@ async function callGetUrl(plugin, rawItem, quality) {
   // 都想要尽量高的音质）；部分歌曲只有低档/VIP 限制，回退保证能播。
   for (const q of [...new Set([want, 'high', 'standard', 'low'])]) {
     try {
-      const result = await plugin.getMediaSource(item, q);
+      const result = plugin.name === '开心汽水' ? await qishui.resolve(plugin,item,q)
+        : await plugin.getMediaSource(item, q);
       if (!result) continue;
       if (typeof result === 'string') return { url: result, quality: q };
       if (result.url) {
         const out = { url: result.url, quality: result.quality || q };
+        const meta = result.playback_metadata;
+        if (plugin.name === '开心汽水' && meta?.branch === 'qishui.play') {
+          out.playback_metadata = meta;
+        } else if ((plugin.name === '网易音乐' && meta?.branch === 'netease.direct') ||
+                   (plugin.name === '酷狗音乐' && meta?.branch === 'kugou.direct')) {
+          if (meta.status === 'matched' && meta.id === String(item.id) &&
+              /^[a-f0-9]{32}$/i.test(meta.media_id)) {
+            out.playback_metadata = {branch:meta.branch, status:'matched', id:meta.id, media_id:meta.media_id};
+          }
+        } else if (plugin.name === '酷我音乐' && result.resolver_branch === 'kuwo.fallback') {
+          out.playback_metadata = {branch:'kuwo.fallback',status:'unconfirmed'};
+        }
+        if (plugin.name === '酷我音乐' && result.kuwo_rid === item.id && item.refrain?.rid === item.id) {
+          out.kuwo_rid = result.kuwo_rid;
+        }
         // 透传插件返回的 headers（如开心汽水给 douyin Referer），供播放链设置
         if (result.headers && typeof result.headers === 'object'
             && Object.keys(result.headers).length) {

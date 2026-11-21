@@ -122,6 +122,10 @@ async function dispatch(method, params) {
       } else {
         const musicInfo = raw_item || { hash: params.track_id };
         const r = await p.getUrl(source, musicInfo, quality);
+        if (r && (r.kuwo_rid || r.playback_metadata)) {
+          const {kuwo_rid, playback_metadata, ...result} = r;
+          return result;
+        }
         return r;
       }
     }

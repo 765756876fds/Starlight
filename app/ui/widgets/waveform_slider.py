@@ -9,9 +9,9 @@ from __future__ import annotations
 import math
 import random
 
-from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
-from PySide6.QtWidgets import QSlider
+from PySide6.QtWidgets import QSlider, QToolTip
 
 from ..theme.colors import Colors
 from ..theme.tokens import Tokens
@@ -23,9 +23,14 @@ _TICK_MS = 60
 class WaveformSlider(QSlider):
     """进度条 + 顶部律动频谱。value/minimum/maximum 与普通 QSlider 一致。"""
 
+    chorusClicked = Signal(object)
+
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
         self.setRange(0, 1000)
+        self.setMinimumHeight(36)
+        self._chorus = None
+        self._pressed_chorus = None
         self._bars = [0.05] * _BAR_COUNT
         self._tick = 0
         self._active = False            # 播放中才跳动
@@ -49,6 +54,35 @@ class WaveformSlider(QSlider):
         self._active = bool(on)
         if not self._active:
             self.update()
+
+    def set_chorus(self, observed):
+        if observed != self._chorus:
+            self._chorus = observed
+            self.update()
+
+    def _chorus_rect(self):
+        if not self._chorus:
+            return QRectF()
+        marker, duration = self._chorus
+        scale = (self.width() - 12) / duration
+        if marker.end is None:
+            return QRectF(6 + scale * marker.start - 3, self.height() / 2 + 5, 6, 9)
+        return QRectF(6 + scale * marker.start, self.height() / 2 + 7,
+                      scale * (marker.end - marker.start), 5)
+
+    def _over_chorus(self, point):
+        return self._chorus and self._chorus_rect().adjusted(0, -2, 0, 3).contains(point)
+
+    def event(self, event):
+        if event.type() == QEvent.ToolTip and self._over_chorus(event.pos()):
+            marker = self._chorus[0]
+            def stamp(seconds):
+                return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+            label = (f"副歌起点 {stamp(marker.start)}" if marker.end is None else
+                     f"副歌 {stamp(marker.start)}–{stamp(marker.end)}")
+            QToolTip.showText(event.globalPos(), f"{label} · 点击跳到起点", self)
+            return True
+        return super().event(event)
 
     # ---- 频谱模拟（平滑随机漫步 + 正弦包络；播放中振幅大、暂停低电平） ----
     def _step(self) -> None:
@@ -115,6 +149,24 @@ class WaveformSlider(QSlider):
             p.drawRoundedRect(QRectF(x, wave_bottom - h, bar_w, h),
                               bar_w / 2, bar_w / 2)
 
+        if self._chorus:
+            p.setBrush(QColor(Colors.SUCCESS))
+            rect = self._chorus_rect()
+            p.drawRoundedRect(rect, 2, 2)
+            p.save()
+            font = p.font()
+            font.setPixelSize(10)
+            p.setFont(font)
+            p.setPen(QColor(Colors.TEXT_SECONDARY))
+            label_width = p.fontMetrics().horizontalAdvance("副歌") + 2
+            x = rect.right() + 4
+            if x + label_width > w:
+                x = rect.left() - label_width - 4
+            if x >= 0:
+                p.drawText(QRectF(x, rect.center().y() - 7, label_width, 14),
+                           Qt.AlignCenter, "副歌")
+            p.restore()
+
         # ④ handle：纯白圆点 + accent 微光
         hx = pad + fill_w
         p.setPen(Qt.NoPen)
@@ -130,6 +182,10 @@ class WaveformSlider(QSlider):
 
     # ---- 鼠标：点击 groove 精确跳转；命中 handle 时交还基类拖拽 ----
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._over_chorus(event.position()):
+            self._pressed_chorus = self._chorus[0]
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and not self._hit_handle(event.position().x()):
             w = self.width()
             if w > 0:
@@ -150,6 +206,12 @@ class WaveformSlider(QSlider):
     def mouseReleaseEvent(self, event):
         # 点击路径：手动发 sliderReleased 触发真正 seek（后台线程），
         # 不调 super 防基类重复 emit；拖拽路径由基类 release 正常 emit。
+        if event.button() == Qt.LeftButton and self._pressed_chorus is not None:
+            marker, self._pressed_chorus = self._pressed_chorus, None
+            if self._over_chorus(event.position()) and self._chorus[0] is marker:
+                self.chorusClicked.emit(marker)
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and self._clicked_to_seek:
             self._clicked_to_seek = False
             self.sliderReleased.emit()

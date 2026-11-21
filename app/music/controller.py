@@ -16,6 +16,7 @@ from ..core.event_bus import Event, EventType, get_event_bus
 from ..core.logger import get_logger
 from ..core.operation_result import OperationResult, OperationStatus
 from ..core.state_store import StateNamespace, get_state_store
+from .online.chorus import PlatformChorus, resolve_chorus
 from .database import MusicDatabase
 from .history_recorder import HistoryRecorder
 from .preferences import PreferenceStore
@@ -81,7 +82,7 @@ class MusicController:
     整合所有音乐子模块，提供统一接口。
     """
 
-    def __init__(self, config: dict[str, Any], mpv_adapter: MpvAdapter | None = None):
+    def __init__(self, config: dict[str, Any], mpv_adapter: MpvAdapter | None = None, *, chorus_lookup=None):
         self._movie_pauser = None  # 注入：电影暂停确认回调
         self._movie_allows_music = None
         self._play_intent_ns = 0
@@ -173,6 +174,9 @@ class MusicController:
         self._lock = threading.Lock()
         # Separate lifecycle gate: slow restart never holds the business lock.
         self._mpv_lifecycle_lock = threading.Lock()
+        self._platform_chorus: PlatformChorus | None = None
+        self._chorus_lookup = chorus_lookup
+        self._pending_chorus = None
         self._current_song: dict[str, Any] | None = None
         # V2-2：播放会话代次，每次加载新媒体递增；全局暂停快照据此判断会话是否变化
         self._playback_gen: int = 0
@@ -1435,7 +1439,7 @@ class MusicController:
                                 return None
                             self._play_intent_ns = intent_ns
                             online_song = self._apply_stream(
-                                chosen, play_url, play_result.get("headers"))
+                                chosen, play_url, play_result.get("headers"), playback=play_result)
                         if online_song is None:
                             return None
                         self.event_bus.publish(Event(
@@ -1552,7 +1556,8 @@ class MusicController:
                 self._log_playback_stage("resolve", "ready", "online", request_id=req_id)
                 online_song = self._apply_stream(
                     chosen_track, url,
-                    headers if headers is not None else play_result.get("headers"))
+                    headers if headers is not None else play_result.get("headers"),
+                    playback=play_result)
                 if online_song is None:
                     self._is_switching_track = False
                     return
@@ -1579,7 +1584,7 @@ class MusicController:
             self._log_playback_stage("online_play" if resolved else "resolve", "failed", "online", request_id=req_id)
             self._schedule_skip_online(song)
 
-    def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None) -> dict | None:
+    def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None, *, playback=None, kuwo_rid=None) -> dict | None:
         """统一播放在线流：http-header-fields 重设 + loadfile + pause 同步 + 状态落库。
 
         三处在线播放共用（play_search_result 在线 fallback / 队列在线 worker /
@@ -1656,7 +1661,7 @@ class MusicController:
             self._log_playback_stage("loadfile", "failed", "online", request_id=req_epoch)
             # loadfile 抛异常（IPC 未连接/写入失败/MPV 拒绝）：不得让切换态
             # 永久卡 True（UI 进度冻结），也不得伪造播放成功。
-            logger.error(f"[Music] 在线 loadfile 失败: {url[:80]!r}: {e!r}")
+            logger.error(f"[Music] 在线 loadfile 失败: {type(e).__name__}")
             # 复位守卫：仅当本请求仍是最新播放意图才结束切换态——过期请求
             # （异常窗口内代次已被更新请求递增）不得覆盖新请求的状态。
             if self._play_request_id == req_epoch:
@@ -1673,7 +1678,7 @@ class MusicController:
             # 结果未确认（IPC 超时/无响应）：不得写入成功播放状态，按既有
             # 失败语义收口切换态（同样带代次守卫），并 raise 交由调用方既有
             # except 走失败/跳过路径——绝不把未确认当作成功。
-            logger.error(f"[Music] 在线 loadfile 结果未确认: {url[:80]!r}")
+            logger.error("[Music] 在线 loadfile 结果未确认")
             if self._play_request_id == req_epoch:
                 self._is_switching_track = False
                 self._last_idle = False
@@ -1682,7 +1687,7 @@ class MusicController:
             # 协议层明确失败响应：命令未被接受，同样按失败收口并交由调用方
             # 既有 except 处理（不伪造播放成功）。
             err = resp.get("error") if isinstance(resp, dict) else resp
-            logger.error(f"[Music] 在线 loadfile 失败: error={err}: {url[:80]!r}")
+            logger.error(f"[Music] 在线 loadfile 失败: error={err}")
             if self._play_request_id == req_epoch:
                 self._is_switching_track = False
                 self._last_idle = False
@@ -1714,6 +1719,26 @@ class MusicController:
             "track_id": getattr(track, 'track_id', '') or '',
             "extra": getattr(track, 'extra', None) or {},
         }
+        resolved = playback or {"kuwo_rid": kuwo_rid}
+        decision = resolve_chorus(track, resolved, req_epoch)
+        self._platform_chorus = decision.marker
+        self._pending_chorus = None
+        proof = resolved.get("playback_metadata") or {}
+        branch = "kuwo.direct" if resolved.get("kuwo_rid") else None
+        if branch is None and isinstance(proof, dict):
+            branch = proof.get("branch")
+        if not isinstance(branch, str) or branch not in {"kuwo.direct", "kuwo.fallback", "netease.direct", "kugou.direct", "qishui.play"}:
+            branch = "unknown"
+        if (branch in ("netease.direct", "kugou.direct") and decision.status.value == "not_queried"
+                and getattr(self, "_chorus_lookup", None) is not None):
+            self._pending_chorus = (req_epoch, track, {"playback_metadata": dict(proof)})
+        platform = online_song["source_name"]
+        provider = platform if platform in {"酷我音乐", "开心汽水", "网易音乐", "酷狗音乐", "QQ音乐"} else "other"
+        ref = hash((platform, online_song["track_id"])) & 0xffffffffffff
+        self._chorus_trace = ((req_epoch, platform, online_song["track_id"], time.monotonic() + 12)
+                              if provider != "other" else None)
+        logger.debug(f"[Chorus] epoch={req_epoch} provider={provider} track={ref:012x} "
+                     f"resolver={branch} metadata={decision.status.value}")
         self._current_song = online_song
         self._playback_gen += 1  # V2-2：在线流加载，会话代次递增
         self._user_stopped = False  # V2-4.5.6：新会话清除停止标记
@@ -2386,7 +2411,7 @@ class MusicController:
             self._end_switch_state_if_current(req_id)
             return False
         url = result.get("url")
-        logger.info(f"[Music] play online: {track.title} -> {url[:80]}")
+        logger.info(f"[Music] play online: request={req_id}")
         try:
             # 锁内权威校验 + 播放（与 _resolve_online_worker 同契约）：
             # get_play_url 是慢网络调用（无锁窗口），返回后必须锁内核对代次——
@@ -2400,7 +2425,7 @@ class MusicController:
                 # 统一流设置（DRY）：header 重设 + before_load 紧贴 loadfile（保持
                 # "校验→loadfile"原子）+ loadfile + pause + 状态落库。
                 online_song = self._apply_stream(
-                    track, url, result.get("headers"), before_load=_before_load,
+                    track, url, result.get("headers"), before_load=_before_load, playback=result,
                     **({"verify_load": _before_load} if _recommendation else {}))
                 if online_song is None:
                     # 互斥确认或紧邻 loadfile 前置校验失败时，没有异常可供
@@ -2754,11 +2779,96 @@ class MusicController:
             return False
         return self.play_online_list(tracks, idx)
 
+    def chorus_is_current(self, marker) -> bool:
+        return (marker is not None and marker is self._platform_chorus
+                and self._chorus_session_current(marker.epoch, marker.platform, marker.rid))
+
+    def _chorus_session_current(self, epoch, platform, track_id):
+        song = self._current_song
+        return (self._running and not self._user_stopped and not self._is_switching_track
+                and self._play_request_id == self._last_loadfile_epoch == epoch
+                and song is not None and song.get("source_name") == platform
+                and song.get("track_id") == track_id)
+
+    def observe_chorus(self):
+        """Progress worker. Read one live sample for identity, diagnostics and optional lookup."""
+        marker = self._platform_chorus
+        trace = getattr(self, "_chorus_trace", None)
+        pending = getattr(self, "_pending_chorus", None)
+        if trace and time.monotonic() >= trace[3]:
+            with self._lock:
+                if self._chorus_trace is trace:
+                    self._chorus_trace = None
+                    self._pending_chorus = None
+            trace = pending = None
+        if marker:
+            epoch, platform, rid = marker.epoch, marker.platform, marker.rid
+        elif pending:
+            epoch, track, _ = pending
+            platform, rid = track.source_name, track.track_id
+        elif trace:
+            epoch, platform, rid = trace[:3]
+        else:
+            return None
+        if not self._chorus_session_current(epoch, platform, rid):
+            return None
+        song = self._current_song
+        path = self.mpv.get_property("path", timeout=.3)
+        if not song or not path or path != song.get("path"):
+            return None
+        duration = self.mpv.get_property("duration", timeout=.3)
+        position = self.mpv.get_property("time-pos", timeout=.3)
+        if (type(duration) not in (int, float) or type(position) not in (int, float)
+                or not 0 < position <= duration or not self._chorus_session_current(epoch, platform, rid)):
+            return None
+        if trace and trace[:3] == (epoch, platform, rid):
+            with self._lock:
+                if self._chorus_trace is trace:
+                    self._chorus_trace = None
+                    catalog = song.get("duration")
+                    aligned = type(catalog) in (float, int) and abs(duration - catalog) <= 1
+                    logger.debug(f"[Chorus] epoch={epoch} mpv_duration={duration:.3f} "
+                                 f"duration_matches={aligned}")
+                    if not aligned:
+                        self._pending_chorus = None
+        if pending:
+            epoch_requested, track, playback = pending
+            if (epoch_requested != epoch or type(track.duration_seconds) not in (int, float)
+                    or not abs(duration - track.duration_seconds) <= 1):
+                return None
+            with self._lock:
+                if self._pending_chorus is not pending or not self._chorus_session_current(epoch, platform, rid):
+                    return None
+                self._pending_chorus = None
+            decision = self._chorus_lookup.after_start(track, playback, epoch)
+            with self._lock:
+                if not self._chorus_session_current(epoch, platform, rid):
+                    return None
+                marker = self._platform_chorus = decision.marker
+                logger.debug(f"[Chorus] epoch={epoch} lookup={decision.status.value}")
+        if self.chorus_is_current(marker) and marker.fits(duration):
+            return marker, duration
+        return None
+
+    def seek_chorus(self, marker, cancelled):
+        # Playback and loadfile share this lock. Never wait on it in the GUI thread.
+        if cancelled.is_set() or not self.chorus_is_current(marker):
+            return
+        observed = self.observe_chorus()
+        if not observed or observed[0] is not marker:
+            return
+        with self._lock:
+            if not cancelled.is_set() and self.chorus_is_current(marker):
+                self._seek_current(marker.start, "absolute")
+
     # ===== 跳转 =====
 
     @_cancel_switch_on_user_action
     def seek(self, seconds: float, mode: str = "relative"):
         """跳转"""
+        self._seek_current(seconds, mode)
+
+    def _seek_current(self, seconds: float, mode: str):
         if not self._mpv_available:
             logger.info("[Music] mpv 不可用，忽略操作")
             return

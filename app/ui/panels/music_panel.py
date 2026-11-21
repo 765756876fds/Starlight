@@ -195,7 +195,7 @@ class MusicPanel(QWidget):
     _status_signal = Signal(str)          # 跨线程状态栏消息桥（换源错误等事件，禁直接 setText）
     _sleep_timer_signal = Signal(bool, int)
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
-    _progress_signal = Signal(float, float)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
+    _progress_signal = Signal(float, float, object)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
     _volume_signal = Signal(int, int)  # gesture generation, volume; worker -> GUI
     _speed_result = Signal(object, float, int, str)  # 倍速三态结果：True / False / None
     _queue_changed = Signal()
@@ -567,6 +567,7 @@ class MusicPanel(QWidget):
             self.slider_vol.valueChanged.connect(self._on_volume)
             self.slider_vol.sliderReleased.connect(self._on_volume_released)
             self.slider_pos.sliderReleased.connect(self._on_seek)
+            self.slider_pos.chorusClicked.connect(self._on_chorus_click)
             # 拖动过程实时预览目标时间（仅内存级 UI 更新，不碰 mpv IPC）
             self.slider_pos.sliderMoved.connect(self._on_seek_preview)
             self.btn_search.clicked.connect(self._request_search)
@@ -619,6 +620,7 @@ class MusicPanel(QWidget):
         self._timer.start(1000)
 
         # 进度轮询后台线程：mpv IPC（playback-time/duration）绝不在主线程同步读取
+        self._chorus_cancel = threading.Event()
         self._progress_polling = False
         self._last_dur = 0.0  # 最近一次进度快照的时长，供拖动预览换算（_on_seek_preview）
         self._progress_signal.connect(self._on_progress)
@@ -663,6 +665,7 @@ class MusicPanel(QWidget):
             self._timer.start()
         if hasattr(self, "btn_like"):
             self.btn_like.sync()
+        self._chorus_cancel = threading.Event()
         self._progress_polling = True
         self._start_progress_poll()
 
@@ -679,6 +682,9 @@ class MusicPanel(QWidget):
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.stop()
         self._progress_polling = False
+        if hasattr(self, "_chorus_cancel"):
+            self._chorus_cancel.set()
+            self.slider_pos.set_chorus(None)
 
     @Slot()
     def _show_queue(self):
@@ -1136,6 +1142,7 @@ class MusicPanel(QWidget):
         本方法只负责"立刻"反馈，避免旧歌进度残留在切换窗口内。"""
         try:
             self.slider_pos.setValue(0)
+            self.slider_pos.set_chorus(None)
             self.lbl_time.setText("加载中...")
         except Exception:
             pass
@@ -2660,6 +2667,17 @@ class MusicPanel(QWidget):
         threading.Thread(target=self._safe_call, args=(self._do_seek, frac),
                          daemon=True, name="ui-music-seek").start()
 
+    def _on_chorus_click(self, marker):
+        cancel = self._chorus_cancel
+        worker = getattr(self, "_chorus_seek_thread", None)
+        if worker is not None and worker.is_alive():
+            return
+        if not cancel.is_set() and self._music.chorus_is_current(marker):
+            self._chorus_seek_thread = threading.Thread(
+                target=self._safe_call, args=(self._music.seek_chorus, marker, cancel),
+                daemon=True, name="ui-music-chorus-seek")
+            self._chorus_seek_thread.start()
+
     def _do_seek(self, frac: float) -> None:
         """后台线程执行 seek（IPC 出主线程；失败静默，不炸线程）。
         统一走 controller 入口：享受 _is_seeking 防抖与快照同步——
@@ -2686,9 +2704,12 @@ class MusicPanel(QWidget):
                     if self._music is not None and hasattr(self._music, "mpv"):
                         # 读 controller 受控缓存（_poll_idle 内带代次/切歌闸门，
                         # 在线解析窗口内旧歌位置不会污染）——绝不直连 mpv 实时值。
+                        visibility = self._chorus_cancel
                         pos = self._music.current_playback_time
-                        dur = self._music.mpv.get_duration()
-                        self._progress_signal.emit(pos, dur)
+                        observe = getattr(self._music, "observe_chorus", None)
+                        observed = observe() if observe else None
+                        dur = observed[1] if isinstance(observed, tuple) else self._music.mpv.get_duration()
+                        self._progress_signal.emit(pos, dur, (visibility, observed))
                         volume_generation = self._volume_request_gen
                         volume = self._music.get_volume()
                         if not self._progress_polling:
@@ -2715,9 +2736,18 @@ class MusicPanel(QWidget):
         finally:
             self._syncing_volume = False
 
-    def _on_progress(self, pos: float, dur: float) -> None:
+    def _on_progress(self, pos: float, dur: float, sample=None) -> None:
         """主线程槽：只做内存级 UI 更新（setValue/setText），不碰 mpv IPC。"""
         try:
+            if sample is not None:
+                visibility, observed = sample
+                if visibility.is_set() or visibility is not self._chorus_cancel:
+                    return
+                if isinstance(observed, tuple) and self._music.chorus_is_current(observed[0]):
+                    dur = observed[1]
+                    self.slider_pos.set_chorus(observed)
+                else:
+                    self.slider_pos.set_chorus(None)
             self._last_dur = dur  # 供拖动预览换算目标时间（_on_seek_preview）
             # 切换态（controller._is_switching_track）：在线解析窗口内 mpv 仍报
             # 旧歌实时位置，禁止渲染——保持归零 + "加载中"，新歌 loadfile 起播

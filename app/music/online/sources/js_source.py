@@ -613,6 +613,8 @@ class JSMusicSource(MusicSource):
         return {
             "url": r.get("url"),
             "headers": r.get("headers") or None,
+            **({"playback_metadata": r["playback_metadata"]} if isinstance(r.get("playback_metadata"), dict) else {}),
+            **({"kuwo_rid": r["kuwo_rid"]} if r.get("kuwo_rid") else {}),
         }
 
     def get_lyric(self, track: OnlineTrack) -> str | None:
