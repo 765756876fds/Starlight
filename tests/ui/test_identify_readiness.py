@@ -5,6 +5,7 @@ import time
 
 import pytest
 from unittest.mock import Mock
+from PySide6.QtCore import QObject, Qt, Slot
 from PySide6.QtWidgets import QApplication
 
 from app.ui.dialogs import identify_dialog as module
@@ -130,33 +131,63 @@ def test_empty_library_worker_captures_without_local_lookup(tmp_path):
 
 
 def test_real_worker_finishes_then_old_finished_cannot_delete_new_audio(dialog, monkeypatch):
+    import threading
     app = QApplication.instance()
     captures = []
+    release = threading.Event()
     dialog._service.capture_audio = lambda path, **kw: captures.append(path)
     dialog._service.record_and_identify = lambda *a, **kw: pytest.fail("不应查询空指纹库")
     monkeypatch.setattr(dialog, "_start_identify_worker",
                         module.IdentifyDialog._start_identify_worker.__get__(dialog))
+
+    def recognize(path):
+        if not release.wait(2):
+            raise RuntimeError("controlled provider gate expired")
+        return module.ShazamRecognitionResult(module.ShazamRecognitionStatus.NO_MATCH)
+
     monkeypatch.setattr("app.music.shazamio_provider.ShazamIOProvider",
-                        lambda: SimpleNamespace(recognize=lambda path: SimpleNamespace(
-                            status=module.ShazamRecognitionStatus.NO_MATCH, detail="")))
+                        lambda: SimpleNamespace(recognize=recognize))
     dialog.begin()
     deadline = time.monotonic() + 2
-    while time.monotonic() < deadline:
+    while dialog._online_thread is None and time.monotonic() < deadline:
         app.processEvents()
-        threads = [t for t in (dialog._identify_thread, dialog._online_thread) if t is not None]
-        if not dialog.is_busy() and all(not t.isRunning() for t in threads):
-            break
         time.sleep(0.005)
-    assert len(captures) == 1
-    assert not dialog.is_busy()
-    assert all(not t.isRunning() for t in threads)
-    assert "未找到匹配" in dialog.lbl_status.text()
-    assert not Path(captures[0]).exists()
+    assert dialog._online_thread is not None
     old_thread = dialog._online_thread
-    monkeypatch.setattr(dialog, "_start_identify_worker", lambda *a: None)
-    dialog.begin()
+    observations, order = {}, []
+
+    class Delivery(QObject):
+        @Slot(object)
+        def start_next(self, _result):
+            # The real result slot is queued before this slot. Hold the GUI
+            # here until native thread completion, so its real finished signal
+            # remains queued until after the next recording has started.
+            observations["no_match"] = "未找到匹配" in dialog.lbl_status.text()
+            threads = (dialog._identify_thread, old_thread)
+            for thread in threads:
+                thread.quit()
+            observations["joined"] = all(thread.wait(1000) for thread in threads)
+            monkeypatch.setattr(dialog, "_start_identify_worker", lambda *a: None)
+            dialog.begin()
+            order.append("new_audio")
+
+        @Slot()
+        def old_finished(self):
+            order.append("old_finished")
+            observations["new_survived"] = bool(dialog._current_wav and Path(dialog._current_wav).exists())
+
+    delivery = Delivery(dialog)
+    dialog._online_worker.done.connect(delivery.start_next, Qt.QueuedConnection)
+    old_thread.finished.connect(delivery.old_finished, Qt.QueuedConnection)
+    release.set()
+    deadline = time.monotonic() + 2
+    while "old_finished" not in order and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.005)
+    app.processEvents()  # No duplicate completion may be pending.
+    assert order == ["new_audio", "old_finished"]
+    assert observations == {"no_match": True, "joined": True, "new_survived": True}
+    assert len(captures) == 1 and not Path(captures[0]).exists()
     new_audio = Path(dialog._current_wav)
-    old_thread.finished.emit()  # 模拟晚到的上一轮收尾通知。
-    app.processEvents()
     assert new_audio.exists()
     assert dialog.is_busy()

@@ -12,7 +12,7 @@ import tempfile
 import threading
 from ...core.notifications import get_notification_center, notify, operation_scope
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton
 
 from ...music.capture import CaptureCancelled
@@ -234,9 +234,12 @@ class IdentifyDialog(GlassDialog):
         self._identify_worker.done.connect(self._on_done)
         self._identify_worker.failed.connect(self._on_failed)
         self._identify_worker.cancelled.connect(self._on_cancelled)
-        self._identify_worker.done.connect(self._identify_thread.quit)
-        self._identify_worker.failed.connect(self._identify_thread.quit)
-        self._identify_worker.cancelled.connect(self._identify_thread.quit)
+        # quit() is thread-safe: finishing must not depend on the GUI loop
+        # still dispatching events. Delete the worker in its own thread.
+        self._identify_worker.done.connect(self._identify_thread.quit, Qt.DirectConnection)
+        self._identify_worker.failed.connect(self._identify_thread.quit, Qt.DirectConnection)
+        self._identify_worker.cancelled.connect(self._identify_thread.quit, Qt.DirectConnection)
+        self._identify_thread.finished.connect(self._identify_worker.deleteLater)
         self._identify_thread.start()
 
     def _on_tick(self):
@@ -295,7 +298,8 @@ class IdentifyDialog(GlassDialog):
             self._online_worker.moveToThread(self._online_thread)
             self._online_thread.started.connect(self._online_worker.run)
             self._online_worker.done.connect(self._on_online_done)
-            self._online_worker.done.connect(self._online_thread.quit)
+            self._online_worker.done.connect(self._online_thread.quit, Qt.DirectConnection)
+            self._online_thread.finished.connect(self._online_worker.deleteLater)
             # done 在 GUI 线程处理并清理本次文件；finished 可能晚于下一次
             # 采集开始，不能让它再次清理 self._current_wav。
             self._online_thread.start()
@@ -403,8 +407,9 @@ class IdentifyDialog(GlassDialog):
         self._build_thread.started.connect(self._build_worker.run)
         self._build_worker.done.connect(self._on_build_done)
         self._build_worker.failed.connect(self._on_build_failed)
-        self._build_worker.done.connect(self._build_thread.quit)
-        self._build_worker.failed.connect(self._build_thread.quit)
+        self._build_worker.done.connect(self._build_thread.quit, Qt.DirectConnection)
+        self._build_worker.failed.connect(self._build_thread.quit, Qt.DirectConnection)
+        self._build_thread.finished.connect(self._build_worker.deleteLater)
         self._build_thread.start()
 
     @Slot(object)
