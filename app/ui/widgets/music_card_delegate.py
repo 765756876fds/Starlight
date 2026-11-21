@@ -27,6 +27,7 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QThreadPool,
+    QTimer,
     QUrl,
     Signal,
 )
@@ -160,6 +161,8 @@ class _CoverLoader(QObject):
     MAX_NETWORK_REQUESTS = 8
     SUCCESS_TTL = 86400
     FAILURE_TTL = 30
+    NETWORK_TIMEOUT_MS = 8000
+    NETWORK_DEADLINE_MS = 15000
 
     def __init__(self):
         super().__init__()
@@ -263,10 +266,17 @@ class _CoverLoader(QObject):
             key = self._network_queue.popleft()
             self._network_active.add(key)
             req = QNetworkRequest(QUrl(key[4:]))
-            req.setTransferTimeout(8000)
+            req.setTransferTimeout(self.NETWORK_TIMEOUT_MS)
             req.setAttribute(QNetworkRequest.RedirectPolicyAttribute, QNetworkRequest.NoLessSafeRedirectPolicy.value)
             reply = self._qnam.get(req)
             reply.setProperty("cover_key", key)
+            # Qt's transfer timeout is an idle timeout; a trickling response or
+            # connection setup must not hold a shared queue slot indefinitely.
+            deadline = QTimer(reply)
+            deadline.setSingleShot(True)
+            deadline.timeout.connect(reply.abort)
+            reply.finished.connect(deadline.stop)
+            deadline.start(self.NETWORK_DEADLINE_MS)
 
     def close(self):
         """Only cancel this loader's work, including jobs not started yet."""
@@ -311,7 +321,7 @@ class _CoverLoader(QObject):
                 img = QImage.fromData(data)
                 pixmap = QPixmap.fromImage(img) if not img.isNull() else None
                 category = "decode" if pixmap is None else "success"
-            elif reply.attribute(QNetworkRequest.HttpStatusCodeAttribute):
+            elif (status := reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)) and not 200 <= status < 300:
                 category = "http"
             elif reply.error() == QNetworkReply.NetworkError.HostNotFoundError:
                 category = "dns"

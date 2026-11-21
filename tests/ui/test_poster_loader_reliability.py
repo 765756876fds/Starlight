@@ -55,7 +55,7 @@ def scene(monkeypatch):
                     self.end_headers()
                     return
                 bad = self.path == "/retry" and number == 1
-                invalid = self.path == "/invalid"
+                invalid = self.path == "/invalid" or self.path == "/decode-retry" and number == 1
                 payload = b"not an image" if bad or invalid else png
                 self.send_response(503 if bad else 200)
                 self.send_header("Content-Type", "image/png")
@@ -213,3 +213,44 @@ def test_closing_loader_does_not_start_queued_requests(scene):
     QTest.qWait(50)
     assert scene.calls["/never-start"] == 0 and not scene.done
     assert scene.loader._pending_count == 0
+
+
+def test_decoding_failure_retries_after_cooldown_and_loads_the_real_image(scene):
+    key = "net:" + scene.url("/decode-retry")
+    scene.loader.request(key)
+    wait(lambda: scene.done == [key])
+    assert scene.loader.failed(key)
+    scene.loader.request(key)
+    assert scene.calls["/decode-retry"] == 1
+    scene.clock[0] = scene.loader.FAILURE_TTL + 1
+    scene.loader.request(key)
+    wait(lambda: len(scene.done) == 2)
+    assert scene.calls["/decode-retry"] == 2
+    assert scene.loader.get(key).toImage().pixelColor(0, 0) == QColor("#2377bb")
+
+
+def test_timed_out_image_releases_slot_for_next_queued_image(scene, monkeypatch):
+    monkeypatch.setattr(scene.loader, "NETWORK_DEADLINE_MS", 150)
+    scene.loader.MAX_NETWORK_REQUESTS = 1
+    slow, good = "net:" + scene.url("/slow-deadline"), "net:" + scene.url("/ok")
+    scene.loader.request(slow)
+    scene.loader.request(good)
+    wait(lambda: len(scene.done) == 2)
+    assert scene.done == [slow, good]
+    assert scene.loader.failed(slow) and scene.loader.get(good) is not None
+    assert not scene.loader._network_active and not scene.loader._pending
+
+
+def test_destroying_page_before_reply_disconnects_its_delegate_and_view(scene, capsys):
+    from shiboken6 import isValid
+    view = CardList(portrait=True)
+    view.set_rows([dict(title="生成影片", cover_url=scene.url("/slow-closed"))], lambda row: row)
+    view.show()
+    wait(lambda: scene.calls["/slow-closed"] == 1)
+    view.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert not isValid(view) and not scene.loader._views
+    scene.release.set()
+    wait(lambda: len(scene.done) == 1)
+    assert scene.loader.get(scene.done[0]) is not None
+    assert "Internal C++ object" not in capsys.readouterr().err
