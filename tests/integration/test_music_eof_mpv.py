@@ -104,7 +104,7 @@ def native(tmp_path):
 
 
 @pytest.mark.parametrize("mode", [PlayMode.SEQUENTIAL, PlayMode.SHUFFLE, PlayMode.REPEAT_ONE])
-def test_real_eof_advances_or_repeats_according_to_the_existing_mode(native, mode):
+def test_real_eof_advances_or_repeats_according_to_the_existing_mode(native, mode, capsys):
     s = native
     s.ctrl.queue.add_all(s.songs)
     s.ctrl.queue.set_play_mode(mode)
@@ -120,3 +120,7 @@ def test_real_eof_advances_or_repeats_according_to_the_existing_mode(native, mod
         wait(lambda: s.ctrl._current_song is None)
         assert len(s.mpv.loads) == 2 and s.ctrl._running
         assert s.mpv.get_property("idle-active") is True
+    diagnostics = capsys.readouterr().out
+    assert "music_playback stage=loadfile result=confirmed media=local" in diagnostics
+    assert "queue_size=2" in diagnostics and "request_id=" in diagnostics
+    assert "end-file reason=eof" in diagnostics

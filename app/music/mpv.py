@@ -37,12 +37,11 @@ class MpvController:
         self._properties: dict[str, Any] = {}
         self._property_watchers: dict[str, Any] = {}
         self._pipe_lock = threading.Lock()
-        if self.video:
-            self._event_pipe = None
-            self._event_buffer = b""
-            self._event_lock = threading.RLock()
-            self._last_end_file = None
-            self._film_end_reasons = {}
+        self._event_pipe = None
+        self._event_buffer = b""
+        self._event_lock = threading.RLock()
+        self._last_end_file = None
+        self._film_end_reasons = {}
 
     def start(self, taskkill: bool = True, wid: int | None = None,
               pipe_timeout: float = 10.0, prop_timeout: float = 1.0, *,
@@ -95,11 +94,10 @@ class MpvController:
                 pipe_timeout: float = 10.0, prop_timeout: float = 1.0, *,
                 cancel: threading.Event | None = None) -> bool:
         """Popen + 等待 IPC 管道就绪。任何一步失败 → 返回 False（不抛）。"""
-        if self.video:
-            with self._event_lock:
-                self._close_event_pipe()
-                self._last_end_file = None
-                self._film_end_reasons.clear()
+        with self._event_lock:
+            self._close_event_pipe()
+            self._last_end_file = None
+            self._film_end_reasons.clear()
         # 旧 pipe 可能来自已自死的进程（窗口关闭路径），先清理再重开
         if self._pipe:
             try:
@@ -269,21 +267,7 @@ class MpvController:
                     continue
                 if "event" in msg:
                     if msg.get("event") == "end-file":
-                        if getattr(self, "video", False):
-                            self._log_end_file(msg)
-                            continue
-                        # Diagnostic only: retain polling/callback behavior and
-                        # never include the media URL, path or raw IPC payload.
-                        from ..core.logger import get_logger
-                        reason = msg.get("reason")
-                        if reason not in ("eof", "stop", "quit", "error", "redirect"):
-                            reason = "unknown"
-                        entry = msg.get("playlist_entry_id")
-                        entry = entry if type(entry) is int else None
-                        try:
-                            get_logger().info(f"[mpv] end-file reason={reason} entry_id={entry}")
-                        except OSError:
-                            pass  # A diagnostic write must not consume the IPC response.
+                        self._log_end_file(msg)
                     continue
                 if msg.get("request_id") == req_id:
                     resp = msg
@@ -348,7 +332,7 @@ class MpvController:
         self._event_pipe = None
         self._event_buffer = b""
 
-    def _poll_film_end_events(self):
+    def poll_end_events(self):
         """Drain a bounded, unbuffered diagnostic connection on the existing poller.
 
         The duplex TextIO command pipe can discard read-ahead events on writes.
@@ -360,6 +344,9 @@ class MpvController:
             try:
                 if self._event_pipe is None:
                     self._event_pipe = open(self.ipc_pipe, "r+b", buffering=0)
+                    if not self.video:
+                        self._event_pipe.write(b'{"command":["disable_event","all"]}\n'
+                                               b'{"command":["enable_event","end-file"]}\n')
                 available = MpvController._pipe_available(SimpleNamespace(_pipe=self._event_pipe))
                 if available < 0:
                     self._close_event_pipe()
@@ -382,14 +369,14 @@ class MpvController:
 
     def film_end_reason(self, entry):
         """Return the bounded end-file observation for this process and entry."""
-        self._poll_film_end_events()
+        self.poll_end_events()
         with self._event_lock:
             return self._film_end_reasons.get(entry)
 
     def loadfile(self, filepath: str, mode: str = "replace"):
         if self.video:
             # Subscribe before submitting a load that may fail immediately.
-            self._poll_film_end_events()
+            self.poll_end_events()
         media_tag = hashlib.sha256(str(filepath).encode("utf8")).hexdigest()[:12]
         print(f"[mpv] cmd loadfile: media_tag={media_tag} (mode={mode})")
         resp = self._send_command("loadfile", [filepath, mode], timeout=5.0)
@@ -648,9 +635,8 @@ class MpvController:
 
     def stop_process(self):
         self._running = False
-        if self.video:
-            with self._event_lock:
-                self._close_event_pipe()
+        with self._event_lock:
+            self._close_event_pipe()
         if self._pipe:
             try:
                 self._pipe.close()

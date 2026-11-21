@@ -309,6 +309,14 @@ class MusicController:
                 if self._mpv_gave_up:
                     wait(2.0)
                     continue
+                # Optional diagnostics use a separate IPC connection, on this
+                # existing thread; they never select songs or alter idle state.
+                try:
+                    poll_events = getattr(self.mpv, "poll_end_events", None)
+                    if callable(poll_events):
+                        poll_events()
+                except Exception:
+                    pass
                 # 1) 管道健康探测：get_property 连续失败 → 触发重启
                 try:
                     now_idle = bool(self.mpv.get_property("idle-active", timeout=0.5))
@@ -893,8 +901,10 @@ class MusicController:
         record_collection(self, "next", "natural" if is_auto else "manual")
         song = self.queue.next(auto=is_auto)
         if song:
+            self._log_playback_stage("next", "selected", "queue")
             self._play_song(song)
         else:
+            self._log_playback_stage("next", "queue_end", "queue")
             report_next_feedback(self, "voice_next", "empty" if self.queue.size() == 0 else "end")
             # 队列空（顺序模式播完队列尾）：停止当前播放、保持空闲，
             # 绝不跨界加载本地库——在线歌单播完不得突然切到本地歌曲
@@ -1471,9 +1481,12 @@ class MusicController:
         网络解析经 OnlineResolver（纯解析，不碰 mpv/队列/Qt 信号）；
         loadfile 必须在 controller._lock 内做二次校验后执行，防止与本地
         播放（play_song 持锁）并发竞态——旧网络请求绝不覆盖最新播放意图。"""
+        resolved = False
         try:
+            self._log_playback_stage("resolve", "started", "online", request_id=req_id)
             if self._resolver is None:
                 report_next_feedback(self, "resolve", "unavailable", req_id)
+                self._log_playback_stage("resolve", "unavailable", "online", request_id=req_id)
                 logger.error("[Music] 在线解析器未就绪，跳过")
                 self._schedule_skip_online(song)
                 return
@@ -1516,6 +1529,7 @@ class MusicController:
                 result = self._resolver.resolve(query, limit_per_source=5)
                 if not result:
                     report_next_feedback(self, "resolve", "no_url", req_id)
+                    self._log_playback_stage("resolve", "no_url", "online", request_id=req_id)
                     logger.info("[Music] 队列在线歌重搜无结果/URL 均失败，跳过")
                     self._schedule_skip_online(song)
                     return
@@ -1524,14 +1538,18 @@ class MusicController:
                 play_result = result["play_result"]
             # 无锁快速检查：已过期直接放弃（省一次 IPC）
             if req_id != self._play_request_id:
+                self._log_playback_stage("resolve", "stale", "online", request_id=req_id)
                 logger.info("[Music] 在线解析已过期（期间已切歌），丢弃结果")
                 return
             # 锁内权威校验 + 播放：校验失败绝不 loadfile；
             # 锁内执行保证与 play_song（本地持锁）互斥，杜绝旧请求覆盖新歌
             with self._lock:
                 if req_id != self._play_request_id:
+                    self._log_playback_stage("resolve", "stale", "online", request_id=req_id)
                     logger.info("[Music] 在线解析已过期（期间已切歌），锁内丢弃结果")
                     return
+                resolved = True
+                self._log_playback_stage("resolve", "ready", "online", request_id=req_id)
                 online_song = self._apply_stream(
                     chosen_track, url,
                     headers if headers is not None else play_result.get("headers"))
@@ -1558,6 +1576,7 @@ class MusicController:
         except Exception as e:
             logger.error(f"[Music] 队列在线歌播放失败: {e}")
             report_next_feedback(self, "resolve", "failed", req_id)
+            self._log_playback_stage("online_play" if resolved else "resolve", "failed", "online", request_id=req_id)
             self._schedule_skip_online(song)
 
     def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None) -> dict | None:
@@ -1634,6 +1653,7 @@ class MusicController:
                                  "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed", req_epoch)
         except Exception as e:
             report_next_feedback(self, "loadfile", "failed", req_epoch)
+            self._log_playback_stage("loadfile", "failed", "online", request_id=req_epoch)
             # loadfile 抛异常（IPC 未连接/写入失败/MPV 拒绝）：不得让切换态
             # 永久卡 True（UI 进度冻结），也不得伪造播放成功。
             logger.error(f"[Music] 在线 loadfile 失败: {url[:80]!r}: {e!r}")
@@ -1645,6 +1665,10 @@ class MusicController:
             # 复用调用方既有异常处理（play_online/在线 fallback/队列 worker
             # 均有 except 兜底），不在本层伪造成功或改动队列/历史/当前曲目。
             raise
+        self._log_playback_stage(
+            "loadfile", "unknown" if resp is None else
+            "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed",
+            "online", request_id=req_epoch)
         if resp is None:
             # 结果未确认（IPC 超时/无响应）：不得写入成功播放状态，按既有
             # 失败语义收口切换态（同样带代次守卫），并 raise 交由调用方既有
@@ -1821,6 +1845,7 @@ class MusicController:
                                  "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed", current_epoch)
         except Exception as e:
             report_next_feedback(self, "loadfile", "failed", current_epoch)
+            self._log_playback_stage("loadfile", "failed", "local", request_id=current_epoch)
             # loadfile 抛异常（IPC 未连接/写入失败/MPV 拒绝）：不得让切换态
             # 永久卡 True（UI 进度冻结），也不得伪造播放成功。
             logger.error(f"[Music] 本地 loadfile 失败: {filepath!r}: {e!r}")
@@ -1832,6 +1857,10 @@ class MusicController:
             # 不更新 _current_song/队列/播放历史；由轮询上升沿或用户操作推进
             # （与缺失文件分支同契约：坏文件交给 auto_next/用户处理）。
             return
+        self._log_playback_stage(
+            "loadfile", "unknown" if resp is None else
+            "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed",
+            "local", request_id=current_epoch)
         if resp is None:
             # 结果未确认（IPC 超时/无响应）：不得写入成功播放状态。与异常同款
             # 复位守卫收口切换态，交由轮询上升沿/用户操作推进（绝不伪造成功）。
@@ -3245,6 +3274,18 @@ class MusicController:
                 logger.info(f"[Music] auto_next: next() 异常: {e!r}")
 
     # ===== 影子对拍打点基建（意图/决策记录，完全透明：先执行原逻辑，记录异常吞掉） =====
+
+    def _log_playback_stage(self, stage, result, media, *, request_id=None):
+        """Diagnostic only: accepted IPC is not a promise of audible playback."""
+        try:
+            logger.info(
+                "music_playback stage=%s result=%s media=%s request_id=%s queue_size=%s index=%s mode=%s",
+                stage, result, media,
+                self._play_request_id if request_id is None else request_id,
+                self.queue.size(), self.queue.get_current_index(), self.queue.get_play_mode())
+        except Exception:
+            # Diagnostics must never interrupt playback or queue consumption.
+            pass
 
     def _current_origin(self) -> str:
         """读取当前线程的 origin（缺省 'user'）。"""

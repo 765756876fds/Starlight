@@ -61,3 +61,61 @@ def test_a_failed_diagnostic_write_cannot_break_the_command_response():
     finally:
         mpv._pipe = None
         mpv._running = False
+
+
+def test_diagnostic_observer_keeps_split_messages_and_does_not_touch_command_pipe():
+    mpv = MpvController("unused-test-mpv")
+    mpv._running = True
+    mpv._pipe, mpv._event_pipe = Mock(), Mock()
+    first, second = b'{"event":"end-', b'file","reason":"eof","playlist_entry_id":7}\n'
+    mpv._event_pipe.read.side_effect = [first, second]
+    log = Mock()
+    try:
+        with patch.object(MpvController, "_pipe_available", side_effect=[len(first), len(second)]), \
+                patch("app.core.logger.get_logger", return_value=log):
+            mpv.poll_end_events()
+            assert not log.info.called
+            mpv.poll_end_events()
+            assert log.info.call_count == 1
+            assert "reason=eof entry_id=7" in log.info.call_args.args[0]
+            mpv._log_end_file(dict(reason="eof", playlist_entry_id=7))
+            assert log.info.call_count == 1
+        assert not mpv._pipe.write.called and not mpv._pipe.readline.called
+        assert not mpv._event_buffer
+    finally:
+        event_pipe = mpv._event_pipe
+        mpv.stop_process()
+        event_pipe.close.assert_called_once()
+        assert mpv._event_pipe is None
+
+
+def test_diagnostic_observer_disconnect_closes_only_its_own_connection():
+    mpv = MpvController("unused-test-mpv")
+    mpv._running = True
+    command, observer = Mock(), Mock()
+    mpv._pipe, mpv._event_pipe = command, observer
+    try:
+        with patch.object(MpvController, "_pipe_available", return_value=-1):
+            mpv.poll_end_events()
+        observer.close.assert_called_once()
+        assert mpv._event_pipe is None and not command.close.called
+        assert mpv._running
+    finally:
+        mpv._pipe = None
+        mpv._running = False
+
+
+def test_missing_diagnostic_connection_cannot_break_normal_ipc():
+    mpv = MpvController("unused-test-mpv")
+    mpv._running = True
+    mpv._pipe = Mock()
+    mpv._pipe_available = lambda: 1
+    mpv._pipe.readline.return_value = b'{"request_id":1,"error":"success","data":true}\n'
+    try:
+        with patch("builtins.open", side_effect=FileNotFoundError("observer unavailable")):
+            mpv.poll_end_events()
+        assert mpv._event_pipe is None
+        assert mpv._send_command("get_property", ["idle-active"])["data"] is True
+    finally:
+        mpv._pipe = None
+        mpv._running = False
