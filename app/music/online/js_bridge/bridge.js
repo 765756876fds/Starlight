@@ -147,7 +147,8 @@ async function dispatch(method, params) {
       const plugins = Array.from(sources.values()).filter(p => {
         if (seen.has(p)) return false;
         seen.add(p);
-        return p.type === 'musicfree' && typeof p.getTopLists === 'function';
+        return (!params.source || p.name === params.source) &&
+          p.type === 'musicfree' && typeof p.getTopLists === 'function';
       });
       const results = await Promise.all(plugins.map(async p => {
         try {
@@ -174,7 +175,7 @@ async function dispatch(method, params) {
       const p = sources.get(source);
       if (!p) throw new Error(`unknown source ${source}`);
       if (p.type !== 'musicfree') throw new Error(`source ${source} not musicfree`);
-      return await mfLoader.callGetTopListDetail(p, { id: list_id }, page || 1);
+      return await mfLoader.callGetTopListDetail(p, { id: list_id }, page || 1, params.limit);
     }
     case 'checkUpdates': {
       // 遍历 MusicFree 插件（按对象去重，忽略别名 key）→ 拉更新源取远端版本

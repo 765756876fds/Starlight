@@ -533,7 +533,20 @@ class MusicPanel(QWidget):
 
         # ---- 榜单 Tab（左：平台 + 榜单列表；右：榜单歌曲）----
         rank = QWidget()
-        rl = QHBoxLayout(rank)
+        from ..widgets.popular_songs import PopularSongs
+        rank_layout = QVBoxLayout(rank)
+        self.rank_mode = QPushButton("按来源查看")
+        self.rank_mode.setCheckable(True)
+        rank_layout.addWidget(self.rank_mode, 0, Qt.AlignRight)
+        self.rank_pages = QStackedWidget()
+        rank_layout.addWidget(self.rank_pages, 1)
+        self.popular_songs = PopularSongs(music, rank)
+        self.popular_songs.play_requested.connect(self._play_popular_song)
+        self.rank_pages.addWidget(self.popular_songs)
+        source_page = QWidget()
+        self.rank_pages.addWidget(source_page)
+        self.rank_mode.toggled.connect(self._rank_mode_changed)
+        rl = QHBoxLayout(source_page)
         rl_left = QVBoxLayout()
         lbl_src = QLabel("平台")
         lbl_src.setStyleSheet(
@@ -558,6 +571,7 @@ class MusicPanel(QWidget):
         rl_right.addWidget(self.lbl_rank_status)
         rl.addLayout(rl_right, 3)
         tabs.addTab(rank, "榜单")
+        tabs.setCurrentWidget(rank)
 
         # 播放按钮图标锁定（防 mpv 异步启动期间图标闪回）
         self._icon_locked = False
@@ -649,6 +663,8 @@ class MusicPanel(QWidget):
         if hasattr(self, "btn_like"):
             self.btn_like.shutdown()
             self._playlist_task.cancel()
+        if hasattr(self, "popular_songs"):
+            self.popular_songs.shutdown()
         if hasattr(self, "discovery"):
             self.discovery.shutdown()
         if self._queue_dialog is not None:
@@ -842,6 +858,8 @@ class MusicPanel(QWidget):
 
     def _focus_search(self):
         """Ctrl+F / Ctrl+K：聚焦当前 tab 的搜索框并全选。"""
+        if self.tabs.currentIndex() == 4:
+            self.tabs.setCurrentIndex(1)
         box = self.edit_local if self.tabs.currentIndex() == 0 else self.edit_kw
         box.setFocus()
         box.selectAll()
@@ -1369,6 +1387,9 @@ class MusicPanel(QWidget):
                 self.cb_source.blockSignals(False)
             if include_discovery and hasattr(self, "discovery"):
                 self.discovery.refresh_sources()
+                self.popular_songs.cache.clear()
+                if self.popular_songs.isVisible():
+                    self.popular_songs.load(force=True)
         except Exception as e:
             print(f"[MusicPanel] 刷新音源列表失败: {e}")
 
@@ -1606,8 +1627,21 @@ class MusicPanel(QWidget):
             self._refresh_history()
         elif index == 3:
             self._refresh_playlists()
-        elif index == 4:
+        elif index == 4 and self.rank_mode.isChecked():
             self._load_top_lists()
+
+    def _rank_mode_changed(self, by_source):
+        self.rank_pages.setCurrentIndex(int(by_source))
+        self.rank_mode.setText("返回多榜热门" if by_source else "按来源查看")
+        if by_source:
+            self._load_top_lists()
+
+    def _play_popular_song(self, tracks, index):
+        if self._music is not None:
+            self._play_async(self._music.play_online_list, tracks, index,
+                             title=tracks[index].title, resolving=True,
+                             fail_msg="该曲目无法播放，可选择其他版本",
+                             status_label=self.popular_songs.play_status)
 
     def _show_discovered_tracks(self, tracks, title):
         self._results_requested = True

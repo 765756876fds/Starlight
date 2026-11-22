@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, Q
 
 from ...core.notifications import notify
 from ...core.path_resolve import USER_DATA_DIR
-from ...movie.discovery import MovieDiscovery, PLATFORMS, CATEGORIES, official_url
+from ...movie.discovery import MovieDiscovery, PLATFORMS, CATEGORIES, browse_works, official_url
 from ...movie.library import MovieLibrary
 from ..settings_store import load_ui_prefs, save_ui_prefs
 from .latest_task import LatestTask
@@ -28,9 +28,7 @@ def film_card(row):
     if progress:
         minutes, seconds = divmod(int(progress), 60)
         subtitle = f"续播 {minutes}:{seconds:02d}"
-    caption = " / ".join(str(s.get("platform_name") or "观看记录")
-        + (" " + str(s["board"]) if s.get("board") else "")
-        + (f" #{s['rank']}" if type(s.get("rank")) is int else "") for s in sources)
+    caption = " · ".join(str(tag) for tag in (row.get("genres") or [])[:3] if tag)
     if type(row.get("score")) in (int, float) and row.get("score_source"):
         subtitle = " · ".join(v for v in (subtitle, f"{row['score_source']} {row['score']:g}分") if v)
     if row.get("recommendation_reason"):
@@ -107,7 +105,8 @@ class MovieHome(QWidget):
         home_layout.setContentsMargins(8, 4, 8, 12)
         home_layout.setSpacing(18)
         intro = QHBoxLayout()
-        intro.addWidget(label("本地与热榜，一眼找到想看的", True), 1)
+        self.preview_stamp = label("正在读取近期热门作品…", True)
+        intro.addWidget(self.preview_stamp, 1)
         refresh = QPushButton("刷新首页")
         refresh.clicked.connect(lambda: self.refresh_boards(force=True))
         intro.addWidget(refresh)
@@ -124,26 +123,21 @@ class MovieHome(QWidget):
         recommendation_head.addWidget(self.recommend_button)
         recommendation_head.addWidget(self.continue_show_button)
         recommendation_head.addStretch()
-        home_layout.addLayout(recommendation_head)
         self.recommendation_section = ContentSection("猜你喜欢", self, portrait=True, action="换一批")
         self.recommendation_section.all_button.clicked.connect(self.request_recommendations)
         self.recommendation_section.cards.itemClicked.connect(self._select_work)
         self.recommendation_section.cards.itemDoubleClicked.connect(self._activate_recommendation)
         self.recommendation_section.set_rows([], film_card, "点击为我推荐：参考实际观看偏好和可用热榜，不会自动播放。")
-        home_layout.addWidget(self.recommendation_section)
         self.continue_section = ContentSection("继续观看", self, portrait=True)
         self.continue_section.all_button.clicked.connect(lambda: self.show_category("continue"))
         self.continue_list = self.continue_section.cards
         self.continue_list.itemDoubleClicked.connect(self._activate_continue)
         self.continue_hint = self.continue_section.hint
-        home_layout.addWidget(self.continue_section)
         self.recent_section = ContentSection("最近添加", self, portrait=True)
         self.recent_section.all_button.clicked.connect(lambda: self.show_category("recent"))
         self.local_list = self.recent_section.cards
         self.local_list.itemDoubleClicked.connect(lambda item: self.play_local.emit(item.data(Qt.UserRole)))
-        home_layout.addWidget(self.recent_section)
         self.board_status = label("正在读取公开榜单预览，本地影片不受影响…", True)
-        home_layout.addWidget(self.board_status)
         self.sections = {}
         for kind in KINDS:
             section = ContentSection("热门" + CATEGORIES[kind], self, portrait=True)
@@ -154,6 +148,12 @@ class MovieHome(QWidget):
             section.set_rows([], film_card, "正在读取预览…")
             self.sections[kind] = section
             home_layout.addWidget(section)
+            if kind == "tv":
+                home_layout.addWidget(self.continue_section)
+        home_layout.addLayout(recommendation_head)
+        home_layout.addWidget(self.recommendation_section)
+        home_layout.addWidget(self.recent_section)
+        home_layout.addWidget(self.board_status)
         local_head = QHBoxLayout()
         local_head.addWidget(label("我的本地电影库"), 1)
         self.add_button = QPushButton("添加影片文件夹")
@@ -189,6 +189,10 @@ class MovieHome(QWidget):
         self.order = QComboBox()
         self.order.addItems(["榜单顺序", "名称", "年份"])
         filters.addWidget(self.local_search, 1)
+        self.filter_button = QPushButton("来源筛选")
+        self.filter_button.setCheckable(True)
+        self.filter_button.toggled.connect(self._toggle_sources)
+        filters.addWidget(self.filter_button)
         filters.addWidget(self.source_filter)
         filters.addWidget(self.order)
         category_layout.addLayout(filters)
@@ -261,13 +265,16 @@ class MovieHome(QWidget):
                 self.refresh_boards()
             return
         self.pages.setCurrentWidget(self.category_page)
+        self.filter_button.setVisible(kind in KINDS)
+        self.filter_button.setChecked(False)
+        self.source_filter.setVisible(kind not in KINDS)
         self.category_title.setText({"local": "我的本地电影库", "recent": "最近添加", "continue": "继续观看"}.get(kind, CATEGORIES.get(kind)))
         self.local_search.blockSignals(True)
         self.local_search.clear()
         self.local_search.blockSignals(False)
         self.order.blockSignals(True)
         self.order.setCurrentIndex(0)
-        self.order.setItemText(0, "最近添加" if kind in ("local", "recent") else "最近观看" if kind == "continue" else "榜单顺序")
+        self.order.setItemText(0, "最近添加" if kind in ("local", "recent") else "最近观看" if kind == "continue" else "综合浏览")
         self.order.blockSignals(False)
         self.boards.clear()
         self._category_rows = []
@@ -470,6 +477,7 @@ class MovieHome(QWidget):
             hint = "榜单暂不可用，请刷新重试或在平台官网查看；本地影片不受影响。"
             (self.board_status if kind == "all" else self.category_status).setText(hint)
             if kind == "all":
+                self.preview_stamp.setText(hint)
                 for section in self.sections.values():
                     section.set_rows([], film_card, hint)
             else:
@@ -479,6 +487,12 @@ class MovieHome(QWidget):
             return
         status, failed = self._status(result)
         if kind == "all":
+            stamps = [s["at"] for s in result.get("states", []) if s.get("at")]
+            brief = "更新于 " + datetime.fromtimestamp(min(stamps)).strftime("%m-%d %H:%M") if stamps else ""
+            if failed:
+                brief += " · 含过期缓存" if any(s["state"] == "stale" for s in failed) else " · 部分榜单未能更新"
+            self.preview_stamp.setText(brief.strip(" ·"))
+            self.preview_stamp.setToolTip(status)
             self._boards_loaded = True
             self._preview_result = result
             links = "、".join(p.name for p in result.get("official_only", [p for p in PLATFORMS if not p.automatic]))
@@ -492,7 +506,9 @@ class MovieHome(QWidget):
                 for source in row.get("sources", []):
                     sources[source["platform"]] = source["platform_name"]
             self._set_filters([("全部榜单来源", "*"), *[(name, key) for key, name in sources.items()]])
-            self.category_status.setText(status + "。榜单信息不代表可直接播放。")
+            self.category_status.setToolTip(status)
+            brief = status if failed else f"{len(self._category_rows)} 部 · 综合浏览"
+            self.category_status.setText(brief + "。榜单信息不代表可直接播放。")
             self._render_category()
         found = bool(result.get("works"))
         title = ("影视榜单部分可用" if found else "影视榜单未完成") if failed else (
@@ -509,6 +525,11 @@ class MovieHome(QWidget):
             empty = "此分类未能读取，点击查看全部后可刷新重试。" if failure else "这个分类暂无榜单内容。" if states else "当前已接入来源未提供此类榜单，可在平台官网查看。"
             section.set_rows(rows, film_card, empty)
 
+    def _toggle_sources(self, expanded):
+        self.source_filter.setVisible(expanded)
+        if not expanded:
+            self.source_filter.setCurrentIndex(0)
+
     def _render_category(self, *_):
         self._selected_work = None
         self.detail.hide()
@@ -518,8 +539,8 @@ class MovieHome(QWidget):
         if self._view in ("local", "recent", "continue"):
             if chosen in ("available", "offline"):
                 rows = [r for r in rows if bool(r.get("available", True)) == (chosen == "available")]
-        elif chosen and chosen != "*":
-            rows = [r for r in rows if any(s["platform"] == chosen for s in r.get("sources", []))]
+        else:
+            rows = browse_works(rows, None if chosen in (None, "*") else chosen)
         if self.order.currentIndex() == 1:
             rows = sorted(rows, key=lambda r: str(r.get("title", "")).casefold())
         elif self.order.currentIndex() == 2:
@@ -543,7 +564,8 @@ class MovieHome(QWidget):
             + (" " + str(s["board"]) if s.get("board") else "")
             + (f"：第 {s['rank']} 名" if type(s.get("rank")) is int else "") for s in row.get("sources", []))
         updates = list(dict.fromkeys(s["source_updated"] for s in row.get("sources", []) if s.get("source_updated")))
-        self.work_detail.setText(" · ".join(v for v in (data["title"], data["subtitle"], ranks) if v)
+        self.work_detail.setText(" · ".join(v for v in (data["title"], data["subtitle"]) if v)
+                                + ("\n榜单出处：" + ranks if ranks else "")
                                 + ("\n" + "；".join(updates) if updates else "")
                                 + ("\n榜单仅供发现内容，官方页面可能需要会员或地区权限。" if ranks else ""))
         self.watch_button.setVisible(any(official_url(s.get("url"), s.get("platform")) for s in row.get("sources", [])))

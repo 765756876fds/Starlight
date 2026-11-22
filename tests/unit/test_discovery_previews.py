@@ -35,6 +35,20 @@ def test_invalid_preview_limits_are_rejected(tmp_path, limit):
         MovieDiscovery(tmp_path / "cache.json", []).read(limit=limit)
 
 
+def test_combined_view_alternates_boards_and_keeps_each_original_rank():
+    from app.movie.discovery import browse_works
+    def work(title, *ranks):
+        return dict(title=title, kind="movie", sources=[dict(platform=src, rank=n) for src, n in ranks])
+
+    shared = work("两榜同一作品", ("A", 11), ("B", 1))
+    first = work("同名", ("A", 10))
+    other = work("同名", ("B", 2))
+    rows = [shared, first, other]
+    assert browse_works(rows) == [first, shared, other]
+    assert browse_works(rows, "B") == [shared, other]
+    assert shared["sources"][0]["rank"] == 11
+
+
 def test_variety_same_season_can_merge_but_other_and_unknown_seasons_cannot():
     base = dict(title="节目", kind="variety", year=2024, region="中国", season=1,
                 platform="bilibili", platform_name="B站", rank=1)

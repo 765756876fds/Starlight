@@ -299,13 +299,13 @@ class JSMusicSource(MusicSource):
 
     # ---------- 榜单（插件自报能力，bridge 层 getTopLists/getTopListDetail）----------
 
-    def get_top_lists(self) -> dict:
+    def get_top_lists(self, source=None) -> dict:
         """拉全部插件的榜单分组（插件自报：无 getTopLists 的插件自动跳过）。
 
         返回 {插件名: [分组]}，分组 = {title, lists: [{id, title, cover_img}]}。
         一个插件可能贡献多个分组（如酷我官方/华语/欧美），UI 展平展示。
         """
-        result = self._call("getTopLists", {}, timeout=20.0)
+        result = self._call("getTopLists", {"source": source} if source else {}, timeout=20.0)
         from ..models import CatalogResults
         if result is None:
             raise SourceSearchError("unknown")
@@ -322,7 +322,7 @@ class JSMusicSource(MusicSource):
         return out
 
     def get_top_list_detail(self, source: str, list_id: str,
-                            page: int = 1) -> dict | None:
+                            page: int = 1, *, limit=None) -> dict | None:
         """单榜单歌曲：bridge 返回与搜索同构的 tracks → 复用 _parse_tracks。
 
         返回 {is_end: bool, tracks: [OnlineTrack]}；无榜单能力/失败 → None。
@@ -333,6 +333,7 @@ class JSMusicSource(MusicSource):
             "source": source,
             "list_id": str(list_id),
             "page": int(page),
+            **({"limit": limit} if limit is not None else {}),
         }, timeout=20.0)
         if not result:
             return None

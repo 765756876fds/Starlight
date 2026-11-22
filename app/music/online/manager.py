@@ -254,7 +254,7 @@ class OnlineSourceManager:
                 continue  # 单源失败继续下一个
         return None
 
-    def get_top_lists(self) -> dict[str, list]:
+    def get_top_lists(self, source=None) -> dict[str, list]:
         """聚合各源榜单分组（源自报能力，无该方法/失败自动跳过）。
 
         返回 {源名或插件名: [分组]}——js_bridge 内部按插件名分组返回；
@@ -265,11 +265,13 @@ class OnlineSourceManager:
         with self._life_lock:
             sources = list(self._sources.items())
         for name, src in sources:
+            if source and name not in (source, "js_bridge"):
+                continue
             fn = getattr(src, "get_top_lists", None)
             if not callable(fn):
                 continue
             try:
-                r = fn()
+                r = fn(source=source) if source and name == "js_bridge" else fn()
                 if r:
                     out.update(r)
                 out.errors.update(getattr(r, "errors", {}))
@@ -279,17 +281,24 @@ class OnlineSourceManager:
         return out
 
     def get_top_list_detail(self, source: str, list_id: str,
-                            page: int = 1) -> dict | None:
+                            page: int = 1, *, limit=None) -> dict | None:
         """单榜单详情：路由到实现 get_top_list_detail 的源（js_bridge 按插件名）。
 
         返回 {is_end: bool, tracks: [OnlineTrack]}；无能力/失败 → None。
         """
-        for name, src in self._sources.items():
+        with self._life_lock:
+            sources = list(self._sources.items())
+        for name, src in sources:
+            if limit is not None and name not in (source, "js_bridge"):
+                continue
             fn = getattr(src, "get_top_list_detail", None)
             if not callable(fn):
                 continue
             try:
-                r = fn(source, list_id, page)
+                if limit is not None and name == "js_bridge":
+                    r = fn(source, list_id, page, limit=limit)
+                else:
+                    r = fn(source, list_id, page)
                 if r is not None:
                     return r
             except Exception as e:

@@ -73,7 +73,7 @@ class MusicDiscovery(QWidget):
         nav.setSpacing(6)
         self.navigation = QButtonGroup(self)
         self.nav_buttons = {}
-        for key, title in (("home", "推荐"), ("ranks", "排行榜"), ("sheets", "歌单"),
+        for key, title in (("home", "推荐"), ("ranks", "按来源看榜"), ("sheets", "歌单"),
                            ("new", "新歌"), ("artists", "歌手 / 专辑"), ("history", "最近播放")):
             button = QPushButton(title)
             button.setCheckable(True)

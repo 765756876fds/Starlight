@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import json
 import logging
+from itertools import zip_longest
 from pathlib import Path
 import threading
 import time
@@ -96,6 +97,28 @@ def merge_works(records):
         if identity is not None:
             identities[identity] = row
     return out
+
+
+def browse_works(works, platform=None):
+    """Take turns between original boards without comparing heat and search ranks."""
+    boards = {}
+    for index, work in enumerate(works):
+        for source in work.get("sources") or [{}]:
+            name = source.get("platform") or ""
+            if platform is not None and name != platform:
+                continue
+            board = (work.get("kind") or "", name, source.get("board") or "")
+            rank = source.get("rank")
+            boards.setdefault(board, []).append((rank if type(rank) is int else float("inf"), index))
+
+    ordered = {}
+    columns = [sorted(boards[key]) for key in sorted(boards)]
+    for positions in zip_longest(*columns):
+        for position in positions:
+            if position is not None:
+                index = position[1]
+                ordered.setdefault(index, works[index])
+    return list(ordered.values())
 
 
 class BilibiliRank:
@@ -250,7 +273,7 @@ class MovieDiscovery:
             # response, but hand only a small per-category preview to the UI.
             counts = {}
             preview = []
-            for row in works:
+            for row in browse_works(works):
                 kind = row.get("kind")
                 if counts.get(kind, 0) < limit:
                     preview.append(row)

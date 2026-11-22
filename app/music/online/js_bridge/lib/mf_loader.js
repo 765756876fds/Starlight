@@ -236,7 +236,7 @@ async function callGetTopLists(plugin) {
 
 // 榜单详情：MusicFree 标准 getTopListDetail(top, page) → {musicList, isEnd}。
 // musicItem 与搜索条目同构 → 复用 callSearch 的规范化形状，Python 侧直接 _parse_tracks。
-async function callGetTopListDetail(plugin, topListItem, page) {
+async function callGetTopListDetail(plugin, topListItem, page, limit) {
   if (typeof plugin.getTopListDetail !== 'function') throw new Error('Chart details unavailable');
   const top = topListItem || { id: '' };
   const result = await plugin.getTopListDetail(top, page || 1);
@@ -244,7 +244,8 @@ async function callGetTopListDetail(plugin, topListItem, page) {
   if (!Array.isArray(items)) throw new Error('Invalid chart tracks response');
   return {
     is_end: !!(result && result.isEnd),
-    tracks: items.map((item) => normalizeMusicItem(plugin.name, item)),
+    tracks: (Number.isSafeInteger(limit) && limit > 0 ? items.slice(0, limit) : items)
+      .map((item) => normalizeMusicItem(plugin.name, item)),
   };
 }
 

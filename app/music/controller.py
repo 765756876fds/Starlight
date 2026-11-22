@@ -2175,21 +2175,23 @@ class MusicController:
             raise SourceSearchError("unavailable")
         return self.online_manager.browse(source, operation, **params)
 
-    def get_top_lists(self) -> dict:
+    def get_top_lists(self, source=None) -> dict:
         """各源榜单分组（源自报能力）：{源或插件名: [分组]}。失败 → {} 不抛。"""
         if self.online_manager is None:
             return {}
         try:
-            return self.online_manager.get_top_lists()
+            return self.online_manager.get_top_lists(source) if source else self.online_manager.get_top_lists()
         except Exception as e:
             logger.info(f"[Music] get_top_lists fail: {e}")
             return {}
 
-    def get_top_list_detail(self, source: str, list_id: str, page: int = 1):
+    def get_top_list_detail(self, source: str, list_id: str, page: int = 1, *, limit=None):
         """单榜单详情：{is_end, tracks: [OnlineTrack]}。失败 → None。"""
         if self.online_manager is None:
             return None
         try:
+            if limit is not None:
+                return self.online_manager.get_top_list_detail(source, list_id, page, limit=limit)
             return self.online_manager.get_top_list_detail(source, list_id, page)
         except Exception as e:
             logger.info(f"[Music] get_top_list_detail fail: {e}")

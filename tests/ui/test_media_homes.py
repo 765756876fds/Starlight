@@ -150,7 +150,11 @@ def test_platform_filter_and_official_entry_cannot_relabel_another_platforms_ran
     monkeypatch.setattr("app.ui.widgets.movie_home.QDesktopServices.openUrl", open_url)
     w.open_official("youku")
     assert open_url.call_args.args[0].host() == "www.youku.com"
-    assert w.boards.item(0).data(DISPLAY_ROLE)["caption"] == "B站 #1 / 爱奇艺 #5"
+    assert w.boards.item(0).data(DISPLAY_ROLE)["caption"] == ""
+    assert w.source_filter.isHidden()
+    QTest.mouseClick(w.filter_button, Qt.LeftButton)
+    assert w.source_filter.isVisible()
+    assert w.boards.item(0).data(Qt.UserRole)["sources"] == row["sources"]
 
 
 def test_empty_local_library_has_no_blank_preview_rail_and_no_online_dependency(movie):
