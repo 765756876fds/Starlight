@@ -15,6 +15,7 @@ GROUPS = {
     "theme": "tests/ui/test_theme_switching.py",
     "notifications": "tests/ui/test_notification_center.py",
     "movie-cards": "tests/ui/test_movie_card_interactions.py",
+    "movie-startup": "tests/ui/test_movie_async_start.py",
     "queue": "tests/ui/test_music_queue_view.py",
     "movie-search-coverage": "tests/ui/test_movie_search_coverage.py",
     "movie-poster-backlog": "tests/ui/test_movie_poster_backlog.py",
