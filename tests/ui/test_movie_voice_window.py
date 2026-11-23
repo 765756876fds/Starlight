@@ -24,7 +24,7 @@ def wait_for(predicate):
 
 
 @pytest.fixture
-def scene(tmp_path, monkeypatch):
+def scene(tmp_path, monkeypatch, request):
     app = QApplication.instance() or QApplication([])
     from app.ui.theme.manager import get_theme_manager
     from app.ui.widgets import movie_home
@@ -42,6 +42,7 @@ def scene(tmp_path, monkeypatch):
 
     mpv.start.side_effect = start
     mpv.loadfile.return_value = {"error": "success"}
+    mpv.set_property.return_value = {"error": "success"}
     mpv.stop.return_value = True
     mpv.get_property.side_effect = lambda key, *a, **k: {
         "time-pos": 0.0, "duration": 120.0, "pause": False,
@@ -56,28 +57,33 @@ def scene(tmp_path, monkeypatch):
                         lambda *a: QSettings(str(tmp_path / "video.ini"), QSettings.IniFormat))
     monkeypatch.setattr(VideoPlayerWindow, "_apply_mpv_mouse_passthrough", lambda _: None)
     monkeypatch.setattr(VideoPlayerWindow, "raise_topmost", lambda _: None)
+    mode = getattr(request, "param", None)
+    if mode in ("native_embed", "native_external"):
+        monkeypatch.setattr(MovieController, "native_film_state", lambda _: True)
     controller = MovieController(source_url="https://source.example.invalid/api", config={
-        "app.data_dir": str(tmp_path), "movie.embed": True,
+        "app.data_dir": str(tmp_path), "movie.embed": mode != "native_external",
     })
     item = {"vod_name": "测试电影", "first_url": "https://media.example.invalid/film.m3u8"}
     monkeypatch.setattr(controller, "search", Mock(return_value=[item]))
     panel = MoviePanel(movie=controller)
     panel._timer.stop()
     window = panel._video_win
-    window._timer.stop()
     calls = []
-    original = window.show_for_playback
+    if window is not None:
+        window._timer.stop()
+        original = window.show_for_playback
 
-    def show():
-        calls.append(QThread.currentThread())
-        original()
+        def show():
+            calls.append(QThread.currentThread())
+            original()
 
-    monkeypatch.setattr(window, "show_for_playback", show)
+        monkeypatch.setattr(window, "show_for_playback", show)
     state = SimpleNamespace(app=app, bus=bus, controller=controller, panel=panel,
                             window=window, mpv=mpv, item=item, shows=calls)
     yield state
     panel._on_app_quit()
-    window.close()
+    if window is not None:
+        window.close()
     panel.close()
 
 

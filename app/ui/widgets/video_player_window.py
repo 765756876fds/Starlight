@@ -564,6 +564,8 @@ class VideoPlayerWindow(QWidget):
 
     # 停播信号（close / 播完 / mpv 异常自愈失败时发，面板清 embed 状态）
     stopped = Signal()
+    episode_requested = Signal(object, int)
+    stop_requested = Signal()
     playback_status = Signal(object, str, str)
     _subtitle_finished = Signal(int, object)
 
@@ -582,6 +584,8 @@ class VideoPlayerWindow(QWidget):
             self.resize(960, 540)
         self._fullscreen = False
         self._playing = False
+        self.managed_playback = False
+        self._preparing_playback = False
         self._title_base = title
         self._current_item = None        # S4：当前播放 item（切集复用）
         self._current_index = 0          # S6：当前集索引（下一集定位）
@@ -666,12 +670,34 @@ class VideoPlayerWindow(QWidget):
         if isinstance(blocked, str) and blocked:
             self._show_recover_label(blocked)
             return False
+        self.prepare_playback()
+        ok = self._movie.play(item, index=index)
+        self.finish_playback(item, index, ok)
+        return ok
+
+    def prepare_playback(self):
         self.switch_trial.reset()
         self._load_generation = None  # Even an unconfirmed new attempt invalidates old feedback.
         self._load_notice_sent = True
         self._invalidate_subtitle_menu()
         self._movie.set_embed_wid(self.container.native_id())
-        ok = self._movie.play(item, index=index)
+        if self.managed_playback:
+            self._preparing_playback = True
+            self._timer.stop()
+            self._native_poll.invalidate()
+            self.overlay.hide()
+            self._show_recover_label("正在加载…")
+
+    def cancel_prepared_playback(self):
+        self._preparing_playback = False
+        self._hide_recover_label()
+        if self._playing:
+            self._timer.start()
+        else:
+            self.hide()
+
+    def finish_playback(self, item, index, ok):
+        self._preparing_playback = False
         if ok:
             self.quality_notice.reset()
             if "_resume_guard" in item:
@@ -699,6 +725,8 @@ class VideoPlayerWindow(QWidget):
             self.overlay.set_play_icon(False)   # S6：新片播放态（图标同步）
             self._apply_mpv_mouse_passthrough()   # S3：mpv 子窗口鼠标穿透（幂等）
             self._show_overlay()          # S3：浮现 + 启动 3s 隐藏计时
+            if self.managed_playback:
+                self._timer.setInterval(150)
             self._timer.start()
             self._position_overlay()
         else:
@@ -706,7 +734,8 @@ class VideoPlayerWindow(QWidget):
             message = read() if callable(read) else None
             if isinstance(message, str) and message:
                 self._show_recover_label(message)
-        return ok
+            if self.managed_playback and self._playing:
+                self._timer.start()
 
     def _load_status(self, state, message):
         generation = getattr(self, "_load_generation", None)
@@ -755,7 +784,7 @@ class VideoPlayerWindow(QWidget):
             return
         if self._current_index + 1 >= self.sidebar.episode_count():
             return
-        self.play(self._current_item, index=self._current_index + 1)
+        self.switch_episode(self._current_index + 1)
 
     def request_subtitle(self):
         """IPC 查询放在后台；菜单和反馈只在 GUI 线程创建/更新。"""
@@ -1036,7 +1065,7 @@ class VideoPlayerWindow(QWidget):
             self._close_after_poll = False
             self.close()
             return
-        if error or not update or self.switch_trial.busy:
+        if error or not update or self.switch_trial.busy or self._preparing_playback:
             return
         movie = self._movie
         if update["generation"] != movie._playback_gen or update["item"] is not movie.current_item():
@@ -1095,10 +1124,12 @@ class VideoPlayerWindow(QWidget):
         if phase == "loading":
             if not self._load_notice_sent and time.monotonic()-self._load_started_at >= 15:
                 self._load_notice_sent = True
+                self._timer.setInterval(500)
                 self._load_status("PENDING", "播放器仍在加载，尚未确认起播。")
             return
         if self._switching:
             self._switching = False
+            self._timer.setInterval(500)
             self._load_status("PROGRESS", "已确认播放。")
         pos, dur = sample.get("time-pos"), sample.get("duration")
         if pos is not None and dur is not None:
@@ -1209,9 +1240,11 @@ class VideoPlayerWindow(QWidget):
         """停播（播完/停止/异常）：停轮询 + 隐藏 overlay/侧栏 + 通知面板。"""
         self._invalidate_subtitle_menu()
         self._playing = False
+        self._preparing_playback = False
         self.switch_trial.reset()
         self.quality_notice.reset()
         self._timer.stop()
+        self._timer.setInterval(500)
         if self._native_poll is not None:
             self._native_poll.invalidate()
         self._hide_timer.stop()
@@ -1232,9 +1265,10 @@ class VideoPlayerWindow(QWidget):
 
     def _show_overlay(self):
         """鼠标活动 → 浮现控制条 + 重置隐藏定时器；指针恢复（全屏/窗口模式统一）。"""
-        self.overlay.show()
-        self.unsetCursor()
-        self._hide_timer.start(_OVERLAY_HIDE_DELAY_MS)
+        if not self._preparing_playback:
+            self.overlay.show()
+            self.unsetCursor()
+            self._hide_timer.start(_OVERLAY_HIDE_DELAY_MS)
 
     def notify_mouse_activity(self):
         """公开接口：鼠标活动（画面区容器/窗口/overlay）→ 浮现 + 重置 3s 隐藏计时。
@@ -1263,7 +1297,10 @@ class VideoPlayerWindow(QWidget):
         """点集数 → 复用 play 链切集（穿透/overlay/title/高亮全走 play）。"""
         if self._current_item is None:
             return
-        self.play(self._current_item, index=index)
+        if self.managed_playback:
+            self.episode_requested.emit(self._current_item, index)
+        else:
+            self.play(self._current_item, index=index)
 
     def _show_sidebar(self):
         """右缘鼠标 → 侧栏滑出 + 重置 3s 隐藏计时。"""
@@ -1348,7 +1385,9 @@ class VideoPlayerWindow(QWidget):
     # ---- 窗口事件：关窗=停播（隐藏保留 winId）/ Esc ----
 
     def closeEvent(self, event):
-        if self._native_poll is not None and self._native_poll._running:
+        if self.managed_playback:
+            self.stop_requested.emit()
+        if not self.managed_playback and self._native_poll is not None and self._native_poll._running:
             # Finish the owned poll before stop tries to acquire its media lock.
             self._close_after_poll = True
             self.hide()
@@ -1366,7 +1405,7 @@ class VideoPlayerWindow(QWidget):
         except Exception:
             pass
         try:
-            if self._playing or self._movie.is_playing():
+            if not self.managed_playback and (self._playing or self._movie.is_playing()):
                 self._movie.stop()
         except Exception:
             pass
@@ -1387,6 +1426,9 @@ class VideoPlayerWindow(QWidget):
             else:
                 self.close()
             event.accept()
+            return
+        if self._preparing_playback:
+            event.ignore()
             return
         # S5：--wid 嵌入后键盘焦点在 Qt 播放窗口（mpv 子窗口收不到键盘——
         # mpv 官方承认的结构性缺陷）→ Qt 侧捕获快捷键 → 转发 mpv 命令。

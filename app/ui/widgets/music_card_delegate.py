@@ -18,7 +18,7 @@ import time
 from collections import OrderedDict, deque
 
 from PySide6.QtCore import (
-    QObject,
+    QObject, QEvent, QPersistentModelIndex, QRect,
     QCoreApplication,
     QPointF,
     QPropertyAnimation,
@@ -44,7 +44,7 @@ from PySide6.QtGui import (
     QPolygonF,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
-from PySide6.QtWidgets import QAbstractItemView, QStyle, QStyledItemDelegate
+from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyleOptionViewItem, QStyledItemDelegate
 
 from ..theme import motion
 from ..theme.tokens import Tokens
@@ -62,6 +62,7 @@ except Exception:  # pragma: no cover
 
 
 class MusicCardRoles:
+    DownloadRole = Qt.UserRole + 41
     StatusRole = Qt.UserRole + 40   # str：状态徽标（下载中 xx%），None=无
 
 
@@ -584,6 +585,66 @@ class MusicCardDelegate(QStyledItemDelegate):
         painter.drawRoundedRect(badge, 6, 6)
         painter.setPen(QColor("#ffffff"))
         painter.drawText(badge, Qt.AlignCenter, text)
+
+
+class DownloadCardDelegate(MusicCardDelegate):
+    """Search-only action, using the same item in grid and list mode."""
+
+    download_requested = Signal(int)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._pressed_action = QPersistentModelIndex()
+
+    def sizeHint(self, option, index):
+        if self.parent().viewMode() == QListView.ViewMode.IconMode:
+            return super().sizeHint(option, index)
+        size = QStyledItemDelegate.sizeHint(self, option, index)
+        size.setHeight(max(38, size.height()))
+        return size
+
+    def action_rect(self, rect):
+        return QRect(rect.right() - 55, rect.top() + 5, 50, 28)
+
+    def paint(self, painter, option, index):
+        grid = self.parent().viewMode() == QListView.ViewMode.IconMode
+        actionable = index.data(MusicCardRoles.DownloadRole)
+        if grid:
+            super().paint(painter, option, index)
+        else:
+            list_option = QStyleOptionViewItem(option)
+            if actionable:
+                list_option.rect.adjust(0, 0, -60, 0)
+            QStyledItemDelegate.paint(self, painter, list_option, index)
+        if not actionable:
+            return
+        rect = self.action_rect(option.rect)
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor(Tokens.BG_ELEVATED))
+        painter.setPen(QColor(Tokens.BORDER_LIGHT))
+        painter.drawRoundedRect(rect, Tokens.RADIUS_SMALL, Tokens.RADIUS_SMALL)
+        painter.setPen(QColor(Tokens.TEXT_PRIMARY))
+        painter.drawText(rect, Qt.AlignCenter, "下载")
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        kind = event.type()
+        if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick):
+            hit = (index.data(MusicCardRoles.DownloadRole) and event.button() == Qt.LeftButton
+                   and self.action_rect(option.rect).contains(event.position().toPoint()))
+            if kind == QEvent.MouseButtonPress:
+                self._pressed_action = QPersistentModelIndex(index) if hit else QPersistentModelIndex()
+                return bool(hit)
+            if kind == QEvent.MouseButtonDblClick and hit:
+                return True
+            if kind == QEvent.MouseButtonRelease:
+                pressed = self._pressed_action
+                self._pressed_action = QPersistentModelIndex()
+                if hit and pressed == index:
+                    self.download_requested.emit(index.row())
+                    return True
+        return super().editorEvent(event, model, option, index)
 
 
 def _split(rgb: str) -> list:

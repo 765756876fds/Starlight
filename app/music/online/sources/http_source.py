@@ -157,16 +157,17 @@ class HttpJsonSource(MusicSource):
         if err:
             # 源失败静默执行：错误仍分类记录到 manager._errors，但不再打印到控制台
             raise SourceError(err, self.name)
-        if data is None:
-            raise SourceError("structure", self.name)
-        # 注意不能用 or 链：空列表是合法"无结果"，会被 or 当成 falsy 吞掉
-        items = data.get("data")
-        if items is None:
-            items = data.get("result")
-        if items is None:
-            items = data.get("songs")
         if isinstance(data, list):
             items = data
+        elif isinstance(data, dict):
+            # 空列表是合法的无结果，不能回退到其他键。
+            items = data.get("data")
+            if items is None:
+                items = data.get("result")
+            if items is None:
+                items = data.get("songs")
+        else:
+            raise SourceError("structure", self.name)
         if not isinstance(items, list):
             raise SourceError("structure", self.name)
         out: list[OnlineTrack] = []
@@ -182,7 +183,9 @@ class HttpJsonSource(MusicSource):
         return out
 
     def get_play_url(self, track: OnlineTrack) -> str | None:
-        if not self._api_url:
+        # IDs belong to this API's catalog. A different source may have the
+        # same ID for another recording; use its own search result for fallback.
+        if not self._api_url or track.source_name != self.name:
             return None
         data, err = self._get_json(self._song_url_path, {"id": track.track_id})
         if err:
@@ -190,9 +193,12 @@ class HttpJsonSource(MusicSource):
             raise SourceError(err, self.name)
         if not isinstance(data, dict):
             raise SourceError("structure", self.name)
-        url = data.get("url") or (data.get("data") or {}).get("url")
-        if isinstance(data.get("data"), str):
-            url = data["data"]
+        nested = data.get("data")
+        url = data.get("url")
+        if isinstance(nested, str):
+            url = nested
+        elif not url and isinstance(nested, dict):
+            url = nested.get("url")
         if not isinstance(url, str) or not url:
             return None
         return url

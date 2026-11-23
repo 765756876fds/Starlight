@@ -55,6 +55,7 @@ from ..dialogs.movie_source_dialog import MovieSourceDialog
 from ..dialogs.parse_link_dialog import ParseLinkDialog
 from ..widgets.clickable_slider import ClickableSlider
 from ..widgets.glass_dialog import GlassDialog
+from ..widgets.media_controls import FilterRow, PLAY_LOADING, PLAY_RETRY, PLAY_STARTED, SEARCH_RETRY, SEARCHING
 from ..widgets.glass_msg import _GlassMsgBox, glass_info
 from ..widgets.movie_search_posters import SearchPosterLoader, poster_key
 from ...movie.cms_parser import normalise_playback
@@ -255,7 +256,8 @@ class _PosterWallDelegate(QStyledItemDelegate):
         rows = (
             (str(data.get("vod_name") or ""), Tokens.FONT_SIZE_BODY, True, Tokens.TEXT_PRIMARY),
             (str(data.get("vod_remarks") or ""), Tokens.FONT_SIZE_SUB, False, Tokens.TEXT_SECONDARY),
-            (_search_source_name(data), Tokens.FONT_SIZE_SUB, False, Tokens.TEXT_SECONDARY),
+            ("可选播放" if data.get("first_url") or data.get("play_url") else "仅作品信息",
+             Tokens.FONT_SIZE_SUB, False, Tokens.TEXT_SECONDARY),
         )
         year = str(data.get("vod_year") or "")
         for row, (label, size, bold, color) in enumerate(rows):
@@ -628,13 +630,17 @@ class MoviePanel(QWidget):
         self.btn_search = QPushButton("搜索")
         self.btn_search.setProperty("class", "primary")
         self.btn_clear = QPushButton("清空")
-        search_row.addWidget(self.edit_kw)
+        self.btn_clear.setParent(self)
+        self.btn_clear.hide()
+        search_row.addWidget(self.edit_kw, 1)
         search_row.addWidget(self.btn_search)
-        search_row.addWidget(self.btn_clear)
+        self.search_options = QPushButton()
+        self.search_options.setToolTip("按影片类型或标签筛选")
+        search_row.addWidget(self.search_options)
         self.btn_view = QPushButton("海报")
         self.btn_view.setCheckable(True)
         self.btn_view.setChecked(True)
-        self.btn_view.setToolTip("列表/海报 视图切换（默认海报墙，对齐爱奇艺/B站）")
+        self.btn_view.setToolTip("切换影片海报与列表")
         search_row.addWidget(self.btn_view)
         self.btn_rank = QPushButton("榜单")
         self.btn_rank.setToolTip("豆瓣榜单（热门/最新/高分…）——点条目按片名搜源内播放")
@@ -651,24 +657,33 @@ class MoviePanel(QWidget):
         self.btn_movie_history = QPushButton("播放历史")
         self.btn_movie_history.setToolTip("查看并重新播放最近观看的电影")
         search_row.addWidget(self.btn_movie_history)
-        self.btn_home = QPushButton("电影首页")
+        self.btn_home = QPushButton("返回发现")
         self._return_to_movie_browse = False
         self.btn_home.clicked.connect(self._show_movie_home)
         search_row.addWidget(self.btn_home)
         self.btn_more = QPushButton("更多")
         more_menu = QMenu(self.btn_more)
-        for title, button in (("更多片单", self.btn_rank), ("播放历史", self.btn_movie_history),
-                              ("管理资源站", self.btn_source), ("现有链接工具", self.btn_parse_link)):
-            more_menu.addAction(title).triggered.connect(button.click)
+        for title, button in (("播放历史", self.btn_movie_history), ("更多片单", self.btn_rank),
+                              ("清空搜索", self.btn_clear)):
+            more_menu.addAction(title, button.click)
             button.hide()
         more_menu.addSeparator()
-        self.quality_trial_action = more_menu.addAction("实验：缓冲提示（本次运行）")
+        advanced = more_menu.addMenu("高级")
+        self.source_summary = advanced.addAction("")
+        self.source_summary.setEnabled(False)
+        advanced.addSeparator()
+        advanced.addAction("管理片源", self.btn_source.click)
+        advanced.addAction("链接工具", self.btn_parse_link.click)
+        self.btn_source.hide()
+        self.btn_parse_link.hide()
+        advanced.addSeparator()
+        self.quality_trial_action = advanced.addAction("实验：缓冲提示（本次运行）")
         self.quality_trial_action.setCheckable(True)
         self.quality_trial_action.setEnabled(callable(quality_toggle))
         self.quality_trial_action.setToolTip(
             "默认关闭；观察网络电影缓冲，不自动切换片源或恢复跨源进度。")
         self.quality_trial_action.toggled.connect(self._toggle_quality_trial)
-        self.switch_trial_action = more_menu.addAction("实验：智能换源（本次运行）")
+        self.switch_trial_action = advanced.addAction("实验：智能换源（本次运行）")
         self.switch_trial_action.setCheckable(True)
         self.switch_trial_action.toggled.connect(self._toggle_switch_trial)
         self.btn_more.setMenu(more_menu)
@@ -678,21 +693,23 @@ class MoviePanel(QWidget):
         # 状态行：搜索状态 + 当前源
         status_row = QHBoxLayout()
         self.lbl_status = QLabel("")
+        self.lbl_status.setTextFormat(Qt.PlainText)
+        self.lbl_status.setWordWrap(True)
         self.lbl_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         self.lbl_source = QLabel("")
         self.lbl_source.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         status_row.addWidget(self.lbl_status, 1)
         self.btn_retry_startup = QPushButton("重试")
         self.btn_retry_startup.clicked.connect(lambda: self._retry_startup(False))
-        self.btn_alternate_startup = QPushButton("试用同片其他来源")
+        self.btn_alternate_startup = QPushButton("换一个版本")
         self.btn_alternate_startup.clicked.connect(lambda: self._retry_startup(True))
         self.btn_back_to_results = QPushButton("返回搜索结果")
         self.btn_back_to_results.clicked.connect(self._back_to_search_results)
         for button in (self.btn_retry_startup, self.btn_alternate_startup, self.btn_back_to_results):
             button.hide()
             status_row.addWidget(button)
+        self.lbl_source.hide()
         status_row.addWidget(self.lbl_source)
-        root.addLayout(status_row)
         self.combo_content_filter = QComboBox()
         self.combo_content_filter.addItems(["全部", "正片/剧集", "电影解说", "短剧", "未知"])
         self.combo_content_tag_filter = QComboBox()
@@ -710,8 +727,9 @@ class MoviePanel(QWidget):
         except Exception:
             self.combo_content_filter.currentTextChanged.connect(lambda _: self._apply_content_filter())
             self.combo_content_tag_filter.currentTextChanged.connect(lambda _: self._apply_content_filter())
-        status_row.addWidget(self.combo_content_filter)
-        status_row.addWidget(self.combo_content_tag_filter)
+        self.search_filters = FilterRow(self.search_options, self.combo_content_filter, self.combo_content_tag_filter)
+        root.addWidget(self.search_filters)
+        root.addLayout(status_row)
 
         # 结果区：列表/海报 双视图（QStackedWidget，默认海报墙）
         self.stack_results = QStackedWidget()
@@ -776,7 +794,13 @@ class MoviePanel(QWidget):
         # 当前播放
         self.lbl_now = QLabel("未播放")
         self.lbl_now.setAlignment(Qt.AlignCenter)
-        root.addWidget(self.lbl_now)
+        self.lbl_now.setTextFormat(Qt.PlainText)
+        self._now_readout = QWidget()
+        now_row = QHBoxLayout(self._now_readout)
+        now_row.setContentsMargins(0, 0, 0, 0)
+        now_row.addWidget(self.lbl_now, 1)
+        root.addWidget(self._now_readout)
+        self._now_readout.hide()
 
         # 进度条（外部进度条无实际用途——内嵌播放器自带进度，直接隐藏）
         self.slider_pos = ClickableSlider(Qt.Horizontal)
@@ -793,10 +817,8 @@ class MoviePanel(QWidget):
             pass
         self.lbl_res = QLabel("")
         self.lbl_res.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
-        time_row = QHBoxLayout()
-        time_row.addWidget(self.lbl_time, 1)
-        time_row.addWidget(self.lbl_res)
-        root.addLayout(time_row)
+        now_row.addWidget(self.lbl_time)
+        now_row.addWidget(self.lbl_res)
 
         # 播放控制
         row = QHBoxLayout()
@@ -888,10 +910,13 @@ class MoviePanel(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
-        self._native_poll = None
+        self._native_poll = self._native_start = None
+        self._native_cancel = None
         if getattr(self._movie, "native_film_state", lambda: False)() is True:
             self._native_poll = LatestTask(self)
             self._native_poll.completed.connect(self._apply_film_poll)
+            self._native_start = LatestTask(self)
+            self._native_start.completed.connect(self._apply_native_start)
         self._timer.start()
         # 海报磁盘缓存上限清理（启动时一次；超 500 张删最旧）
         self._cleanup_poster_cache()
@@ -902,6 +927,8 @@ class MoviePanel(QWidget):
         self._click_timer.setInterval(300)
         self._click_timer.timeout.connect(self._on_click_timeout)
         self._pending_click_item = None
+        self.stack_results.currentChanged.connect(self._sync_search_navigation)
+        self._sync_search_navigation()
 
         # 当前源显示（源管理变更后刷新）
         self._refresh_source_label()
@@ -961,6 +988,8 @@ class MoviePanel(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        if hasattr(self, "_click_timer"):
+            self._cancel_pending_detail()
         if hasattr(self, "_progressive_search"):
             self._freeze_progressive()
         service = getattr(getattr(self, "_movie", None), "recommendations", None)
@@ -982,6 +1011,10 @@ class MoviePanel(QWidget):
                 self._video_win = VideoPlayerWindow(self._movie)
                 self._video_win.setProperty("starlightMediaDomain", "movie")
                 self._video_win.stopped.connect(self._on_video_stopped)
+                if self._native_start is not None:
+                    self._video_win.managed_playback = True
+                    self._video_win.episode_requested.connect(self._play_item)
+                    self._video_win.stop_requested.connect(self._on_stop)
                 self._video_win.quality_notice.view_candidates_requested.connect(self._show_playback_candidates)
             status = getattr(self._video_win, "playback_status", None)
             if status is not None:
@@ -994,6 +1027,8 @@ class MoviePanel(QWidget):
 
     def _on_app_quit(self):
         self._clear_startup_choice()
+        if self._native_start is not None:
+            self._native_start.cancel()
         self._forget_playback_candidates()
         self._recommendation_closed = True
         self._poster_refill_timer.stop()
@@ -1035,6 +1070,7 @@ class MoviePanel(QWidget):
     # ---- 搜索 ----
 
     def _do_search(self):
+        self.btn_search.setText("搜索")
         service = getattr(self._movie, "recommendations", None)
         if service is not None:
             service.cancel()
@@ -1050,8 +1086,8 @@ class MoviePanel(QWidget):
         self._last_search_result = []
         self._begin_search_posters()
         self._return_to_movie_browse = False
-        self.btn_home.setText("电影首页")
-        self.lbl_status.setText("正在搜索；可继续输入新的片名…")
+        self.btn_home.setText("返回发现")
+        self.lbl_status.setText(SEARCHING)
         self.stack_results.setCurrentWidget(self.list_posters if self._poster_mode else self.list_results)
         self.list_results.clear()
         self.list_posters.clear()
@@ -1125,6 +1161,24 @@ class MoviePanel(QWidget):
         # this exact format. Mixed failures must remain failures, not empties.
         return isinstance(error, str) and bool(error) and all(part.endswith(": 无结果") for part in error.split("；"))
 
+    def _sync_search_navigation(self, *_):
+        current = self.stack_results.currentWidget()
+        results = current in (self.list_results, self.list_posters)
+        self.btn_home.setVisible(current is not self.movie_home)
+        self.btn_view.setVisible(results)
+        self.search_options.setVisible(results)
+        if not results:
+            self.search_options.setChecked(False)
+        self._cancel_pending_detail()
+
+    def _cancel_pending_detail(self):
+        self._click_timer.stop()
+        self._pending_click_item = None
+
+    def _set_now(self, text):
+        self.lbl_now.setText(text)
+        self._now_readout.setVisible(text not in ("未播放", "播放失败", "播放未确认"))
+
     def _show_movie_home(self):
         self._clear_startup_choice()
         self._forget_playback_candidates()
@@ -1139,7 +1193,7 @@ class MoviePanel(QWidget):
         else:
             self.lbl_status.setText("已返回刚才的浏览位置")
         self._return_to_movie_browse = False
-        self.btn_home.setText("电影首页")
+        self.btn_home.setText("返回发现")
 
     def _play_library_entry(self, entry):
         path = str(entry.get("path") or "")
@@ -1188,17 +1242,12 @@ class MoviePanel(QWidget):
         if n == 0:
             err = getattr(self._movie, "last_search_error", "") or ""
             self.lbl_status.setText("当前筛选下没有匹配影片，请选择“全部”或调整筛选。" if result else
-                                    "搜索未完成，请更换片源后重试。" if err and not self._sources_had_no_matches(err) else
-                                    "没有找到匹配影片，请换个片名或切换片源后重试。")
+                                    SEARCH_RETRY if err and not self._sources_had_no_matches(err) else
+                                    "没有找到匹配影片，试试其他片名。")
         elif not any(it.get("first_url") or it.get("play_url") for it in self._filtered_content_results(result)):
-            self.lbl_status.setText(f"找到 {n} 条影片信息，但片源没有提供播放地址，请更换片源后重试。")
+            self.lbl_status.setText(f"找到 {n} 条作品信息，暂时没有可用片源。")
         else:
-            src = getattr(self._movie, "last_search_source", None)
-            active = self._current_source_name()
-            if src and src != active:
-                self.lbl_status.setText(f"已从 {src} 找到 {n} 部")
-            else:
-                self.lbl_status.setText(f"找到 {n} 部")
+            self.lbl_status.setText(f"已找到 {n} 部")
 
     def _category_of(self, it):
         info = it.get("content_classification")
@@ -1229,14 +1278,14 @@ class MoviePanel(QWidget):
                 if title_key(it.get("vod_name", "")) == title_key(selected["title"]) and same_year:
                     it = dict(it, _starlight_work=selected)
             name = it.get("vod_name", "") or ""
-            remarks = it.get("vod_remarks", "") or ""
-            # 列表视图
-            label = f"{name}  [{remarks}]" if remarks else name
+            meta = " · ".join(str(it[key]) for key in ("vod_year", "vod_remarks") if it.get(key))
+            # 列表和海报都先显示片名，再显示年份/版本。
+            label = f"{name} · {meta}" if meta else name
             source = _search_source_name(it)
             tooltip = self._poster_tip(it)
             if source:
-                label += " · " + source
                 tooltip += "\n来源：" + source
+            label += " · 可选播放" if it.get("first_url") or it.get("play_url") else " · 仅作品信息"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, it)
             item.setToolTip(tooltip)
@@ -1290,10 +1339,9 @@ class MoviePanel(QWidget):
         self._last_search_result.extend(rows)
         self._append_search_results(rows)
         n = self.list_posters.count()
-        suffix = "；部分来源不可用，已有结果可使用" if result["failed"] and n else ""
         self.lbl_status.setText(
-            f"已找到{n}条，正在补充其他来源（{result['done']}/{result['total']}）{suffix}"
-            if n else "正在搜索第一批结果…")
+            f"已找到 {n} 部，正在加载更多…"
+            if n else SEARCHING)
         logger.info("[MovieSearch] stage=progressive_batch serial=%s rows=%s done=%s total=%s",
                     serial, len(rows), result["done"], result["total"])
 
@@ -1302,7 +1350,7 @@ class MoviePanel(QWidget):
             return
         n = self.list_posters.count()
         self.lbl_status.setText(
-            f"已找到{n}条，继续补充较慢来源" if n else "首批查询较慢，继续查询其他来源…")
+            f"已找到 {n} 部，正在加载更多…" if n else SEARCHING)
 
     def _progressive_finished(self, serial, result):
         if not self._progressive_is_current(serial):
@@ -1310,21 +1358,22 @@ class MoviePanel(QWidget):
         self._progressive_ui_timer.stop()
         n = self.list_posters.count()
         if result["reason"] == "changed":
-            text = "片源设置已更改，请重新搜索。"
+            text = "播放设置已更改，请重新搜索。"
         elif result["reason"] == "budget":
-            text = f"搜索时间已到，已找到{n}条；部分来源尚未完成，可使用已有结果或重试。"
+            text = (f"已找到{n}条，部分内容暂未加载，可使用已有结果或重试。" if n
+                    else "暂未找到影片，搜索尚未完成，可以重试。")
         elif not result["total"]:
-            text = "没有启用的可用片源，请在管理资源站中检查。"
+            text = "暂时没有可用片源，请在更多中检查设置。"
         elif result["failed"] == result["total"]:
-            text = "所有来源搜索失败，请检查网络或更换片源后重试。"
+            text = SEARCH_RETRY
         elif n:
-            text = f"搜索完成，共{n}条" + ("；部分来源不可用，已有结果可使用。" if result["failed"] else "。")
+            text = f"搜索完成，共{n}条" + ("；部分内容暂不可用。" if result["failed"] else "。")
         else:
-            text = "没有匹配影片；部分来源不可用。" if result["failed"] else "没有匹配影片，请换个片名重试。"
-        text += (f"（已完成{result['done']}/{result['total']}，失败{result.get('errors', result['failed'])}，"
-                 f"超时{result.get('timed_out', 0)}，尚未尝试{result.get('unattempted', 0)}）")
-        if result["limited"]:
-            text += " 已限制本次候选数量。"
+            text = "暂未找到匹配影片，可重试。" if result["failed"] else "没有匹配影片，请换个片名重试。"
+        self.btn_search.setText("重试" if result["reason"] == "budget" or (not n and result["failed"]) else "搜索")
+        logger.info("[MovieSearch] summary done=%s total=%s failed=%s timed_out=%s unattempted=%s limited=%s",
+                    result["done"], result["total"], result["failed"], result.get("timed_out", 0),
+                    result.get("unattempted", 0), result["limited"])
         self.lbl_status.setText(text)
         logger.info("[MovieSearch] stage=progressive_settled serial=%s result=%s count=%s",
                     serial, result["reason"], n)
@@ -1334,7 +1383,9 @@ class MoviePanel(QWidget):
         if self._progressive_serial is None or self._progressive_frozen:
             return
         self._freeze_progressive()
-        self.lbl_status.setText("搜索超时；已有结果可以使用，请稍后重试或更换片源。")
+        self.btn_search.setText("重试")
+        self.lbl_status.setText("加载较慢，已有结果可以使用，也可以重试。" if self.list_posters.count()
+                                else "加载较慢，暂未找到影片，请重试。")
         notify("影片搜索超时", self.lbl_status.text(), source="movie", status="warning")
 
     def _filtered_content_results(self, result):
@@ -1377,7 +1428,9 @@ class MoviePanel(QWidget):
         return "  ".join(p for p in parts if p)
 
     def _on_search_failed(self, err: str):
-        self.lbl_status.setText(f"搜索失败: {err}")
+        self.btn_search.setText("重试")
+        logger.warning("movie search failed: %s", err)
+        self.lbl_status.setText("搜索暂未完成，请重试或换个片名。")
 
     # ---- 播放 ----
 
@@ -1484,7 +1537,7 @@ class MoviePanel(QWidget):
     def _on_item_activated(self, item):
         self._freeze_progressive()
         # 双击 → 直接播放（先取消单击详情定时器，防双击误触详情页）
-        self._click_timer.stop()
+        self._cancel_pending_detail()
         it = item.data(Qt.UserRole)
         if not isinstance(it, dict):
             return
@@ -1494,7 +1547,8 @@ class MoviePanel(QWidget):
                 return
             self._play_item(it, index=None)
         except Exception as e:
-            self.lbl_status.setText(f"播放失败: {e}")
+            logger.error("movie playback failed", exc_info=True)
+            self.lbl_status.setText("暂时无法播放，请重试。")
 
     def _on_item_clicked(self, item):
         """单击 → 300ms 后开详情页（双击先触发单击，用 timer 让位）。"""
@@ -1512,7 +1566,10 @@ class MoviePanel(QWidget):
         if not isinstance(it, dict):
             return
         dlg = _MovieDetailDialog(it, self)
-        dlg.exec()
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def _on_toggle_view(self):
         self._poster_mode = not self._poster_mode
@@ -1795,6 +1852,7 @@ class MoviePanel(QWidget):
         source = ((current.get("_source") or ("本地影片" if current.get("local_file") else "来源未标注"))
                   if isinstance(current, dict) else "未加载")
         self.lbl_source.setText(f"默认搜索源：{name}；当前影片来源：{source}")
+        self.source_summary.setText(self.lbl_source.text())
 
     def _on_source_manage(self):
         """"源"按钮 → 源管理对话框（增删/测源/设当前；变更后刷新状态栏）。"""
@@ -1847,7 +1905,9 @@ class MoviePanel(QWidget):
             self.lbl_status.setText(f"解析启动失败: {e}")
 
     def _play_parsed_url(self, url: str, title: str = "解析流"):
-        """走 MovieController.play_external_url：pause 音乐 + 状态写入 + 错误回滚一致。"""
+        """Open a parsed direct stream through the native startup path."""
+        if self._native_start is not None:
+            return self._play_item({"vod_name": title, "first_url": url, "_external_direct": True})
         try:
             ok = self._movie.play_external_url(url, title)
             if ok:
@@ -1875,7 +1935,25 @@ class MoviePanel(QWidget):
         self.lbl_status.setText("链接解析失败")
         glass_info(self, "解析失败", f"请检查链接或稍后再试。\n\n{err}")
 
+    def _search_poster_key(self, item):
+        if item.get("_source_id"):
+            return poster_key(["cms", item["_source_id"]], item.get("vod_id"), item.get("vod_pic"))
+        name = item.get("_source") or getattr(self._movie, "last_search_source", "")
+        name = name if isinstance(name, str) else ""
+        manager = getattr(self._movie, "_source_manager", None)
+        read = getattr(manager, "get_enabled_sources", None)
+        try:
+            sources = read() if callable(read) else []
+        except Exception:
+            sources = []
+        if not isinstance(sources, (list, tuple)):
+            sources = []
+        endpoint = next((s.get("url", "") for s in sources
+                         if isinstance(s, dict) and s.get("name") == name), "")
+        return poster_key([name, endpoint], item.get("vod_id"), item.get("vod_pic"))
+
     def _begin_search_posters(self):
+        self._cancel_pending_detail()
         self._poster_refill_timer.stop()
         self._poster_overflow = False
         self._poster_retry_row = 0
@@ -1934,24 +2012,6 @@ class MoviePanel(QWidget):
             self._poster_overflow = False
             self._poster_retry_row = 0
 
-    def _search_poster_key(self, item):
-        if item.get("_source_id"):
-            return poster_key(["cms", item["_source_id"]], item.get("vod_id"), item.get("vod_pic"))
-        name = item.get("_source") or getattr(self._movie, "last_search_source", "")
-        name = name if isinstance(name, str) else ""
-        manager = getattr(self._movie, "_source_manager", None)
-        read = getattr(manager, "get_enabled_sources", None)
-        try:
-            sources = read() if callable(read) else []
-        except Exception:
-            sources = []
-        if not isinstance(sources, (list, tuple)):
-            sources = []
-        endpoint = next((s.get("url", "") for s in sources
-                         if isinstance(s, dict) and s.get("name") == name), "")
-        return poster_key([name, endpoint], item.get("vod_id"), item.get("vod_pic"))
-
-
     @Slot(int, str, object)
     def _on_search_poster_done(self, generation, key, pixmap):
         if self._recommendation_closed or generation != self._search_posters._generation:
@@ -1971,8 +2031,8 @@ class MoviePanel(QWidget):
             self._progressive_search.detach()
         self._poster_refill_timer.stop()
         self._search_posters.close()
+        self._cancel_pending_detail()
         super().closeEvent(event)
-
 
     def _on_poster_batch_finished(self):
         if self._pending_poster_jobs:
@@ -2005,6 +2065,13 @@ class MoviePanel(QWidget):
                     break
 
     def _clear_startup_choice(self):
+        pending = getattr(self, "_native_cancel", None)
+        if pending is not None:
+            self._native_cancel = None
+            pending[0].set()
+            self._native_start.invalidate()
+            if self._video_win is not None:
+                self._video_win.cancel_prepared_playback()
         if self._startup_choice:
             self._dismissed_startup_attempt = self._startup_choice[2]
         self._history_start = self._pending_embed_request = self._panel_start = None
@@ -2025,7 +2092,8 @@ class MoviePanel(QWidget):
                 and receipt.generation == self._movie._playback_gen
                 and receipt.candidate_tag == self._movie.playback_candidate_tag(*choice[:2])
                 and receipt.state in ("startup_failed", "load_rejected", "no_address", "start_failed")
-                and self.stack_results.currentWidget() in (self.list_results, self.list_posters)):
+                and (self._native_start is not None or
+                     self.stack_results.currentWidget() in (self.list_results, self.list_posters))):
             return choice[:2]
         return None
 
@@ -2130,12 +2198,12 @@ class MoviePanel(QWidget):
         binding = self._search_playback_item
 
         def playback_current():
-            return (not self._recommendation_closed and window.isVisible() and window._playing
+            return (not self._recommendation_closed and window._playing
                     and not window.switch_trial.busy and movie.current_item() is current
                     and movie._playback_gen == generation and self._search_playback_item is binding)
 
         def still_current():
-            return playback_current() and getattr(movie, "_play_attempt", 0) == attempt
+            return window.isVisible() and playback_current() and getattr(movie, "_play_attempt", 0) == attempt
 
         candidates = self._playback_candidates(current)
         dialog = GlassDialog("当前影片候选", window)
@@ -2192,9 +2260,12 @@ class MoviePanel(QWidget):
         """统一播放入口：控制器播放 + 状态刷新 + 自动字幕（配置开时每片一次）。
         内嵌模式 → 播放窗口接管（呈现 + 轮询 + 控制）；非 embed → 现状面板直控。"""
         try:
-            if callable(is_current) and not is_current():
+            if self._recommendation_closed or (callable(is_current) and not is_current()):
                 return
             it = normalise_playback(it)
+            pending = self._native_cancel
+            if pending is not None and pending[1] == self._movie.playback_candidate_tag(it, index):
+                return True
             blocked = (self._movie.playback_block_message(it, index)
                        if isinstance(self._movie, MovieController) else "")
             if blocked:
@@ -2208,7 +2279,7 @@ class MoviePanel(QWidget):
             request = self._play_request = object()
             if history_dialog is not None:
                 self._history_start = (request, history_dialog, getattr(self._movie, "_play_attempt", 0) + 1)
-            self._set_play_status("正在加载影片…")
+            self._set_play_status(PLAY_LOADING)
             if self._video_win is not None:
                 self._pending_embed_request = request
                 # P0 卡死修复（宿主窗口系统同步高危）：显示序列延后一拍——
@@ -2217,35 +2288,49 @@ class MoviePanel(QWidget):
                 QTimer.singleShot(0, functools.partial(self._guarded_embed_play, it, index, is_current, request))
                 return True
             self._capture_startup_choice(it, index)
+            if self._native_start is not None:
+                self._submit_native_start(it, index, request)
+                return True
             ok = self._movie.play(it, index=index)
-            if ok:
-                if isinstance(self._movie, MovieController):
-                    receipt = self._movie.playback_startup()
-                    if receipt:
-                        self._panel_start = (receipt.attempt, receipt.generation, time.monotonic() + 15)
-                name = it.get("vod_name", "") or ""
-                self.lbl_now.setText(f"加载中: {name}")
-                self._set_play_status("播放器已接收加载，等待起播确认。")
-                self.slider_pos.setEnabled(True)
-                self._sync_toggle_icon()
-                self._maybe_auto_subtitle(it)
-                self._refresh_source_label()
-            else:
-                self._set_play_status(self._play_failure_text())
-                self._refresh_startup_actions()
+            self._finish_panel_play(it, ok)
             return bool(ok)
         except Exception:
             self._set_play_status("播放失败，请重试或返回选择其他影片。")
             return False
 
+    def _finish_panel_play(self, it, ok):
+        if ok:
+            if isinstance(self._movie, MovieController):
+                receipt = self._movie.playback_startup()
+                if receipt:
+                    self._panel_start = (receipt.attempt, receipt.generation, time.monotonic() + 15)
+            name = it.get("vod_name", "") or ""
+            self._set_now(f"加载中: {name}")
+            self._set_play_status(PLAY_LOADING)
+            self.slider_pos.setEnabled(True)
+            self._sync_toggle_icon()
+            self._maybe_auto_subtitle(it)
+            self._refresh_source_label()
+        else:
+            self._set_play_status(self._play_failure_text())
+            self._refresh_startup_actions()
+
     def _play_failure_text(self):
         read = getattr(self._movie, "playback_failure_message", None)
         message = read() if callable(read) else None
-        return message if isinstance(message, str) and message else "无法播放：请检查该片源或选择其他候选。"
+        logger.warning("movie playback failure: %s", message)
+        read = getattr(self._movie, "playback_startup", None)
+        receipt = read() if callable(read) else None
+        if getattr(receipt, "state", None) in ("load_unknown", "load_exception", "unconfirmed"):
+            return "暂未确认播放，请先停止播放，再重试。"
+        if getattr(receipt, "state", None) == "no_address":
+            return "暂时没有可用片源，请换一个版本。"
+        return PLAY_RETRY
 
     def _capture_startup_choice(self, item, index):
-        if ((item.get("_source_id") or item.get("_source"))
-                and self.stack_results.currentWidget() in (self.list_results, self.list_posters)):
+        if (self._native_start is not None or
+                ((item.get("_source_id") or item.get("_source"))
+                 and self.stack_results.currentWidget() in (self.list_results, self.list_posters))):
             retry_item = {key: value for key, value in item.items() if key != "_resume_guard"}
             self._startup_choice = (retry_item, index, getattr(self._movie, "_play_attempt", 0) + 1)
 
@@ -2271,28 +2356,83 @@ class MoviePanel(QWidget):
             self._video_win.show_for_playback()
             # 宿主盖窗口修复：置顶异步执行（只动 z-order 不碰前台锁，宿主喘息后置顶）
             QTimer.singleShot(0, self._video_win.raise_topmost)
+            if self._native_start is not None:
+                self._pending_embed_request = self._play_request
+                self._video_win.prepare_playback()
+                self._submit_native_start(it, index, self._play_request, (from_search, key))
+                return
             ok = self._video_win.play(it, index=index)
-            self._forget_playback_candidates()
-            if ok:
-                current = self._movie.current_item()
-                if from_search and current and self._search_record_key(current) == key:
-                    self._search_playback_item = current
-                trial = getattr(self._video_win, "switch_trial", None)
-                service = self._progressive_search
-                if trial is not None and trial.enabled and service is not None:
-                    trial.prepare(service, service.switch_candidates(it))
-                name = it.get("vod_name", "") or ""
-                self.lbl_now.setText(f"加载中: {name}")
-                self._set_play_status("播放器已接收加载，等待起播确认。")
-                self._embed_playing = True
-                self._sync_toggle_icon()
-                self._maybe_auto_subtitle(it)
-                self._refresh_source_label()
-            else:
-                self._set_play_status(self._play_failure_text())
-                self._refresh_startup_actions()
+            self._finish_embed_play(it, ok, from_search, key)
         except Exception:
             self._set_play_status("播放失败，请重试或返回选择其他影片。")
+
+    def _finish_embed_play(self, it, ok, from_search, key):
+        self._forget_playback_candidates()
+        if ok:
+            current = self._movie.current_item()
+            if from_search and current and self._search_record_key(current) == key:
+                self._search_playback_item = current
+            trial = getattr(self._video_win, "switch_trial", None)
+            service = self._progressive_search
+            if trial is not None and trial.enabled and service is not None:
+                trial.prepare(service, service.switch_candidates(it))
+            name = it.get("vod_name", "") or ""
+            self._set_now(f"加载中: {name}")
+            self._set_play_status(PLAY_LOADING)
+            self._embed_playing = True
+            self._sync_toggle_icon()
+            self._maybe_auto_subtitle(it)
+            self._refresh_source_label()
+        else:
+            self._set_play_status(self._play_failure_text())
+            self._refresh_startup_actions()
+
+    def _submit_native_start(self, item, index, request, embed=None):
+        movie = self._movie
+        cancel = threading.Event()
+        self._native_cancel = cancel, movie.playback_candidate_tag(item, index)
+
+        def play(current):
+            # Keep the UI request, receipt and native load under the existing
+            # media lock. The GUI never waits on this lock.
+            with movie._media_action_lock:
+                if not current() or cancel.is_set():
+                    return False, None
+                previous = movie.playback_startup()
+                ok = movie.play(item, index=index, _ui_cancel=cancel)
+                if ok and not current():
+                    cancel.set()
+                    movie._discard_cancelled_ui_load(cancel)
+                    return False, None
+                receipt = movie.playback_startup()
+                return ok, receipt if receipt is not previous else None
+
+        self._native_start.submit((request, item, index, embed), play, guarded=True)
+
+    def _apply_native_start(self, key, value, error):
+        if key is None:  # A queued stop has no startup UI to update.
+            return
+        request, item, index, embed = key
+        if self._recommendation_closed or self._play_request is not request:
+            return
+        self._native_cancel = None
+        self._pending_embed_request = None
+        ok, receipt = value if error is None and value is not None else (False, None)
+        if receipt is not None and receipt.generation != self._movie._playback_gen:
+            if embed is not None:
+                self._video_win.cancel_prepared_playback()
+            return
+        if receipt is not None:
+            retry = self._startup_choice
+            if retry is not None:
+                self._startup_choice = (*retry[:2], receipt.attempt)
+            if self._history_start:
+                self._history_start = (*self._history_start[:2], receipt.attempt)
+        if embed is not None:
+            self._video_win.finish_playback(item, index, ok)
+            self._finish_embed_play(item, ok, *embed)
+        else:
+            self._finish_panel_play(item, ok)
 
     def _on_playback_status(self, generation, status, message):
         if (self._recommendation_closed or self._pending_embed_request is not None
@@ -2310,15 +2450,20 @@ class MoviePanel(QWidget):
             status, message = "PENDING", "播放器已返回播放进度，等待起播确认。"
         if self._history_start and receipt and receipt.attempt != self._history_start[2]:
             self._history_start = None
-        self._set_play_status(message, started=status == "PROGRESS")
+        logger.info("movie playback status=%s detail=%s", status, message)
+        public = {"PROGRESS": PLAY_STARTED, "PENDING": PLAY_LOADING,
+                  "FAILED": PLAY_RETRY,
+                  "UNCONFIRMED": "暂未确认播放，请查看播放窗口。",
+                  "LOAD_UNKNOWN": "暂未确认播放，请查看播放窗口。"}
+        self._set_play_status(public.get(status, PLAY_LOADING), started=status == "PROGRESS")
         if status in ("PROGRESS", "PENDING"):
             item = self._movie.current_item() or {}
             prefix = "播放中" if status == "PROGRESS" else "加载中"
-            self.lbl_now.setText(f"{prefix}: {item.get('vod_name') or ''}")
+            self._set_now(f"{prefix}: {item.get('vod_name') or ''}")
         elif status == "FAILED":
-            self.lbl_now.setText("播放失败")
+            self._set_now("播放失败")
         elif status in ("UNCONFIRMED", "LOAD_UNKNOWN"):
-            self.lbl_now.setText("播放未确认")
+            self._set_now("播放未确认")
         self._refresh_source_label()
         self._refresh_startup_actions()
 
@@ -2331,7 +2476,7 @@ class MoviePanel(QWidget):
         """播放窗口停播（关窗/播完/异常）：面板清 embed 播放状态（现状控制行让位）。"""
         self._forget_playback_candidates()
         self._embed_playing = False
-        self.lbl_now.setText("未播放")
+        self._set_now("未播放")
         self.slider_pos.setEnabled(False)
         self.slider_pos.setValue(0)
         self.lbl_time.setText("0:00 / 0:00")
@@ -2359,7 +2504,7 @@ class MoviePanel(QWidget):
             combo.setCurrentIndex(next(i for i, line in enumerate(lines)
                                        if line["index"] == it["_playback_line_index"]))
             lay.addWidget(combo)
-        tip = QLabel("双击所选线路的集数播放；不会切换到其他CMS来源。")
+        tip = QLabel("双击选择集数播放，可在上方更换版本。")
         tip.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         lay.addWidget(tip)
         lst = QListWidget()
@@ -2380,7 +2525,8 @@ class MoviePanel(QWidget):
         dlg.exec()
 
     def _apply_film_poll(self, _, update, error):
-        if error or not update or self._embed_playing or self._recommendation_closed:
+        if (error or not update or self._native_cancel is not None
+                or self._embed_playing or self._recommendation_closed):
             return
         if update["generation"] != self._movie._playback_gen or update["item"] is not self._movie.current_item():
             return
@@ -2397,7 +2543,7 @@ class MoviePanel(QWidget):
                     status = "FAILED" if phase == "failed" else "UNCONFIRMED"
                     self._on_playback_status(update["generation"], status, message)
             elif phase == "ended":
-                self.lbl_now.setText("未播放")
+                self._set_now("未播放")
             return
         pending = self._panel_start
         if pending is not None:
@@ -2413,7 +2559,7 @@ class MoviePanel(QWidget):
             return
         item, sample = update["item"] or {}, update["sample"]
         prefix = "缓冲中" if phase == "buffering" else "播放中"
-        self.lbl_now.setText(f"{prefix}: {item.get('vod_name') or ''}")
+        self._set_now(f"{prefix}: {item.get('vod_name') or ''}")
         pos, dur = sample.get("time-pos"), sample.get("duration")
         if pos is not None and dur is not None and dur > 0:
             if not self.slider_pos.isSliderDown():
@@ -2579,10 +2725,20 @@ class MoviePanel(QWidget):
 
     def _on_stop(self):
         self._clear_startup_choice()
-        threading.Thread(target=self._safe_movie_call, args=(self._movie.stop,),
-                         daemon=True, name="movie-stop").start()
+        if self._native_start is not None:
+            movie = self._movie
+
+            def stop(current):
+                with movie._media_action_lock:
+                    if current():
+                        movie.stop()
+
+            self._native_start.submit(None, stop, guarded=True)
+        else:
+            threading.Thread(target=self._safe_movie_call, args=(self._movie.stop,),
+                             daemon=True, name="movie-stop").start()
         # UI 重置在主线程（controller 最终状态由 _tick 校正）
-        self.lbl_now.setText("未播放")
+        self._set_now("未播放")
         self.slider_pos.setEnabled(False)
         self.slider_pos.setValue(0)
         self.lbl_time.setText("0:00 / 0:00")
@@ -2610,7 +2766,7 @@ class MoviePanel(QWidget):
 
     def _tick(self):
         if self._native_poll is not None:
-            if not self._embed_playing and not self._native_poll._running:
+            if self._native_cancel is None and not self._embed_playing and not self._native_poll._running:
                 if self._movie.mpv.is_running():
                     self._native_poll.submit("film", self._movie.poll_film_ui)
             return
@@ -2818,8 +2974,8 @@ class _MovieDetailDialog(GlassDialog):
     """详情页：大图 + 评分/导演/演员/简介 + 播放按钮（对齐爱奇艺点击进详情）。"""
 
     def __init__(self, it, panel, parent=None):
-        super().__init__(f"{(it.get('vod_name') or '')[:24]} - 详情", parent)
-        self.resize(540, 660)
+        super().__init__("影片详情", parent or panel)
+        self.resize(520, 345)
         self._panel = panel
         self._it = normalise_playback(it)
 
@@ -2833,11 +2989,18 @@ class _MovieDetailDialog(GlassDialog):
         self.lbl_pic = QLabel()
         self.lbl_pic.setAlignment(Qt.AlignCenter)
         self.lbl_pic.setPixmap(
-            pix.scaled(180, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        root.addWidget(self.lbl_pic)
+            pix.scaled(145, 218, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        content_row = QHBoxLayout()
+        content_row.setSpacing(Tokens.SPACING_MD)
+        content_row.addWidget(self.lbl_pic, 0, Qt.AlignTop)
+        root.addLayout(content_row, 1)
 
-        lines = [it.get("vod_name") or ""]
-        meta = " / ".join(x for x in (
+        self.lbl_name = QLabel(it.get("vod_name") or "未命名影片")
+        self.lbl_name.setProperty("class", "title")
+        self.lbl_name.setTextFormat(Qt.PlainText)
+        self.lbl_name.setWordWrap(True)
+        lines = []
+        meta = " · ".join(x for x in (
             str(it.get("vod_year") or ""),
             str(it.get("vod_remarks") or ""),
             ("评分 " + str(it.get("vod_score"))) if it.get("vod_score") else "",
@@ -2852,17 +3015,28 @@ class _MovieDetailDialog(GlassDialog):
         if content:
             lines.append("")
             lines.append(content)
-        self.lbl_info = QLabel("\n".join(lines))
+        self.lbl_info = QLabel("\n".join(lines).strip() or "暂无影片简介")
+        self.lbl_info.setTextFormat(Qt.PlainText)
+        self.lbl_info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.lbl_info.setWordWrap(True)
         self.lbl_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.lbl_info)
-        root.addWidget(scroll, 1)
+        description = QVBoxLayout()
+        description.addWidget(self.lbl_name)
+        description.addWidget(scroll, 1)
+        content_row.addLayout(description, 1)
 
         source = self._it.get("_source")
+        source_details = QWidget()
+        source_layout = QHBoxLayout(source_details)
+        source_layout.setContentsMargins(0, 0, 0, 0)
         if source:
-            root.addWidget(QLabel("资源来源：" + str(source)))
+            source_label = QLabel("来源：" + str(source))
+            source_label.setTextFormat(Qt.PlainText)
+            source_label.setWordWrap(True)
+            source_layout.addWidget(source_label, 1)
         self.combo_play_line = None
         lines = self._it.get("_playback_lines") or []
         if len(lines) > 1:
@@ -2872,16 +3046,35 @@ class _MovieDetailDialog(GlassDialog):
                 self.combo_play_line.addItem(line["name"], line["index"])
             self.combo_play_line.setCurrentIndex(next(i for i, line in enumerate(lines)
                 if line["index"] == self._it["_playback_line_index"]))
-            root.addWidget(self.combo_play_line)
-        self.btn_play = QPushButton("播放")
+            self.combo_play_line.setAccessibleName("播放线路")
+            source_layout.addWidget(self.combo_play_line)
+        playable = bool(self._it.get("first_url") or self._it.get("play_url") or self._it.get("local_file"))
+        self.btn_play = QPushButton("选择集数" if playable and MovieController.is_multi_episode(self._it)
+                                    else "播放" if playable else "暂无可用片源")
+        self.btn_play.setEnabled(playable)
+        self.btn_play.setProperty("class", "primary")
         self.btn_play.clicked.connect(self._on_play)
+        self.btn_play.setVisible(playable)
         row = QHBoxLayout()
+        if source or self.combo_play_line is not None:
+            self.btn_source_details = QPushButton("来源与版本")
+            self.btn_source_details.setCheckable(True)
+            self.btn_source_details.toggled.connect(source_details.setVisible)
+            row.addWidget(self.btn_source_details)
+            root.addWidget(source_details)
+            source_details.hide()
+        else:
+            source_details.setParent(self)
+            source_details.hide()
         row.addStretch()
+        if not playable:
+            row.addWidget(QLabel("仅作品信息 · 暂无可用片源"))
         row.addWidget(self.btn_play)
-        row.addStretch()
         root.addLayout(row)
 
     def _on_play(self):
+        if not self.btn_play.isEnabled():
+            return
         it = (normalise_playback(self._it, self.combo_play_line.currentData())
               if self.combo_play_line is not None else self._it)
         self.accept()
@@ -2890,5 +3083,6 @@ class _MovieDetailDialog(GlassDialog):
                 self._panel._show_episode_dialog(it)
             else:
                 self._panel._play_item(it, index=None)
-        except Exception as e:
-            self._panel.lbl_status.setText(f"播放失败: {e}")
+        except Exception:
+            logger.exception("movie detail playback failed")
+            self._panel.lbl_status.setText(PLAY_RETRY)

@@ -6,12 +6,26 @@ pytestmark = pytest.mark.unit
 
 
 import os
+from pathlib import Path
 import time
 from unittest.mock import MagicMock, patch
 
 from app.music.database import MusicDatabase
 from app.music.downloader import DownloadManager
 from app.music.online.models import OnlineTrack
+
+
+_owned = []
+
+
+@pytest.fixture(autouse=True)
+def close_downloaders():
+    yield
+    while _owned:
+        dl, db = _owned.pop()
+        dl.close()
+        dl._pool.shutdown(wait=True)
+        db.close()
 
 
 def _mk_track(title="夜曲", artist="周杰伦", src="酷我音乐", tid="t1"):
@@ -23,6 +37,11 @@ def _make_dl(tmp_path, max_workers=3):
     db = MusicDatabase(str(tmp_path / "t.db"))
     dl = DownloadManager(MagicMock(), db, str(tmp_path / "dl"), max_workers=max_workers)
     dl.online_manager = MagicMock()
+    # These tests exercise scheduling/transport with synthetic bytes. Actual media
+    # validation and tagging are covered separately by test_download_experience.
+    dl._inspect_audio = lambda path: dict(extension=".m4a" if Path(path).read_bytes().startswith(b"MP4") else ".flac",
+        duration=200, quality="fixture", score=(1, 128000, 44100))
+    _owned.append((dl, db))
     return dl, db
 
 
@@ -76,10 +95,9 @@ def _url_result(url="http://x/song.flac"):
 def test_concurrent_workers_limited_to_3(tmp_path):
     """并发 ≤3：5 个慢下载同时活动数不超过 max_workers。"""
     dl, _db = _make_dl(tmp_path)
-    dl.online_manager.search_all.side_effect = [
-        {"酷我音乐": [_mk_track(title=f"歌{n}")]} for n in range(5)]
+    dl.online_manager.search_all.side_effect = lambda query, **kw: {"酷我音乐": [_mk_track(query.rsplit(" ", 1)[0], "A")]}
     dl.online_manager.get_play_url.return_value = _url_result("http://x/f.flac")
-    with patch("app.music.downloader.urlopen", return_value=_SlowResp(0.15, 3000, b"x" * 1000)):
+    with patch("app.music.downloader.urlopen", side_effect=lambda *a, **k: _SlowResp(0.15, 3000, b"x" * 1000)):
         events = {}
         for i in range(5):
             s = {"title": f"歌{i}", "artist": "A"}
@@ -94,6 +112,7 @@ def test_concurrent_workers_limited_to_3(tmp_path):
                 break
             time.sleep(0.03)
         assert peak <= 3, f"并发超限: peak={peak}"
+        assert set(events.values()) == {"done"}
         assert len(events) == 5, f"完成数不足: {len(events)}"
 
 
@@ -152,15 +171,8 @@ def test_downloaded_judgement(tmp_path):
 def test_failure_does_not_block_queue(tmp_path):
     """一个下载失败 → 其他任务继续完成（不卡队列）。"""
     dl, _db = _make_dl(tmp_path)
-    # 第一个 track 重搜无结果（失败）；第二个成功
-    dl.online_manager.search_all.side_effect = [
-        {"酷我音乐": [_mk_track(title="坏歌")]},
-        {"酷我音乐": [_mk_track(title="好歌")]},
-    ]
-    dl.online_manager.get_play_url.side_effect = [
-        None, None,  # 坏歌 super+high 都失败
-        _url_result("http://x/ok.flac"),
-    ]
+    dl.online_manager.search_all.side_effect = lambda query, **kw: {"酷我音乐": [_mk_track(query.rsplit(" ", 1)[0], "A")]}
+    dl.online_manager.get_play_url.side_effect = lambda track, **kw: None if track.title == "坏歌" else _url_result("http://x/ok.flac")
     with patch("app.music.downloader.urlopen",
                return_value=_FakeResp([b"x" * 10], total=10)):
         done = {}

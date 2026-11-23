@@ -195,6 +195,8 @@ def _ctrl(tmp_path):
     }
     with patch("app.music.controller.MpvController"):
         ctrl = MusicController(cfg)
+    ctrl.set_movie_pauser(lambda: True)
+    ctrl.mpv.loadfile.return_value = {"error": "success"}
     return ctrl, db
 
 
@@ -315,8 +317,8 @@ def test_mpv_header_reset_across_sources(tmp_path):
     class HttpSource(MusicSource):
         name = "ikun"
         def search(self, keyword, limit=20):
-            if keyword == "歌":
-                return [OnlineTrack(source_name="ikun", track_id="2", title="歌")]
+            if keyword == "测试歌曲":
+                return [OnlineTrack(source_name="ikun", track_id="2", title="测试歌曲")]
             return []
         def get_play_url(self, track): return "https://ikun.example.com/b.mp3"
         def get_lyric(self, track): return None
@@ -332,7 +334,7 @@ def test_mpv_header_reset_across_sources(tmp_path):
         assert "kuwo" in kw_calls[-1].args[1]
 
         ctrl.online_manager.register(HttpSource())
-        ctrl.play_search_result("歌")
+        ctrl.play_search_result("测试歌曲")
         all_calls = [c for c in ctrl.mpv.set_property.call_args_list
                      if c.args[0] == "http-header-fields"]
         assert all_calls and "Referer" not in all_calls[-1].args[1]
@@ -428,3 +430,36 @@ def test_dialog_item_changed_single_connection(qapp, tmp_path, monkeypatch):
         assert len(sync_calls) == 1
     finally:
         dlg.close()
+
+
+@pytest.mark.parametrize("payload, ids", [
+    ([{"title": "数组结果", "id": "array-one"}], ["array-one"]),
+    ([], []),
+    ({"data": [], "result": [{"title": "无关回退", "id": "other"}]}, []),
+])
+def test_http_source_search_preserves_array_and_empty_results(payload, ids):
+    with patch("app.music.online.sources.http_source.requests.get", return_value=FakeResp(payload)):
+        assert [track.track_id for track in _src().search("数组")] == ids
+
+
+def test_http_source_never_resolves_a_foreign_id_even_if_the_api_would_accept_it():
+    manager = OnlineSourceManager()
+    manager.register(HttpJsonSource("first", "https://first.example.invalid"))
+    manager.register(HttpJsonSource("second", "https://second.example.invalid"))
+    first = OnlineTrack("first", "overlapping-id", "原歌曲")
+    correct = OnlineTrack("second", "other-id", "原歌曲")
+
+    def respond(url, *, params, timeout):
+        if "first.example.invalid" in url:
+            return FakeResp({"url": None})
+        suffix = "correct" if params["id"] == "other-id" else "wrong"
+        return FakeResp({"data": f"https://media.example.invalid/{suffix}.mp3"})
+
+    try:
+        with patch("app.music.online.sources.http_source.requests.get", side_effect=respond) as request:
+            assert manager.get_play_url(first) is None
+            assert request.call_count == 1
+            assert manager.get_play_url(correct)["url"].endswith("/correct.mp3")
+            assert request.call_count == 2
+    finally:
+        manager.close()

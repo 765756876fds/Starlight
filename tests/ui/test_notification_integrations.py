@@ -117,8 +117,13 @@ def test_main_tab_navigation_opens_existing_center(center):
 
 def test_search_failure_keeps_actionable_message(center):
     key = center.post("正在搜索", source="music")
-    panel = SimpleNamespace(_search_generation=3, _search_notice_ids={3: key}, lbl_status=QLabel())
+    retry = QPushButton("重试")
+    retry.hide()
+    panel = SimpleNamespace(_search_generation=3, _search_notice_ids={3: key},
+                            lbl_status=QLabel(), btn_retry_online=retry)
     MusicPanel._on_search_failed(panel, "音源请求超时", 3)
+    assert not retry.isHidden()
+    retry.close()
     item, = center.history()
     assert item.status == "failed"
     assert "重试" in item.advice

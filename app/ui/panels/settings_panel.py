@@ -85,6 +85,11 @@ def register_lyrics_prefs_listener(fn: Callable) -> None:
         _LYRICS_LISTENERS.append(fn)
 
 
+def unregister_lyrics_prefs_listener(fn: Callable) -> None:
+    if fn in _LYRICS_LISTENERS:
+        _LYRICS_LISTENERS.remove(fn)
+
+
 def _notify_lyrics_prefs_changed(update: dict | None = None) -> None:
     """保存后通知全部监听器（单个失败不影响其他；窗口未开则无监听，下次构造读新值）。
 
@@ -327,6 +332,22 @@ class SettingsPanel(QWidget):
         self._build_reset_row(tab_ui)
         from ..widgets.diagnostics_panel import DiagnosticsPanel
         self._tabs.addTab(DiagnosticsPanel(self), "诊断")
+
+    def showEvent(self,event):
+        super().showEvent(event)
+        if not getattr(self,"_lyrics_group_ready",False):return
+        from PySide6.QtCore import QSignalBlocker
+        prefs=load_lyrics_prefs()
+        widgets=(self.cmb_lyrics_font,self.spin_lyrics_size,self.slider_lyrics_opacity,self.cmb_lyrics_mode,self.cb_lyrics_locked)
+        blockers=[QSignalBlocker(widget) for widget in widgets]
+        self.cmb_lyrics_font.setCurrentFont(QFont(prefs["font"]))
+        self.spin_lyrics_size.setValue(prefs["font_size"])
+        self.slider_lyrics_opacity.setValue(prefs["bg_opacity"])
+        self.lbl_lyrics_opacity.setText(f"{prefs['bg_opacity']}%")
+        self.cmb_lyrics_mode.setCurrentIndex(self.cmb_lyrics_mode.findData(prefs["mode"]))
+        self.cb_lyrics_locked.setChecked(prefs["locked"])
+        self._lyrics_color=QColor(prefs["color"]);self._refresh_lyrics_color_btn()
+        del blockers
 
     def _make_tab_page(self, title: str) -> QVBoxLayout:
         """新建一个 tab 页：QScrollArea → QWidget → QVBoxLayout。

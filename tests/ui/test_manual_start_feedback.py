@@ -13,7 +13,7 @@ from tests.ui.test_movie_voice_window import scene  # noqa: F401
 
 
 @pytest.mark.parametrize("outcome,expected", [
-    ("no_url", "未取得播放地址"), ("unknown", "暂未确认起播"), ("failed", "无法播放"),
+    ("no_url", "暂时无法播放"), ("unknown", "暂未确认播放"), ("failed", "无法播放"),
 ])
 def test_resolver_and_load_receipts(panel, outcome, expected):
     p, music, _ = panel
@@ -32,10 +32,11 @@ def test_resolver_and_load_receipts(panel, outcome, expected):
     try:
         p._play_async(target, title="生成歌曲", resolving=True)
         assert entered.wait(1)
-        assert "获取播放地址" in p.lbl_status.text()
+        assert "正在加载" in p.lbl_status.text()
     finally:
         release.set()
     wait_until(lambda: expected in p.lbl_status.text())
+    assert p.lbl_time.text() == "0:00 / 0:00"
     target.assert_called_once_with()
 
 
@@ -90,16 +91,16 @@ def test_accepted_needs_same_new_entry_with_advancing_time(panel, monkeypatch):
         return True
 
     p._play_async(play, title="新录音")
-    wait_until(lambda: "等待起播确认" in p.lbl_status.text())
+    wait_until(lambda: "正在加载" in p.lbl_status.text())
     QTest.qWait(210)
     sample[:] = [8, 0]
     QTest.qWait(320)
-    assert "等待起播确认" in p.lbl_status.text()
+    assert "正在加载" in p.lbl_status.text()
     sample[1] = 100.0
     QTest.qWait(250)
-    assert "等待起播确认" in p.lbl_status.text()
+    assert "正在加载" in p.lbl_status.text()
     sample[1] = 100.2
-    wait_until(lambda: p.lbl_status.text() == "正在播放：新录音")
+    wait_until(lambda: p.lbl_status.text() == "已开始播放：新录音")
 
 
 @pytest.mark.parametrize("reply,state", [(None, "unknown"), ({"error":"failure"}, "failed"),
@@ -118,16 +119,16 @@ def test_history_keeps_selection_until_confirmed(scene, monkeypatch, reply, stat
     assert dialog.isVisible()
     assert dialog.playback_status.text() == p.lbl_status.text()
     if state == "accepted":
-        assert "等待起播确认" in dialog.playback_status.text()
+        assert "正在加载" in dialog.playback_status.text()
         gen = movie._playback_gen
         p._on_playback_status(gen - 1, "PROGRESS", "旧片")
         p._on_playback_status(gen, "PROGRESS", "过早")
-        assert dialog.isVisible() and "等待起播确认" in dialog.playback_status.text()
+        assert dialog.isVisible() and "正在加载" in dialog.playback_status.text()
         movie._startup = replace(movie.playback_startup(), state="started")
         p._on_playback_status(gen, "PROGRESS", "已确认播放")
         assert dialog.result() == QDialog.Accepted
     else:
-        assert ("未确认" if state == "unknown" else "拒绝加载") in dialog.playback_status.text()
+        assert ("未确认" if state == "unknown" else "暂时无法播放") in dialog.playback_status.text()
         assert dialog.result() != QDialog.Accepted
         dialog.reject()
     scene.mpv.loadfile.assert_called_once()
@@ -155,10 +156,10 @@ def test_history_explicit_retry_uses_the_same_entry(scene, monkeypatch):
     scene.mpv.loadfile.side_effect = [{"error": "failure"}, {"error": "success"}]
     row = {"id": 9}
     p._play_movie_history_row(row, dlg)
-    wait_until(lambda: "拒绝加载" in dlg.playback_status.text())
+    wait_until(lambda: "暂时无法播放" in dlg.playback_status.text())
     assert dlg.isVisible() and scene.mpv.loadfile.call_count == 1
     p._play_movie_history_row(row, dlg)
-    wait_until(lambda: "等待起播确认" in dlg.playback_status.text())
+    wait_until(lambda: "正在加载" in dlg.playback_status.text())
     a, b = scene.mpv.loadfile.call_args_list
     assert a == b
     dlg.reject()

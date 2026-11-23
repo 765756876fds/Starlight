@@ -93,7 +93,7 @@ def test_movie_home_previews_are_bounded_separate_and_never_build_a_299_item_lis
     assert w.boards.count() == 0 and w.pages.currentWidget() is w.home
     for kind, section in w.sections.items():
         assert all(section.cards.item(i).data(Qt.UserRole)["kind"] == kind for i in range(section.cards.count()))
-    assert "未提供" in w.sections["variety"].hint.text()
+    assert "暂无内容" in w.sections["variety"].hint.text()
     assert movie.catalog.calls[0][0:3] == ("all", False, {"limit": 6})
     assert movie.catalog.calls[0][3] != qapp.thread()
     unknown = w.sections["movie"].cards.item(0).data(DISPLAY_ROLE)
@@ -175,7 +175,7 @@ def test_empty_and_partial_rank_failures_are_not_the_same_status(movie):
         dict(platform="B站", kind="movie", state="failed", error="timeout"),
         dict(platform="B站", kind="tv", state="success", at=1793853887)]}, None)
     assert w.sections["tv"].cards.count() == 2
-    assert "未能读取" in w.sections["movie"].hint.text() and "超时" in w.board_status.text()
+    assert "未能读取" in w.sections["movie"].hint.text() and "超时" in w.board_status.toolTip()
     assert w.local_list.count() == 6
     assert film_card(dict(title="电影", kind="movie", year=None))["subtitle"] == "电影"
 
@@ -430,5 +430,6 @@ def test_recent_and_own_playlist_cards_reuse_existing_panel_handlers_once(setup_
     s.c.get_playlist_songs = Mock(return_value=[])
     s.panel.discovery.playlist_chosen.emit({"id": 2, "name": "第二份"})
     assert s.panel.tabs.currentIndex() == 3
+    wait(lambda: s.panel.list_playlists.currentItem() is not None)
     assert s.panel.list_playlists.currentItem().data(Qt.UserRole)["id"] == 2
     assert s.c.get_queue_snapshot() == snapshot and not s.mpv.mock_calls

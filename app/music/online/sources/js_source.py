@@ -614,6 +614,7 @@ class JSMusicSource(MusicSource):
         return {
             "url": r.get("url"),
             "headers": r.get("headers") or None,
+            **({"quality": r["quality"]} if isinstance(r.get("quality"), str) else {}),
             **({"playback_metadata": r["playback_metadata"]} if isinstance(r.get("playback_metadata"), dict) else {}),
             **({"kuwo_rid": r["kuwo_rid"]} if r.get("kuwo_rid") else {}),
         }

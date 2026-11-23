@@ -47,6 +47,11 @@ class PopularSongs(QWidget):
         footer = QHBoxLayout()
         self.versions = QComboBox()
         self.versions.setAccessibleName("歌曲版本与榜单出处")
+        self.version_options = QPushButton("换一个版本")
+        self.version_options.setCheckable(True)
+        self.version_options.toggled.connect(lambda checked: self.versions.setVisible(
+            checked and self.cards.currentItem() is not None))
+        footer.addWidget(self.version_options)
         footer.addWidget(self.versions, 1)
         self.play = QPushButton("播放")
         self.play.clicked.connect(self._play)
@@ -141,8 +146,9 @@ class PopularSongs(QWidget):
                 t = entry.track
                 self.versions.addItem(" · ".join(filter(None, (t.source_name, version_label(t), t.album, entry.board,
                                                               f"第 {entry.rank} 名"))))
-        self.versions.setVisible(item is not None)
+        self.versions.setVisible(item is not None and self.version_options.isChecked())
         self.play.setVisible(item is not None)
+        self.version_options.setVisible(item is not None)
 
     def _play(self, *_):
         row = self.cards.currentRow()

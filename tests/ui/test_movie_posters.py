@@ -363,10 +363,10 @@ def test_panel_double_click_plays_and_cancels_detail():
 
 def test_panel_detail_dialog_fields():
     p, _ = _panel()
-    it = _ITEMS[0]
+    it = dict(_ITEMS[0], first_url="https://media.invalid/film.mp4")
     dlg = _MovieDetailDialog(it, p)
     text = dlg.lbl_info.text()
-    assert "流浪地球" in text
+    assert "流浪地球" in dlg.lbl_name.text() and "流浪地球" not in text.splitlines()[0]
     assert "评分 7.9" in text
     assert "2019" in text
     assert "导演: 郭帆" in text
@@ -379,9 +379,9 @@ def test_panel_detail_dialog_fields():
 
 def test_panel_detail_dialog_play_button():
     p, movie = _panel()
+    it = dict(_ITEMS[0], first_url="https://media.invalid/film.mp4")
     with patch.object(p, "_start_poster_jobs"):
-        p._on_search_done(list(_ITEMS))
-    it = _ITEMS[0]
+        p._on_search_done([it])
     dlg = _MovieDetailDialog(it, p)
     dlg._on_play()
     assert movie.play_calls  # 单集 → _play_item → play

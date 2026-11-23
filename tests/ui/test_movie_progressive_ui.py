@@ -75,7 +75,7 @@ def test_fast_rows_append_preserving_selection_posters_and_gui(screen, cms, reco
     begin(screen)
     wait(lambda: panel.list_posters.count() == 2)
     first_cost = time.monotonic()-before
-    assert '正在补充' in panel.lbl_status.text()
+    assert panel.lbl_status.text() == '已找到 2 部，正在加载更多…'
     selected = panel.list_posters.item(0)
     panel.list_posters.setCurrentItem(selected)
     generation = panel._search_posters._generation
@@ -84,7 +84,9 @@ def test_fast_rows_append_preserving_selection_posters_and_gui(screen, cms, reco
     assert panel.list_posters.count() == panel.list_results.count() == 22
     assert panel.list_posters.currentItem() is selected
     assert panel._search_posters._generation == generation and starts.call_count == 1
-    assert '极速资源' in panel.list_results.item(0).text()
+    assert '极速资源' not in panel.list_results.item(0).text()
+    assert '极速资源' in panel.list_results.item(0).toolTip()
+    assert panel.list_results.item(0).data(Qt.UserRole)['_source'] == '极速资源'
     screen.mpv.loadfile.assert_not_called()
     screen.controller.film_memory.record_action.assert_called_once_with('search', 'Public')
     timer.stop()
@@ -127,7 +129,7 @@ def test_late_batch_cannot_replace_new_page_or_playing_selection(screen, cms, ki
     gate.set()
 
 
-@pytest.mark.parametrize('mode,expected', [({'status': 503}, '所有来源搜索失败'),
+@pytest.mark.parametrize('mode,expected', [({'status': 503}, '搜索暂未完成'),
                                          ({'rows': []}, '没有匹配影片')])
 def test_all_finished_settles_immediately_and_retry_works(screen, cms, mode, expected):
     for path in ('/s0','/s1','/s2'):
@@ -154,15 +156,25 @@ def test_background_probe_is_deferred_during_playback_and_never_downloads_video(
     assert all(c[0].startswith('/s') for c in cms.calls)
 
 
-def test_shared_pool_and_frozen_safe_legacy_fallback(screen, monkeypatch):
+def test_shared_pool_uses_frozen_worker_and_falls_back_without_pythonw(screen, tmp_path, monkeypatch):
     import sys
-    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+
+    executable = str(tmp_path / "Starlight.exe")
+    monkeypatch.setattr(sys, "executable", executable)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
     assert real_shared_search_service() is None
-    monkeypatch.setattr(sys, 'frozen', False)
-    previous = getattr(screen.app, '_movie_progressive_search', None)
+
+    monkeypatch.setattr(sys, "frozen", True)
+    if hasattr(screen.app, "_movie_progressive_search"):
+        monkeypatch.delattr(screen.app, "_movie_progressive_search")
     service = real_shared_search_service()
-    assert service is real_shared_search_service() and service.pool.MAX_ACTIVE == 2
-    if previous is None:
+    try:
+        assert service is real_shared_search_service()
+        assert service.pool.MAX_ACTIVE == 2
+        assert service.pool.command == [executable, "--movie-search-worker"]
+        assert service.pool.working_directory == tmp_path
+    finally:
         service.close()
         del screen.app._movie_progressive_search
 
@@ -174,7 +186,7 @@ def test_ui_watchdog_preserves_partial_results_and_ignores_late_batch(screen, cm
     wait(lambda: screen.panel.list_posters.count() == 1)
     serial = screen.panel._progressive_serial
     screen.panel._progressive_ui_timeout()
-    assert '搜索超时' in screen.panel.lbl_status.text()
+    assert '加载较慢' in screen.panel.lbl_status.text()
     screen.panel._progressive_batch(serial, dict(items=[dict(vod_id='late')], done=3, total=3, failed=0))
     assert screen.panel.list_posters.count() == 1
     wait(lambda: not screen.service.pool.active)

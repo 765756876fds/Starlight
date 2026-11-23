@@ -122,10 +122,9 @@ def test_card_search_returns_to_same_category_filters_and_scroll(scene, qapp, th
     assert scene.home._selected_work['title'] == title
     scene.panel._play_item.assert_not_called()
     assert all(thread == qapp.thread() for _, thread in scene.rendered)
-    assert scene.panel.btn_home.text() == '电影首页'
-    QTest.mouseClick(scene.panel.btn_home, Qt.LeftButton)
+    assert scene.panel.btn_home.isHidden()
+    QTest.mouseClick(scene.home.nav_buttons["all"], Qt.LeftButton)
     assert scene.home._view == 'all'
-    assert scene.panel.lbl_status.text() == '已返回电影首页'
 
 
 @pytest.mark.parametrize('theme', ['dark', 'light'])

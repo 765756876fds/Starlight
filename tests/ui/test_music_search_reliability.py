@@ -141,7 +141,7 @@ def test_current_search_failure_is_visible_and_retryable(panel):
     music.fail_first = True
     p.edit_kw.setText("A")
     p.edit_kw.returnPressed.emit()
-    wait_until(lambda: "失败" in p.lbl_status.text())
+    wait_until(lambda: "暂未完成" in p.lbl_status.text())
     wait_until(lambda: p._thread is None or not p._thread.isRunning())
     p.edit_kw.returnPressed.emit()
     wait_until(lambda: bool(p._tracks_by_row))
@@ -189,16 +189,18 @@ def test_request_status_survives_qt_signal_and_uses_correct_callback(panel, stat
         assert "未找到" in text and "失败" not in text
     elif state == "partial":
         assert callbacks == [("done", 1)]
-        assert "已找到 1 首" in text and "部分音源失败" in text
+        assert "已找到 1 首" in text and "部分内容暂不可用" in text
     else:
         assert len(callbacks) == 1 and callbacks[0][0] == "failed"
-        assert "搜索失败" in text and "已找到" not in text
+        assert "搜索暂未完成" in text and "已找到" not in text
         assert "重试" in text
-        assert ("超时" in text) == (state == "timeout")
+        # Technical categories stay available to callbacks, not on the main surface.
+        detail = callbacks[0][1]
+        assert ("超时" in detail) == (state == "timeout")
         if state == "network":
-            assert "检查网络" in text
+            assert "检查网络" in detail
         if state == "interrupted":
-            assert "刷新或变更" in text
+            assert "刷新或变更" in detail
     assert errors == []
 
 
@@ -214,7 +216,7 @@ def test_source_filter_does_not_hide_selected_source_failure(panel):
     p.cb_source.setCurrentIndex(p.cb_source.findData("fake"))
     p._on_search_done(result)
     assert p.list_results.count() == 0
-    assert "搜索失败" in p.lbl_status.text()
+    assert "搜索暂未完成" in p.lbl_status.text()
 
 
 def test_edit_without_submission_does_not_show_old_results_or_stay_loading(panel):
@@ -255,8 +257,10 @@ def test_legacy_invalid_result_is_visible_failure_not_gui_exception(panel, inval
     music.search_online = lambda keyword: invalid
     p.edit_kw.setText("A")
     p.edit_kw.returnPressed.emit()
-    wait_until(lambda: "失败" in p.lbl_status.text())
-    assert "有效搜索结果" in p.lbl_status.text()
+    wait_until(lambda: "暂未完成" in p.lbl_status.text())
+    assert p.lbl_status.text() == "搜索暂未完成，请重试。"
+    assert p.list_results.count() == 0
+    assert not p.btn_retry_online.isHidden()
     assert "超时" not in p.lbl_status.text()
     assert errors == []
 
@@ -285,8 +289,10 @@ def test_ranked_result_actions_use_clicked_provider_and_track(panel, monkeypatch
     p._toggle_view_mode(cards)
     assert p._tracks_by_row == [exact, live, first]
     item = p.list_results.item(0)
-    assert "来源乙" in item.text()
-    assert "来源乙" in item.data(Qt.UserRole)["_sub"]
+    assert "来源乙" not in item.text()
+    assert "来源乙" in item.toolTip()
+    assert "来源乙" not in item.data(Qt.UserRole)["_sub"]
+    assert item.data(Qt.UserRole)["source_name"] == "来源乙"
     assert "Live" in p.list_results.item(1).text()
     p.list_results.scrollToItem(item)
     QApplication.processEvents()
@@ -295,8 +301,11 @@ def test_ranked_result_actions_use_clicked_provider_and_track(panel, monkeypatch
 
     p.list_results.itemDoubleClicked.emit(item)
     # A boolean from this stub supplies no player receipt or advancing media.
-    wait_until(lambda: "未确认起播" in p.lbl_status.text())
-    music.play_online.assert_called_once_with(exact)
+    wait_until(lambda: "暂未确认播放" in p.lbl_status.text())
+    music.play_online.assert_called_once()
+    assert music.play_online.call_args.args == (exact,)
+    assert music.play_online.call_args.kwargs["_alternatives"] == (exact,)
+    assert music.play_online.call_args.kwargs["_before_load"]() is False
     assert music.play_online.call_args.args[0] is exact
 
     def invoke_actions(menu, _position):
@@ -304,7 +313,7 @@ def test_ranked_result_actions_use_clicked_provider_and_track(panel, monkeypatch
         actions["下一首播放"].trigger()
         playlist_menu = actions["添加到歌单 ▸"].menu()
         next(action for action in playlist_menu.actions() if action.text() == "我喜欢的音乐").trigger()
-        actions["下载到本地"].trigger()
+        actions["一键最佳下载"].trigger()
 
     monkeypatch.setattr(QMenu, "exec_", invoke_actions)
     p._on_online_context_menu(point)
@@ -335,7 +344,7 @@ def test_ranked_filters_use_submitted_query_and_original_provider_groups(panel):
     p.edit_kw.returnPressed.emit()
     wait_until(lambda: p._thread is None and p.list_results.count() == 3)
     assert p._tracks_by_row == [exact, other, cover]
-    assert "部分音源失败" in p.lbl_status.text()
+    assert "部分内容暂不可用" in p.lbl_status.text()
 
     p.edit_kw.setText("星桥 Live 远舟")
     p.cb_search_filter.setCurrentIndex(1)

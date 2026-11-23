@@ -16,7 +16,7 @@ pytestmark = pytest.mark.ui
 
 
 @pytest.mark.parametrize("theme,scale,width", [("dark", 1, 170), ("light", 1.5, 140)])
-def test_poster_draws_source_inside_card_without_hiding_title_or_version(candidates, theme, scale, width):
+def test_poster_draws_availability_without_hiding_title_or_version(candidates, theme, scale, width):
     from PySide6.QtGui import QIcon
     app = candidates.app
     manager = get_theme_manager(app)
@@ -55,7 +55,8 @@ def test_poster_draws_source_inside_card_without_hiding_title_or_version(candida
         assert traces[0][0].startswith("很长的电影片名") and traces[0][0].endswith("…")
         assert traces[1][0] == "导演剪辑版"
         assert traces[2][0] == "2026"
-        assert traces[3][0].startswith("很长的来") and traces[3][0].endswith("…")
+        assert traces[3][0] == "仅作品信息"
+        assert item.data(Qt.UserRole)["_source"].startswith("很长的来")
         assert traces[3][5] == QColor(Tokens.TEXT_SECONDARY)
         assert all(214 < top < bottom < 292 and 0 <= x < x + extent <= width
                    for _, top, bottom, x, extent, _ in traces)
@@ -76,7 +77,8 @@ def test_same_title_tooltips_and_list_to_poster_toggle_keep_the_exact_candidate(
     for index in range(panel.list_results.count()):
         row = panel.list_results.item(index)
         source = row.data(Qt.UserRole)["_source"]
-        assert row.text().endswith(source)
+        assert source not in row.text()
+        assert row.text().endswith("可选播放")
         assert row.toolTip() == rows[source].toolTip()
     panel._on_toggle_view()
     assert panel.stack_results.currentWidget() is panel.list_results

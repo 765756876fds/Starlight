@@ -112,6 +112,18 @@ def test_cancellation_guard_invalidates_running_read_and_does_not_revive_closed_
         task.cancel()
 
 
+def test_quality_trial_does_not_change_search_completion_or_load_media(scene):
+    scene.panel.quality_trial_action.trigger()
+    assert scene.controller.source_quality_trial_enabled()
+    scene.mpv.reset_mock()
+    scene.panel.edit_kw.setText("公开测试片名")
+    scene.panel._do_search()
+    wait(lambda: not scene.panel._film_search._running)
+    assert scene.panel.list_results.count() == 1
+    assert "正在搜索" not in scene.panel.lbl_status.text()
+    scene.mpv.loadfile.assert_not_called()
+    assert not scene.window.quality_notice.isVisible()
+    scene.panel.quality_trial_action.trigger()
 
 
 def test_return_home_cancels_deadline_and_preserves_page(movie_panel):

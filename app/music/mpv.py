@@ -520,7 +520,10 @@ class MpvController:
     def get_property(self, name: str, timeout: float = 2.0) -> Any:
         resp = self._send_command("get_property", [name], timeout=timeout)
         if resp and "data" in resp:
-            return resp["data"]
+            value = resp["data"]
+            if name in ("pause", "idle-active") and isinstance(value, bool):
+                self._properties[name] = value
+            return value
         return None
 
     def get_video_params(self) -> dict:
@@ -566,15 +569,14 @@ class MpvController:
         return str(self._properties.get("filename", ""))
 
     def get_idle_active(self) -> bool:
-        """实时查询 idle-active（不读启动时缓存——音乐链教训：_properties 不随播放更新）。"""
+        """查询实时空闲状态，无明确响应时保留上次观测。"""
         try:
             val = self.get_property("idle-active", timeout=1.0)
-            if val is not None:
-                self._properties["idle-active"] = bool(val)
-                return bool(val)
+            if isinstance(val, bool):
+                return val
         except Exception:
             pass
-        return bool(self._properties.get("idle-active", False))
+        return self.is_idle()
 
     # ---- 字幕 ----
 

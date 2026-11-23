@@ -565,6 +565,8 @@ class MusicController:
         stop_scanner = getattr(getattr(self, "scanner", None), "stop_highlight_background", None)
         if callable(stop_scanner) and stop_scanner() is False:
             logger.warning("[Music] 已请求停止后台 highlight 任务，但尚未确认线程退出")
+        if getattr(self, "downloader", None) is not None:
+            self.downloader.close()
         if getattr(self, "online_manager", None) is not None:
             try:
                 self.online_manager.close()
@@ -2041,7 +2043,7 @@ class MusicController:
             except Exception as e:
                 logger.error(f"[Music] 下载器初始化失败: {e}")
 
-    def download_song(self, song: dict[str, Any], callbacks=None) -> bool:
+    def download_song(self, song: dict[str, Any], callbacks=None, *, options=None) -> bool:
         """在线歌下载入队（薄代理）。callbacks: on_progress/on_done/on_fail/on_exists。"""
         if self.downloader is None:
             if callbacks and callbacks.get("on_fail"):
@@ -2049,7 +2051,7 @@ class MusicController:
                 callbacks["on_fail"](key, "下载服务未就绪")
             return False
         try:
-            return self.downloader.download(song, callbacks)
+            return self.downloader.download(song, callbacks, **({"options": options} if options is not None else {}))
         except Exception as e:
             logger.error(f"[Music] download_song error: {e}")
             return False
@@ -2375,7 +2377,8 @@ class MusicController:
                 self._is_switching_track = False
 
     def play_online(self, track, _before_load=None, *, _on_loaded=None, _resolved=None,
-                    _expected_request=None, _recommendation=False, _intent_ns=None) -> bool:
+                    _expected_request=None, _recommendation=False, _intent_ns=None,
+                    _alternatives=()) -> bool:
         """通过 online source 获取 URL 后用 mpv 直接播放。"""
         intent_ns = time.perf_counter_ns() if _intent_ns is None else _intent_ns
         if not self._movie_permits_request(intent_ns):
@@ -2408,7 +2411,31 @@ class MusicController:
         if self.online_manager is None:
             self._end_switch_state_if_current(req_id)
             return False
-        result = _resolved if _resolved is not None else self.online_manager.get_play_url(track)
+        try:
+            result = _resolved if _resolved is not None else self.online_manager.get_play_url(track)
+        except Exception:
+            if not _alternatives:
+                raise
+            logger.error("[Music] initial address resolution failed", exc_info=True)
+            result = None
+        if not result or not result.get("url"):
+            from .online.content_choices import equivalent_versions
+            # Only address resolution can fall back. Never repeat an unknown load.
+            for candidate in list(equivalent_versions(track, _alternatives))[:2]:
+                with self._lock:
+                    current = req_id == self._play_request_id
+                if (not current or not self._movie_permits_request(intent_ns)
+                        or (_before_load is not None and not _before_load())):
+                    self._end_switch_state_if_current(req_id)
+                    return False
+                try:
+                    result = self.online_manager.get_play_url(candidate)
+                except Exception:
+                    logger.error("[Music] alternate address resolution failed", exc_info=True)
+                    result = None
+                if result and result.get("url"):
+                    track = candidate
+                    break
         if not result or not result.get("url"):
             report_next_feedback(self, "resolve", "no_url", req_id)
             logger.info(f"[Music] online 无 URL: {track.title}")
@@ -2431,7 +2458,7 @@ class MusicController:
                 # "校验→loadfile"原子）+ loadfile + pause + 状态落库。
                 online_song = self._apply_stream(
                     track, url, result.get("headers"), before_load=_before_load, playback=result,
-                    **({"verify_load": _before_load} if _recommendation else {}))
+                    **({"verify_load": _before_load} if _recommendation or _alternatives else {}))
                 if online_song is None:
                     # 互斥确认或紧邻 loadfile 前置校验失败时，没有异常可供
                     # 外层 except 收口；必须结束本次切换态，避免 UI 永久冻结。

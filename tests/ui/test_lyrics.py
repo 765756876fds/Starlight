@@ -100,10 +100,21 @@ def _controller(mpv_pos=10.0, current_song=None, online_manager=None):
     ctrl = MagicMock()
     ctrl.mpv = MagicMock()
     ctrl.mpv.get_live_playback_time.return_value = mpv_pos
+    ctrl.current_playback_time = mpv_pos
     ctrl.get_current_song.return_value = current_song
     ctrl.online_manager = online_manager
     ctrl.event_bus = MagicMock()
     return ctrl
+
+
+def _wait_loaded(window, title):
+    """Online results are queued to Qt; retain assertions after bounded delivery."""
+    import time
+    from PySide6.QtTest import QTest
+    deadline = time.monotonic() + 2
+    while window._title != title and time.monotonic() < deadline:
+        QTest.qWait(5)
+    assert window._title == title
 
 
 class TestLyricsWindow:
@@ -131,6 +142,7 @@ class TestLyricsWindow:
         w.set_lyrics([(1.0, "a"), (2.0, "b"), (4.0, "c")])
         w._sync()
         assert w._current_idx == 1
+        ctrl.mpv.get_live_playback_time.assert_not_called()
 
     def test_sync_ignores_exception_and_none(self, qapp):
         from app.ui.widgets.lyrics_window import LyricsWindow
@@ -142,6 +154,7 @@ class TestLyricsWindow:
 
         ctrl.mpv.get_live_playback_time.side_effect = None
         ctrl.mpv.get_live_playback_time.return_value = None
+        ctrl.current_playback_time = None
         w._sync()  # None 不更新
         assert w._current_idx == 0
 
@@ -168,6 +181,7 @@ class TestLyricsWindow:
         ctrl = _controller(current_song=track, online_manager=mgr)
         w = LyricsWindow(ctrl)
         w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={"song": track}))
+        _wait_loaded(w, '晴天')
         assert len(w._lines) == 1
         assert w._lines[0][1] == "在线歌词"
 
@@ -188,6 +202,7 @@ class TestLyricsWindow:
         ctrl = _controller(current_song=song, online_manager=mgr)
         w = LyricsWindow(ctrl)
         w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={"song": song}))
+        _wait_loaded(w, '晴天')
         # 在线分支：manager.get_lyric 被调，且收到的是 OnlineTrack（不是 dict——manager 按属性路由）
         assert mgr.get_lyric.call_count == 1
         got = mgr.get_lyric.call_args.args[0]
@@ -208,6 +223,7 @@ class TestLyricsWindow:
         ctrl = _controller(current_song=song, online_manager=mgr)
         w = LyricsWindow(ctrl)
         w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={"song": song}))
+        _wait_loaded(w, '词')
         assert mgr.get_lyric.call_count == 1
         assert len(w._lines) == 1
 
@@ -222,6 +238,8 @@ class TestLyricsWindow:
         # 新歌在线 dict，加载失败（无 online_manager）→ 旧词必须清空
         w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={
             "song": {"source": "online", "source_name": "酷狗音乐", "track_id": "t1", "title": "新歌"}}))
+        assert w._lines == []  # Clear old lines before queued completion.
+        _wait_loaded(w, '新歌')
         assert w._lines == []          # 旧歌词消失（防串词）
         assert w._title == "新歌"
 
@@ -237,6 +255,8 @@ class TestLyricsWindow:
         w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={
             "song": {"source": "online", "source_name": "酷狗音乐", "track_id": "t2", "title": "新"}}))
         assert w._lines == []
+        _wait_loaded(w, '新')
+        assert w._lines == []
         assert w._title == "新"
 
     def test_track_changed_online_dict_missing_fields_placeholder(self, qapp):
@@ -249,6 +269,7 @@ class TestLyricsWindow:
         ctrl = _controller(current_song=song, online_manager=mgr)
         w = LyricsWindow(ctrl)
         w._on_track_changed(Event(EventType.MUSIC_TRACK_CHANGED, data={"song": song}))
+        _wait_loaded(w, '旧形态')
         assert w._lines == []
         assert w._title == "旧形态"
 
@@ -262,6 +283,7 @@ class TestLyricsWindow:
         ctrl = _controller(current_song=song_a, online_manager=mgr)
         w = LyricsWindow(ctrl)
         w._load_current()
+        _wait_loaded(w, '歌A')
         assert len(w._lines) == 1
         assert w._lines[0][1] == "歌A歌词"
         assert w._last_song_key == w._song_key(song_a)
@@ -271,6 +293,7 @@ class TestLyricsWindow:
         mgr.get_lyric.return_value = "[00:01.00]歌B歌词"
         ctrl.get_current_song.return_value = song_b
         w._sync()
+        _wait_loaded(w, '歌B')
         assert w._lines[0][1] == "歌B歌词"      # 自动重载
         assert w._last_song_key == w._song_key(song_b)
 
@@ -284,6 +307,7 @@ class TestLyricsWindow:
         ctrl = _controller(current_song=song, online_manager=mgr)
         w = LyricsWindow(ctrl)
         w._load_current()
+        _wait_loaded(w, '歌')
         calls0 = mgr.get_lyric.call_count
         w._sync()
         w._sync()

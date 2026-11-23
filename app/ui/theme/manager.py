@@ -66,7 +66,14 @@ class ThemeManager(QObject):
                 refresh_color_tokens()
                 self._apply_palette()
                 from .applier import build_glass_qss
-                self.app.setStyleSheet(build_glass_qss())
+                sheet = build_glass_qss()
+                # Theme changes already ignore our global event filter.
+                # Avoid dispatching every Qt repolish event back to Python.
+                self.app.removeEventFilter(self)
+                try:
+                    self.app.setStyleSheet(sheet)
+                finally:
+                    self.app.installEventFilter(self)
                 QPixmapCache.clear()
                 for widget in widgets:
                     if not isValid(widget):

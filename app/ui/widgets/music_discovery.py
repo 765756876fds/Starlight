@@ -4,17 +4,18 @@ import json
 import weakref
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QButtonGroup,
-    QComboBox, QScrollArea, QStackedWidget, QLineEdit)
+    QComboBox, QMenu, QScrollArea, QStackedWidget, QLineEdit)
 
 from ...core.notifications import notify
 from .latest_task import LatestTask
+from .media_controls import FilterRow
 from .discovery_cards import CardList, ContentSection, label
 
 
 def music_card(row):
     return dict(title=row.get("title") or row.get("name") or "未命名",
                 subtitle=row.get("artist") or row.get("description") or "",
-                caption=row.get("source_name") or ("本地" if row.get("source_type") == "local" else ""),
+                caption=row.get("album") or ("本地音乐" if row.get("source_type") == "local" else ""),
                 cover_url=row.get("cover_url") or row.get("artwork") or row.get("coverImg") or "")
 
 
@@ -73,7 +74,7 @@ class MusicDiscovery(QWidget):
         nav.setSpacing(6)
         self.navigation = QButtonGroup(self)
         self.nav_buttons = {}
-        for key, title in (("home", "推荐"), ("ranks", "按来源看榜"), ("sheets", "歌单"),
+        for key, title in (("home", "推荐"), ("ranks", "排行榜"), ("sheets", "歌单"),
                            ("new", "新歌"), ("artists", "歌手 / 专辑"), ("history", "最近播放")):
             button = QPushButton(title)
             button.setCheckable(True)
@@ -85,22 +86,23 @@ class MusicDiscovery(QWidget):
         nav.addStretch()
         root.addLayout(nav)
         controls = QHBoxLayout()
-        controls.addWidget(label("发现音源", True))
+        self.source_options = QPushButton("内容筛选")
+        controls.addWidget(self.source_options)
         self.sources = QComboBox()
         self.sources.setMinimumContentsLength(8)
-        controls.addWidget(self.sources, 1)
         self.tags = QComboBox()
         self.tags.setMinimumContentsLength(6)
-        controls.addWidget(self.tags, 1)
         self.refresh_button = QPushButton("刷新内容")
         self.refresh_button.clicked.connect(self.retry)
-        self.back = QPushButton("发现首页")
+        self.back = QPushButton("返回发现")
         self.back.clicked.connect(lambda: self.show_view("home"))
         self.back.hide()
+        controls.addStretch()
         controls.addWidget(self.refresh_button)
         controls.addWidget(self.back)
         root.addLayout(controls)
-        self.status = label("内容由音源实际能力提供；歌曲版本与来源均保留。", True)
+        root.addWidget(FilterRow(self.source_options, self.sources, self.tags))
+        self.status = label("挑一首喜欢的，或搜索歌曲与歌手。", True)
         root.addWidget(self.status)
         recommendation = QHBoxLayout()
         self.recommend_button = QPushButton("为我播放")
@@ -111,14 +113,21 @@ class MusicDiscovery(QWidget):
         self.change_chart_button.clicked.connect(lambda: self._recommend(change_chart=True))
         self.like_artist_button.clicked.connect(lambda: self._remember_preference(True))
         self.reduce_track_button.clicked.connect(lambda: self._remember_preference(False))
-        for button in (self.recommend_button, self.change_chart_button,
-                       self.like_artist_button, self.reduce_track_button):
-            button.setEnabled(callable(getattr(music, "recommend_music", None)))
-            recommendation.addWidget(button)
+        available = callable(getattr(music, "recommend_music", None))
+        self.recommend_button.setVisible(available)
+        recommendation.addWidget(self.recommend_button)
+        recommendation_options = QPushButton("推荐选项")
+        menu = QMenu(recommendation_options)
+        for button in (self.change_chart_button, self.like_artist_button, self.reduce_track_button):
+            button.setParent(self)
+            button.hide()
+            menu.addAction(button.text(), button.click)
+        recommendation_options.setMenu(menu)
+        recommendation.addWidget(recommendation_options)
+        recommendation_options.setVisible(available)
         recommendation.addStretch()
         root.addLayout(recommendation)
-        self.recommendation_status = label("为我播放：参考本地偏好选歌；没有记录时从可用榜单开始。", True)
-        self.recommendation_status.setWordWrap(True)
+        self.recommendation_status = label("", True)
         root.addWidget(self.recommendation_status)
         self.pages = QStackedWidget()
         root.addWidget(self.pages, 1)
@@ -266,7 +275,7 @@ class MusicDiscovery(QWidget):
         self._sheet = None
         self._render_charts()
         self._render_sheets([])
-        self.status.setText("选择发现音源，或直接使用顶部搜索。" if self.sources.count() else
+        self.status.setText("挑一首喜欢的，或搜索歌曲与歌手。" if self.sources.count() else
                             "当前音源未提供发现内容；普通搜索、本地音乐、最近播放和我的歌单仍可使用。排行榜以音源实际支持为准。")
         if self.isVisible():
             self._source_changed()
@@ -283,7 +292,7 @@ class MusicDiscovery(QWidget):
         self.nav_buttons[view].setChecked(True)
         self.pages.setCurrentWidget(self.home if view == "home" else self.category_page)
         self.back.setVisible(view != "home")
-        self.tags.setVisible(view in ("home", "sheets"))
+        self.tags.setVisible(self.source_options.isChecked() and view in ("home", "sheets"))
         self.artist_controls.setVisible(view == "artists")
         self.more.hide()
         self.sheets.clear()
@@ -481,7 +490,7 @@ class MusicDiscovery(QWidget):
                     self.sheets.addItem(item)
                 self.empty.setText("" if self.sheets.count() else "此分类暂无内容，试试其他分类或音源。")
                 self.more.setVisible(more)
-            self.status.setText(f"{source} · 已读取 {len(rows)} 个条目" + (" · 首页仅展示少量预览" if self._view == "home" else ""))
+            self.status.setText(f"已找到 {len(rows)} 个内容" + (" · 首页仅展示少量预览" if self._view == "home" else ""))
         else:
             tracks = value.get("tracks")
             if not isinstance(tracks, list):
@@ -492,14 +501,14 @@ class MusicDiscovery(QWidget):
             self._track_pages[self._page] = list(tracks)
             self._tracks = [track for page in sorted(self._track_pages) for track in self._track_pages[page]]
             title = str(self._sheet.get("title") or self._sheet.get("name") or "曲目")
-            self.status.setText(f"{source} · {title} · {len(self._tracks)} 首")
+            self.status.setText(f"{title} · {len(self._tracks)} 首")
             self.back.show()
             self.paging_changed.emit(more)
             self.tracks_ready.emit(list(self._tracks), title)
             notify("曲目已加载", self.status.text(), source="music", status="success" if self._tracks else "warning")
 
     def _render_sheets(self, rows):
-        empty = "当前音源未提供公开推荐歌单，可换音源或直接搜索。"
+        empty = "暂时没有推荐歌单，试试搜索喜欢的歌手。"
         self.sections["today"].set_rows(rows[:6], music_card, empty)
         self.sections["featured"].set_rows(rows[6:12], music_card, "选择“歌单”可浏览其他分类。")
 
@@ -603,7 +612,7 @@ class MusicDiscovery(QWidget):
             hint = new_hint if self._view == "new" else hint
             self.sheets.set_rows(selected, music_card)
             self.empty.setText("" if selected else hint)
-            self.status.setText(hint or f"{chosen} · 已读取 {len(selected)} 个榜单")
+            self.status.setText(hint or f"已找到 {len(selected)} 个榜单")
 
     def _refresh_local(self):
         def read():

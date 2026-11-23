@@ -18,6 +18,7 @@ import unicodedata
 import zipfile
 from pathlib import Path
 from collections import Counter
+from contextlib import nullcontext
 from difflib import SequenceMatcher
 from functools import wraps
 
@@ -773,19 +774,24 @@ class MovieController:
             return
         item = self._current or {}
         self._play_feedback(item, receipt.episode, state, media_url=session["url"])
+        if state == "started" and session.get("ui_start"):
+            self._write_state(playing=True, paused=False)
         source = item.get("_source_id")
         evidence = getattr(self, "startup_evidence", None)
         if evidence is not None and isinstance(source, str) and source and state in ("started", "startup_failed"):
             evidence.observe(source, receipt.media_tag, state == "started")
 
     @_serialized_media
-    def play(self, item, index=None):
+    def play(self, item, index=None, *, _ui_cancel=None):
         """播电影：启动视频 mpv 播指定集，确认实际起播后再暂停音乐。
         index=None → 取 first_url（现状不变）；index=N → 取第 N 集 URL。失败返回 False。
         内嵌：embed 开且有播放窗口注入 winId → mpv --wid 渲染进 Qt 容器；
         否则（embed 关 / 窗口未建）→ 独立 mpv 窗口（现状，安全回退）。"""
-        if not isinstance(item, dict) or getattr(self, "_media_voice_closed", False):
+        if (not isinstance(item, dict) or getattr(self, "_media_voice_closed", False)
+                or (_ui_cancel is not None and _ui_cancel.is_set())):
             return False
+        if _ui_cancel is not None:
+            self._ui_start_cancel = _ui_cancel
         if "$$$" in str(item.get("vod_play_url") or item.get("play_url") or ""):
             item = normalise_playback(item)
         blocked = self.playback_block_message(item, index)
@@ -826,30 +832,61 @@ class MovieController:
         if wid is not None:
             print(f"[Movie] 内嵌播放 wid={wid}")
         # 独立视频实例：taskkill=False 不杀音乐实例；video=True 出视频窗口
-        if not self.mpv.is_running():
-            if not self.mpv.start(taskkill=False, wid=wid):
+        cold = not self.mpv.is_running()
+        if cold:
+            options = {"cancel": _ui_cancel} if _ui_cancel is not None else {}
+            if not self.mpv.start(taskkill=False, wid=wid, **options):
+                if _ui_cancel is not None and _ui_cancel.is_set():
+                    return False
                 return self._play_feedback(item, index, "start_failed", "播放器启动失败，请稍后重试。")
+        if _ui_cancel is not None and (_ui_cancel.is_set() or getattr(self, "_media_voice_closed", False)):
+            if cold:
+                self.mpv.stop_process()
+            return False
         # loadfile 三态确认（与 mpv.stop() 同契约；命令被接受≠媒体已解码/出声）：
         #   resp.error == "success" → 命令被接受，按原逻辑更新播放上下文
         #   resp is None（超时/无响应）→ 结果未确认 → 不伪造播放成功
         #   resp.error != "success" → 协议层明确失败 → 不伪造播放成功
         #   抛异常（IPC 未连接/写入失败）→ 不伪造播放成功。
-        # 失败时音乐已按互斥先行暂停（既有行为，如实保留，不加回滚）。
+        restore_playing = False
         try:
             if callable(resume_guard) and not resume_guard():
+                if cold and _ui_cancel is not None:
+                    self.mpv.stop_process()
                 return False
+            if _ui_cancel is not None:
+                # loadfile can begin decoding before its reply reaches us.
+                # Keep it paused until the owning UI request accepts the reply.
+                restore_playing = not cold and self.mpv.get_property("pause", timeout=.2) is False
+                paused = self.mpv.set_property("pause", True)
+                if not isinstance(paused, dict) or paused.get("error") != "success":
+                    if cold:
+                        self.mpv.stop_process()
+                    return self._play_feedback(item, idx, "start_failed", "播放器未就绪，请重试。")
+                if _ui_cancel.is_set() or getattr(self, "_media_voice_closed", False):
+                    if cold:
+                        self.mpv.stop_process()
+                    elif restore_playing:
+                        self.mpv.set_property("pause", False)
+                    return False
             self._quality_transition(suspend=True)
             requested_at = time.monotonic()
             resp = self.mpv.loadfile(url)
         except Exception as e:
+            if self._discard_cancelled_ui_load(_ui_cancel):
+                return False
             logger.error("[Movie] loadfile 异常: type=%s", type(e).__name__)
             return self._unconfirmed_load(item, idx, "load_exception", url)
+        if self._discard_cancelled_ui_load(_ui_cancel):
+            return False
         if resp is None:
             logger.error("[Movie] loadfile 结果未确认（IPC 超时/无响应）")
             return self._unconfirmed_load(item, idx, "load_unknown", url)
         if not isinstance(resp, dict) or resp.get("error") != "success":
             err = resp.get("error") if isinstance(resp, dict) else resp
             logger.error("[Movie] loadfile 失败: error_type=%s", type(err).__name__)
+            if restore_playing:
+                self.mpv.set_property("pause", False)
             return self._play_feedback(item, index, "load_rejected", "播放器拒绝加载该地址，请选择其他候选。", media_url=url)
         # 确保新视频开始播放（不继承之前的暂停状态）
         self.mpv.set_property("pause", False)
@@ -857,29 +894,42 @@ class MovieController:
             self.mpv._properties["pause"] = False
         except Exception:
             pass
+        if self._discard_cancelled_ui_load(_ui_cancel):
+            return False
         self._switch_unsettled = False
         self._current = item
         self._current_index = idx
         self._playback_gen += 1  # V2-2：新片加载，会话代次递增
         self._begin_film_session(resp, url)
+        if self._film_session is not None and _ui_cancel is not None:
+            self._film_session["ui_start"] = True
         self._last_idle = False  # 新播放开始，等播完再触发连播
         self._external_url_mode = False  # 切回正常剧集模式
         self._external_url_seen_active = False
-        self._pending_history = (dict(item), str(url))
+        self._pending_history = None if item.get("_external_direct") else (dict(item), str(url))
         self._history_recorded_gen = None
         self._film_last_sample = None
         self._film_saved_at = 0
         position = item.get("_resume_position")
         self._resume_pending = ((self._playback_gen, self._current_index, float(position), 0) if not item.get("local_file")
                                 and type(position) in (int, float) and position > 0 else None)
-        self._write_state(playing=True, paused=False)
+        self._write_state(playing=_ui_cancel is None, paused=False)
         self._pending_local_subtitle = None
         if item.get("local_file"):
             self._load_local_subtitle(str(url))
-        self._start_playback_diagnostics("local" if item.get("local_file") else "cms",
-                                         item.get("_source"), media_url=str(url),
+        mode = "local" if item.get("local_file") else "external" if item.get("_external_direct") else "cms"
+        self._start_playback_diagnostics(mode, item.get("_source"), media_url=str(url),
                                          requested_at=requested_at)
         self._play_feedback(item, idx, "accepted", media_url=url)  # loadfile accepted is not decoded playback.
+        return True
+
+    def _discard_cancelled_ui_load(self, cancel):
+        if cancel is None or not (cancel.is_set() or getattr(self, "_media_voice_closed", False)):
+            return False
+        # loadfile was already sent. Drop only this controller's process so
+        # an unconfirmed reply cannot leave a hidden movie playing.
+        self.mpv.stop_process()
+        self.stop()
         return True
 
     @staticmethod
@@ -2023,11 +2073,18 @@ class MovieController:
 
     def close(self):
         self._media_voice_closed = True
+        cancel = getattr(self, "_ui_start_cancel", None)
+        if cancel is not None:
+            cancel.set()
+        with getattr(self, "_media_action_lock", nullcontext()):
+            self._close_media()
+
+    def _close_media(self):
         monitor = getattr(self, "_playback_monitor", None)
         if monitor is not None:
             monitor.close()
         worker = getattr(self, "_ownership_worker", None)
-        if worker is not None and worker is not threading.current_thread():
+        if worker is not None and worker is not threading.current_thread() and worker.ident is not None:
             worker.join(.25)
         self._remember_view(force=True)
         self._recommendation_ready = None

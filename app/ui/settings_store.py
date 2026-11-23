@@ -27,6 +27,7 @@ SETTINGS_PATH = os.path.join(_ROOT, "config", "settings.yaml")
 ALL_EXTENSIONS = ["mp3", "flac", "wav", "m4a", "ogg", "ape"]
 
 DEFAULT_PREFS = {
+    "download_options": {"quality":"best", "lyrics":True, "cover":True, "metadata":True},
     "theme": "dark",             # 夜间默认；日间/夜间共用同一套 UI
     "movie_library_dirs": [],    # Only folders explicitly selected by the user.
     "combo_window_gate": True,   # 仅 LoL 前台时触发（持久化）
@@ -180,6 +181,7 @@ DEFAULT_LYRICS_PREFS = {
     "color": "#FAB446",          # 当前行颜色（橙，对齐项目主色 250,180,70）
     "bg_opacity": 0,             # 背景透明度 0-100（0=纯透明不画背景；100=半透黑底）
     "mode": "triple",            # triple=3 行上下文 / single=单行
+    "offset_ms": 0,             # 正值延后显示，负值提前显示；不修改原歌词
     "locked": True,              # 锁定=鼠标穿透不可拖（默认锁定）；False=解锁可拖
     "pos_x": None,               # 窗口位置（None=未保存/居中）
     "pos_y": None,
@@ -199,6 +201,10 @@ def load_lyrics_prefs() -> dict:
         merged = dict(DEFAULT_LYRICS_PREFS)
         if isinstance(raw, dict):
             merged.update({k: raw[k] for k in DEFAULT_LYRICS_PREFS if k in raw})
+        try:
+            merged["offset_ms"] = max(-10000, min(10000, int(merged["offset_ms"])))
+        except (TypeError, ValueError, OverflowError):
+            merged["offset_ms"] = 0
         return merged
 
 
@@ -216,3 +222,13 @@ def save_lyrics_prefs(update: dict) -> bool:
     cur = load_lyrics_prefs()
     cur.update(clean)
     return save_settings_yaml({"music": {"lyrics": cur}})
+
+
+def load_download_prefs():
+    from app.music.downloader import normalize_options
+    return normalize_options(load_ui_prefs().get("download_options"))
+
+
+def save_download_prefs(options):
+    from app.music.downloader import normalize_options
+    return save_ui_prefs({"download_options":normalize_options(options)})

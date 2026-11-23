@@ -179,7 +179,11 @@ def test_panel_watchdog_uses_the_absolute_supplementary_deadline(screen, cms):
     assert screen.panel._progressive_ui_timer.interval() == 47000
     serial = screen.panel._progressive_serial
     screen.panel._progressive_progress(serial, dict(phase='supplement'))
-    assert '继续查询' in screen.panel.lbl_status.text()
+    assert screen.panel.lbl_status.text() == '正在搜索…'
+    screen.panel.list_posters.addItem('已有影片')
+    screen.panel._progressive_progress(serial, dict(phase='supplement'))
+    assert screen.panel.lbl_status.text() == '已找到 1 部，正在加载更多…'
+    assert screen.panel._progressive_ui_timer.interval() == 47000
     screen.panel._freeze_progressive()
     screen.panel._progressive_progress(serial, dict(phase='supplement'))
     assert not screen.panel._progressive_ui_timer.isActive()

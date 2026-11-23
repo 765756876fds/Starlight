@@ -92,7 +92,7 @@ def test_multiple_lines_do_not_concatenate_urls(candidates, cms):
     assert '$$$' in s.controller.current_item()['vod_play_url']  # Original data survives.
 
 
-@pytest.mark.parametrize('response,reason', [(None,'未确认'), ({'error':'loading failed'},'播放器拒绝')])
+@pytest.mark.parametrize('response,reason', [(None,'未确认'), ({'error':'loading failed'},'暂时无法播放')])
 def test_nonempty_url_failure_is_visible_and_not_reported_as_missing_address(candidates, response, reason):
     s = candidates
     rows = found(s)
@@ -100,6 +100,7 @@ def test_nonempty_url_failure_is_visible_and_not_reported_as_missing_address(can
     s.panel._on_item_activated(rows['非凡资源'])
     wait(lambda: s.mpv.loadfile.called)
     assert reason in s.panel.lbl_status.text()
+    assert s.controller.playback_startup().state == ("load_unknown" if response is None else "load_rejected")
     assert '无可用地址' not in s.panel.lbl_status.text()
     assert s.controller.current_item() is None
 
@@ -109,8 +110,8 @@ def test_empty_play_address_is_explicit_and_does_not_load_another_cms(candidates
     cms.modes['/s1']['rows'][0]['vod_play_url'] = ''
     row = found(s)['非凡资源']
     s.panel._on_item_activated(row)
-    wait(lambda: '该来源未提供播放地址' in s.panel.lbl_status.text() or '无法播放' in s.panel.lbl_status.text())
-    assert '该来源未提供播放地址' in s.panel.lbl_status.text()
+    wait(lambda: '暂时没有可用片源' in s.panel.lbl_status.text() or '无法播放' in s.panel.lbl_status.text())
+    assert '暂时没有可用片源' in s.panel.lbl_status.text()
     s.mpv.loadfile.assert_not_called()
 
 
@@ -160,17 +161,17 @@ def test_accepted_is_not_start_confirmation_and_pending_status_uses_existing_pol
     s = candidates
     s.panel._on_item_activated(found(s)['非凡资源'])
     wait(lambda: s.mpv.loadfile.called)
-    assert '等待起播确认' in s.panel.lbl_status.text()
+    assert '正在加载' in s.panel.lbl_status.text()
     monkeypatch.setattr(s.controller, 'tick', lambda: None)
     monkeypatch.setattr(s.controller, 'get_position', lambda: 0.)
     monkeypatch.setattr(s.controller, 'get_duration', lambda: 120.)
     window = s.panel._video_win
     window._load_started_at = time.monotonic()-16
     window._tick()
-    assert '尚未确认起播' in s.panel.lbl_status.text()
+    assert '正在加载' in s.panel.lbl_status.text()
     monkeypatch.setattr(s.controller, 'get_position', lambda: 3.0)
     window._tick()
-    assert '返回播放进度' in s.panel.lbl_status.text()
+    assert '正在加载' in s.panel.lbl_status.text()
     s.mpv.loadfile.assert_called_once()
 
 
@@ -195,7 +196,7 @@ def test_load_ending_before_progress_is_reported_unconfirmed_without_retry(candi
     monkeypatch.setattr(s.controller, 'tick', lambda: None)
     s.controller._current = None
     s.panel._video_win._tick()
-    assert '未取得起播确认' in s.panel.lbl_status.text()
+    assert '暂未确认播放' in s.panel.lbl_status.text()
     s.mpv.loadfile.assert_called_once()
 
 
@@ -208,7 +209,7 @@ def test_unknown_new_load_does_not_allow_old_pending_notice_to_overwrite_it(cand
     s.panel._on_item_activated(rows['极速资源'])
     wait(lambda: s.mpv.loadfile.call_count == 2)
     message = s.panel.lbl_status.text()
-    assert '加载结果未确认' in message
+    assert '暂未确认播放' in message
     monkeypatch.setattr(s.controller, 'tick', lambda: None)
     monkeypatch.setattr(s.controller, 'get_position', lambda: 0.)
     monkeypatch.setattr(s.controller, 'get_duration', lambda: 120.)

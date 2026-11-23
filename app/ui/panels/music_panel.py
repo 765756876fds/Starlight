@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QStyledItemDelegate,
+    QSplitter,
     QStackedWidget,
     QTabWidget,
     QVBoxLayout,
@@ -39,6 +40,7 @@ from ..theme.tokens import Tokens
 from ..widgets.current_song_like import CurrentSongLikeButton
 from ..widgets.icon_utils import lucide_icon
 from ..widgets.latest_task import LatestTask
+from ..widgets.media_controls import FilterRow, PLAY_LOADING, PLAY_RETRY, SEARCHING
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
 from ..widgets.music_queue_dialog import MusicQueueDialog
 from .music_search_order import rank_manual_search
@@ -189,9 +191,6 @@ class MusicPanel(QWidget):
     _search_event = Signal(dict)
     # 识曲语音命令（MUSIC_IDENTIFY）跨线程桥：voice 线程 emit → 主线程弹窗
     _identify_trigger = Signal()
-    # 下载进度：后台线程 emit → 主线程渲染（跨线程安全）；pct None=无总量，-1=完成，-2=失败
-    _dl_signal = Signal(str, object)  # key, pct
-    _dl_finish_signal = Signal(str, str)  # (key, 状态: done/fail/exists)：下载回调只 emit，UI 刷新主线程做
     _status_signal = Signal(str)          # 跨线程状态栏消息桥（换源错误等事件，禁直接 setText）
     _sleep_timer_signal = Signal(bool, int)
     _manual_play_status = Signal(object, object, str)
@@ -199,6 +198,7 @@ class MusicPanel(QWidget):
     _progress_signal = Signal(float, float, object)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
     _volume_signal = Signal(int, int)  # gesture generation, volume; worker -> GUI
     _speed_result = Signal(object, float, int, str)  # 倍速三态结果：True / False / None
+    _download_event = Signal(str, int, str, object)
     _queue_changed = Signal()
 
     def __init__(self, music=None, parent=None):
@@ -215,7 +215,13 @@ class MusicPanel(QWidget):
         self._queue_refresh_timer.setSingleShot(True)
         self._queue_refresh_timer.timeout.connect(self._refresh_queue_view)
         self._queue_changed.connect(self._schedule_queue_refresh, Qt.QueuedConnection)
+        self._download_tasks = {}
+        self._download_serial = 0
+        self._download_pane = None
+        self._download_event.connect(self._apply_download_event)
         self._tracks_by_row = []
+        self._track_versions = []
+        self._retry_online_track = None
         self._local_songs = []
         self._thread = None
         self._scan_thread = None
@@ -225,8 +231,6 @@ class MusicPanel(QWidget):
         self._active_search = None
         self._pending_search = None
         self._pending_identify_close = None
-        self._dl_markers = {}           # 下载进度行内标记：key -> {base, widget}
-        self._dl_signal.connect(self._on_dl_progress)
         self._manual_request = None
         self._manual_play_status.connect(self._on_manual_play_status)
         self._play_result.connect(self._on_play_result)
@@ -253,44 +257,55 @@ class MusicPanel(QWidget):
         self._identify_service = None
 
         root = QVBoxLayout(self)
-        # 顶栏：右侧"歌词"开关（桌面歌词浮窗入口）
-        top_bar = QHBoxLayout()
         self.btn_queue = QPushButton("播放队列")
-        self.btn_queue.setProperty("class", "secondary")
-        self.btn_queue.setToolTip("查看当前歌曲、已指定的下一首和队列")
+        self.btn_queue.setToolTip("查看当前歌曲、下一首和待播歌曲")
         self.btn_queue.clicked.connect(self._show_queue)
-        top_bar.addWidget(self.btn_queue)
-        top_bar.addStretch()
-        self.btn_lyrics = QPushButton("歌词")
+
+        self.btn_lyrics = QPushButton("桌面歌词")
         self.btn_lyrics.setCheckable(True)
-        self.btn_lyrics.setProperty("class", "secondary")
-        self.btn_lyrics.setIcon(lucide_icon("book-open", 16, Tokens.TEXT_SECONDARY))
         self.btn_lyrics.clicked.connect(self._on_toggle_lyrics)
-        top_bar.addWidget(self.btn_lyrics)
+        self.btn_lyrics_adjust = QPushButton("调整")
+        self.btn_lyrics_adjust.setAccessibleName("歌词调整")
+        self.btn_lyrics_adjust.setToolTip("字号、锁定、显示行数与歌词时间校正")
+        self.lyrics_menu = QMenu(self.btn_lyrics_adjust)
+        self.lyrics_menu.aboutToShow.connect(self._build_lyrics_menu)
+        self.btn_lyrics_adjust.setMenu(self.lyrics_menu)
+
         self.btn_identify = QPushButton("识曲")
-        self.btn_identify.setProperty("class", "secondary")
         self.btn_identify.setIcon(lucide_icon("mic", 16, Tokens.TEXT_SECONDARY))
         self.btn_identify.clicked.connect(self._on_identify_click)
-        top_bar.addWidget(self.btn_identify)
         self.lbl_identify_status = QLabel("")
         self.lbl_identify_status.setWordWrap(True)
-        top_bar.addWidget(self.lbl_identify_status, 1)
-        # 列表/网格 视图切换（Lucide grid/list，全局作用于全部歌曲列表）
+        self.lbl_identify_status.setTextFormat(Qt.PlainText)
+        self.lbl_identify_status.hide()
+
         self.btn_view_toggle = QPushButton()
         self.btn_view_toggle.setCheckable(True)
         self.btn_view_toggle.setChecked(True)
         self.btn_view_toggle.setIcon(lucide_icon("grid", 16, Tokens.TEXT_PRIMARY))
-        self.btn_view_toggle.setToolTip("切换 网格卡片 / 平铺列表（作用于全部歌曲列表）")
+        self.btn_view_toggle.setAccessibleName("切换网格与列表")
+        self.btn_view_toggle.setToolTip("切换歌曲网格与列表")
         self.btn_view_toggle.clicked.connect(self._toggle_view_mode)
-        top_bar.addWidget(self.btn_view_toggle)
         tabs = self.tabs = QTabWidget()
-        self.music_tools = QWidget()
-        top_bar.setContentsMargins(0, 0, 0, 0)
-        top_bar.setSpacing(4)
-        self.music_tools.setLayout(top_bar)
-        tabs.setCornerWidget(self.music_tools, Qt.TopRightCorner)
-        root.addWidget(tabs, 1)  # Tab 区占满上方剩余空间，下方留给全局播放控制栏
+        tabs.setCornerWidget(self.btn_view_toggle, Qt.TopRightCorner)
         tabs.currentChanged.connect(self._on_tab_changed)
+
+        self._music_content = QSplitter(Qt.Horizontal)
+        self._music_content.setChildrenCollapsible(False)
+        self._music_content.addWidget(tabs)
+        self._media_pane = QStackedWidget()
+        self._media_pane.setMinimumWidth(275)
+        from ..widgets.playing_lyrics import PlayingLyrics
+        self.playing_lyrics = PlayingLyrics(self._media_pane)
+        self.playing_lyrics.tools.insertWidget(0, self.btn_lyrics)
+        self.playing_lyrics.tools.insertWidget(1, self.btn_lyrics_adjust)
+        self.playing_lyrics.close_requested.connect(self._close_media_pane)
+        self._media_pane.addWidget(self.playing_lyrics)
+        self._music_content.addWidget(self._media_pane)
+        self._music_content.setStretchFactor(0, 1)
+        self._music_content.setStretchFactor(1, 0)
+        self._media_pane.hide()
+        root.addWidget(self._music_content, 1)
 
         # ---- 本地 Tab ----
         local = QWidget()
@@ -337,6 +352,11 @@ class MusicPanel(QWidget):
         track_row.addStretch()
         track_row.addWidget(self.lbl_track)
         track_row.addWidget(self.btn_like)
+        self.btn_playing_lyrics = QPushButton("歌词")
+        self.btn_playing_lyrics.setCheckable(True)
+        self.btn_playing_lyrics.clicked.connect(self._toggle_playing_lyrics)
+        track_row.addWidget(self.btn_playing_lyrics)
+        track_row.addWidget(self.btn_queue)
         track_row.addStretch()
         root.addLayout(track_row)
 
@@ -389,9 +409,15 @@ class MusicPanel(QWidget):
         self.btn_mode.setMenu(self._mode_menu)
         self._set_play_mode_display("sequential")
 
-        self.btn_more = QPushButton("更多播放选项")
+        self.btn_more = QPushButton("更多")
         self._more_menu = QMenu(self.btn_more)
         self.btn_more.setMenu(self._more_menu)
+        self.action_download_tasks = self._more_menu.addAction("下载任务", self._show_download_tasks)
+        self.action_desktop_lyrics = self._more_menu.addAction("桌面歌词")
+        self.action_desktop_lyrics.setCheckable(True)
+        self.action_desktop_lyrics.triggered.connect(self.btn_lyrics.click)
+        self.btn_lyrics.toggled.connect(self.action_desktop_lyrics.setChecked)
+        self._more_menu.addSeparator()
         self._speed_menu = self._more_menu.addMenu("倍速")
         self._speed_steps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
         self._setup_speed_actions()
@@ -420,16 +446,16 @@ class MusicPanel(QWidget):
         self.slider_vol.setRange(0, 100)
         self.btn_volume.set_slider(self.slider_vol)
         left = QHBoxLayout()
-        left.addWidget(self.btn_mode)
+        left.addWidget(self.btn_mode, 0, Qt.AlignVCenter)
         left.addStretch()
         right = QHBoxLayout()
         right.addStretch()
-        right.addWidget(self.btn_more)
-        right.addWidget(self.btn_volume)
+        right.addWidget(self.btn_more, 0, Qt.AlignVCenter)
+        right.addWidget(self.btn_volume, 0, Qt.AlignVCenter)
         row_main.addLayout(left, 1)
-        row_main.addWidget(self.btn_prev)
-        row_main.addWidget(self.btn_toggle)
-        row_main.addWidget(self.btn_next)
+        row_main.addWidget(self.btn_prev, 0, Qt.AlignVCenter)
+        row_main.addWidget(self.btn_toggle, 0, Qt.AlignVCenter)
+        row_main.addWidget(self.btn_next, 0, Qt.AlignVCenter)
         row_main.addLayout(right, 1)
         root.addLayout(row_main)
 
@@ -446,7 +472,7 @@ class MusicPanel(QWidget):
         ol = QVBoxLayout(online)
         search_row = QHBoxLayout()
         self.edit_kw = QLineEdit()
-        self.edit_kw.setPlaceholderText("搜索在线音乐")
+        self.edit_kw.setPlaceholderText("想听什么？搜索歌曲、歌手")
         self.btn_search = QPushButton("搜索")
         self.btn_search.setProperty("class", "primary")
         self.cb_source = QComboBox()
@@ -456,14 +482,19 @@ class MusicPanel(QWidget):
         self.cb_search_filter.addItems(["全部版本", "现场标记", "翻唱标记"])
         self.cb_search_filter.setToolTip("只按标题中明确的现场/Live、翻唱/Cover标记筛选，不推测原唱")
         self.cb_search_filter.currentIndexChanged.connect(self._apply_online_filter)
-        self.btn_discovery_home = QPushButton("发现首页")
+        self.btn_discovery_home = QPushButton("返回发现")
         self.btn_discovery_home.clicked.connect(self._show_discovery_home)
+        self.search_options = QPushButton()
+        self.search_options.setToolTip("按歌曲版本或来源筛选")
+        self.search_filters = FilterRow(self.search_options, self.cb_search_filter, self.cb_source)
         search_row.addWidget(self.edit_kw, 1)
-        search_row.addWidget(self.cb_source)
-        search_row.addWidget(self.cb_search_filter)
         search_row.addWidget(self.btn_search)
+        search_row.addWidget(self.search_options)
+        search_row.addWidget(self.btn_identify)
         search_row.addWidget(self.btn_discovery_home)
         ol.addLayout(search_row)
+        ol.addWidget(self.search_filters)
+        ol.addWidget(self.lbl_identify_status)
         self._results_requested = False
         self._last_online_result = None
         self._last_online_query = ""
@@ -479,16 +510,44 @@ class MusicPanel(QWidget):
         results_layout = QVBoxLayout(self.results_page)
         results_layout.setContentsMargins(0, 0, 0, 0)
         self.list_results = QListWidget()
-        self._dl_results = self._setup_card_view(self.list_results)
+        from ..widgets.music_card_delegate import DownloadCardDelegate
+        self._dl_results = self._setup_card_view(self.list_results, DownloadCardDelegate)
+        self._dl_results.download_requested.connect(self._download_result)
+        download_shortcut = QShortcut(QKeySequence("Ctrl+D"), self.list_results)
+        download_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        download_shortcut.activated.connect(lambda: self._download_result(self.list_results.currentRow()))
         results_layout.addWidget(self.list_results, 1)
         self.lbl_status = QLabel("输入关键词开始搜索")
-        results_layout.addWidget(self.lbl_status)
+        self.lbl_status.setTextFormat(Qt.PlainText)
+        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        actions = QHBoxLayout()
+        actions.addWidget(self.lbl_status, 1)
+        self.btn_result_play = QPushButton("播放")
+        self.btn_result_play.setProperty("class", "primary")
+        self.btn_result_play.clicked.connect(lambda: self._on_play(self.list_results.currentItem())
+                                            if self.list_results.currentItem() else None)
+        self.btn_versions = QPushButton("换一个版本")
+        self.btn_versions.clicked.connect(self._choose_online_version)
+        self.btn_retry_online = QPushButton("重试")
+        self.btn_retry_online.clicked.connect(self._retry_online)
+        self.btn_retry_online.hide()
+        self.btn_result_play.setEnabled(False)
+        self.btn_versions.setEnabled(False)
+        self.btn_versions.hide()
+        self.list_results.currentRowChanged.connect(self._online_selection_changed)
+        for button in (self.btn_result_play, self.btn_versions, self.btn_retry_online):
+            actions.addWidget(button)
+        results_layout.addLayout(actions)
         self.btn_discovery_more = QPushButton("加载更多曲目")
         self.btn_discovery_more.hide()
         self.btn_discovery_more.clicked.connect(self.discovery._more)
         self.discovery.paging_changed.connect(self.btn_discovery_more.setVisible)
         results_layout.addWidget(self.btn_discovery_more)
         self.online_stack.addWidget(self.results_page)
+        self.btn_discovery_home.hide()
+        self.online_stack.currentChanged.connect(
+            lambda _: self.btn_discovery_home.setVisible(self.online_stack.currentWidget() is self.results_page))
         ol.addWidget(self.online_stack, 1)
         tabs.addTab(online, "发现音乐")
 
@@ -645,7 +704,6 @@ class MusicPanel(QWidget):
 
         # P1 候选旁路：订阅 controller 推送的候选事件（Signal 桥到主线程）
         self._search_event.connect(self._on_search_show)
-        self._dl_finish_signal.connect(self._on_dl_finish)
         self._status_signal.connect(self._on_status_msg)
         self._sleep_timer_signal.connect(self._on_sleep_timer_state)
         try:
@@ -669,6 +727,11 @@ class MusicPanel(QWidget):
             self.discovery.shutdown()
         if self._queue_dialog is not None:
             self._queue_dialog.close()
+        self._close_media_pane()
+        if self._lyrics_window is not None:
+            self._lyrics_window.close()
+            from .settings_panel import unregister_lyrics_prefs_listener
+            unregister_lyrics_prefs_listener(self._lyrics_window.apply_prefs)
         try:
             bus = get_event_bus()
             bus.unsubscribe(ONLINE_SEARCH_DONE, self._on_search_event)
@@ -765,7 +828,7 @@ class MusicPanel(QWidget):
         self._schedule_queue_refresh()
 
     # ---- 卡片网格（只改 UI 绘制，不动数据流） ----
-    def _setup_card_view(self, w: QListWidget) -> MusicCardDelegate:
+    def _setup_card_view(self, w: QListWidget, delegate=MusicCardDelegate) -> MusicCardDelegate:
         """歌曲类列表 → IconMode 卡片网格 + 自绘 Delegate。"""
         w.setViewMode(QListWidget.IconMode)
         w.setMovement(QListWidget.Static)
@@ -773,7 +836,7 @@ class MusicPanel(QWidget):
         w.setUniformItemSizes(True)
         w.setSpacing(Tokens.SPACING_MD)
         w.setMouseTracking(True)
-        d = MusicCardDelegate(w)
+        d = delegate(w)
         w.setItemDelegate(d)
         return d
 
@@ -805,7 +868,7 @@ class MusicPanel(QWidget):
             try:
                 w.setViewMode(mode)
                 # ListMode 下显式挂默认 delegate（setItemDelegate(None) 会令行高归零）
-                w.setItemDelegate(d if grid_on else QStyledItemDelegate(w))
+                w.setItemDelegate(d if grid_on or w is self.list_results else QStyledItemDelegate(w))
                 if grid_on:
                     w.setMovement(QListWidget.Static)
                     w.setResizeMode(QListWidget.Adjust)
@@ -1178,16 +1241,19 @@ class MusicPanel(QWidget):
             self._manual_request = None
 
     def _play_async(self, target, *args, title="", resolving=False,
-                    fail_msg="该曲目无法播放，请重试或选择其他结果", status_label=None):
+                    fail_msg=PLAY_RETRY, status_label=None, play_options=None):
         from ...music.next_feedback import observe_manual_play
 
         if self._music is None:
             return
         self._enter_switching_ui()
+        if not play_options:
+            self._retry_online_track = None
+        self.btn_retry_online.hide()
         label = status_label or self.lbl_status
         cancel = threading.Event()
         self._manual_request = (cancel, label, title, fail_msg, time.perf_counter_ns())
-        label.setText("正在获取播放地址…" if resolving else "正在加载歌曲…")
+        label.setText(PLAY_LOADING)
 
         def publish(stage, epoch):
             if not cancel.is_set():
@@ -1196,6 +1262,10 @@ class MusicPanel(QWidget):
                 except RuntimeError:
                     cancel.set()  # Widget was destroyed during a slow resolver call.
 
+        if play_options:
+            original = target
+            options = dict(play_options, _before_load=lambda: not cancel.is_set())
+            target = lambda *values: original(*values, **options)
         threading.Thread(target=observe_manual_play,
                          args=(self._music, target, args, cancel, publish),
                          daemon=True, name="ui-music-play-async").start()
@@ -1214,15 +1284,20 @@ class MusicPanel(QWidget):
             self._cancel_manual_feedback()
             return
         messages = {
-            "loading": "正在加载歌曲…",
-            "accepted": "播放器已接收加载，等待起播确认。",
-            "started": f"正在播放：{title}" if title else "歌曲已开始播放。",
-            "unknown": "暂未确认起播，请查看播放器状态。不会自动重试。",
-            "no_url": "未取得播放地址，可重试或选择其他结果。",
+            "loading": PLAY_LOADING,
+            "accepted": PLAY_LOADING,
+            # This confirms startup; the playback bar owns live pause and resume state.
+            "started": f"已开始播放：{title}" if title else "歌曲已开始播放。",
+            "unknown": "暂未确认播放，请查看播放器或重试。",
+            "no_url": PLAY_RETRY,
             "failed": failure,
         }
         label.setText(messages[stage])
+        self.btn_retry_online.setVisible(label is self.lbl_status and stage in ("failed", "no_url", "unknown")
+                                         and self._retry_online_track is not None)
         if stage not in ("loading", "accepted"):
+            if stage != "started" and self.lbl_time.text() == "加载中...":
+                self.lbl_time.setText("0:00 / 0:00")
             self._cancel_manual_feedback()
 
     def _on_play_result(self, ok: bool, msg: str, lbl) -> None:
@@ -1402,6 +1477,8 @@ class MusicPanel(QWidget):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
+        self._retry_online_track = None
+        self.btn_retry_online.hide()
         self._results_requested = True
         self.online_stack.setCurrentWidget(self.results_page)
         self.cb_search_filter.setEnabled(True)
@@ -1423,7 +1500,7 @@ class MusicPanel(QWidget):
         request = (self._search_generation, kw, on_done, on_failed, kw if rank_for_display else "")
         self.list_results.clear()
         self._tracks_by_row = []
-        self.lbl_status.setText("搜索中...")
+        self.lbl_status.setText(SEARCHING)
         # finished 槽回收旧线程前不覆盖引用；最多保存最后一次待执行请求。
         if self._thread is not None:
             self._pending_search = request
@@ -1510,12 +1587,16 @@ class MusicPanel(QWidget):
         ]
         if display_query:
             tracks_for_search = rank_manual_search(tracks_for_search, display_query)
+        from ...music.online.content_choices import group_tracks
+        self._track_versions = (group_tracks(tracks_for_search) if on_done is None
+                                else [[track] for track in tracks_for_search])
+        tracks_for_search = [group[0] for group in self._track_versions]
         n = len(tracks_for_search)
         for t in tracks_for_search:
             # 显示具体插件源名（t.source_name = 插件 platform，如"酷我音乐"），
             # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
-            item = QListWidgetItem(f"[{t.source_name}] {t.title} - {t.artist}")
-            sub = " · ".join(str(value) for value in (t.artist, t.album, t.source_name) if value)
+            item = QListWidgetItem(f"{t.title} — {t.artist}")
+            sub = " · ".join(str(value) for value in (t.artist, t.album) if value)
             # 登记在线封面 → 历史/歌单缺字段时补全
             if self._music is not None and hasattr(self._music, "remember_cover"):
                 try:
@@ -1534,8 +1615,13 @@ class MusicPanel(QWidget):
                 "track_id": t.track_id,
                 "cover_url": getattr(t, "cover_url", None) or None,
             }, sub, f"net:{t.track_id}" if t.track_id else None))
+            item.setToolTip(" · ".join(filter(None, (t.title, t.artist, t.album, "来源：" + t.source_name))))
+            item.setData(MusicCardRoles.DownloadRole, True)
             self.list_results.addItem(item)
         self._tracks_by_row = tracks_for_search
+        for key, task in self._download_tasks.items():
+            self._update_download_card(key, task)
+        self.list_results.setCurrentRow(0 if tracks_for_search else -1)
         errors = {src: error for src, error in getattr(result, "errors", {}).items()
                   if not source_filter or src == source_filter}
         succeeded = {src for src in getattr(result, "successful_sources", set())
@@ -1544,12 +1630,12 @@ class MusicPanel(QWidget):
             self._on_search_failed(self._search_error_hint(errors), search_generation, on_failed)
             return
         if errors:
-            self.lbl_status.setText(f"已找到 {n} 首；部分音源失败。{self._search_error_hint(errors)}")
+            self.lbl_status.setText(f"已找到 {n} 首；部分内容暂不可用，可重试搜索。")
         elif hasattr(result, "successful_sources") and not succeeded:
             self._on_search_failed("暂无可用音源，请在设置中检查插件或添加音源", search_generation, on_failed)
             return
         else:
-            self.lbl_status.setText(f"已找到 {n} 首" if n else "未找到歌曲，请尝试其他关键词或音源")
+            self.lbl_status.setText(f"已找到 {n} 首" if n else "未找到歌曲，试试其他歌名或歌手")
         notice_id = getattr(self, "_search_notice_ids", {}).get(search_generation)
         if notice_id:
             notify(f"已找到 {n} 首歌曲" if n else "没有找到歌曲", self.lbl_status.text(),
@@ -1561,8 +1647,10 @@ class MusicPanel(QWidget):
     def _on_search_failed(self, err: str, search_generation=None, on_failed=None):
         if search_generation is not None and search_generation != self._search_generation:
             return
-        hint = "" if "重试" in err else "。可重试或更换音源"
-        self.lbl_status.setText(f"搜索失败: {err}{hint}")
+        self._retry_online_track = None
+        logger.warning("music search failed: %s", err)
+        self.lbl_status.setText("搜索暂未完成，请重试。")
+        self.btn_retry_online.setVisible(True)
         notice_id = getattr(self, "_search_notice_ids", {}).get(search_generation)
         if notice_id:
             notify("歌曲搜索未完成", "音源没有返回可用结果", status="failed",
@@ -1604,8 +1692,9 @@ class MusicPanel(QWidget):
                 src = row.get("source", "")
                 title = row.get("title", "")
                 artist = row.get("artist", "")
-                item = QListWidgetItem(f"[{src}] {title} - {artist}")
-                sub = f"{artist} · {src}" if artist and src else (artist or src)
+                item = QListWidgetItem(f"{title} — {artist}")
+                sub = artist
+                item.setToolTip("来源：" + str(src))
                 item.setData(Qt.UserRole, self._card_data({
                     "title": title,
                     "artist": artist,
@@ -1663,6 +1752,7 @@ class MusicPanel(QWidget):
         self._results_requested = False
         self.online_stack.setCurrentWidget(self.discovery)
         self.discovery.show_view("home")
+        self.search_options.setChecked(False)
         self.btn_discovery_more.hide()
 
     def _apply_online_filter(self, *_):
@@ -1676,29 +1766,84 @@ class MusicPanel(QWidget):
 
     def _open_discovery_playlist(self, row):
         self.tabs.setCurrentIndex(3)
-        for index in range(self.list_playlists.count()):
-            item = self.list_playlists.item(index)
-            if item.data(Qt.UserRole).get("id") == row.get("id"):
-                self.list_playlists.setCurrentItem(item)
-                break
+        self._refresh_playlists(preferred_id=row.get("id"))
 
-    def _on_toggle_lyrics(self, checked: bool):
-        """桌面歌词开关：开 → 创建浮窗并显示；关 → 隐藏（保留状态可再开）。"""
+    def _build_lyrics_menu(self):
+        from ..settings_store import load_lyrics_prefs
+        prefs=load_lyrics_prefs();self.lyrics_menu.clear();self.lyrics_actions={}
+        choices=[("字号放大",{"font_size":min(48,int(prefs["font_size"])+2)}),
+                 ("字号缩小",{"font_size":max(12,int(prefs["font_size"])-2)}),
+                 ("歌词提前 0.2 秒",{"offset_ms":max(-10000,int(prefs.get("offset_ms",0))-200)}),
+                 ("歌词延后 0.2 秒",{"offset_ms":min(10000,int(prefs.get("offset_ms",0))+200)}),
+                 ("恢复同步",{"offset_ms":0}),("单行歌词",{"mode":"single"}),
+                 ("三行歌词",{"mode":"triple"}),("锁定桌面歌词",{"locked":not prefs["locked"]}),
+                 ("恢复窗口位置",{"pos_x":None,"pos_y":None})]
+        for title,update in choices:
+            action=self.lyrics_menu.addAction(title)
+            if title=="锁定桌面歌词":action.setCheckable(True);action.setChecked(prefs["locked"])
+            action.triggered.connect(lambda _=False,values=update:self._change_lyrics_prefs(values))
+            self.lyrics_actions[title]=action
+        offset=int(prefs.get("offset_ms",0))
+        label=self.lyrics_menu.addAction("同步："+(f"延后 {offset/1000:g} 秒" if offset>0 else f"提前 {-offset/1000:g} 秒" if offset<0 else "未校正"))
+        label.setEnabled(False)
+
+    def _change_lyrics_prefs(self,update):
+        from ..settings_store import save_lyrics_prefs
+        from .settings_panel import _notify_lyrics_prefs_changed
+        if save_lyrics_prefs(update):_notify_lyrics_prefs_changed(update)
+        else:notify("歌词设置未能保存","请重试",status="failed",source="music")
+
+    def _ensure_lyrics_window(self):
+        from .settings_panel import register_lyrics_prefs_listener
+        if self._lyrics_window is None:
+            from ..widgets.lyrics_window import LyricsWindow
+            self._lyrics_window = LyricsWindow(self._music, self)
+            self.playing_lyrics.attach(self._lyrics_window)
+        register_lyrics_prefs_listener(self._lyrics_window.apply_prefs)
+        return self._lyrics_window
+
+    def _open_media_pane(self, content):
+        was_closed = self._media_pane.isHidden()
+        self._media_pane.setCurrentWidget(content)
+        self._media_pane.show()
+        if was_closed:
+            width = self._music_content.width()
+            pane_width = max(290, min(380, width // 3))
+            self._music_content.setSizes([max(1, width - pane_width), pane_width])
+        self._sync_lyrics_pane(content is self.playing_lyrics)
+
+    def _close_media_pane(self):
+        self._media_pane.hide()
+        self._sync_lyrics_pane(False)
+
+    def _sync_lyrics_pane(self, enabled):
+        self.btn_playing_lyrics.setChecked(enabled)
+        if enabled and self._music is not None:
+            window = self._ensure_lyrics_window()
+            window.start()
+            self.playing_lyrics.refresh()
+        elif self._lyrics_window is not None and not self.btn_lyrics.isChecked():
+            self._lyrics_window.stop()
+
+    def _toggle_playing_lyrics(self, enabled):
+        if enabled:
+            self._open_media_pane(self.playing_lyrics)
+        else:
+            self._close_media_pane()
+
+    def _on_toggle_lyrics(self, checked):
+        """Desktop visibility is independent of the current-song lyrics view."""
         if self._music is None:
             self.btn_lyrics.setChecked(False)
             return
-        if self._lyrics_window is None:
-            from app.ui.widgets.lyrics_window import LyricsWindow
-            self._lyrics_window = LyricsWindow(self._music)
-            # 设置页"🎤 桌面歌词"改动 → 窗口即时生效（幂等注册；窗口显式隐藏不销毁，注册一次即可）
-            from app.ui.panels.settings_panel import register_lyrics_prefs_listener
-            register_lyrics_prefs_listener(self._lyrics_window.apply_prefs)
+        window = self._ensure_lyrics_window()
         if checked:
-            self._lyrics_window.start()
-            self._lyrics_window.show()
+            window.start()
+            window.show()
         else:
-            self._lyrics_window.stop()
-            self._lyrics_window.hide()
+            window.hide()
+            if not self.btn_playing_lyrics.isChecked():
+                window.stop()
 
     # ------------------------------------------------------------------ 哼唱识曲
     def _on_identify_cmd(self, command):
@@ -1740,10 +1885,12 @@ class MusicPanel(QWidget):
             self._identify_dialog.raise_()
             self._identify_dialog.start()
             self.lbl_identify_status.clear()
+            self.lbl_identify_status.hide()
         except Exception as exc:
             logger.exception("识曲窗口打开失败")
             self._identify_dialog = None
             self.lbl_identify_status.setText(f"识曲暂不可用：{exc}")
+            self.lbl_identify_status.show()
 
     def _on_identify_search(self, keyword):
         """识曲结果复用现有在线搜索链路，并在结果完成后自动尝试播放。"""
@@ -1900,13 +2047,15 @@ class MusicPanel(QWidget):
         if self.tabs.currentIndex() == 3:
             self._refresh_playlists()
 
-    def _refresh_playlists(self, *, poll=False):
-        """Read playlist data off the GUI thread, then preserve the current selection."""
+    def _refresh_playlists(self, *, poll=False, preferred_id=None):
+        """Read playlist data off the GUI thread and apply the requested selection."""
         if self._music is None or (poll and self._playlist_task._running):
             return
         listing = self.list_playlists
         selected = listing.currentItem()
-        current = selected.data(Qt.UserRole)["id"] if selected is not None else None
+        current = preferred_id
+        if current is None and selected is not None:
+            current = selected.data(Qt.UserRole)["id"]
         displayed = [listing.item(i).data(Qt.UserRole) for i in range(listing.count())]
         music = self._music
 
@@ -1927,15 +2076,16 @@ class MusicPanel(QWidget):
         playlists, selected_id, rows = snapshot
         listing = self.list_playlists
         displayed = [listing.item(i).data(Qt.UserRole) for i in range(listing.count())]
-        if playlists != displayed:
-            with QSignalBlocker(listing):
+        with QSignalBlocker(listing):
+            if playlists != displayed:
                 listing.clear()
-                for p in playlists:
-                    item = QListWidgetItem(p.get("name", "?"))
-                    item.setData(Qt.UserRole, p)
+                for playlist in playlists:
+                    item = QListWidgetItem(playlist.get("name", "?"))
+                    item.setData(Qt.UserRole, playlist)
                     listing.addItem(item)
-                    if p["id"] == selected_id:
-                        listing.setCurrentItem(item)
+            selected_row = next((i for i, playlist in enumerate(playlists)
+                                 if playlist["id"] == selected_id), -1)
+            listing.setCurrentRow(selected_row)
         self.list_playlist_songs.clear()
         for row in rows:
             title = row.get("title", "?") or "?"
@@ -2340,6 +2490,7 @@ class MusicPanel(QWidget):
         if is_online:
             try:
                 downloaded = self._music is not None and bool(
+                    "_download_alternatives" not in song and
                     self._music.is_downloaded(song.get("title", ""), song.get("artist", "")))
             except Exception:
                 downloaded = False
@@ -2347,8 +2498,9 @@ class MusicPanel(QWidget):
                 act_del_dl = menu.addAction("删除本地下载")
                 act_del_dl.triggered.connect(lambda: self._delete_download(song))
             else:
-                act_dl = menu.addAction("下载到本地")
+                act_dl = menu.addAction("一键最佳下载")
                 act_dl.triggered.connect(lambda: self._on_download_song(song))
+                menu.addAction("自定义下载…").triggered.connect(lambda:self._custom_download(song))
         is_local = song.get("source_type", "local") == "local"
         if is_local:
             path = song.get("path") or ""
@@ -2485,127 +2637,187 @@ class MusicPanel(QWidget):
         idx = self.list_results.row(item)
         if idx < 0 or idx >= len(self._tracks_by_row):
             return
-        t = self._tracks_by_row[idx]
-        song = {
-            "title": t.title,
-            "artist": t.artist,
-            "source_type": "online",
-            "source_name": t.source_name,
-            "track_id": t.track_id,
-            "extra": getattr(t, "extra", None) or {},
-            "music_id": 0,
-            "id": 0,
-            "path": "",
-        }
-        menu = self._build_song_menu(song)
+        menu = self._build_song_menu(self._download_result_song(idx))
         menu.exec_(self.list_results.mapToGlobal(pos))
 
-    def _on_download_song(self, song: dict):
-        """在线歌下载入队：行内标记 + 状态栏；进度经 _dl_signal 回主线程。"""
+    def _download_result_song(self, row):
+        track = self._tracks_by_row[row]
+        alternatives = self._track_versions[row] if row < len(self._track_versions) else ()
+        return dict(title=track.title, artist=track.artist, album=track.album,
+                    duration_seconds=track.duration_seconds, source_type="online",
+                    source_name=track.source_name, track_id=track.track_id,
+                    cover_url=track.cover_url, extra=dict(track.extra or {}),
+                    _download_alternatives=tuple(alternatives), path="", music_id=0, id=0)
+
+    @Slot(int)
+    def _download_result(self, row):
+        if self._voice_generation is None and 0 <= row < len(self._tracks_by_row):
+            self._on_download_song(self._download_result_song(row))
+
+    def _custom_download(self, song):
+        from ..dialogs.download_options_dialog import DownloadOptionsDialog
+        downloader = getattr(self._music, "downloader", None)
+        verified = downloader.verified_options(song) if downloader is not None else ()
+        probe = None
+        if downloader is not None and song.get("source_name") and song.get("track_id"):
+            probe = lambda ready, cancelled: downloader.probe_options(song, ready, cancelled)
+        dialog = DownloadOptionsDialog(self, song=song, verified=verified, probe=probe)
+        if dialog.exec() == dialog.Accepted:
+            selected = dict(song)
+            if song.get("source_name") and song.get("track_id"):
+                selected["_download_alternatives"] = ()
+            self._on_download_song(selected, options=dialog.options())
+        dialog.deleteLater()
+
+    @staticmethod
+    def _download_task_key(song):
+        source, track_id = song.get("source_name"), song.get("track_id")
+        if source and track_id:
+            return repr((source, str(track_id)))
+        return repr((song.get("title"), song.get("artist")))
+
+    def _show_download_tasks(self):
+        if self._download_pane is None:
+            from ..dialogs.download_tasks_dialog import DownloadTasksPane
+            self._download_pane = DownloadTasksPane(self._media_pane)
+            self._download_pane.close_requested.connect(self._close_media_pane)
+            self._media_pane.addWidget(self._download_pane)
+            self._download_pane.retry_requested.connect(self._retry_download)
+            for key, task in self._download_tasks.items():
+                self._download_pane.update_task(key, task)
+        self._open_media_pane(self._download_pane)
+
+    @Slot(str)
+    def _retry_download(self, key):
+        task = self._download_tasks.get(key)
+        if task and task["state"] == "fail":
+            self._on_download_song(task["song"], options=task["options"])
+
+    def _on_download_song(self, song, *, options=None):
+        from ...music.downloader import DownloadManager
+
         if self._music is None:
             return
-        key = f"{song.get('title', '')}|{song.get('artist', '')}".strip('|')
-        base = None
-        widget = None
-        # 定位卡片标记目标：在线 tab（按 _tracks_by_row 匹配）→ 歌单列表（按 UserRole 匹配）
-        try:
-            for i, t in enumerate(self._tracks_by_row):
-                if t.title == song.get("title") and t.artist == song.get("artist"):
-                    item = self.list_results.item(i)
-                    if item is not None:
-                        base = t.title
-                        widget = "online"
-                    break
-        except Exception:
-            pass
-        if widget is None:
-            for i in range(self.list_playlist_songs.count()):
-                item = self.list_playlist_songs.item(i)
-                row = item.data(Qt.UserRole) if item is not None else None
-                if row is not None and row.get("title") == song.get("title"):
-                    base = song.get("title")
-                    widget = "playlist"
-                    break
-        self._dl_markers[key] = {"base": base, "widget": widget}
+        key = self._download_task_key(song)
+        name = song.get("title") or "歌曲"
+        filename_key = DownloadManager._key(song.get("title"), song.get("artist"))
+        for existing in self._download_tasks.values():
+            if existing["filename_key"] == filename_key and existing["state"] == "active":
+                self._show_download_tasks()
+                return
 
-        def on_progress(k, pct):
-            self._dl_signal.emit(k, pct)
+        current = self._download_tasks.get(key)
+        if current and current["state"] == "done" and current["options"] == options:
+            from pathlib import Path
+            if current.get("path") and Path(current["path"]).is_file():
+                self._show_download_tasks()
+                self._download_pane.items.setCurrentItem(self._download_pane.rows[key])
+                return
+        self._download_serial += 1
+        serial = self._download_serial
+        notice = get_notification_center().post("正在下载", name, source="music")
+        self._download_tasks[key] = dict(serial=serial, notice=notice, song=dict(song),
+                                         options=None if options is None else dict(options),
+                                         state="active", message="等待下载", filename_key=filename_key,
+                                         search_generation=self._search_generation)
+        self._render_download_task(key)
+        self.lbl_status.setText(f"正在下载：{name}")
 
-        def on_done(k, path):
-            # 下载回调在工作线程：只 emit 信号，UI 刷新（setText/_refresh）丢主线程槽
-            self._dl_signal.emit(k, -1)
-            self._dl_finish_signal.emit(k, "done")
+        def send(event, value=None):
+            try:
+                self._download_event.emit(key, serial, event, value)
+            except RuntimeError:
+                # The application can close while the downloader unwinds.
+                pass
 
-        def on_fail(k, reason):
-            self._dl_signal.emit(k, -2)
-            self._dl_finish_signal.emit(k, "fail")
+        callbacks = {
+            "on_progress": lambda k, pct: send("progress", pct),
+            "on_stage": lambda k, stage: send("stage", stage),
+            "on_details": lambda k, details: send("details", details),
+            "on_done": lambda k, path: send("done", path),
+            "on_fail": lambda k, reason: send("fail", reason),
+            "on_exists": lambda k: send("exists"),
+            "on_cancel": lambda k, reason: send("cancelled"),
+        }
+        kwargs = {"options": options} if options is not None else {}
+        if self._music.download_song(song, callbacks, **kwargs) is False:
+            send("fail", "下载暂不可用")
 
-        def on_exists(k):
-            self._dl_finish_signal.emit(k, "exists")
-
-        self.lbl_status.setText(f"开始下载：{song.get('title', '')}")
-        self._music.download_song(song, {
-            "on_progress": on_progress,
-            "on_done": on_done,
-            "on_fail": on_fail,
-            "on_exists": on_exists,
-        })
-
-    def _on_dl_progress(self, key, pct):
-        """主线程：更新卡片状态徽标（跨线程 Signal 桥；不拼接列表文本）。"""
-        if pct in (-1, -2):
-            self._restore_marker(key)
+    @Slot(str, int, str, object)
+    def _apply_download_event(self, key, serial, event, value):
+        task = self._download_tasks.get(key)
+        if not task or task["serial"] != serial or task["state"] != "active":
             return
-        label = "下载中…" if pct is None else f"下载中 {pct}%"
-        m = self._dl_markers.get(key)
-        if not m or not m.get("base"):
+        if event == "details":
+            for field in ("format", "quality", "size_bytes", "lyrics", "cover", "metadata", "indexed"):
+                if field in value:
+                    task[field] = value[field]
             return
-        try:
-            if m.get("widget") == "online":
-                for i, t in enumerate(self._tracks_by_row):
-                    if t.title == m["base"]:
-                        item = self.list_results.item(i)
-                        if item is not None:
-                            item.setData(MusicCardRoles.StatusRole, label)
-                            self.list_results.viewport().update()
-                        return
-            elif m.get("widget") == "playlist":
-                for i in range(self.list_playlist_songs.count()):
-                    item = self.list_playlist_songs.item(i)
-                    row = item.data(Qt.UserRole)
-                    if row is not None and row.get("title") == m["base"]:
-                        item.setData(MusicCardRoles.StatusRole, label)
-                        self.list_playlist_songs.viewport().update()
-                        return
-        except Exception:
-            pass
+        if event in ("progress", "stage"):
+            task["message"] = (value if event == "stage" else
+                               "正在下载" if value is None else f"当前文件 {value}%")
+            self._render_download_task(key)
+            return
 
-    def _restore_marker(self, key):
-        """完成/失败：清除卡片状态徽标，移除标记。"""
-        m = self._dl_markers.get(key)
-        if not m or not m.get("base"):
-            self._dl_markers.pop(key, None)
-            return
-        try:
-            if m.get("widget") == "online":
-                for i, t in enumerate(self._tracks_by_row):
-                    if t.title == m["base"]:
-                        item = self.list_results.item(i)
-                        if item is not None:
-                            item.setData(MusicCardRoles.StatusRole, None)
-                            self.list_results.viewport().update()
-                        break
-            elif m.get("widget") == "playlist":
-                for i in range(self.list_playlist_songs.count()):
-                    item = self.list_playlist_songs.item(i)
-                    row = item.data(Qt.UserRole)
-                    if row is not None and row.get("title") == m["base"]:
-                        item.setData(MusicCardRoles.StatusRole, None)
-                        self.list_playlist_songs.viewport().update()
-                        break
-        except Exception:
-            pass
-        self._dl_markers.pop(key, None)
+        task["state"] = event
+        status = "warning"
+        if event == "done":
+            status = "success"
+            task["path"] = value
+            message = "下载完成"
+            missing = [name for field, name in (("lyrics", "歌词"), ("cover", "封面"), ("metadata", "歌曲信息"))
+                       if task.get(field) == "unavailable"]
+            if missing:
+                message += "，" + "、".join(missing) + "暂缺"
+            if task.get("indexed") is False:
+                message += "，曲库尚未更新"
+        elif event == "fail":
+            status = "failed"
+            if value in ("下载目录空间不足", "无法写入下载目录"):
+                message = value + "，请检查下载目录后重试"
+            else:
+                reasons = {"所选音质或格式暂不可用", "来源暂未提供可下载音频", "音频未能完整下载", "下载暂不可用"}
+                message = (value if value in reasons else "暂时无法下载") + "，可重试或选择其他版本"
+        elif event == "exists":
+            message = "已有同名本地文件，未写入"
+        else:
+            message = "下载已取消"
+
+        task["message"] = message
+        self._render_download_task(key)
+        from ..dialogs.download_tasks_dialog import download_label
+        if task["search_generation"] == self._search_generation:
+            self.lbl_status.setText(download_label(task))
+        get_notification_center().update(task["notice"], title=message, message=task["song"].get("title", ""),
+                                         status=status, phase="done")
+        if event == "done":
+            self._refresh_local_list(self.edit_local.text().strip())
+            if self.tabs.currentIndex() == 3:
+                self._refresh_playlists()
+        while len(self._download_tasks) > 80:
+            oldest = next((item for item, record in self._download_tasks.items()
+                           if item != key and record["state"] != "active"), None)
+            if oldest is None:
+                break
+            self._download_tasks.pop(oldest)
+            if self._download_pane is not None:
+                self._download_pane.forget(oldest)
+
+    def _render_download_task(self, key):
+        task = self._download_tasks[key]
+        self._update_download_card(key, task)
+        if self._download_pane is not None:
+            self._download_pane.update_task(key, task)
+
+    def _update_download_card(self, key, task):
+        for i, track in enumerate(self._tracks_by_row):
+            if self._download_task_key({"source_name": track.source_name, "track_id": track.track_id}) != key:
+                continue
+            item = self.list_results.item(i)
+            if item is not None:
+                active = task["state"] == "active"
+                item.setData(MusicCardRoles.StatusRole, task["message"] if active else None)
+            break
 
     def _delete_download(self, song: dict):
         """删除下载副本：二次确认默认取消 → controller 删文件+库；歌单条目保留（在线可重下）。"""
@@ -2670,22 +2882,6 @@ class MusicPanel(QWidget):
         menu = self._build_song_menu(song, playlist_song_id=row.get("id"))
         menu.exec_(self.list_playlist_songs.mapToGlobal(pos))
 
-    def _on_dl_finish(self, key, status):
-        """主线程槽：下载结束统一刷新状态栏/本地列表（回调线程只 emit，禁直接刷 UI）。"""
-        base = (self._dl_markers.get(key) or {}).get("base") or ""
-        if status == "done":
-            self.lbl_status.setText(f"已下载：{base}")
-            try:
-                self._refresh_local_list(self.edit_local.text().strip())
-                if self.tabs.currentIndex() == 3:
-                    self._refresh_playlists()
-            except Exception as e:
-                print(f"[MusicPanel] 下载后刷新失败: {e}")
-        elif status == "fail":
-            self.lbl_status.setText("下载失败")
-        elif status == "exists":
-            self.lbl_status.setText("该歌已下载，跳过（不覆盖）")
-
     def _on_status_msg(self, msg):
         """主线程槽：跨线程状态栏消息（仅主线程允许直接 setText）。"""
         self.lbl_status.setText(msg)
@@ -2697,6 +2893,42 @@ class MusicPanel(QWidget):
             self._status_signal.emit(msg)
         except Exception as e:
             print(f"[MusicPanel] 错误事件处理失败: {e}")
+
+    def _online_selection_changed(self, row):
+        self.btn_result_play.setEnabled(row >= 0)
+        groups = getattr(self, "_track_versions", [])
+        has_alternatives = (self._voice_generation is None and 0 <= row < len(groups)
+                            and len({(t.source_name, t.track_id) for t in groups[row]}) > 1)
+        self.btn_versions.setEnabled(has_alternatives)
+        self.btn_versions.setVisible(has_alternatives)
+
+    def _choose_online_version(self):
+        row = self.list_results.currentRow()
+        if self._voice_generation is not None or not 0 <= row < len(self._track_versions):
+            return
+        menu = QMenu(self)
+        for track in self._track_versions[row]:
+            text = " · ".join(filter(None, (track.artist, track.album, track.source_name)))
+            menu.addAction(text or track.title).triggered.connect(
+                lambda _=False, t=track: self._start_online_track(t, ()))
+        menu.exec_(self.btn_versions.mapToGlobal(self.btn_versions.rect().bottomLeft()))
+
+    def _start_online_track(self, track, alternatives):
+        active = self._retry_online_track
+        if (getattr(self, "_manual_request", None) is not None and active is not None
+                and (active[0].source_name, active[0].track_id) == (track.source_name, track.track_id)):
+            return  # A second click on the same in-flight request is not a new load.
+        self._retry_online_track = (track, tuple(alternatives))
+        self.btn_retry_online.hide()
+        self._play_async(self._music.play_online, track, title=track.title, resolving=True,
+                         fail_msg=PLAY_RETRY,
+                         play_options={"_alternatives": tuple(alternatives)})
+
+    def _retry_online(self):
+        if self._retry_online_track is not None:
+            self._start_online_track(*self._retry_online_track)
+        else:
+            self._request_search()
 
     def _on_play(self, item: QListWidgetItem):
         row = self.list_results.row(item)
@@ -2713,8 +2945,8 @@ class MusicPanel(QWidget):
         if row >= len(self._tracks_by_row):
             return
         track = self._tracks_by_row[row]
-        self._play_async(self._music.play_online, track,
-                         title=track.title, resolving=True)
+        alternatives = self._track_versions[row] if row < len(self._track_versions) else [track]
+        self._start_online_track(track, alternatives)
 
     def _on_seek_preview(self, value: int) -> None:
         """拖动进度条（sliderMoved，主线程）：只更新时间标签预览目标位置，

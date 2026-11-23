@@ -16,15 +16,19 @@ def test_history_dialog_waits_for_real_video(sessions, media, qapp):
     try:
         dialog.show()
         assert panel._play_movie_history_row(row, dialog)
-        assert dialog.isVisible() and "等待起播确认" in dialog.playback_status.text()
+        assert dialog.isVisible() and "正在加载" in dialog.playback_status.text()
 
         def advance():
             update = s.ctl.poll_film_ui()
             panel._apply_film_poll(None, update, None)
             return dialog.result() == QDialog.Accepted
 
-        # The fixture deliberately starts MPV paused. Release it only after checking the receipt.
-        s.mpv.set_property("pause", False)
+        # Wait for the asynchronous load receipt and panel binding without
+        # driving progress. The history dialog is still open at this point.
+        wait_until(lambda: panel._panel_start is not None, timeout=6)
+        assert dialog.isVisible()
+        assert s.ctl.playback_startup().state == "accepted"
+        assert s.mpv.set_property("pause", False)["error"] == "success"
         wait_until(advance, timeout=6)
         assert s.ctl.playback_startup().state == "started"
         assert s.mpv.get_property("time-pos", timeout=.3) > 0
