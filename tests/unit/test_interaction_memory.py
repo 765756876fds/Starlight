@@ -168,3 +168,21 @@ def test_fast_revoke_completion_cannot_leave_unbounded_pending_ids(tmp_path, mon
         assert m._revoking == set()
     finally:
         assert m.close()
+
+
+def test_close_wakes_idle_writer_and_closes_database(tmp_path, monkeypatch):
+    m = InteractionMemory(tmp_path / "idle.db")
+    waiting = threading.Event()
+    wait = m._ready.wait
+
+    def signal_idle(timeout=None):
+        if threading.current_thread() is m._worker and not m._tasks:
+            waiting.set()
+        return wait(timeout)
+
+    monkeypatch.setattr(m._ready, "wait", signal_idle)
+    assert m.start() and m.flush()
+    assert waiting.wait(1)
+    assert m.close(timeout=0.2)
+    assert m._worker is None
+    assert not record(m, "late")

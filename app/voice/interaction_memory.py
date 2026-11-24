@@ -1,9 +1,9 @@
 """Bounded private interaction memory; one idle-exiting writer, no GUI disk I/O."""
 
+from collections import deque
 from contextlib import closing
 import logging
 from pathlib import Path
-import queue
 import sqlite3
 import threading
 import time
@@ -18,7 +18,10 @@ class InteractionMemory:
     def __init__(self, path):
         self.path = Path(path)
         self._lock = threading.RLock()
-        self._tasks = queue.Queue(maxsize=64)
+        self._ready = threading.Condition(self._lock)
+        self._tasks = deque()
+        self._accepted = 0
+        self._finished = 0
         self._worker = None
         self._closed = False
         self.available = True
@@ -28,19 +31,19 @@ class InteractionMemory:
     def start(self):
         return self._submit(("load", None))
 
+    def _start_writer(self):
+        self._worker = threading.Thread(target=self._drain, name="interaction-memory", daemon=True)
+        self._worker.start()
+
     def _submit(self, task):
-        with self._lock:
-            if self._closed or not self.available:
+        with self._ready:
+            if self._closed or not self.available or len(self._tasks) >= 64:
                 return False
-            try:
-                self._tasks.put_nowait(task)
-            except queue.Full:
-                return False
-            if self._worker is None or not self._worker.is_alive():
-                self._worker = threading.Thread(
-                    target=self._drain, name="interaction-memory", daemon=True
-                )
-                self._worker.start()
+            self._tasks.append(task)
+            self._accepted += 1
+            if self._worker is None:
+                self._start_writer()
+            self._ready.notify_all()
             return True
 
     def record(
@@ -128,8 +131,12 @@ class InteractionMemory:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(str(self.path), timeout=0.15)
         try:
-            if db.execute("PRAGMA user_version").fetchone()[0] > 1:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version == 1:
+                return db
+            if version > 1:
                 raise sqlite3.DatabaseError("future interaction memory schema")
+            db.execute("BEGIN")
             db.execute("""CREATE TABLE IF NOT EXISTS interactions(
                 id TEXT PRIMARY KEY,feature TEXT,domain TEXT,action TEXT,media_key TEXT,
                 rating TEXT,kind TEXT,weight REAL,created REAL,parent TEXT,revoked INTEGER DEFAULT 0)""")
@@ -144,21 +151,13 @@ class InteractionMemory:
         try:
             with closing(self._connect()) as db:
                 while True:
-                    try:
-                        kind, payload = self._tasks.get(timeout=0.5)
-                    except queue.Empty:
-                        with self._lock:
-                            if self._tasks.empty():
-                                self._worker = None
-                                return
-                        continue
-                    try:
-                        batch = [(kind, payload)]
-                        while len(batch) < 64:
-                            try:
-                                batch.append(self._tasks.get_nowait())
-                            except queue.Empty:
-                                break
+                    with self._ready:
+                        self._ready.wait_for(lambda: self._tasks or self._closed, timeout=0.5)
+                        if not self._tasks:
+                            return
+                        batch = list(self._tasks)
+                        self._tasks.clear()
+                    if any(kind != "load" for kind, _ in batch):
                         with db:
                             for kind, payload in batch:
                                 if kind == "record":
@@ -175,60 +174,51 @@ class InteractionMemory:
                                 "DELETE FROM interactions WHERE id NOT IN (SELECT id FROM interactions ORDER BY created DESC LIMIT ?)",
                                 (self.LIMIT,),
                             )
-                        rows = db.execute("SELECT * FROM interactions ORDER BY created").fetchall()
-                        with self._lock:
-                            self._cache = rows
-                            for kind, payload in batch:
-                                if kind == "revoke":
-                                    self._revoking.discard(payload)
-                    except (OSError, sqlite3.Error):
-                        with self._lock:
-                            self.available = False
-                        raise
-                    finally:
-                        for _ in batch:
-                            self._tasks.task_done()
-                    with self._lock:
-                        if self._closed and self._tasks.empty():
-                            self._worker = None
-                            return
+                    rows = db.execute("SELECT * FROM interactions ORDER BY created").fetchall()
+                    with self._ready:
+                        self._cache = rows
+                        for kind, payload in batch:
+                            if kind == "revoke":
+                                self._revoking.discard(payload)
+                        self._finished += len(batch)
+                        self._ready.notify_all()
         except (OSError, sqlite3.Error):
-            log.warning(
-                "interaction_memory_unavailable; original databases untouched", exc_info=True
-            )
+            with self._ready:
+                self.available = False
+                self._cache.clear()
+                self._revoking.clear()
+                self._tasks.clear()
+                self._ready.notify_all()
+            log.warning("interaction_memory_unavailable; original databases untouched", exc_info=True)
             from ..core.notifications import notify
-
             notify(
                 "交互习惯暂时无法保存",
                 "音乐和电影仍可使用，请稍后检查用户数据目录",
                 status="warning",
                 dedup_key="interaction-memory-unavailable",
             )
-            with self._lock:
-                self.available = False
-                self._cache = []
-                self._revoking.clear()
-                while True:
-                    try:
-                        self._tasks.get_nowait()
-                        self._tasks.task_done()
-                    except queue.Empty:
-                        break
+        finally:
+            # Ownership transfers only after the old connection has been closed.
+            with self._ready:
                 self._worker = None
+                if self._tasks and self.available:
+                    self._start_writer()
+                self._ready.notify_all()
 
     def flush(self, timeout=1):
-        """Tests/shutdown only; normal execution never waits for disk."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if not self._tasks.unfinished_tasks:
-                return self.available
-            time.sleep(0.005)
-        return False
+        """Wait for this caller's accepted writes and their published cache."""
+        with self._ready:
+            target = self._accepted
+            done = self._ready.wait_for(
+                lambda: self._finished >= target or not self.available or self._worker is None,
+                timeout=timeout,
+            )
+            return done and self.available and self._finished >= target
 
     def close(self, timeout=0.75):
-        with self._lock:
+        with self._ready:
             self._closed = True
-            worker = self._worker
-        if worker is not None and worker is not threading.current_thread():
-            worker.join(timeout)
-        return worker is None or not worker.is_alive()
+            self._ready.notify_all()
+            if self._worker is threading.current_thread():
+                return False
+            return self._ready.wait_for(lambda: self._worker is None, timeout=timeout)

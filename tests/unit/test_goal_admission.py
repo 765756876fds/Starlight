@@ -62,6 +62,9 @@ class Player:
     def on_property_change(self, *args):
         pass
 
+    def is_idle(self):
+        return self.get_property("idle-active")
+
     def stop_process(self):
         pass
 
@@ -367,3 +370,26 @@ def test_noop_does_not_require_permission_to_change_other_media(setup):
     in_worker(lambda: c.observe_music_goal(req.operation_id))
     assert in_worker(lambda: c.observe_music_goal(req.operation_id)).status is S.STARTED
     assert unchanged(c, p) == before
+
+def test_deadline_crossed_inside_mpv_read_keeps_admitted_receipt(setup, monkeypatch):
+    from unittest.mock import Mock
+    from app.music import goal_admission
+
+    controller, player, _, pid, mid = setup
+    player.progress = False
+    req = request(controller, pid, mid)
+    assert admit(controller, req).status is S.ACCEPTED
+    clock = Mock(wraps=time)
+    clock.monotonic.return_value = req.deadline - 0.01
+    monkeypatch.setattr(goal_admission, "time", clock)
+    original = player.get_property
+
+    def read(name, **kwargs):
+        if name == "path":
+            clock.monotonic.return_value = req.deadline + 0.01
+        return original(name, **kwargs)
+
+    monkeypatch.setattr(player, "get_property", read)
+    result = in_worker(lambda: controller.observe_music_goal(req.operation_id))
+    assert result.status is S.UNKNOWN_EFFECTS and result.mpv_accepted
+    assert result.effects_started and not result.safe_to_fallback and len(player.loads) == 1

@@ -66,7 +66,7 @@ def test_negative_tracks_original_identity_after_real_next(controller, tmp_path,
     settle(controller)
     assert controller.get_current_song() != before
     assert controller.online_manager.details == catalogs
-    assert control.memory.flush()
+    assert control.memory.flush(timeout=None)
     assert control.memory.weak_profile("music") == {media_key(before): expected}
     assert media_key(controller.get_current_song()) not in control.memory.weak_profile("music")
     assert controller.music_memory.profile()["explicit"] == {}
@@ -97,11 +97,11 @@ def test_correction_revokes_only_immediately_attributable_weak_feedback(controll
     controller.music_memory.set_preference("track", original, 1)
     assert natural(rt, "这首不好听").status is S.ACCEPTED
     settle(controller)
-    assert control.memory.flush() and original in control.memory.weak_profile("music")
+    assert control.memory.flush(timeout=None) and original in control.memory.weak_profile("music")
     result = natural(rt, "不是换歌，是换榜单")
     assert result.status is S.CONFIRMED
     assert controller.queue.size() == 10
-    assert control.memory.flush() and original not in control.memory.weak_profile("music")
+    assert control.memory.flush(timeout=None) and original not in control.memory.weak_profile("music")
     assert controller.music_memory.profile()["explicit"][("track", original)] == 1
     assert control.close()
 
@@ -112,10 +112,10 @@ def test_manual_change_makes_old_feedback_ineligible_for_undo(controller, tmp_pa
     assert natural(rt, "这首不好听").status is S.ACCEPTED
     settle(controller)
     controller._play_request_id += 1  # independent, newer manual playback generation
-    assert control.memory.flush()
+    assert control.memory.flush(timeout=None)
     before = control.memory.weak_profile("music")
     natural(rt, "不是换歌，是换榜单")
-    assert control.memory.flush() and control.memory.weak_profile("music") == before
+    assert control.memory.flush(timeout=None) and control.memory.weak_profile("music") == before
     assert control.close()
 
 
@@ -185,7 +185,7 @@ def test_movie_negative_saves_progress_stops_then_recommends(tmp_path):
     assert [c[0] for c in movie.mpv.calls] == ["save", "stop"]
     assert movie.current() is None and recommended == [{"kind": "movie"}]
     movie._remember_view.assert_called_once_with(force=True)
-    assert control.memory.flush() and control.memory.weak_profile("movie")
+    assert control.memory.flush(timeout=None) and control.memory.weak_profile("movie")
     assert control.close()
 
 
@@ -208,7 +208,7 @@ def test_failed_movie_stop_never_offers_replacements_or_negative_memory(tmp_path
         is S.FAILED
     )
     recommend.assert_not_called()
-    assert control.memory.flush() and control.memory.weak_profile("movie") == {}
+    assert control.memory.flush(timeout=None) and control.memory.weak_profile("movie") == {}
     assert movie.current() is not None and control.close()
 
 
@@ -316,7 +316,7 @@ def test_legacy_context_commands_can_confirm_a_reliable_habit(controller, tmp_pa
             worker.join(2)
             assert not worker.is_alive()
     assert controller.mpv.get_property("pause") is True
-    assert control.memory.flush()
+    assert control.memory.flush(timeout=None)
     assert len([r for r in control.memory._cache if r[6] == "confirmation"]) == 1
     assert control.memory.preferred_domain("pause:current::", ["music", "movie"]) is None
     assert control.close()
@@ -419,7 +419,7 @@ def test_weak_feedback_changes_real_ranking_but_explicit_like_wins(controller, t
         media_key=key,
         rating="negative",
     )
-    assert control.memory.flush()
+    assert control.memory.flush(timeout=None)
     choices = controller.recommendations.choices(controller.online_manager)
     first = choices[0].tracks[choices[0].index]
     assert first.track_id != original["track_id"]
@@ -438,6 +438,7 @@ def test_like_survives_independent_save_failure(controller, tmp_path, monkeypatc
     assert result.status is S.FAILED and "已记住喜欢" in result.message
     assert controller.music_memory.profile()["explicit"][("track", key)] == 1
     assert controller.get_playlists() == []
+    assert control.memory.flush(timeout=None)
     assert control.close()
 
 
@@ -487,7 +488,7 @@ def test_neutral_movie_evaluation_records_light_feedback_without_stopping(tmp_pa
     assert result.status is S.ACCEPTED
     stop.assert_not_called()
     assert movie.current() is not None
-    assert control.memory.flush()
+    assert control.memory.flush(timeout=None)
     assert list(control.memory.weak_profile("movie").values()) == [-0.1]
     assert control.close()
 
@@ -503,11 +504,11 @@ def test_denied_previous_action_never_executes_and_only_undoes_attributable_feed
     rt, control = build(controller, tmp_path)
     assert natural(rt, "这首不好听").status is S.ACCEPTED
     settle(controller)
-    assert control.memory.flush()
+    assert control.memory.flush(timeout=None)
     before = control.memory.weak_profile("music")
     loads = len(controller.mpv.loaded)
     rt._execute_intent(rt.intent_router.parse(text), text)
-    assert control.memory.flush()
+    assert control.memory.flush(timeout=None)
     assert control.memory.weak_profile("music") == ({} if revoked else before)
     assert len(controller.mpv.loaded) == loads
     assert control.close()
@@ -525,7 +526,7 @@ def test_movie_evaluation_never_skips_background_music_without_movie_target(
         result = natural(rt, text)
         assert result.status is S.NEEDS_PARAMETER
         assert controller._play_request_id == before
-        assert control.memory.flush()
+        assert control.memory.flush(timeout=None)
         assert control.memory.weak_profile("music") == {}
     finally:
         assert control.close()
@@ -557,5 +558,5 @@ def test_page_evidence_changing_after_selection_blocks_old_feedback(controller, 
     before = controller._play_request_id
     assert natural(rt, "这个一般般").status is S.UNKNOWN
     assert controller._play_request_id == before
-    assert control.memory.flush() and control.memory.weak_profile("music") == {}
+    assert control.memory.flush(timeout=None) and control.memory.weak_profile("music") == {}
     assert control.close()

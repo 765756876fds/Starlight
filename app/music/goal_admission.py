@@ -351,7 +351,7 @@ class GoalAdmission:
             op.receipt.mpv_accepted,
             op.epoch,
         )
-        if not op.processing:
+        if not op.processing and self._active is op:
             self._active = None
 
     def current(self, op):
@@ -748,6 +748,17 @@ class GoalAdmission:
             if self._active:
                 self._stale(self._active, "controller_closed")
 
+    def _observation_interrupted(self, op):
+        """Caller holds the lock. A deadline after admission leaves effects unresolved."""
+        if (self._active is op and not self.closed and not op.request.cancel.is_set()
+                and self.revision == op.request.expected.revision
+                and self.controller._play_request_id == op.epoch
+                and time.monotonic() >= op.request.deadline):
+            self._unknown(op, "confirmation_deadline_unresolved")
+        elif op.receipt.status is not AdmissionStatus.REJECTED_STALE:
+            self._stale(op, "expired_cancelled_or_superseded")
+        return op.receipt
+
     def observe(self, operation_id):
         require_worker()
         with self._lock:
@@ -758,11 +769,7 @@ class GoalAdmission:
                 return op.receipt
         if not self.current(op):
             with self._lock:
-                if time.monotonic() >= op.request.deadline and not op.request.cancel.is_set():
-                    self._unknown(op, "confirmation_deadline_unresolved")
-                else:
-                    self._stale(op, "expired_cancelled_or_superseded")
-                return op.receipt
+                return self._observation_interrupted(op)
         c = self.controller
         if op.request.member is not None:
             try:
@@ -809,7 +816,7 @@ class GoalAdmission:
                 or self.revision != op.request.expected.revision
                 or op.receipt.status is AdmissionStatus.REJECTED_STALE
             ):
-                self._stale(op, "changed_during_mpv_read")
+                return self._observation_interrupted(op)
             elif (
                 path == op.path
                 and idle is False
