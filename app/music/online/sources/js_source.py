@@ -598,6 +598,17 @@ class JSMusicSource(MusicSource):
                 successful = 0
         return SearchTracks(tracks, errors=errors, successful=successful)
 
+    def get_playback_rendition(self, track, preference):
+        from ...playback_quality import rendition_order
+        plugin = next((item for item in self.list_plugins() if item.get("name") == track.source_name), {})
+        order = rendition_order(preference, plugin.get("type"))
+        if not order:
+            return self.get_play_url(track)
+        extra = track.extra if isinstance(track.extra, dict) else {}
+        response = self._call("getUrl", {"source": track.source_name, "track_id": track.track_id,
+                              "raw_item": extra.get("_raw"), "playback_qualities": list(order)})
+        return response if isinstance(response, dict) and response.get("url") else None
+
     def get_play_url(self, track: OnlineTrack, quality: str = "high") -> dict | None:
         print(f"[getUrl] -> {track.source_name} track_id={track.track_id}", flush=True)
         extra = track.extra if isinstance(getattr(track, "extra", None), dict) else {}

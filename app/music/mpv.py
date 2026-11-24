@@ -5,6 +5,7 @@ mpv 作为纯音频后端运行，无 GUI，不抢焦点。
 Python 通过命名管道发送 JSON 命令控制播放。
 """
 import hashlib
+import io
 import json
 import math
 import os
@@ -37,6 +38,7 @@ class MpvController:
         self._running = False
 
         self._request_id = 0
+        self._command_buffer = b""
         self._properties: dict[str, Any] = {}
         self._property_watchers: dict[str, Any] = {}
         self._pipe_lock = threading.Lock()
@@ -217,7 +219,8 @@ class MpvController:
         last_error = None
         for i in range(5):
             try:
-                self._pipe = open(self.ipc_pipe, "r+", buffering=1, encoding="utf-8")
+                self._command_buffer = b""
+                self._pipe = open(self.ipc_pipe, "r+b", buffering=0)
                 return
             except Exception as e:
                 last_error = e
@@ -246,40 +249,43 @@ class MpvController:
             req_id = self._request_id
             message = {"command": [command] + (params or []), "request_id": req_id}
             line = json.dumps(message) + "\n"
-            pipe.write(line)
+            binary = isinstance(pipe, io.RawIOBase)
+            pipe.write(line.encode("utf-8") if binary else line)
             pipe.flush()
-            start = time.time()
-            resp = None
-            while time.time() - start < timeout:
-                # Windows 命名管道有界读：PeekNamedPipe 探测可读字节数，
-                # 无数据则短眠轮询；mpv 不响应时到点强制返回 None，绝不无限阻塞。
-                if self._pipe is not pipe:
-                    return None
-                avail = self._pipe_available()
-                if avail < 0:
-                    break
-                if avail <= 0:
-                    time.sleep(0.01)
-                    continue
-                line = pipe.readline()
-                if not line:
-                    time.sleep(0.01)
-                    continue
-                line = line.strip()
-                if not line:
-                    continue
+            deadline = time.monotonic() + timeout
+            while self._pipe is pipe and time.monotonic() < deadline:
+                if binary and b"\n" in self._command_buffer:
+                    line, _, self._command_buffer = self._command_buffer.partition(b"\n")
+                else:
+                    available = self._pipe_available()
+                    if available < 0:
+                        break
+                    if not available:
+                        time.sleep(0.01)
+                        continue
+                    if binary:
+                        # One Windows read may contain an event, a reply and part of the next line.
+                        chunk = pipe.read(min(available, 65536))
+                        if not chunk:
+                            break
+                        self._command_buffer += chunk
+                        continue
+                    line = pipe.readline()  # Existing line-oriented transports.
+                    if not line:
+                        time.sleep(0.01)
+                        continue
                 try:
                     msg = json.loads(line)
-                except json.JSONDecodeError:
+                except (ValueError, UnicodeError):
+                    continue
+                if not isinstance(msg, dict):
                     continue
                 if "event" in msg:
                     if msg.get("event") == "end-file":
                         self._log_end_file(msg)
-                    continue
-                if msg.get("request_id") == req_id:
-                    resp = msg
-                    break
-            return resp
+                elif msg.get("request_id") == req_id:
+                    return msg
+            return None
 
     def _pipe_available(self) -> int:
         """探测命名管道当前可读字节数。
@@ -393,6 +399,14 @@ class MpvController:
         #   resp.error == "success"（命令被接受）/ resp is None（超时未确认）/
         #   协议层 error 响应（明确失败）。既有调用方忽略返回值，行为不变。
         return resp
+
+    def load_rendition(self, path, position, paused, headers=None):
+        """Set seek, pause and stream-specific HTTP headers as part of the same load."""
+        fields = ",".join(f"{k}: {v}" for k, v in (headers or {}).items()
+                          if "\n" not in str(v) and "\r" not in str(v))
+        options = {"start": str(max(0., position)), "pause": "yes" if paused else "no",
+                   "http-header-fields": fields}
+        return self._send_command("loadfile", [path, "replace", -1, options], timeout=.3)
 
     def _set_paused(self, paused: bool) -> bool:
         response = self.set_property("pause", paused)

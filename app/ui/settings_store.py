@@ -27,6 +27,7 @@ SETTINGS_PATH = os.path.join(_ROOT, "config", "settings.yaml")
 ALL_EXTENSIONS = ["mp3", "flac", "wav", "m4a", "ogg", "ape"]
 
 DEFAULT_PREFS = {
+    "playback_quality": "auto",
     "download_options": {"quality":"best", "lyrics":True, "cover":True, "metadata":True},
     "theme": "dark",             # 夜间默认；日间/夜间共用同一套 UI
     "movie_library_dirs": [],    # Only folders explicitly selected by the user.

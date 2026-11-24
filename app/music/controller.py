@@ -179,6 +179,8 @@ class MusicController:
         self._platform_chorus: PlatformChorus | None = None
         self._chorus_lookup = chorus_lookup
         self._pending_chorus = None
+        from .playback_quality import PlaybackQuality
+        self.playback_quality = PlaybackQuality(self)
         self._current_song: dict[str, Any] | None = None
         # V2-2：播放会话代次，每次加载新媒体递增；全局暂停快照据此判断会话是否变化
         self._playback_gen: int = 0
@@ -381,7 +383,7 @@ class MusicController:
                     wait(0.8)
                     continue
                 # 3) 原逻辑：idle 上升沿 → 自动切歌
-                if now_idle and self._is_seeking:
+                if now_idle and (self._is_seeking or getattr(getattr(self, "playback_quality", None), "switching", False)):
                     # seek 防抖：拖拽进度条后 mpv 短暂进入 idle（seek 缓冲窗口），
                     # 属正常现象，绝不能误判为播放结束。不消费上升沿（不更新
                     # _last_idle）：seek 结束恢复播放 → 无事发生；seek 后确实
@@ -1107,6 +1109,10 @@ class MusicController:
                 song = self.db.get_song_by_id(mid) if mid > 0 else None
                 if song and song.get("path"):
                     row["path"] = song["path"]
+                    # Only the exact library ID can supply metadata about this recording.
+                    for field in ("album", "duration"):
+                        if not row.get(field) and song.get(field):
+                            row[field] = song[field]
                     return row
                 q = " ".join(x for x in (row.get("title"), row.get("artist")) if x)
                 for hit in self.db.search(q, limit=5):
@@ -1295,6 +1301,14 @@ class MusicController:
         elif mode == PlayMode.REPEAT_ONE:
             message += "；单曲循环仍循环当前歌曲，可手动下一首或切换播放模式"
         return OperationResult(OperationStatus.CONFIRMED, message)
+
+    def replay_queue_entry_next(self, index, revision):
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            return (not self._is_switching_track and self.queue.repeat_next(index, revision, self._current_song))
+        finally:
+            self._lock.release()
 
     def remove_from_queue(self, index: int, revision: int) -> OperationResult:
         """Validate a display snapshot atomically; no MPV, file or database operation."""
@@ -1487,7 +1501,7 @@ class MusicController:
                     _t_url_start = time.time()
                     chosen, play_result = None, None
                     for cand in candidates:
-                        play_result = self.online_manager.get_play_url(cand)
+                        play_result = self._playback_url(cand)
                         if play_result and play_result.get("url"):
                             chosen = cand
                             break
@@ -1582,8 +1596,7 @@ class MusicController:
             if track_id and source_name:
                 try:
                     direct_track = self._online_track(song)
-                    play_res = self.online_manager.get_play_url(
-                        direct_track, quality="high")
+                    play_res = self._playback_url(direct_track, legacy_quality="high")
                     if play_res and play_res.get("url"):
                         url = play_res["url"]
                         headers = play_res.get("headers")
@@ -1651,6 +1664,12 @@ class MusicController:
             report_next_feedback(self, "resolve", "failed", req_id)
             self._log_playback_stage("online_play" if resolved else "resolve", "failed", "online", request_id=req_id)
             self._schedule_skip_online(song, req_id)
+
+    def _playback_url(self, track, *, legacy_quality=None):
+        from .playback_quality import resolve_playback
+        quality = getattr(self, "playback_quality", None)
+        return resolve_playback(self.online_manager, track, getattr(quality, "preference", "auto"),
+                                legacy_quality=legacy_quality)
 
     def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None, *, playback=None, kuwo_rid=None) -> dict | None:
         """统一播放在线流：http-header-fields 重设 + loadfile + pause 同步 + 状态落库。
@@ -1808,6 +1827,8 @@ class MusicController:
                               if provider != "other" else None)
         logger.debug(f"[Chorus] epoch={req_epoch} provider={provider} track={ref:012x} "
                      f"resolver={branch} metadata={decision.status.value}")
+        if hasattr(self, "playback_quality"):
+            self.playback_quality.bind(online_song, track, dict(resolved, url=url, headers=hdr))
         self._current_song = online_song
         self._playback_gen += 1  # V2-2：在线流加载，会话代次递增
         self._user_stopped = False  # V2-4.5.6：新会话清除停止标记
@@ -1992,6 +2013,8 @@ class MusicController:
             self.mpv._properties["pause"] = False
         except Exception:
             pass
+        if hasattr(self, "playback_quality"):
+            self.playback_quality.bind(None, None, {})
         self._current_song = song
         self._playback_gen += 1  # V2-2：新媒体加载，会话代次递增
         self._user_stopped = False  # V2-4.5.6：新会话清除停止标记
@@ -2119,7 +2142,7 @@ class MusicController:
         self.online_manager = manager
         # 在线解析器随源就绪创建（纯网络解析，不碰 mpv/队列/Qt 信号）
         if self._resolver is None:
-            self._resolver = OnlineResolver(manager)
+            self._resolver = OnlineResolver(manager, play_url=self._playback_url)
         else:
             self._resolver.set_manager(manager)
         # 下载器随在线源就绪创建（不阻塞 UI、独立线程池，不碰本对象 mpv）
@@ -2501,17 +2524,22 @@ class MusicController:
         if self.online_manager is None:
             self._end_switch_state_if_current(req_id)
             return False
+        resolve_start = time.monotonic()
+        requested_track = track
         try:
-            result = _resolved if _resolved is not None else self.online_manager.get_play_url(track)
+            result = _resolved if _resolved is not None else self._playback_url(track)
         except Exception:
             if not _alternatives and _queue_context is None:
                 raise
             logger.error("[Music] initial address resolution failed", exc_info=True)
             result = None
-        if not result or not result.get("url"):
+        if not result or not result.get("url") or result.get("downgraded"):
+            from itertools import islice
             from .online.content_choices import equivalent_versions
             # Only address resolution can fall back. Never repeat an unknown load.
-            for candidate in list(equivalent_versions(track, _alternatives))[:2]:
+            for candidate in islice(equivalent_versions(track, _alternatives), 2):
+                if result and result.get("url") and time.monotonic() - resolve_start > 2:
+                    break
                 with self._lock:
                     current = req_id == self._play_request_id
                 if (not current or not self._movie_permits_request(intent_ns)
@@ -2519,13 +2547,15 @@ class MusicController:
                     self._end_switch_state_if_current(req_id)
                     return False
                 try:
-                    result = self.online_manager.get_play_url(candidate)
+                    alternate = self._playback_url(candidate)
                 except Exception:
                     logger.error("[Music] alternate address resolution failed", exc_info=True)
-                    result = None
-                if result and result.get("url"):
-                    track = candidate
-                    break
+                    alternate = None
+                if alternate and alternate.get("url"):
+                    if not result or not result.get("url") or not alternate.get("downgraded"):
+                        result, track = alternate, candidate
+                    if not result.get("downgraded"):
+                        break
         if not result or not result.get("url"):
             report_next_feedback(self, "resolve", "no_url", req_id)
             logger.info(f"[Music] online 无 URL: {track.title}")
@@ -2558,6 +2588,10 @@ class MusicController:
                     if req_id == self._play_request_id:
                         self._is_switching_track = False
                     return False
+                if hasattr(self, "playback_quality") and _alternatives:
+                    from itertools import islice
+                    from .online.content_choices import equivalent_versions
+                    self.playback_quality.alternatives = tuple(islice(equivalent_versions(track, (requested_track, *_alternatives)), 2))
                 if _recommendation:
                     online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
                 if selected is not None:
@@ -2947,7 +2981,8 @@ class MusicController:
             return None
         song = self._current_song
         path = self.mpv.get_property("path", timeout=.3)
-        if not song or not path or path != song.get("path"):
+        quality = getattr(self, "playback_quality", None)
+        if not song or not path or path != (quality.path_for(song) if quality else song.get("path")):
             return None
         duration = self.mpv.get_property("duration", timeout=.3)
         position = self.mpv.get_property("time-pos", timeout=.3)

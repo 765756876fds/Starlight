@@ -158,7 +158,7 @@ function normalizeMusicItem(sourceName, item) {
   };
 }
 
-async function callGetUrl(plugin, rawItem, quality) {
+async function callGetUrl(plugin, rawItem, quality, exact = false) {
   if (typeof plugin.getMediaSource !== 'function') return null;
   const item = rawItem || { id: '' };
   const want = quality || 'high';
@@ -166,7 +166,7 @@ async function callGetUrl(plugin, rawItem, quality) {
   // low/standard/high/super（'320k' 不是标准键，kg/wy 会 qualities['320k']
   // 查不到直接 return null）；super 失败补 high（避免直接跳 standard，下载/播放
   // 都想要尽量高的音质）；部分歌曲只有低档/VIP 限制，回退保证能播。
-  for (const q of [...new Set([want, 'high', 'standard', 'low'])]) {
+  for (const q of (exact ? [want] : [...new Set([want, 'high', 'standard', 'low'])])) {
     try {
       const result = plugin.name === '开心汽水' ? await qishui.resolve(plugin,item,q)
         : await plugin.getMediaSource(item, q);
@@ -174,6 +174,7 @@ async function callGetUrl(plugin, rawItem, quality) {
       if (typeof result === 'string') return { url: result, quality: q };
       if (result.url) {
         const out = { url: result.url, quality: result.quality || q };
+        if (exact && typeof result.quality === 'string') out.source_quality = result.quality;
         const meta = result.playback_metadata;
         if (plugin.name === '开心汽水' && meta?.branch === 'qishui.play') {
           out.playback_metadata = meta;

@@ -92,10 +92,22 @@ class PlayQueue:
     def add_next(self, song: dict[str, Any]):
         """原子插到当前曲目后；跨模式优先消费一次，连续请求后选先播。"""
         with self._lock:
-            position = self._current_index + 1
-            self._insert(song, position)
-            self._next_up.insert(0, position)
-            # 不重洗现有随机顺序；插队项不重复进入本轮随机遍历。
+            self._insert_next(song)
+
+    def _insert_next(self, song):
+        position = self._current_index + 1
+        self._insert(song, position)
+        self._next_up.insert(0, position)
+
+    @_queue_mutation
+    def repeat_next(self, index, revision, current_song):
+        """Temporarily replay the selected occurrence using the existing next-up order."""
+        with self._lock:
+            if (revision != self._revision or not 0 <= index < len(self._queue)
+                    or index in self._protected_indices(current_song)):
+                return False
+            self._insert_next(self._queue[index])
+            return True
 
     @_queue_mutation
     def add_all(self, songs: list[dict[str, Any]]):

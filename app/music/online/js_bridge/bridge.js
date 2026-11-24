@@ -116,6 +116,27 @@ async function dispatch(method, params) {
       const { source, quality, raw_item } = params;
       const p = sources.get(source);
       if (!p) throw new Error(`unknown source ${source}`);
+      if (Array.isArray(params.playback_qualities)) {
+        const allowed = p.type === 'musicfree' ? ['super','high','standard','low'] : ['flac24bit','flac','320k','128k'];
+        const choices = [...new Set(params.playback_qualities)].filter(key => allowed.includes(key));
+        const deadline = Date.now() + 6500;
+        for (const [index, key] of choices.entries()) {
+          if (Date.now() >= deadline) break;
+          try {
+            const result = p.type === 'musicfree'
+              ? await mfLoader.callGetUrl(p, raw_item, key, true)
+              : await p.getUrl(source, raw_item || {hash: params.track_id}, key, true);
+            if (result && result.url) {
+              if (p.type !== 'musicfree') {
+                delete result.kuwo_rid;
+                delete result.playback_metadata;
+              }
+              return {...result, requested_quality: key, downgraded: index > 0};
+            }
+          } catch { /* Try the next supported rendition of the same recording. */ }
+        }
+        return null;
+      }
       if (p.type === 'musicfree') {
         const r = await mfLoader.callGetUrl(p, raw_item, quality);
         return r;

@@ -121,7 +121,8 @@ class OnlineResolver:
     loadfile 播放。
     """
 
-    def __init__(self, manager=None):
+    def __init__(self, manager=None, *, play_url=None):
+        self._play_url = play_url
         self._manager = manager
 
     def set_manager(self, manager):
@@ -150,7 +151,7 @@ class OnlineResolver:
             logger.info("[Resolver] 搜索无结果: %s", query)
             return None
         for cand in self.pick_candidates(all_tracks):
-            play_result = self._manager.get_play_url(cand)
+            play_result = (self._play_url or self._manager.get_play_url)(cand)
             if play_result and play_result.get("url"):
                 return {
                     "url": play_result["url"],

@@ -269,7 +269,10 @@ class RecommendationService:
                     return OperationResult(OperationStatus.UNKNOWN, "已取消过时的推荐")
                 track = choice.tracks[choice.index]
                 try:
-                    result = self._read(manager, lambda track=track: manager.get_play_url(track), current, stage="url_resolution")
+                    from .playback_quality import resolve_playback
+                    preference = getattr(getattr(controller, "playback_quality", None), "preference", "auto")
+                    result = self._read(manager, lambda track=track: resolve_playback(manager, track, preference),
+                                        current, stage="url_resolution")
                 except SourceReadBusy:
                     return OperationResult(OperationStatus.UNAVAILABLE, "上次音源请求仍在结束，请稍后重试；当前播放不受影响")
                 except Exception:

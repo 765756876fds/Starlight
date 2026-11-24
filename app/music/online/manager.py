@@ -178,6 +178,24 @@ class OnlineSourceManager:
         except TypeError:
             return src.get_play_url(track)
 
+    def get_playback_url(self, track: OnlineTrack, preference: str):
+        """Route this recording to its owner. Never pass a foreign service this track ID."""
+        source = self._sources.get(track.source_name)
+        if source is None:
+            source = next((item for item in self._sources.values()
+                           if callable(getattr(item, "accepts", None)) and item.accepts(track)), None)
+        if source is None:
+            return None
+        resolver = getattr(source, "get_playback_rendition", None)
+        try:
+            result = resolver(track, preference) if callable(resolver) else source.get_play_url(track)
+        except (OSError, ValueError, TimeoutError, RuntimeError):
+            return None
+        result = self._normalize_play_result(result, source)
+        if result and result.get("url"):
+            return dict(result, requested_preference=preference, supports_renditions=callable(resolver))
+        return None
+
     def get_play_url(self, track: OnlineTrack, quality: str | None = None) -> dict | None:
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         tried = set()
