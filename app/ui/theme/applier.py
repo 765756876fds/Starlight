@@ -4,11 +4,13 @@ QSS 由 build_glass_qss() 在 Python 中插值 Tokens 生成；theme.qss 独立�
 已移除——任何颜色 / 字号 / 圆角 / 间距必须改 Tokens，禁止在模板中出现
 字面量（防 colors.py 改动后 QSS 不同步的漂移）。
 """
+from functools import lru_cache
 from pathlib import Path
+import re
 
 from PySide6.QtWidgets import QApplication
 
-from .tokens import Tokens
+from .tokens import Tokens, refresh_color_tokens
 
 _ICONS_DIR = Path(__file__).parent / "icons"
 
@@ -25,9 +27,9 @@ def _load_qss(name: str) -> str:
         return f.read()
 
 
-def build_glass_qss() -> str:
+def build_glass_qss(tokens=Tokens) -> str:
     """从 Tokens 拼装 Glass 全局样式。返回的字符串可直接 setStyleSheet。"""
-    T = Tokens
+    T = tokens
     return f"""/* Glass 全局样式（由 applier.build_glass_qss() 从 tokens.py 生成） */
 
 /* 全局 */
@@ -358,6 +360,26 @@ QPushButton[class="danger"]:pressed {{ background-color: rgba({_rgb(T.DANGER)}, 
 """
 
 
+@lru_cache(maxsize=1)
+def application_qss():
+    """Install both palettes once. Only widgets entering the light variant opt in."""
+    dark, light = Tokens(), Tokens()
+    refresh_color_tokens("dark", target=dark)
+    refresh_color_tokens("light", target=light)
+    light_sheet = re.sub(r"/\*.*?\*/", "", build_glass_qss(light), flags=re.DOTALL)
+
+    def scope(rule):
+        selectors = []
+        for selector in rule[1].split(","):
+            # Apply the property to the target, before its pseudo-element or state.
+            ancestor, space, target = selector.strip().rpartition(" ")
+            base, colon, state = target.partition(":")
+            selectors.append(f'{ancestor}{space}{base}[starlightLight="true"]{colon}{state}')
+        return ", ".join(selectors) + " {" + rule[2] + "}\n"
+
+    return build_glass_qss(dark) + "\n" + re.sub(r"([^{}]+)\{([^{}]*)\}", scope, light_sheet)
+
+
 def _rgb(hex_color: str) -> str:
     """供模板内 rgba() 用：'#rrggbb' → 'r, g, b'（从 Tokens/Colors 引用）。"""
     h = hex_color.lstrip("#")
@@ -378,5 +400,5 @@ def apply_glass_theme(app: QApplication) -> None:
     """
     from .manager import get_theme_manager
     manager = get_theme_manager(app)
-    if app.styleSheet() != build_glass_qss():
+    if app.styleSheet() != application_qss():
         manager.set_theme(manager.mode, persist=False, force=True)

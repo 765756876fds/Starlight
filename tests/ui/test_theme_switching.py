@@ -371,3 +371,38 @@ def test_main_window_and_five_real_tabs_switch_without_reinitializing_services(t
     window.close()
     for timer, _, _ in timers:
         timer.stop()
+
+
+def test_theme_reuses_global_sheet_and_preserves_artwork_cache(theme):
+    from PySide6.QtGui import QPixmap, QPixmapCache
+    from PySide6.QtWidgets import QStackedWidget
+
+    host = QStackedWidget()
+    first = QLabel("第一屏")
+    hidden = QWidget()
+    layout = QVBoxLayout(hidden)
+    caption = QLabel("下一屏")
+    layout.addWidget(caption)
+    host.addWidget(first)
+    host.addWidget(hidden)
+    host.show()
+    QTest.qWait(10)
+    app = QApplication.instance()
+    stylesheet = app.styleSheet()
+    artwork = QPixmap(16, 16)
+    artwork.fill(Qt.magenta)
+    key = "starlight-test-theme-independent-art"
+    assert QPixmapCache.insert(key, artwork)
+    try:
+        for mode in ("light", "dark"):
+            theme.set_theme(mode, persist=False)
+            assert app.styleSheet() == stylesheet
+            assert QPixmapCache.find(key).cacheKey() == artwork.cacheKey()
+            assert hidden.palette().color(QPalette.WindowText).name() == PALETTES[mode].primary_text
+            host.setCurrentWidget(hidden)
+            QTest.qWait(10)
+            assert caption.palette().color(QPalette.WindowText).name() == PALETTES[mode].primary_text
+            host.setCurrentWidget(first)
+    finally:
+        QPixmapCache.remove(key)
+        host.close()

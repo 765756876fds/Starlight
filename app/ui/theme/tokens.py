@@ -142,21 +142,24 @@ class Tokens:
     BTN_SUB = 36           # 上一首/下一首
 
 
-def refresh_color_tokens():
-    """Refresh derived colors only; geometry, fonts and media artwork stay intact."""
-    from .colors import COLOR_ROLES, current_theme
-    for alias in COLOR_ROLES:
-        setattr(Tokens, alias, getattr(Colors, alias))
-        setattr(Tokens, alias + "_RGB", _rgb_of(getattr(Colors, alias)))
-    T = Tokens
-    light = current_theme() == "light"
-    T.SLIDER_HANDLE = Colors.ACCENT_HOVER if light else Colors.ON_ACCENT
-    T.SLIDER_HANDLE_HOVER = Colors.ACCENT_PRESSED if light else "#e0e0e0"
-    T.WAVEFORM_COLOR = Colors.TEXT_SECONDARY if light else Colors.ON_ACCENT
+def refresh_color_tokens(mode=None, *, target=Tokens):
+    """Update the live tokens or a private copy for a stylesheet variant."""
+    from .colors import COLOR_ROLES, current_theme, palette_for
+    mode = mode or current_theme()
+    palette = palette_for(mode)
+    T = target
+    for alias, role in COLOR_ROLES.items():
+        color = getattr(palette, role)
+        setattr(T, alias, color)
+        setattr(T, alias + "_RGB", _rgb_of(color))
+    light = mode == "light"
+    T.SLIDER_HANDLE = T.ACCENT_HOVER if light else T.ON_ACCENT
+    T.SLIDER_HANDLE_HOVER = T.ACCENT_PRESSED if light else "#e0e0e0"
+    T.WAVEFORM_COLOR = T.TEXT_SECONDARY if light else T.ON_ACCENT
     T.WAVEFORM_ALPHA = 100 if light else 34
     T.TEXT_RGB = T.TEXT_SECONDARY_RGB
     T.SLIDER_GROOVE_RGB = T.TEXT_SECONDARY_RGB if light else "255, 255, 255"
-    T.ACCENT_LIGHT = Colors.ACCENT_HOVER
+    T.ACCENT_LIGHT = T.ACCENT_HOVER
     T.GLASS_BG_RGB = T.BG_BASE_RGB
     T.GLASS_BG_ALPHA = 0.97 if light else 0.86
     T.GLASS_BG = f"rgba({T.GLASS_BG_RGB}, {int(255 * T.GLASS_BG_ALPHA)})"
@@ -167,18 +170,18 @@ def refresh_color_tokens():
     T.CARD_ALPHA = 0.96 if light else 0.74
     T.CARD_HOVER_ALPHA = 0.98 if light else 0.86
     T.CARD = f"rgba({T.CARD_RGB}, {int(255 * T.CARD_ALPHA)})"
-    T.CARD_HOVER, T.CARD_ACTIVE = Colors.BG_HOVER, Colors.BG_ACTIVE
+    T.CARD_HOVER, T.CARD_ACTIVE = T.BG_HOVER, T.BG_ACTIVE
     T.CARD_TOP_RGB, T.CARD_BOTTOM_RGB = T.BG_HOVER_RGB, T.BG_ELEVATED_RGB
     T.CARD_HOVER_TOP_RGB, T.CARD_HOVER_BOTTOM_RGB = T.BG_HOVER_RGB, T.BG_ACTIVE_RGB
     T.GLASS_TOP_LINE = "rgba(255, 255, 255, 120)" if light else "rgba(255, 255, 255, 26)"
     T.GLASS_TOP_LINE_HOVER = "rgba(255, 255, 255, 180)" if light else "rgba(255, 255, 255, 44)"
     T.GLASS_BOTTOM_LINE = "rgba(0, 0, 0, 20)" if light else "rgba(0, 0, 0, 60)"
-    T.PLACEHOLDER = Colors.TEXT_SECONDARY
+    T.PLACEHOLDER = T.TEXT_SECONDARY
     T.INPUT_RGB, T.INPUT_ALPHA = T.BG_ELEVATED_RGB, 0.96 if light else 0.78
     T.INPUT_BG = f"rgba({T.INPUT_RGB}, {int(255 * T.INPUT_ALPHA)})"
     T.SCROLL_HANDLE = f"rgba({T.TEXT_DISABLED_RGB}, 150)"
     T.BORDER_HIGHLIGHT = f"rgba({T.ACCENT_RGB}, 0.45)"
-    T.BORDER_FOCUS = Colors.ACCENT
+    T.BORDER_FOCUS = T.ACCENT
 
 
 refresh_color_tokens()

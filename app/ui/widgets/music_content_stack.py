@@ -1,7 +1,7 @@
 """Input-transparent transitions over live music and movie navigation."""
 import math
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal, QVariantAnimation
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QStackedWidget, QTabWidget, QWidget
 
@@ -22,7 +22,7 @@ def _snapshot(page, limit):
     return frame
 
 
-class _OutgoingPage(QWidget):
+class PageTransition(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -63,6 +63,25 @@ class _OutgoingPage(QWidget):
         self.raise_()
         self.show()
         self.animation.start()
+
+    def cover_bounds(self, widget):
+        return QRect(widget.mapTo(self.parentWidget(), QPoint()), widget.size())
+
+    def wash(self, widget, color, alpha, direction=0):
+        if self.isVisible():
+            self.finish()
+            return
+        shade = QColor(color)
+        shade.setAlpha(alpha)
+        frame = QPixmap(1, 1)
+        frame.fill(shade)
+        self.start(frame, self.cover_bounds(widget), direction)
+
+    def depart(self, widget):
+        if self.isVisible():
+            self.finish()
+            return
+        self.start(_snapshot(widget, 180_000), self.cover_bounds(widget), -1)
 
     def _advance(self, value):
         self.progress = value
@@ -116,7 +135,7 @@ class MusicContentStack(QStackedWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._outgoing = _OutgoingPage(self)
+        self._outgoing = PageTransition(self)
         self._fade = self._outgoing.animation
         self._entry_start = 0.
         self._track_key = ""
@@ -176,27 +195,45 @@ class MusicContentStack(QStackedWidget):
 
 
 class MediaTabs(QTabWidget):
-    """Slide a short-lived outgoing image only between the specified related tabs."""
+    """Move focus and input immediately. A temporary layer explains the change."""
 
-    def __init__(self, titles, parent=None):
+    def __init__(self, titles=(), parent=None, *, theme_fade=False, animate_navigation=True):
         super().__init__(parent)
-        self.titles = frozenset(titles)
+        self.related_tabs = frozenset(titles)
+        self._animate_navigation = animate_navigation
         self.reduce_motion = reduced_motion_enabled
         self._previous = -1
-        self._outgoing = _OutgoingPage(self)
+        self._outgoing = PageTransition(self)
         self.currentChanged.connect(self._switch)
+        if theme_fade:
+            from ..theme.colors import palette_for
+            from ..theme.manager import get_theme_manager
+            manager = get_theme_manager()
+            self._surface_color = palette_for(manager.mode).panel_background
+            manager.theme_changed.connect(self._fade_theme)
+
+    def _fade_theme(self, mode):
+        from ..theme.colors import palette_for
+        previous = self._surface_color
+        self._surface_color = palette_for(mode).panel_background
+        if self.isVisible() and self.currentWidget() is not None and not self.reduce_motion():
+            self._outgoing.wash(self.currentWidget(), previous, 42)
+        else:
+            self._outgoing.finish()
 
     def _switch(self, index):
         previous, self._previous = self._previous, index
+        interrupted = self._outgoing.isVisible()
         self._outgoing.finish()
-        if (previous < 0 or index < 0 or not self.isVisible() or
-                self.tabText(index) not in self.titles or self.tabText(previous) not in self.titles or self.reduce_motion()):
+        if not self._animate_navigation or interrupted or previous < 0 or index < 0 or not self.isVisible() or self.reduce_motion():
             return
         old, page = self.widget(previous), self.widget(index)
-        frame = _snapshot(old, 360_000)
-        bounds = page.geometry()
-        bounds.moveTopLeft(page.mapTo(self, QPoint()))
-        self._outgoing.start(frame, bounds, 1 if index > previous else -1)
+        direction = 1 if index > previous else -1
+        if {self.tabText(index), self.tabText(previous)} <= self.related_tabs:
+            self._outgoing.start(_snapshot(old, 360_000), self._outgoing.cover_bounds(page), direction)
+        else:
+            # Ordinary navigation needs no synchronous rendering of the outgoing page.
+            self._outgoing.wash(page, Tokens.BG_BASE, 52, direction)
 
     def resizeEvent(self, event):
         self._outgoing.finish()

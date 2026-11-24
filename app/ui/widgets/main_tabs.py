@@ -60,7 +60,7 @@ class MainTabs(QWidget):
                                   Tokens.SPACING_SM, Tokens.SPACING_SM)
         layout.setSpacing(Tokens.SPACING_SM)
 
-        tabs = MediaTabs(("音乐", "电影"))
+        tabs = MediaTabs(theme_fade=True, animate_navigation=False)
         self.tabs = tabs
         self._panels = {}
 
@@ -118,7 +118,7 @@ class MainTabs(QWidget):
             ), "设置", "settings")
         lyrics = getattr(self._panels.get("music"), "playing_lyrics", None)
         if lyrics is not None:
-            tabs.reduce_motion = lyrics.motion_reduced
+            tabs.reduce_motion = getattr(lyrics, "navigation_motion_reduced", lyrics.motion_reduced)
         layout.addWidget(tabs)
 
         # 应用持久化的刷新间隔到各面板 timer（settings.yaml ui.refresh_interval 原为死配置）

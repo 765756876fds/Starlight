@@ -43,7 +43,7 @@ from ..widgets.current_song_like import CurrentSongLikeButton
 from ..widgets.icon_utils import lucide_icon
 from ..widgets.latest_task import LatestTask
 from ..widgets.media_controls import FilterRow, PLAY_LOADING, PLAY_RETRY, SEARCHING
-from ..widgets.music_content_stack import MediaTabs, MusicContentStack
+from ..widgets.music_content_stack import MediaTabs, MusicContentStack, PageTransition
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
 from ..widgets.music_queue_dialog import MusicQueueDialog
 from ..widgets.music_wheel import MusicWheelScroll
@@ -299,13 +299,15 @@ class MusicPanel(QWidget):
         self._music_content = QSplitter(Qt.Horizontal)
         self._music_content.setChildrenCollapsible(False)
         self._music_content.addWidget(tabs)
+        self._drawer_transition = PageTransition(self)
+        self._music_content.splitterMoved.connect(lambda *_: self._drawer_transition.finish())
         self._media_pane = QStackedWidget()
         self._media_pane.setMinimumWidth(275)
         self._content_pages = MusicContentStack()
         self._content_pages.addWidget(self._music_content)
         from ..widgets.playing_lyrics import PlayingLyrics
         self.playing_lyrics = PlayingLyrics(self._content_pages)
-        tabs.reduce_motion = self.playing_lyrics.motion_reduced
+        tabs.reduce_motion = self.playing_lyrics.navigation_motion_reduced
         self.playing_lyrics.style_chosen.connect(lambda key: self._change_lyrics_prefs({"stage_style": key}))
         self.playing_lyrics.effect_chosen.connect(lambda key: self._change_lyrics_prefs({"stage_effect": key}))
         self._meter_request = None
@@ -757,7 +759,7 @@ class MusicPanel(QWidget):
             self.discovery.shutdown()
         if self._queue_dialog is not None:
             self._queue_dialog.close()
-        self._close_media_pane()
+        self._close_media_pane(animate=False)
         self._toggle_playing_lyrics(False, animate=False)
         if self._lyrics_window is not None:
             self._lyrics_window.close()
@@ -779,7 +781,12 @@ class MusicPanel(QWidget):
             self._lyrics_window.start()
         self._start_progress_poll()
 
+    def resizeEvent(self, event):
+        self._drawer_transition.finish()
+        super().resizeEvent(event)
+
     def hideEvent(self, event):
+        self._drawer_transition.finish()
         self._cancel_manual_feedback()
         super().hideEvent(event)
         # A Qt popup can stay visible after its owning panel has been hidden.
@@ -1839,7 +1846,10 @@ class MusicPanel(QWidget):
         from ..settings_store import save_lyrics_prefs
         from .settings_panel import _notify_lyrics_prefs_changed
         if save_lyrics_prefs(update):
+            self.playing_lyrics.remember_motion_preferences(update)
             _notify_lyrics_prefs_changed(update)
+            if self.playing_lyrics.navigation_motion_reduced():
+                self._drawer_transition.finish()
             if update.get("reduce_motion"):
                 self._content_pages.finish_transition()
         else:
@@ -1864,8 +1874,14 @@ class MusicPanel(QWidget):
             width = self._music_content.width()
             pane_width = max(290, min(380, width // 3))
             self._music_content.setSizes([max(1, width - pane_width), pane_width])
+            if self.isVisible() and not self.playing_lyrics.navigation_motion_reduced():
+                self._drawer_transition.wash(self._media_pane, Tokens.BG_BASE, 82, direction=1)
 
-    def _close_media_pane(self):
+    def _close_media_pane(self, *, animate=True):
+        if animate and self._media_pane.isVisible() and not self.playing_lyrics.navigation_motion_reduced():
+            self._drawer_transition.depart(self._media_pane)
+        else:
+            self._drawer_transition.finish()
         self._media_pane.hide()
 
     def _shared_lyric_cover(self, entering):
@@ -1912,6 +1928,8 @@ class MusicPanel(QWidget):
 
     def _toggle_playing_lyrics(self, enabled, *, animate=True):
         from ..widgets.lyrics_window import LyricsWindow
+        if enabled:
+            self._drawer_transition.finish()
         window = self._ensure_lyrics_window() if enabled and self._music is not None else None
         self.btn_playing_lyrics.setChecked(enabled)
         if enabled and self._content_pages.currentWidget() is not self.playing_lyrics:

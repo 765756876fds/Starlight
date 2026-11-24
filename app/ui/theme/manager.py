@@ -3,8 +3,8 @@ import logging
 import weakref
 
 from PySide6.QtCore import QObject, QEvent, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QPalette, QPixmapCache
-from PySide6.QtWidgets import QApplication, QLabel, QWidget, QAbstractItemView
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication, QLabel, QWidget, QAbstractItemView, QStackedWidget
 from shiboken6 import isValid
 
 from .colors import Colors, PALETTES, current_theme, palette_for, set_color_theme
@@ -67,19 +67,16 @@ class ThemeManager(QObject):
                 set_color_theme(mode)
                 refresh_color_tokens()
                 self._apply_palette()
-                from .applier import build_glass_qss
-                sheet = build_glass_qss()
-                # Theme changes already ignore our global event filter.
-                # Avoid dispatching every Qt repolish event back to Python.
-                self.app.removeEventFilter(self)
-                try:
+                from .applier import application_qss
+                sheet = application_qss()
+                if self.app.styleSheet() != sheet:
                     self.app.setStyleSheet(sheet)
-                finally:
-                    self.app.installEventFilter(self)
-                QPixmapCache.clear()
                 for widget in widgets:
                     if not isValid(widget):
                         continue
+                    # Page roots expose their palette even before navigation.
+                    if widget.isVisible() or widget.isWindow() or isinstance(widget.parentWidget(), QStackedWidget):
+                        self._set_widget_variant(widget, polish=True)
                     self._apply_widget(widget)
                     if isinstance(widget, QLabel) and widget.textFormat() != Qt.PlainText:
                         text = widget.text()
@@ -143,6 +140,16 @@ class ThemeManager(QObject):
             # A closed window may have been deleted between queued updates.
             self._styles.pop(widget, None)
 
+    def _set_widget_variant(self, widget, *, polish):
+        light = self.mode == "light"
+        if bool(widget.property("starlightLight")) == light:
+            return
+        widget.setProperty("starlightLight", light)
+        if polish:
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
+
     def eventFilter(self, watched, event):
         if not self._updating and isinstance(watched, QWidget) and event.type() in (
                 QEvent.Polish, QEvent.Show):
@@ -151,6 +158,7 @@ class ThemeManager(QObject):
             # path from a Python event filter can crash native widget cleanup.
             # Runtime status producers use current Tokens; legacy inline styles
             # are bound when shown and during an explicit theme change.
+            self._set_widget_variant(watched, polish=event.type() == QEvent.Show)
             self._capture_style(watched, self.mode)
             self._pending.add(watched)
             if not self._pending_timer.isActive():

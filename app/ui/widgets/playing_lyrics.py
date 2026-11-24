@@ -40,6 +40,7 @@ class PlayingLyrics(QWidget):
         self._auto_reader = False
         initial = load_lyrics_prefs()
         self._initial_reduced = initial.get("reduce_motion") is True
+        self._initial_low_power = initial.get("stage_low_power") is True
         self.active_line = -1
         self._follow = True
         self._cover_key = None
@@ -335,6 +336,17 @@ class PlayingLyrics(QWidget):
             self._scroll.pause()
         elif state == QAbstractAnimation.Paused and self.engine.is_playing():
             self._scroll.resume()
+
+    def remember_motion_preferences(self, update):
+        if "reduce_motion" in update:
+            self._initial_reduced = update["reduce_motion"] is True
+        if "stage_low_power" in update:
+            self._initial_low_power = update["stage_low_power"] is True
+
+    def navigation_motion_reduced(self):
+        low = (self._initial_low_power if self.engine is None
+               else self.engine._prefs.get("stage_low_power") is True)
+        return low or self.motion_reduced()
 
     def motion_reduced(self):
         local = self._initial_reduced if self.engine is None else self.engine._prefs.get("reduce_motion") is True

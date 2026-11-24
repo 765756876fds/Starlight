@@ -148,3 +148,92 @@ def test_parent_destruction_releases_music_events(qapp, monkeypatch):
         assert delivered == [True]
     finally:
         bus.shutdown()
+
+
+def test_fast_tab_reversal_keeps_search_input_and_browse_position(qapp):
+    from PySide6.QtWidgets import QLineEdit, QListWidget
+    from app.ui.widgets.music_content_stack import MediaTabs
+
+    tabs = MediaTabs()
+    tabs.reduce_motion = lambda: False
+    listing = QListWidget()
+    listing.addItems([str(i) for i in range(160)])
+    search = QLineEdit()
+    tabs.addTab(listing, "曲库")
+    tabs.addTab(search, "搜索")
+    tabs.resize(850, 480)
+    tabs.show()
+    try:
+        listing.setCurrentRow(84)
+        listing.scrollToItem(listing.currentItem(), QListWidget.PositionAtCenter)
+        qapp.processEvents()
+        position = listing.verticalScrollBar().value()
+        bar = tabs.tabBar()
+        QTest.mouseClick(bar, Qt.LeftButton, pos=bar.tabRect(1).center())
+        assert tabs.currentWidget() is search and tabs._outgoing.isVisible()
+        assert tabs._outgoing.testAttribute(Qt.WA_TransparentForMouseEvents)
+        search.setFocus()
+        QTest.keyClicks(search, "moon")
+        assert search.hasFocus() and search.text() == "moon"
+        QTest.mouseClick(bar, Qt.LeftButton, pos=bar.tabRect(0).center())
+        assert not tabs._outgoing.isVisible()
+        assert listing.currentRow() == 84 and listing.verticalScrollBar().value() == position
+        tabs.reduce_motion = lambda: True
+        tabs.setCurrentWidget(search)
+        assert search.text() == "moon" and not tabs._outgoing.isVisible()
+    finally:
+        tabs.close()
+
+
+def test_drawer_reversal_is_immediate_and_low_power_skips_the_layer(panel, qapp):
+    p, _, _ = panel
+    view = p.playing_lyrics
+    p.resize(850, 680)
+    p.show()
+    QTest.qWait(20)
+    assert view.engine is None
+    view.remember_motion_preferences({"reduce_motion": False, "stage_low_power": False})
+    from app.ui.theme.motion import set_reduced_motion
+    from app.ui.theme import motion
+    old = motion._forced_reduced
+    set_reduced_motion(False)
+    try:
+        p.action_download_tasks.trigger()
+        assert p._media_pane.isVisible() and p._drawer_transition.isVisible()
+        p._close_media_pane()
+        assert p._media_pane.isHidden() and not p._drawer_transition.isVisible()
+        for key in ("stage_low_power", "reduce_motion"):
+            view.remember_motion_preferences({"stage_low_power": False, "reduce_motion": False, key: True})
+            assert view.navigation_motion_reduced()
+            p.action_download_tasks.trigger()
+            assert p._media_pane.isVisible() and not p._drawer_transition.isVisible()
+            p._close_media_pane()
+            assert p._media_pane.isHidden() and not p._drawer_transition.isVisible()
+    finally:
+        set_reduced_motion(old)
+        p.close()
+
+
+def test_direct_global_navigation_preserves_input_without_a_snapshot(qapp, monkeypatch):
+    from PySide6.QtWidgets import QLineEdit, QWidget
+    from app.ui.widgets import music_content_stack
+
+    tabs = music_content_stack.MediaTabs(animate_navigation=False)
+    tabs.reduce_motion = lambda: False
+    search = QLineEdit()
+    tabs.addTab(search, "音乐")
+    tabs.addTab(QWidget(), "电影")
+    tabs.show()
+    try:
+        qapp.processEvents()
+        def unexpected_snapshot(*args):
+            raise AssertionError("Top-level navigation rendered the outgoing page")
+        monkeypatch.setattr(music_content_stack, "_snapshot", unexpected_snapshot)
+        for index in (1, 0, 1, 0):
+            tabs.setCurrentIndex(index)
+            assert tabs.currentIndex() == index and tabs._outgoing.isHidden()
+        search.setFocus()
+        QTest.keyClicks(search, "starlight")
+        assert search.text() == "starlight"
+    finally:
+        tabs.close()
