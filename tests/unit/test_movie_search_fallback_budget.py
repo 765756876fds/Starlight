@@ -10,6 +10,12 @@ from app.movie import movie_controller as module
 from app.movie.movie_controller import MovieController
 
 
+def patch_search_http(monkeypatch, get):
+    # Leave concurrent discovery and artwork tasks on their own transports.
+    transport = SimpleNamespace(get=get, Timeout=requests.Timeout, ConnectTimeout=requests.ConnectTimeout)
+    monkeypatch.setattr(module, "requests", transport)
+
+
 def connection_scenario(monkeypatch, clock):
     calls = []
     sources = [{"name": name, "url": f"https://{name}.invalid/cms"}
@@ -34,7 +40,7 @@ def connection_scenario(monkeypatch, clock):
             b'{"list":[{"vod_id":1,"vod_name":"Public test","vod_play_url":"film$synthetic"}]}'),
             preload_content=False)
         return response
-    monkeypatch.setattr(module.requests, "get", get)
+    patch_search_http(monkeypatch, get)
     return controller, calls
 
 

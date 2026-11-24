@@ -84,8 +84,10 @@ def test_tencent_cards_and_action_are_honestly_labelled_and_network_runs_off_gui
         assert "不代表可直接播放" in widget.category_status.text()
         widget.show_category("all")
         wait(lambda: widget._preview_result is not None)
-        assert "优酷、芒果TV仅提供官网入口" in widget.board_status.text()
-        assert "腾讯视频仅提供官网入口" not in widget.board_status.text()
+        official_only = widget.board_status.toolTip().split("官方入口：", 1)[1].split("、")
+        assert {"优酷", "芒果TV"}.issubset(official_only)
+        assert "腾讯视频" not in official_only
+        assert "官方观看入口" in widget.board_status.text()
     finally:
         widget.shutdown()
         widget.close()

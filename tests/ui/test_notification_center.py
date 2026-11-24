@@ -139,7 +139,7 @@ def test_notification_panel_and_capsule_fit_small_windows(center, width):
 
 
 def test_light_and_dark_palettes_share_semantic_roles():
-    dark, light = notification_style(), notification_style("light")
+    dark, light = notification_style("dark"), notification_style("light")
     assert dark.background != light.background
     assert dark.text != light.text
     assert dark.color("success") == dark.success

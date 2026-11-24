@@ -9,6 +9,7 @@
 - 音量三态（high/low/muted）图标状态。
 """
 from PySide6.QtCore import Qt
+from tests.ui.test_movie_voice_window import wait_for
 from PySide6.QtWidgets import QApplication
 import pytest
 pytestmark = pytest.mark.ui
@@ -32,6 +33,9 @@ class _FakeCtl:
     def play(self, item, index=None):
         self.plays.append((item, index))
         return True
+
+    def subtitle_state(self):
+        return None
 
     def is_playing(self):
         return self.playing
@@ -158,6 +162,12 @@ class TestSubtitleButton:
         try:
             w.play({"vod_name": "喜剧之王", "first_url": "u"}, index=0)
             w.overlay.btn_subtitle.click()
+            wait_for(lambda: w._subtitle_menu is not None)
+            menu = w._subtitle_menu
+            online = next(action for action in menu.actions() if "Assrt" in action.text())
+            assert online.isEnabled()
+            menu.close()
+            online.trigger()
             assert len(calls) == 1
             movie, kw, parent = calls[0]
             assert movie is ctl
@@ -177,6 +187,12 @@ class TestSubtitleButton:
         monkeypatch.setattr(
             "app.ui.panels.movie_panel._SubtitleDialog", _boom)
         try:
-            w.request_subtitle()            # 不抛 = 通过
+            w.request_subtitle()
+            wait_for(lambda: w._subtitle_menu is not None)
+            menu = w._subtitle_menu
+            online = next(action for action in menu.actions() if "Assrt" in action.text())
+            menu.close()
+            online.trigger()  # Failure stays inside the optional subtitle dialog.
+            assert w.overlay.btn_subtitle.isEnabled()
         finally:
             w._timer.stop()

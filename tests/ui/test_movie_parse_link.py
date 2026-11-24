@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 sys.path.insert(0, ".")
 
+from tests.ui.test_movie_voice_window import scene, wait_for  # noqa: F401
 from app.ui.dialogs.parse_link_dialog import ParseLinkDialog  # noqa: E402
 from app.ui.panels.movie_panel import _ParseLinkWorker, MoviePanel  # noqa: E402
 
@@ -216,30 +217,21 @@ def test_panel_third_party_api_plays_directly():
     assert play.call_args[0][0] == "https://jx.xxx.com/?url=https://www.iqiyi.com/v_x.html"
 
 
-def test_play_parsed_url_uses_existing_mpv():
-    """直接调现有电影 mpv 实例（loadfile+play），不经过 movie_controller.play。"""
-    p = _make_panel()
-    mpv = MagicMock()
-    mpv._process = MagicMock()
-    mpv._process.poll.return_value = None  # 进程活着 → 复用
-    p._movie.mpv = mpv
-    p._play_parsed_url("https://cdn/x.m3u8", title="测试流")
-    mpv.loadfile.assert_called_once_with("https://cdn/x.m3u8")
-    mpv.play.assert_called_once()
-    mpv.start.assert_not_called()
-
-
-def test_play_parsed_url_starts_if_not_alive():
-    """mpv 未启动 → 先 start（无 wid、短超时）再 loadfile。"""
-    p = _make_panel()
-    mpv = MagicMock()
-    mpv._process = None  # 未启动
-    mpv.start.return_value = True
-    p._movie.mpv = mpv
-    p._play_parsed_url("https://cdn/y.m3u8")
-    mpv.start.assert_called_once()
-    assert mpv.start.call_args.kwargs.get("wid") is None
-    mpv.loadfile.assert_called_once_with("https://cdn/y.m3u8")
+@pytest.mark.parametrize("scene", ["native_external"], indirect=True)
+@pytest.mark.parametrize("running", [True, False], ids=["reuse", "cold-start"])
+def test_parsed_url_loads_only_in_the_owned_movie_player(scene, running):
+    scene.mpv.is_running.return_value = running
+    url = "https://media.example.invalid/owned.m3u8"
+    assert scene.panel._play_parsed_url(url, title="测试流")
+    assert scene.panel.lbl_status.text() == "正在加载…"
+    wait_for(lambda: scene.panel._native_cancel is None and scene.mpv.loadfile.called)
+    scene.mpv.loadfile.assert_called_once_with(url)
+    scene.mpv.set_property.assert_any_call("pause", False)
+    if running:
+        scene.mpv.start.assert_not_called()
+    else:
+        scene.mpv.start.assert_called_once()
+        assert scene.mpv.start.call_args.kwargs["wid"] is None
 
 
 def test_parse_done_play_button_triggers_play():

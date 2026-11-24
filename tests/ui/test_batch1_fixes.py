@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 pytestmark = pytest.mark.ui
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
 
@@ -38,7 +38,9 @@ class SlowMusic:
     def is_playing(self):
         return self._playing
     def toggle(self):
-        QTimer.singleShot(300, lambda: setattr(self, "_playing", True))
+        import time
+        time.sleep(.3)  # The controller runs on the panel's worker thread.
+        self._playing = True
     def get_play_mode(self): return "sequential"
     def is_highlight_mode(self): return False
     def get_volume(self): return 70

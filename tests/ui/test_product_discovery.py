@@ -205,7 +205,8 @@ def test_movie_home_shows_actual_resume_local_entries_and_platform_provenance(qa
     assert "会员" in widget.work_detail.text()
     assert widget.show_local_matches(work)
     assert "1 个版本" in widget.local_status.text()
-    assert "官网入口" in widget.board_status.text()
+    assert "官方观看入口" in widget.board_status.text()
+    assert "官方入口：" in widget.board_status.toolTip()
     assert widget.continue_list.count() == 1 and widget.continue_list.count() <= 3
     widget._local_task.cancel()
     widget._board_task.cancel()
@@ -304,7 +305,7 @@ def test_movie_search_replaces_waiting_keywords_and_renders_only_latest_on_gui(q
         release.set()
         wait(lambda: panel.list_results.count() == 1)
         assert calls == ["A", "C"] and rendered == [("C", qapp.thread())]
-        assert panel.list_results.item(0).text() == "C"
+        assert panel.list_results.item(0).text() == "C · 仅作品信息"
     finally:
         release.set()
         wait(lambda: not panel._film_search._running)
@@ -360,8 +361,9 @@ def test_stale_movie_ranks_keep_timestamp_and_error_without_blocking_local_libra
     widget._boards_loaded_result("all", {"works": [work], "states": [
         {"platform": "B站", "kind": "movie", "state": "stale", "at": 1, "error": "timeout"},
         {"platform": "B站", "kind": "tv", "state": "failed", "error": "network"}]}, None)
-    assert "过期缓存" in widget.board_status.text() and "请求超时" in widget.board_status.text()
-    assert "连接失败" in widget.board_status.text() and widget.local_list.count() == 1
+    assert "更新于" in widget.preview_stamp.text() and "过期缓存" in widget.preview_stamp.text()
+    assert "请求超时" in widget.board_status.toolTip()
+    assert "连接失败" in widget.board_status.toolTip() and widget.local_list.count() == 1
     assert widget.sections["movie"].cards.count() == 1
     widget._local_task.cancel()
     widget._board_task.cancel()

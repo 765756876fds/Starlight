@@ -419,8 +419,10 @@ class TestTitleBar:
         })())
         tb.btn_min.click()
         assert called.get("min") is True
+        from PySide6.QtTest import QSignalSpy
+        request = QSignalSpy(tb.close_clicked)
         tb.btn_close.click()
-        assert called.get("close") is True
+        assert request.count() == 1 and "close" not in called
 
     def test_drag_moves_window(self, qapp):
         from PySide6.QtCore import QEvent, QPointF
@@ -595,10 +597,12 @@ class TestMainWindowGlass:
         w._on_boot_timeout()                            # 已切换 → 兜底忽略
         assert w._stack.count() == n
 
-    def test_boot_timeout_forces_switch(self, qapp):
-        # 兜底生效路径：仍停留在 LoadingPanel 时超时强制进入主界面
+    def test_boot_timeout_waits_for_actual_readiness(self, qapp):
+        # Slow startup must not report success before the readiness signal.
         from app.ui.main_window import MainWindow
         w = MainWindow(music=None)
         assert w._stack.currentWidget() is w._loading
         w._on_boot_timeout()
-        assert w._stack.currentWidget() is not w._loading
+        assert w._stack.currentWidget() is w._loading
+        w.switch_to_tabs(None)
+        assert w._stack.currentWidget() is w._tabs

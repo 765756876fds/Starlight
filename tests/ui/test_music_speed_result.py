@@ -3,29 +3,12 @@ from unittest.mock import MagicMock
 import time
 
 import pytest
-from PySide6.QtCore import QTimer
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
+from PySide6.QtWidgets import QApplication
 
 from app.music.controller import MusicController
 from app.music.mpv import MpvController
 from app.ui.panels.music_panel import MusicPanel
-
-
-class SpeedPanel(MusicPanel):
-    """Keep the production signal and methods; avoid unrelated panel services."""
-    def __init__(self, controller):
-        QWidget.__init__(self)
-        self._music = controller
-        # Keep the lifecycle resources that MusicPanel.closeEvent owns.
-        self._queue_refresh_timer = QTimer(self)
-        self._queue_refresh_timer.setSingleShot(True)
-        self._queue_dialog = None
-        self._speed_steps = list(MusicController.SPEED_STEPS)
-        self._speed_menu = QMenu(self)
-        self._setup_speed_actions()
-        self.lbl_status = QLabel("", self)
-        self._speed_result.connect(self._after_speed)
 
 
 @pytest.fixture(scope="module")
@@ -48,7 +31,8 @@ def test_speed_ui_signal_tracks_confirmed_failed_and_unknown_results(gui, respon
     controller.mpv = player
     controller._speed = 1.0
     controller.state_store = MagicMock()
-    panel = SpeedPanel(controller)
+    panel = MusicPanel()
+    panel._music = controller
     spy = QSignalSpy(panel._speed_result)
     try:
         panel._speed_actions.actions()[4].trigger()

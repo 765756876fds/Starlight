@@ -87,8 +87,8 @@ def test_real_manual_entry_same_name_selection_and_voice_keep_payload(manual_sce
     assert s.cms_calls[-2:] == [("reselected", "current"), ("reselected", "极速资源")]
     assert manager.get_active_name() == "current"
     manager._save.assert_called_once()
-    # Existing label reflects configured default, not actual row origin; report only.
-    assert "极速资源" in s.panel.lbl_status.text()
+    assert s.panel.lbl_status.text() == "已找到 2 部"
+    assert "极速资源" in s.panel.list_posters.item(1).toolTip()
     assert s.panel._current_source_name() == "current"
     item = s.panel.list_posters.item(1)
     payload = item.data(Qt.UserRole)

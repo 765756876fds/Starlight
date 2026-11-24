@@ -8,7 +8,7 @@
     & 'C:\Program Files\Python311\python.exe' -m pytest tests/e2e/test_ui_interaction.py -v
 """
 import os
-from types import SimpleNamespace
+from threading import Event
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -18,6 +18,7 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (QApplication, QListWidget, QListWidgetItem,
                                QMainWindow)
 
+from app.music.online.models import OnlineTrack
 from app.ui.panels.music_panel import MusicPanel
 
 pytestmark = pytest.mark.ui
@@ -50,6 +51,7 @@ class FakeMusic:
 
     def __init__(self):
         self.calls = []
+        self.release_play = Event()
         self.playing = False
         self.mpv = None  # 无真实 mpv：任何 IPC 调用都会自然失败并被上层 except 吞掉
 
@@ -58,9 +60,11 @@ class FakeMusic:
         self.playing = True
         return True
 
-    def play_online(self, track):
+    def play_online(self, track, *, _alternatives, _single_context, _before_load, _intent_ns):
+        assert _single_context and _before_load() and _intent_ns > 0
         """搜索结果双击播放的目标方法（_on_play 的异步调用目标）。"""
         self.calls.append(("play_online", track))
+        self.release_play.wait(3.)
         self.playing = True
         return True
 
@@ -85,8 +89,7 @@ class FakeMusic:
 
     def search_online(self, kw):
         self.calls.append(("search_online", kw))
-        return {"在线源": [SimpleNamespace(title="晴天", artist="周杰伦",
-                                          source_name="在线源", track_id=1)]}
+        return {"在线源": [OnlineTrack("在线源", "1", "晴天", "周杰伦")]}
 
 
 @pytest.fixture
@@ -99,6 +102,7 @@ def panel(qtbot, monkeypatch):
     p = MusicPanel(music=music)
     p.resize(900, 640)
     qtbot.addWidget(p)
+    p.show()
     yield p, music
     # teardown（关键）：停进度轮询线程并 join，防其访问已析构的 Qt 信号（0xC0000409）
     p._progress_polling = False
@@ -137,15 +141,10 @@ def test_double_click_plays_song(panel, qtbot):
     确认取址期间显示处理中；替身没有提供实际起播证据。"""
     p, music = panel
     _activate_online_tab(p)
-    # 模拟“搜索已完成”状态：_tracks_by_row 已由 _on_search_done 填充
-    track = SimpleNamespace(title="晴天", artist="周杰伦", source_name="在线源")
-    p._tracks_by_row = [track]
-    item = QListWidgetItem("晴天 - 周杰伦")
-    item.setData(Qt.UserRole, {"title": "晴天", "artist": "周杰伦",
-                               "id": 1, "source_name": "在线源"})
-    p.list_results.addItem(item)
-    p.list_results.setCurrentRow(0)
-    qtbot.wait(30)  # 布局稳定
+    p.edit_kw.setText("晴天")
+    qtbot.keyClick(p.edit_kw, Qt.Key_Return)
+    qtbot.waitUntil(lambda: p.list_results.isVisible() and p.list_results.count() == 1)
+    item = p.list_results.item(0)
 
     rect = p.list_results.visualItemRect(item)
     pos = rect.center() if rect.width() > 0 else QPoint(30, 30)
@@ -153,11 +152,14 @@ def test_double_click_plays_song(panel, qtbot):
     qtbot.mouseClick(p.list_results.viewport(), Qt.LeftButton, pos=pos)
     qtbot.mouseDClick(p.list_results.viewport(), Qt.LeftButton, pos=pos)
 
-    assert "正在播放" not in p.lbl_status.text()
-    assert any(word in p.lbl_status.text() for word in ("获取播放地址", "未确认起播"))
-    # 异步线程内 play_online 被真实调用
-    qtbot.waitUntil(lambda: bool(music.calls) and music.calls[0][0] == "play_online",
-                    timeout=3000)
+    try:
+        assert p.lbl_status.text() == "正在加载…"
+        qtbot.waitUntil(lambda: any(c[0] == "play_online" for c in music.calls))
+        assert [c[1].track_id for c in music.calls if c[0] == "play_online"] == ["1"]
+    finally:
+        music.release_play.set()
+    qtbot.waitUntil(lambda: p.btn_retry_online.isVisible())
+    assert p.lbl_status.text() == "暂未确认播放，请查看播放器或重试。"
 
 
 def test_play_toggle_button_icon_switches(panel, qtbot):
@@ -185,7 +187,9 @@ def test_search_input_triggers_request(panel, qtbot):
 
     assert p.edit_kw.text() == "周杰伦"
     qtbot.waitUntil(lambda: p.list_results.count() > 0, timeout=5000)
-    assert "[在线源]" in p.list_results.item(0).text()
+    item = p.list_results.item(0)
+    assert item.text() == "晴天 — 周杰伦"
+    assert item.data(Qt.UserRole)["source_name"] == "在线源" and "在线源" in item.toolTip()
     assert any(c[0] == "search_online" and c[1] == "周杰伦" for c in music.calls)
 
 

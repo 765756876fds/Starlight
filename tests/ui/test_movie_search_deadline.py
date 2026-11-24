@@ -9,6 +9,7 @@ from PySide6.QtTest import QTest
 
 from app.ui.widgets.latest_task import LatestTask
 from tests.ui.test_product_discovery import movie_panel as movie_panel, qapp as qapp, wait
+from tests.unit.test_movie_search_fallback_budget import patch_search_http
 from tests.ui.test_movie_voice_window import scene as scene
 
 pytestmark = pytest.mark.ui
@@ -67,7 +68,7 @@ def test_watchdog_finishes_latest_ui_without_creating_replacement_workers(movie_
         panel.edit_kw.setText("E")
         panel._do_search()
         wait(lambda: panel.list_results.count() == 1)
-        assert panel.list_results.item(0).text() == "E"
+        assert panel.list_results.item(0).text() == "E · 仅作品信息"
         assert calls == ["A", "E"]
         assert completed == ["C", "D", "E"]
         assert len(ticks) >= 3
@@ -157,16 +158,22 @@ def test_manual_search_renders_healthy_third_source_without_autoplay(scene, monk
     from app.movie.movie_controller import MovieController
     from tests.unit.test_movie_search_fallback_budget import connection_scenario
     clock = [time.monotonic()]
+    from app.movie import discovery
+    discovery_get = discovery.requests.get
     isolated, calls = connection_scenario(monkeypatch, clock)
+    assert discovery.requests.get is discovery_get
     scene.controller._source_manager = isolated._source_manager
     monkeypatch.setattr(scene.controller, "search", MethodType(MovieController.search, scene.controller))
     scene.mpv.reset_mock()
     scene.panel.edit_kw.setText("公开测试片名")
     scene.panel._do_search()
     wait(lambda: not scene.panel._film_search._running)
-    assert len(calls) == 3
+    assert [url for url, _ in calls] == [
+        "https://first.invalid/cms", "https://second.invalid/cms", "https://healthy.invalid/cms",
+    ]
     assert scene.panel.list_results.count() == 1
-    assert "healthy" in scene.panel.lbl_status.text() and "正在搜索" not in scene.panel.lbl_status.text()
+    assert "healthy" in scene.panel.list_results.item(0).toolTip()
+    assert scene.panel.lbl_status.text() == "已找到 1 部"
     assert scene.controller._source_manager.get_active_name() == "first"
     scene.mpv.loadfile.assert_not_called()
 
@@ -203,7 +210,7 @@ def test_three_connection_failures_finish_each_generation_and_allow_retry(scene,
             b'{"list":[{"vod_id":1,"vod_name":"Public test","vod_play_url":"film$synthetic"}]}'),
             preload_content=False)
         return response
-    monkeypatch.setattr(module.requests, "get", get)
+    patch_search_http(monkeypatch, get)
     scene.panel._film_search.completed.connect(
         lambda *args: finished.append((args, QThread.currentThread())))
     timer = QTimer()
@@ -278,7 +285,7 @@ def test_active_timeout_jisu_results_reach_gui_and_selected_media_keeps_source(s
         response.raw = HTTPResponse(body=BytesIO(json.dumps({'list': rows}).encode('utf-8')),
                                     preload_content=False)
         return response
-    monkeypatch.setattr(module.requests, 'get', get)
+    patch_search_http(monkeypatch, get)
     diagnostic = Mock(wraps=panel_module.logger.info)
     monkeypatch.setattr(panel_module.logger, 'info', diagnostic)
     caplog.set_level(logging.INFO, logger='app.ui.widgets.latest_task')
@@ -291,7 +298,8 @@ def test_active_timeout_jisu_results_reach_gui_and_selected_media_keeps_source(s
     wait(lambda: not scene.panel._film_search._running)
     assert calls == [state['sources'][0]['url'], state['sources'][4]['url']]
     assert scene.panel.list_results.count() == scene.panel.list_posters.count() == 2
-    assert '极速资源' in scene.panel.lbl_status.text()
+    assert '极速资源' in scene.panel.list_results.item(0).toolTip()
+    assert scene.panel.lbl_status.text() == '已找到 2 部'
     assert '正在搜索' not in scene.panel.lbl_status.text()
     assert not scene.panel._film_search._timer.isActive()
     assert state['active'] == '量子资源'

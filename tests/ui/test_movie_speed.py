@@ -26,8 +26,8 @@ class TestMovieSpeed(unittest.TestCase):
 
     def _panel(self):
         movie = MagicMock()
-        with patch("app.ui.panels.movie_panel.MovieController", return_value=movie):
-            panel = MoviePanel(movie=None)
+        movie.embed_enabled.return_value = False
+        panel = MoviePanel(movie=movie)
         return panel, movie
 
     def test_speed_steps_full_9_gears(self):

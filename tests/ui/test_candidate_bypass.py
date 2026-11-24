@@ -29,6 +29,8 @@ def _make_controller(tmp_path):
         c = MusicController(cfg)
     c.mpv = MagicMock()
     c.mpv.get_live_playback_time.return_value = 42.0
+    c.mpv.loadfile.return_value = {"error": "success"}
+    c.set_movie_pauser(lambda: True)
     return c
 
 

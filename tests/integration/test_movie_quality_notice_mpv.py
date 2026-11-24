@@ -35,6 +35,7 @@ def test_runtime_notice_and_candidates_preserve_owned_playback(
     http = threading.Thread(target=server.serve_forever, name="owned-quality-http", daemon=True)
     http.start()
     s = sessions("runtime-notice")
+    s.mpv.extra_video_args.remove("--pause=yes")  # This test streams a moving timeline.
     s.mpv.extra_video_args += [
         "--cache=yes", "--demuxer-max-bytes=256KiB", "--demuxer-readahead-secs=2",
         "--cache-secs=2", "--cache-pause-initial=yes", "--cache-pause-wait=0.5",
@@ -79,7 +80,10 @@ def test_runtime_notice_and_candidates_preserve_owned_playback(
         panel._on_search_done([original, alternate])
         panel.stack_results.setCurrentWidget(panel.list_results)
         panel._on_item_activated(panel.list_results.item(0))
-        wait_until(lambda: (s.mpv.get_property("time-pos", timeout=.2) or 0) > .3, 6)
+        # A load receipt follows asynchronous startup. Keep the original
+        # deadline and read the owned pipe only after that receipt exists.
+        wait_until(lambda: getattr(s.ctl.playback_startup(), "state", None) in ("accepted", "started")
+                   and (s.mpv.get_property("time-pos", timeout=.2) or 0) > .3, 6)
         assert getattr(s.ctl, "_playback_monitor", None) is None
         process = s.mpv._process
         entry = s.mpv.get_property("playlist-entry-id", timeout=.3)

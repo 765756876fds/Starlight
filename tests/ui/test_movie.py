@@ -362,8 +362,8 @@ def test_panel_search_done_renders(qapp):
         assert panel.list_results.count() == 2
         assert "流浪地球2" in panel.list_results.item(0).text()
         assert "HD" in panel.list_results.item(0).text()
-        assert panel.list_results.item(1).text() == "星际穿越"
-        assert panel.lbl_status.text().startswith("找到")
+        assert panel.list_results.item(1).text() == "星际穿越 · 可选播放"
+        assert panel.lbl_status.text() == "已找到 2 部"
     finally:
         panel._timer.stop()
 
@@ -374,7 +374,7 @@ def test_panel_search_empty(qapp):
     try:
         panel._on_search_done([])
         assert panel.list_results.count() == 0
-        assert panel.lbl_status.text() == "没有找到匹配影片，请换个片名或切换片源后重试。"
+        assert panel.lbl_status.text() == "没有找到匹配影片，试试其他片名。"
     finally:
         panel._timer.stop()
 
@@ -384,7 +384,7 @@ def test_panel_search_failed(qapp):
     panel = _mk_panel(qapp, fake)
     try:
         panel._on_search_failed("timeout")
-        assert "搜索失败" in panel.lbl_status.text()
+        assert panel.lbl_status.text() == "搜索暂未完成，请重试或换个片名。"
     finally:
         panel._timer.stop()
 
@@ -398,7 +398,8 @@ def test_panel_item_activated_plays(qapp):
         item = QListWidgetItem("流浪地球2")
         item.setData(0x0100, it)   # Qt.UserRole
         panel._on_item_activated(item)
-        assert "播放中" in panel.lbl_now.text()
+        assert panel.lbl_now.text() == "加载中: 流浪地球2"
+        assert panel.lbl_status.text() == "正在加载…"
         assert panel.slider_pos.isEnabled()
     finally:
         panel._timer.stop()

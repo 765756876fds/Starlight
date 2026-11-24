@@ -425,7 +425,10 @@ def test_recent_and_own_playlist_cards_reuse_existing_panel_handlers_once(setup_
     row = {"title": "最近听过", "source_type": "local", "music_id": 7}
     s.panel.discovery.history_chosen.emit(row)
     s.panel._play_async.assert_called_once()
-    assert s.panel._play_async.call_args.args == (s.c.play_history_item, row)
+    # A discovery history card has no surrounding list. It starts exactly the
+    # selected recording through the same context path as other saved rows.
+    assert s.panel._play_async.call_args.args == (s.c.play_playlist_context, (row,), 0)
+    assert s.panel._play_async.call_args.kwargs["context"] is True
     s.c.get_playlists = Mock(return_value=[{"id": 1, "name": "第一份"}, {"id": 2, "name": "第二份"}])
     s.c.get_playlist_songs = Mock(return_value=[])
     s.panel.discovery.playlist_chosen.emit({"id": 2, "name": "第二份"})

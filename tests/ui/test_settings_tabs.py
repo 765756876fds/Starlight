@@ -1,7 +1,7 @@
-"""设置页方案 B：4 tab 结构回归测试。
+"""设置页四组偏好与独立诊断页的结构回归测试。
 
-- 4 个 tab（音乐/语音/游戏/界面），标题不带 emoji
-- 每个 tab 页是 QScrollArea（独立滚动）
+- 音乐、语音、游戏、界面依次展示，最后为诊断
+- 四个偏好页独立滚动，诊断页显示检查记录
 - 插件区不再内嵌滚动（平铺，_plugins_container 直接挂组 layout）
 - 构造后关键控件属性仍存在（防重设计误删控件）
 """
@@ -40,16 +40,19 @@ def _make_panel(app):
     )
 
 
-def test_four_tabs_in_order(app):
+def test_preference_tabs_followed_by_diagnostics(app):
     p = _make_panel(app)
-    assert p._tabs.count() == 4
+    assert p._tabs.count() == 5
     assert [p._tabs.tabText(i) for i in range(p._tabs.count())] == \
-        ["音乐", "语音", "游戏", "界面"]
+        ["音乐", "语音", "游戏", "界面", "诊断"]
 
 
-def test_each_tab_page_is_scrollarea(app):
+def test_preference_pages_scroll_and_diagnostics_has_read_only_results(app):
+    from app.ui.widgets.diagnostics_panel import DiagnosticsPanel
     p = _make_panel(app)
-    for i in range(p._tabs.count()):
+    diagnostics = p._tabs.widget(4)
+    assert isinstance(diagnostics, DiagnosticsPanel) and diagnostics.output.isReadOnly()
+    for i in range(4):
         w = p._tabs.widget(i)
         assert isinstance(w, QScrollArea)
         assert w.widgetResizable() is True

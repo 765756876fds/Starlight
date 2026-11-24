@@ -375,7 +375,9 @@ def test_detail_does_not_use_wrong_source_legacy_when_new_cache_missing(scene, i
     monkeypatch.setattr(movie_panel, '_get_poster', lambda _: pytest.fail('unqualified CMS cache access'))
     dialog = _MovieDetailDialog(row, scene.panel)
     from PySide6.QtCore import Qt
-    expected = _make_poster_placeholder(row['vod_name']).scaled(180, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    actual = dialog.lbl_pic.pixmap()
+    assert actual is not None and not actual.isNull()
+    expected = _make_poster_placeholder(row['vod_name']).scaled(actual.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
     assert dialog.lbl_pic.pixmap().toImage() == expected.toImage()
     assert not images.calls
     dialog.close()
