@@ -11,6 +11,8 @@ from PySide6.QtGui import QActionGroup, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QComboBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -210,6 +212,7 @@ class MusicPanel(QWidget):
     def __init__(self, music=None, parent=None):
         super().__init__(parent)
         self._music = music
+        self._row_favorites = {}
         self._playlist_task = LatestTask(self)
         self._playlist_task.completed.connect(self._apply_playlists)
         self._volume_request_gen = 0
@@ -263,6 +266,22 @@ class MusicPanel(QWidget):
         self._identify_service = None
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(10, 6, 10, 4)
+        root.setSpacing(7)
+        self.header = QWidget()
+        self.header_layout = QHBoxLayout(self.header)
+        self.header_layout.setContentsMargins(0, 0, 0, 0)
+        self.heading = QLabel("发现音乐")
+        heading_font = self.heading.font()
+        heading_font.setPointSize(18)
+        heading_font.setBold(True)
+        self.heading.setFont(heading_font)
+        self.heading.setStyleSheet("font-size:23px; font-weight:650;")
+        self.header_layout.addWidget(self.heading)
+        self.header_layout.addStretch()
+        root.addWidget(self.header)
+        self.header.hide()
+        self.column_headers = []
         self.btn_queue = QPushButton("播放队列")
         self.btn_queue.setToolTip("查看当前歌曲、下一首和待播歌曲")
         self.btn_queue.clicked.connect(self._show_queue)
@@ -303,6 +322,10 @@ class MusicPanel(QWidget):
         self._music_content.splitterMoved.connect(lambda *_: self._drawer_transition.finish())
         self._media_pane = QStackedWidget()
         self._media_pane.setMinimumWidth(275)
+        self._drawer_focus = None
+        escape_drawer = QShortcut(QKeySequence(Qt.Key_Escape), self._media_pane)
+        escape_drawer.setContext(Qt.WidgetWithChildrenShortcut)
+        escape_drawer.activated.connect(self._close_media_pane)
         self._content_pages = MusicContentStack()
         self._content_pages.addWidget(self._music_content)
         from ..widgets.playing_lyrics import PlayingLyrics
@@ -322,9 +345,10 @@ class MusicPanel(QWidget):
         self.playing_lyrics.close_requested.connect(lambda: self._toggle_playing_lyrics(False))
         self._queue_changed.connect(self.playing_lyrics.sync_transport, Qt.QueuedConnection)
         self._content_pages.addWidget(self.playing_lyrics)
-        self._music_content.addWidget(self._media_pane)
+        self._media_pane.setParent(self._content_pages)
+        self._media_pane.setObjectName("musicSidePanel")
+        self._media_pane.setStyleSheet(f"QStackedWidget#musicSidePanel {{ background:{Tokens.BG_ELEVATED}; border:1px solid {Tokens.BORDER}; border-left:2px solid {Tokens.TEXT_SECONDARY}; border-radius:10px; }}")
         self._music_content.setStretchFactor(0, 1)
-        self._music_content.setStretchFactor(1, 0)
         self._media_pane.hide()
         root.addWidget(self._content_pages, 1)
 
@@ -363,23 +387,29 @@ class MusicPanel(QWidget):
         # 本地列表（卡片网格）
         self.list_local = QListWidget()
         self._dl_local = self._setup_card_view(self.list_local)
+        self._track_header(ll, self.list_local)
         ll.addWidget(self.list_local, 1)
         # 当前曲目（小标题级）
         self.lbl_track = _TrackTitle()
-        track_row = QHBoxLayout()
+        from ..widgets.music_chrome import Artwork
+        from ..widgets.playback_quality_button import PlaybackQualityButton
+        self.cover_thumb = Artwork()
+        self.cover_thumb.setFixedSize(48, 48)
+        self.quality_button = PlaybackQualityButton(music, self)
+        self.lbl_artist = _TrackTitle()
+        self.lbl_artist.setText("")
+        self.lbl_artist.setProperty("class","secondary")
+        self.lbl_track.setAlignment(Qt.AlignLeft|Qt.AlignVCenter)
+        self.lbl_artist.setAlignment(Qt.AlignLeft|Qt.AlignVCenter)
+        self.lbl_artist.setMaximumWidth(150)
+        self.lbl_track.setStyleSheet("font-size:15px;font-weight:600;")
+        self.lbl_artist.setStyleSheet(f"font-size:12px;color:{Tokens.TEXT_SECONDARY};")
         self.btn_like = CurrentSongLikeButton(music, self)
         self.btn_like.changed.connect(self._refresh_visible_playlists)
         self._queue_changed.connect(self.btn_like.sync, Qt.QueuedConnection)
-        track_row.addStretch()
-        track_row.addWidget(self.lbl_track)
-        track_row.addWidget(self.btn_like)
         self.btn_playing_lyrics = QPushButton("歌词")
         self.btn_playing_lyrics.setCheckable(True)
         self.btn_playing_lyrics.clicked.connect(self._toggle_playing_lyrics)
-        track_row.addWidget(self.btn_playing_lyrics)
-        track_row.addWidget(self.btn_queue)
-        track_row.addStretch()
-        root.addLayout(track_row)
 
         # 进度条（律动波形：播放中频谱跳动，暂停低电平）
         from ..widgets.waveform_slider import WaveformSlider
@@ -396,8 +426,6 @@ class MusicPanel(QWidget):
             self.lbl_time.setFont(f)
         except Exception:
             pass  # 旧 Qt 无 QFont.Tag：忽略
-        root.addWidget(self.slider_pos)
-        root.addWidget(self.lbl_time)
 
         # 模式、播放键、更多选项与音量共用一行。
         row_main = QHBoxLayout()
@@ -466,19 +494,50 @@ class MusicPanel(QWidget):
         self.slider_vol = GlassSlider(Qt.Vertical)
         self.slider_vol.setRange(0, 100)
         self.btn_volume.set_slider(self.slider_vol)
-        left = QHBoxLayout()
-        left.addWidget(self.btn_mode, 0, Qt.AlignVCenter)
-        left.addStretch()
-        right = QHBoxLayout()
-        right.addStretch()
-        right.addWidget(self.btn_more, 0, Qt.AlignVCenter)
-        right.addWidget(self.btn_volume, 0, Qt.AlignVCenter)
-        row_main.addLayout(left, 1)
-        row_main.addWidget(self.btn_prev, 0, Qt.AlignVCenter)
-        row_main.addWidget(self.btn_toggle, 0, Qt.AlignVCenter)
-        row_main.addWidget(self.btn_next, 0, Qt.AlignVCenter)
-        row_main.addLayout(right, 1)
-        root.addLayout(row_main)
+        footer = QFrame()
+        footer.setObjectName("musicTransport")
+        footer.setStyleSheet(f"QFrame#musicTransport {{ border-top: 1px solid {Tokens.BORDER}; }}")
+        outer = QGridLayout(footer)
+        outer.setContentsMargins(8, 6, 8, 5)
+        outer.setHorizontalSpacing(14)
+        identity = QHBoxLayout()
+        identity.setSpacing(9)
+        identity.addWidget(self.cover_thumb)
+        names = QVBoxLayout()
+        names.setSpacing(1)
+        self.lbl_track.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.lbl_artist.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        names.addWidget(self.lbl_track)
+        names.addWidget(self.lbl_artist)
+        names.addWidget(self.quality_button, 0, Qt.AlignLeft)
+        identity.addLayout(names, 1)
+        outer.addLayout(identity, 0, 0, 2, 1)
+        outer.setVerticalSpacing(1)
+        row_main.setSpacing(5)
+        row_main.addStretch()
+        for control in (self.btn_mode, self.btn_prev, self.btn_toggle, self.btn_next):
+            row_main.addWidget(control, 0, Qt.AlignCenter)
+        row_main.addStretch()
+        self.btn_toggle.setFixedSize(42, 42)
+        self.btn_toggle.setAccessibleName("播放或暂停")
+        self.btn_toggle.setStyleSheet(f"QPushButton {{ background:{Tokens.ACCENT}; border:0; border-radius:21px; }}")
+        outer.addLayout(row_main, 0, 1)
+        timeline = QHBoxLayout()
+        self.slider_pos.setFixedHeight(20)
+        timeline.addWidget(self.slider_pos, 1)
+        timeline.addWidget(self.lbl_time)
+        outer.addLayout(timeline, 1, 1)
+        auxiliary = QHBoxLayout()
+        auxiliary.setSpacing(2)
+        auxiliary.addStretch()
+        for control in (self.btn_like, self.btn_playing_lyrics, self.btn_queue, self.btn_more, self.btn_volume):
+            auxiliary.addWidget(control, 0, Qt.AlignVCenter)
+        self.btn_queue.setText("队列")
+        outer.addLayout(auxiliary, 0, 2)
+        outer.setColumnStretch(0, 4)
+        outer.setColumnStretch(1, 6)
+        outer.setColumnStretch(2, 3)
+        root.addWidget(footer)
 
         # 键盘优先：Ctrl+F / Ctrl+K 聚焦搜索框（窗口级快捷键）
         self._sc_find = QShortcut(
@@ -538,6 +597,7 @@ class MusicPanel(QWidget):
         download_shortcut = QShortcut(QKeySequence("Ctrl+D"), self.list_results)
         download_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         download_shortcut.activated.connect(lambda: self._download_result(self.list_results.currentRow()))
+        self._track_header(results_layout, self.list_results, download=True)
         results_layout.addWidget(self.list_results, 1)
         self.lbl_status = QLabel("输入关键词开始搜索")
         self.lbl_status.setTextFormat(Qt.PlainText)
@@ -555,6 +615,7 @@ class MusicPanel(QWidget):
         self.btn_retry_online.clicked.connect(self._retry_online)
         self.btn_retry_online.hide()
         self.btn_result_play.setEnabled(False)
+        self.btn_result_play.hide()
         self.btn_versions.setEnabled(False)
         self.btn_versions.hide()
         self.list_results.currentRowChanged.connect(self._online_selection_changed)
@@ -566,6 +627,14 @@ class MusicPanel(QWidget):
         self.btn_discovery_more.clicked.connect(self.discovery._more)
         self.discovery.paging_changed.connect(self.btn_discovery_more.setVisible)
         results_layout.addWidget(self.btn_discovery_more)
+        results_layout.addStretch(0)
+        self._results_fit = QTimer(self)
+        self._results_fit.setSingleShot(True)
+        self._results_fit.timeout.connect(self._fit_sparse_results)
+        model = self.list_results.model()
+        for changed in (model.rowsInserted, model.rowsRemoved, model.modelReset):
+            changed.connect(lambda *_: self._results_fit.start(0))
+        self._fit_sparse_results()
         self.online_stack.addWidget(self.results_page)
         self.btn_discovery_home.hide()
         self.online_stack.currentChanged.connect(
@@ -583,6 +652,7 @@ class MusicPanel(QWidget):
         hl2.addLayout(hrow2)
         self.list_history = QListWidget()
         self._dl_history = self._setup_card_view(self.list_history)
+        self._track_header(hl2, self.list_history)
         hl2.addWidget(self.list_history)
         tabs.addTab(history, "历史")
 
@@ -600,15 +670,45 @@ class MusicPanel(QWidget):
         pl_btns.addWidget(self.btn_rename_playlist)
         pl_btns.addWidget(self.btn_del_playlist)
         pl_left.addLayout(pl_btns)
-        pl.addLayout(pl_left, 2)
+        self._favorites_only = False
+        self._browse_playlist_id = None
+        collection = self.playlist_collection = QWidget()
+        collection.setMinimumWidth(140)
+        collection.setMaximumWidth(210)
+        collection.setLayout(pl_left)
+        pl.addWidget(collection)
         pl_right = QVBoxLayout()
         self.list_playlist_songs = QListWidget()
         self._dl_playlist_songs = self._setup_card_view(self.list_playlist_songs)
-        pl_right.addWidget(self.list_playlist_songs, 1)
+        from ..widgets.music_chrome import Artwork, PlaylistHeader
+        self.playlist_header = PlaylistHeader()
+        detail = QHBoxLayout(self.playlist_header)
+        detail.setContentsMargins(10, 8, 12, 8)
+        detail.setSpacing(12)
+        self.playlist_art = Artwork()
+        self.playlist_art.setFixedSize(60, 60)
+        detail.addWidget(self.playlist_art)
+        summary = QVBoxLayout()
+        summary.setSpacing(2)
+        self.playlist_title = _TrackTitle()
+        self.playlist_title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.playlist_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.playlist_title.setStyleSheet("font-size:20px;font-weight:600;")
+        self.playlist_title.setText("歌单")
+        summary.addWidget(self.playlist_title)
         self.lbl_playlist_status = QLabel("未选择歌单")
-        self.lbl_playlist_status.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
-        pl_right.addWidget(self.lbl_playlist_status)
+        self.lbl_playlist_status.setProperty("class", "secondary")
+        summary.addWidget(self.lbl_playlist_status)
+        detail.addLayout(summary, 1)
+        self.play_playlist_button = QPushButton("播放")
+        self.play_playlist_button.setProperty("class", "primary")
+        self.play_playlist_button.hide()
+        self.play_playlist_button.clicked.connect(lambda: self._on_playlist_song_play(self.list_playlist_songs.item(0))
+                                                if self.list_playlist_songs.count() else None)
+        detail.addWidget(self.play_playlist_button)
+        pl_right.addWidget(self.playlist_header)
+        self._track_header(pl_right, self.list_playlist_songs)
+        pl_right.addWidget(self.list_playlist_songs, 1)
         pl.addLayout(pl_right, 3)
         tabs.addTab(playlist, "歌单")
 
@@ -645,6 +745,7 @@ class MusicPanel(QWidget):
         rl_right = QVBoxLayout()
         self.list_rank_songs = QListWidget()
         self._dl_rank_songs = self._setup_card_view(self.list_rank_songs)
+        self._track_header(rl_right, self.list_rank_songs)
         rl_right.addWidget(self.list_rank_songs, 1)
         self.lbl_rank_status = QLabel("加载榜单中…")
         self.lbl_rank_status.setStyleSheet(
@@ -752,7 +853,11 @@ class MusicPanel(QWidget):
         self._queue_refresh_timer.stop()
         if hasattr(self, "btn_like"):
             self.btn_like.shutdown()
-            self._playlist_task.cancel()
+            self.quality_button.shutdown()
+        for task in self._row_favorites.values():
+            task.cancel()
+        self._row_favorites.clear()
+        self._playlist_task.cancel()
         if hasattr(self, "popular_songs"):
             self.popular_songs.shutdown()
         if hasattr(self, "discovery"):
@@ -784,6 +889,8 @@ class MusicPanel(QWidget):
     def resizeEvent(self, event):
         self._drawer_transition.finish()
         super().resizeEvent(event)
+        if hasattr(self, "_media_pane"):
+            self._position_media_pane()
 
     def hideEvent(self, event):
         self._drawer_transition.finish()
@@ -795,8 +902,8 @@ class MusicPanel(QWidget):
             self._more_menu.close()
         self._last_ui_tick = None
         self._queue_refresh_timer.stop()
-        if self._queue_dialog is not None:
-            self._queue_dialog.hide()
+        if self._queue_dialog is not None and self._media_pane.currentWidget() is self._queue_dialog:
+            self._close_media_pane(animate=False)
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.stop()
         self._progress_polling = False
@@ -811,13 +918,19 @@ class MusicPanel(QWidget):
     @Slot()
     def _show_queue(self):
         if self._queue_dialog is None:
-            self._queue_dialog = MusicQueueDialog(self)
+            self._queue_dialog = MusicQueueDialog(self._media_pane, embedded=True)
+            self._media_pane.addWidget(self._queue_dialog)
+            self._queue_dialog.close_requested.connect(self._close_media_pane)
+            self._queue_dialog.clear_requested.connect(self._on_clear_queue)
+            self._queue_dialog.next_requested.connect(self._queue_entry_next)
             self._queue_dialog.finished.connect(self._queue_refresh_timer.stop)
             self._queue_dialog.remove_requested.connect(self._remove_queue_item, Qt.QueuedConnection)
             self._queue_dialog.move_requested.connect(self._move_queue_item, Qt.QueuedConnection)
-        self._queue_dialog.show()
-        self._queue_dialog.raise_()
-        self._queue_dialog.activateWindow()
+        if (self._media_pane.isVisible() and self._media_pane.currentWidget() is self._queue_dialog
+                and self._queue_dialog.isVisible()):
+            self._close_media_pane()
+            return
+        self._open_media_pane(self._queue_dialog)
         self._schedule_queue_refresh()
 
     @Slot()
@@ -869,6 +982,8 @@ class MusicPanel(QWidget):
     def _setup_card_view(self, w: QListWidget, delegate=MusicCardDelegate) -> MusicCardDelegate:
         """歌曲类列表 → IconMode 卡片网格 + 自绘 Delegate。"""
         w.setViewMode(QListWidget.IconMode)
+        # Sparse data reads as individual tracks rather than a large empty card.
+        w.setStyleSheet("QListWidget { background: transparent; border: none; padding: 0; }")
         w.setMovement(QListWidget.Static)
         w.setResizeMode(QListWidget.Adjust)
         w.setUniformItemSizes(True)
@@ -892,6 +1007,15 @@ class MusicPanel(QWidget):
                result.message, status="success" if result.status is OperationStatus.CONFIRMED else "warning")
         self._schedule_queue_refresh()
 
+    def _fit_sparse_results(self):
+        listing = self.list_results
+        layout = self.results_page.layout()
+        count = listing.count()
+        sparse = count <= 2 and listing.viewMode() == QListWidget.ListMode
+        height = max(0, listing.sizeHintForRow(0)) * count if sparse else 16777215
+        listing.setMaximumHeight(height)
+        layout.setStretch(layout.count() - 1, int(sparse))
+
     def _toggle_view_mode(self, grid_on: bool):
         """列表/网格 全局切换：网格 = 卡片 Delegate；列表 = 默认文本 delegate。"""
         pairs = [
@@ -906,13 +1030,20 @@ class MusicPanel(QWidget):
             try:
                 w.setViewMode(mode)
                 # ListMode 下显式挂默认 delegate（setItemDelegate(None) 会令行高归零）
-                w.setItemDelegate(d if grid_on or w is self.list_results else QStyledItemDelegate(w))
+                w.setProperty("trackTable", not grid_on)
+                w.setItemDelegate(d)
+                w.setSpacing(Tokens.SPACING_MD if grid_on else 0)
+                if w is self.list_results:
+                    self._fit_sparse_results()
                 if grid_on:
                     w.setMovement(QListWidget.Static)
                     w.setResizeMode(QListWidget.Adjust)
                     w.setSpacing(Tokens.SPACING_MD)
             except RuntimeError:
                 pass  # 视图已销毁
+        self.popular_songs.set_grid(grid_on)
+        for header in self.column_headers:
+            header.setVisible(not grid_on)
         self.btn_view_toggle.setIcon(lucide_icon(
             "grid" if grid_on else "list", 16, Tokens.TEXT_PRIMARY))
 
@@ -956,6 +1087,122 @@ class MusicPanel(QWidget):
             return f"net:{song.get('title')}|{song.get('artist')}"
         sid = song.get("id")
         return f"local:{sid}" if sid else None
+
+    def _track_header(self, layout, listing, *, download=False):
+        from ..widgets.music_chrome import TrackColumns
+        header = TrackColumns(listing, self._sort_tracks, download)
+        self.column_headers.append(header)
+        layout.addWidget(header)
+
+    def enable_shell_navigation(self):
+        self.tabs.tabBar().hide()
+        self.tabs.setCornerWidget(None)
+        self.header.show()
+        self.edit_kw.setMaximumWidth(440)
+        self.header_layout.addWidget(self.edit_kw, 2)
+        self.header_layout.addWidget(self.btn_search)
+        self.sort_button = QPushButton("排序")
+        self.sort_menu = QMenu(self.sort_button)
+        for field, label in (("title","歌曲名称"),("artist","歌手"),("album","专辑"),("duration","时长")):
+            self.sort_menu.addAction(label, lambda checked=False, key=field: self._sort_tracks(key))
+        self.sort_button.setMenu(self.sort_menu)
+        self.browse_button = QPushButton("浏览")
+        browse_menu = QMenu(self.browse_button)
+        self.discovery.add_browse_actions(browse_menu)
+        browse_menu.addSeparator()
+        browse_menu.addAction("搜索筛选", self.search_options.click)
+        browse_menu.addAction("听歌识曲", self.btn_identify.click)
+        self.browse_button.setMenu(browse_menu)
+        self.search_options.hide()
+        self.btn_identify.hide()
+        self.header_layout.addWidget(self.browse_button)
+        self.header_layout.addWidget(self.sort_button)
+        self.header_layout.addWidget(self.btn_view_toggle)
+        self.btn_view_toggle.show()
+        self.popular_songs.enable_table()
+        self.popular_songs.cards.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.popular_songs.cards.customContextMenuRequested.connect(self._popular_context_menu)
+        self.list_rank_songs.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_rank_songs.customContextMenuRequested.connect(self._rank_context_menu)
+        self.btn_view_toggle.setChecked(False)
+        self._toggle_view_mode(False)
+        self.tabs.currentChanged.connect(self._update_heading)
+        self.online_stack.currentChanged.connect(self._update_heading)
+        self.tabs.setCurrentIndex(1)
+        self._update_heading()
+
+    def _update_heading(self, *_):
+        if not hasattr(self, "sort_button"):
+            return
+        index = self.tabs.currentIndex()
+        title = ("本地音乐","发现音乐","最近播放","我的歌单","排行榜")[index]
+        if index == 1 and self.online_stack.currentWidget() is self.results_page:
+            title = "搜索结果" if self._discovery_tracks is None else "歌单详情"
+        if index == 3 and self._favorites_only:
+            title = "我的收藏"
+        self.heading.setText(title)
+        self.browse_button.setVisible(index == 1)
+        self.sort_button.setVisible(index != 1 or self.online_stack.currentWidget() is self.results_page)
+
+    def _popular_context_menu(self, pos):
+        listing = self.popular_songs.cards
+        item = listing.itemAt(pos)
+        if item is None:
+            return
+        listing.setCurrentItem(item)
+        group = item.data(Qt.UserRole)
+        index = max(0, self.popular_songs.versions.currentIndex())
+        track = group.entries[index].track
+        self._build_song_menu(self._online_song_row(track, [entry.track for entry in group.entries])).exec(
+            listing.viewport().mapToGlobal(pos))
+
+    def _rank_context_menu(self, pos):
+        listing = self.list_rank_songs
+        item = listing.itemAt(pos)
+        if item is not None:
+            track = self._rank_tracks[listing.row(item)]
+            self._build_song_menu(self._online_song_row(track, ())).exec(listing.viewport().mapToGlobal(pos))
+
+    def _sort_tracks(self, key):
+        listing = (self.list_local, self.list_results, self.list_history,
+                   self.list_playlist_songs, self.list_rank_songs)[self.tabs.currentIndex()]
+        if listing is self.list_rank_songs and not self.rank_mode.isChecked():
+            listing = self.popular_songs.cards
+        count = listing.count()
+        if count < 2:
+            return
+        reverse = getattr(listing, "_sort_key", None) == (key, False)
+        listing._sort_key = (key, reverse)
+        selected = listing.currentItem()
+        def value(row):
+            data = listing.item(row).data(Qt.UserRole) or {}
+            if listing is self.popular_songs.cards:
+                track = data.entries[0].track
+                if key == "duration":
+                    return track.duration_seconds or 0
+                return str(getattr(track, key, "") or "").casefold()
+            if key == "duration":
+                try:
+                    return float(data.get("duration_seconds") or data.get("duration") or 0)
+                except (TypeError, ValueError):
+                    return 0.
+            return str(data.get(key) or "").casefold()
+        order = sorted(range(count), key=value, reverse=reverse)
+        with QSignalBlocker(listing):
+            items = [listing.takeItem(0) for _ in range(count)]
+            for index in order:
+                listing.addItem(items[index])
+            if selected is not None:
+                listing.setCurrentItem(selected)
+        names = (("_tracks_by_row","_track_versions") if listing is self.list_results else
+                 ("_local_songs",) if listing is self.list_local else
+                 ("_rank_tracks",) if listing is self.list_rank_songs else ())
+        for name in names:
+            rows = getattr(self, name, ())
+            if len(rows) == count:
+                setattr(self, name, [rows[index] for index in order])
+        if listing is self.list_results:
+            self._online_selection_changed(listing.currentRow())
 
     def _focus_search(self):
         """Ctrl+F / Ctrl+K：聚焦当前 tab 的搜索框并全选。"""
@@ -1512,6 +1759,8 @@ class MusicPanel(QWidget):
         self._do_search(rank_for_display=True)
 
     def _do_search(self, *, on_done=None, on_failed=None, rank_for_display=False):
+        if hasattr(self, "sort_button"):
+            self.tabs.setCurrentIndex(1)
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
@@ -1653,6 +1902,7 @@ class MusicPanel(QWidget):
                 "title": t.title,
                 "artist": t.artist,
                 "album": t.album,
+                "duration_seconds": t.duration_seconds,
                 "source_name": t.source_name,
                 "track_id": t.track_id,
                 "cover_url": getattr(t, "cover_url", None) or None,
@@ -1661,6 +1911,7 @@ class MusicPanel(QWidget):
             item.setData(MusicCardRoles.DownloadRole, True)
             self.list_results.addItem(item)
         self._tracks_by_row = tracks_for_search
+        self._fit_sparse_results()
         for key, task in self._download_tasks.items():
             self._update_download_card(key, task)
         self.list_results.setCurrentRow(0 if tracks_for_search else -1)
@@ -1865,24 +2116,46 @@ class MusicPanel(QWidget):
         register_lyrics_prefs_listener(self._lyrics_window.apply_prefs)
         return self._lyrics_window
 
+    def _queue_entry_next(self, index, revision):
+        success = self._music.replay_queue_entry_next(index, revision)
+        self._queue_dialog.action_status.setText("已安排下一首临时插播" if success else "队列已变化，请重新选择")
+        self._schedule_queue_refresh()
+
+    def _position_media_pane(self):
+        space = self._content_pages.rect()
+        inset = 6
+        width = min(max(280, space.width() // 2), 372, max(0, space.width() - 2 * inset))
+        self._media_pane.setGeometry(max(0, space.width() - width - inset), inset,
+                                     width, max(0, space.height() - 2 * inset))
+
     def _open_media_pane(self, content):
         self._toggle_playing_lyrics(False, animate=False)
         was_closed = self._media_pane.isHidden()
-        self._media_pane.setCurrentWidget(content)
-        self._media_pane.show()
+        switched = self._media_pane.currentWidget() is not content
         if was_closed:
-            width = self._music_content.width()
-            pane_width = max(290, min(380, width // 3))
-            self._music_content.setSizes([max(1, width - pane_width), pane_width])
-            if self.isVisible() and not self.playing_lyrics.navigation_motion_reduced():
-                self._drawer_transition.wash(self._media_pane, Tokens.BG_BASE, 82, direction=1)
+            self._drawer_focus = self.focusWidget()
+        self._media_pane.setCurrentWidget(content)
+        content.show()
+        self._position_media_pane()
+        self._media_pane.show()
+        self._media_pane.raise_()
+        if (was_closed or switched) and self.isVisible():
+            content.btn_close.setFocus(Qt.OtherFocusReason)
+            if not self.playing_lyrics.navigation_motion_reduced():
+                self._drawer_transition.wash(self._media_pane, Tokens.BG_BASE, 72, direction=-1)
 
     def _close_media_pane(self, *, animate=True):
-        if animate and self._media_pane.isVisible() and not self.playing_lyrics.navigation_motion_reduced():
-            self._drawer_transition.depart(self._media_pane)
-        else:
-            self._drawer_transition.finish()
+        interrupted = self._drawer_transition.isVisible()
+        self._drawer_transition.finish()
+        focused = self.focusWidget()
+        return_focus = focused is not None and self._media_pane.isAncestorOf(focused)
+        was_open = self._media_pane.isVisible()
         self._media_pane.hide()
+        if animate and was_open and not interrupted and not self.playing_lyrics.navigation_motion_reduced():
+            self._drawer_transition.wash(self._media_pane, Tokens.BG_ELEVATED, 42, direction=-1)
+        opener, self._drawer_focus = self._drawer_focus, None
+        if return_focus and opener is not None and opener.isVisible():
+            opener.setFocus(Qt.OtherFocusReason)
 
     def _shared_lyric_cover(self, entering):
         from ..widgets.music_card_delegate import cover_key_of, _get_cover_loader
@@ -1929,7 +2202,7 @@ class MusicPanel(QWidget):
     def _toggle_playing_lyrics(self, enabled, *, animate=True):
         from ..widgets.lyrics_window import LyricsWindow
         if enabled:
-            self._drawer_transition.finish()
+            self._close_media_pane(animate=False)
         window = self._ensure_lyrics_window() if enabled and self._music is not None else None
         self.btn_playing_lyrics.setChecked(enabled)
         if enabled and self._content_pages.currentWidget() is not self.playing_lyrics:
@@ -2157,6 +2430,18 @@ class MusicPanel(QWidget):
 
     # ---- 歌单 ----
 
+    def set_favorites_view(self, enabled):
+        if enabled == self._favorites_only:
+            return
+        selected = self.list_playlists.currentItem()
+        if enabled:
+            self._browse_playlist_id = selected.data(Qt.UserRole)["id"] if selected else None
+        self._favorites_only = enabled
+        self.playlist_collection.setVisible(not enabled)
+        self._update_heading()
+        if self.tabs.currentIndex() == 3:
+            self._refresh_playlists(preferred_id=None if enabled else self._browse_playlist_id)
+
     def _refresh_visible_playlists(self):
         if self.tabs.currentIndex() == 3:
             self._refresh_playlists()
@@ -2172,9 +2457,13 @@ class MusicPanel(QWidget):
             current = selected.data(Qt.UserRole)["id"]
         displayed = [listing.item(i).data(Qt.UserRole) for i in range(listing.count())]
         music = self._music
+        favorites_only = self._favorites_only
 
         def read():
+            from ...music.database import _LIKED_PLAYLIST
             playlists = music.get_playlists()
+            if favorites_only:
+                playlists = [row for row in playlists if row.get("name") == _LIKED_PLAYLIST]
             if poll and playlists == displayed:
                 return None
             selected_id = next((p["id"] for p in playlists if p["id"] == current),
@@ -2214,7 +2503,17 @@ class MusicPanel(QWidget):
                 f"{artist} · {src}" if artist else src,
                 f"local:{mid}" if mid else None))
             self.list_playlist_songs.addItem(item)
-        self.lbl_playlist_status.setText(f"{len(rows)} 首" if selected_id is not None else "未选择歌单")
+        selected = listing.currentItem()
+        self.playlist_title.setText(selected.text() if selected else ("我喜欢的音乐" if self._favorites_only else "歌单"))
+        cover = next((row for row in rows if row.get("cover_url") or row.get("path")), {})
+        self.playlist_header.set_song(cover)
+        self.playlist_art.set_song(cover)
+        self.play_playlist_button.setVisible(bool(rows))
+        self.play_playlist_button.setEnabled(bool(rows))
+        if self._favorites_only and not rows:
+            self.lbl_playlist_status.setText("尚未收藏歌曲")
+        else:
+            self.lbl_playlist_status.setText(f"{len(rows)} 首" if selected_id is not None else "未选择歌单")
 
     def _refresh_playlist_songs(self):
         self._refresh_playlists()
@@ -2222,6 +2521,7 @@ class MusicPanel(QWidget):
     def _on_playlist_selected(self, current, previous):
         """歌单列表选中变化 → 刷新右侧歌曲。"""
         self.list_playlist_songs.clear()
+        self.play_playlist_button.hide()
         self.lbl_playlist_status.setText("正在读取歌单…" if current is not None else "未选择歌单")
         self._refresh_playlist_songs()
 
@@ -2594,6 +2894,12 @@ class MusicPanel(QWidget):
         """通用右键菜单；parent=self 防 GC。song 须含 title/artist/source_type/
         source_name/track_id/music_id（本地可带 path）。"""
         menu = QMenu(self)
+        from ...music.database import liked_song_identity
+        row_song = self._song_dict_from_row(song)
+        identity = liked_song_identity(row_song)
+        if identity is not None and row_song["title"] and self._music is not None:
+            favorite = menu.addAction("收藏到我喜欢的音乐")
+            favorite.triggered.connect(lambda: self._favorite_row(identity, row_song))
         act_next = menu.addAction("下一首播放")
         act_next.triggered.connect(lambda: self._on_next_play(song))
         act_append = menu.addAction("添加到播放队列")
@@ -2633,6 +2939,26 @@ class MusicPanel(QWidget):
             act_del = menu.addAction("删除本地文件")
             act_del.triggered.connect(lambda: self._delete_local_file(song))
         return menu
+
+    def _favorite_row(self, identity, song):
+        if identity in self._row_favorites:
+            return
+        task = LatestTask(self)
+        self._row_favorites[identity] = task
+        music = self._music
+
+        def done(_key, saved, error):
+            self._row_favorites.pop(identity, None)
+            task.deleteLater()
+            if error is None and saved is True:
+                self.lbl_status.setText("已收藏")
+                self.btn_like.refresh_membership(song)
+                self._refresh_visible_playlists()
+            else:
+                self.lbl_status.setText("收藏未更新，请重试")
+
+        task.completed.connect(done)
+        task.submit(identity, lambda: music.set_liked_song(song, True))
 
     def _on_next_play(self, song: dict):
         if self._music is None:
@@ -2761,6 +3087,10 @@ class MusicPanel(QWidget):
     def _download_result_song(self, row):
         track = self._tracks_by_row[row]
         alternatives = self._track_versions[row] if row < len(self._track_versions) else ()
+        return self._online_song_row(track, alternatives)
+
+    @staticmethod
+    def _online_song_row(track, alternatives):
         return dict(title=track.title, artist=track.artist, album=track.album,
                     duration_seconds=track.duration_seconds, source_type="online",
                     source_name=track.source_name, track_id=track.track_id,
@@ -3014,6 +3344,7 @@ class MusicPanel(QWidget):
 
     def _online_selection_changed(self, row):
         self.btn_result_play.setEnabled(row >= 0)
+        self.btn_result_play.setVisible(row >= 0)
         groups = getattr(self, "_track_versions", [])
         has_alternatives = (self._voice_generation is None and 0 <= row < len(groups)
                             and len({(t.source_name, t.track_id) for t in groups[row]}) > 1)
@@ -3263,12 +3594,16 @@ class MusicPanel(QWidget):
                 self.btn_like.sync()
             if not song:
                 self.lbl_track.setText("未播放")
+                self.lbl_artist.setText("")
+                self.cover_thumb.set_song({})
+                self.quality_button.refresh()
             if song:
                 title = song.get("title") or song.get("name") or ""
                 artist = song.get("artist") or ""
-                prefix = "[在线] " if song.get("online") else ""
-                text = f"{prefix}{title} - {artist}" if artist else f"{prefix}{title}"
-                self.lbl_track.setText(text)
+                self.lbl_track.setText(title)
+                self.lbl_artist.setText(artist)
+                self.cover_thumb.set_song(song)
+                self.quality_button.refresh()
                 # 播放/暂停图标随状态切换（定时器路径，复用同一同步方法）
                 self._sync_toggle_icon()
                 # 卡片播放态同步（仅 key 变化时更新全部卡片视图）

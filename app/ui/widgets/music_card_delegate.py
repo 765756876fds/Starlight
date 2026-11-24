@@ -165,7 +165,7 @@ class _CoverLoader(QObject):
     NETWORK_TIMEOUT_MS = 8000
     NETWORK_DEADLINE_MS = 15000
 
-    def __init__(self):
+    def __init__(self, shimmer_clock=None):
         super().__init__()
         self._covers = OrderedDict()  # key -> QPixmap | None（失败）
         self._expires = {}
@@ -176,6 +176,8 @@ class _CoverLoader(QObject):
         self._pending = set()
         self._pending_count = 0
         self._views = {}             # id(view) -> view（微光 tick 重绘范围）
+        self._shimmer_clock = shimmer_clock or motion.ShimmerClock.instance()
+        self._holds_shimmer = False
         self._shimmer_connected = False
         self._qnam = QNetworkAccessManager(self)
         self._qnam.finished.connect(self._on_net_finished)
@@ -197,16 +199,19 @@ class _CoverLoader(QObject):
             lambda *_, _id=_vid: self._views.pop(_id, None))
 
     def _start_shimmer(self) -> None:
-        if motion.reduced_motion_enabled():
+        if self._holds_shimmer or motion.reduced_motion_enabled():
             return
-        clock = motion.ShimmerClock.instance()
+        clock = self._shimmer_clock
         if not self._shimmer_connected:
             clock.tick.connect(self._on_shimmer_tick)
             self._shimmer_connected = True
         clock.acquire()
+        self._holds_shimmer = True
 
     def _stop_shimmer(self) -> None:
-        motion.ShimmerClock.instance().release()
+        if self._holds_shimmer:
+            self._holds_shimmer = False
+            self._shimmer_clock.release()
 
     def _on_shimmer_tick(self, _pos: float) -> None:
         for view in list(self._views.values()):
@@ -384,6 +389,8 @@ class MusicCardDelegate(QStyledItemDelegate):
         return QRectF(rect.left() + pad, rect.top() + pad, side, side)
 
     def sizeHint(self, option, index) -> QSize:
+        if self.parent() and self.parent().property("trackTable"):
+            return QSize(180, 48)
         return QSize(Tokens.CARD_WIDTH, Tokens.CARD_HEIGHT)
 
     # ---- 封面就绪 → 重绘 ----
@@ -406,8 +413,68 @@ class MusicCardDelegate(QStyledItemDelegate):
             if isinstance(v, QAbstractItemView):
                 v.viewport().update()
 
+    def paint_row(self, painter, option, index):
+        data = index.data(Qt.UserRole) or {}
+        if not isinstance(data,dict):
+            from .discovery_cards import DISPLAY_ROLE
+            data = index.data(DISPLAY_ROLE) or {}
+        rect = option.rect
+        painter.save()
+        if option.state & (QStyle.State_Selected | QStyle.State_MouseOver):
+            color = Tokens.BG_ACTIVE if option.state & QStyle.State_Selected else Tokens.BG_HOVER
+            painter.fillRect(rect, QColor(color))
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        x, y = rect.x() + 8, rect.y()
+        key = cover_key_of(data)
+        cover = self._loader.get(key) if key else None
+        if key and not cover:
+            self._loader.request(key)
+        art = QRect(x, y + (rect.height()-32)//2, 32, 32)
+        if cover and not cover.isNull():
+            side = min(cover.width(), cover.height())
+            painter.drawPixmap(art, cover, QRect((cover.width()-side)//2,(cover.height()-side)//2,side,side))
+        else:
+            painter.fillRect(art, QColor(Tokens.BG_ELEVATED))
+            painter.setPen(QColor(Tokens.TEXT_SECONDARY))
+            painter.drawText(art, Qt.AlignCenter, str(index.row()+1))
+        x += 42
+        remaining = max(1, rect.right()-x-4)
+        artist, album = data.get("artist") or "", data.get("album") or ""
+        duration = data.get("duration_seconds") or data.get("duration")
+        time_text = ""
+        if type(duration) in (int,float) and 0 < duration < 86400:
+            sec = int(duration)
+            time_text = f"{sec//60}:{sec%60:02}"
+        score = remaining >= 380
+        show_album = remaining >= 510
+        duration_width = 48 if remaining >= 300 else 0
+        work = remaining-duration_width
+        title_width = int(work * (.45 if show_album else .61)) if score else work
+        artist_width = int(work * .25) if show_album else work-title_width
+        fields = [(str(data.get("title") or index.data(Qt.DisplayRole) or ""), title_width, Tokens.TEXT_PRIMARY)]
+        if score:
+            fields.append((str(artist),artist_width,Tokens.TEXT_SECONDARY))
+        if show_album:
+            fields.append((str(album),work-title_width-artist_width,Tokens.TEXT_SECONDARY))
+        for text, width, color in fields:
+            painter.setPen(QColor(color))
+            area = QRect(x,y,width-6,rect.height() if score else rect.height()//2+2)
+            painter.drawText(area, Qt.AlignLeft | Qt.AlignVCenter,painter.fontMetrics().elidedText(text,Qt.ElideRight,max(1,area.width())))
+            if not score:
+                painter.setPen(QColor(Tokens.TEXT_SECONDARY))
+                area.translate(0,rect.height()//2-2)
+                painter.drawText(area,Qt.AlignLeft|Qt.AlignVCenter,painter.fontMetrics().elidedText(str(artist),Qt.ElideRight,max(1,area.width())))
+            x += width
+        if duration_width:
+            painter.setPen(QColor(Tokens.TEXT_SECONDARY))
+            painter.drawText(QRect(x,y,duration_width-4,rect.height()), Qt.AlignRight|Qt.AlignVCenter, time_text)
+        painter.restore()
+
     # ---- 绘制 ----
     def paint(self, painter: QPainter, option, index) -> None:
+        if self.parent() and self.parent().property("trackTable"):
+            self.paint_row(painter, option, index)
+            return
         data = index.data(Qt.UserRole)
         if not isinstance(data, dict):
             data = {}
@@ -606,7 +673,7 @@ class DownloadCardDelegate(MusicCardDelegate):
         if self.parent().viewMode() == QListView.ViewMode.IconMode:
             return super().sizeHint(option, index)
         size = QStyledItemDelegate.sizeHint(self, option, index)
-        size.setHeight(max(38, size.height()))
+        size.setHeight(max(48, size.height()))
         return size
 
     def action_rect(self, rect):
@@ -621,7 +688,7 @@ class DownloadCardDelegate(MusicCardDelegate):
             list_option = QStyleOptionViewItem(option)
             if actionable:
                 list_option.rect.adjust(0, 0, -60, 0)
-            QStyledItemDelegate.paint(self, painter, list_option, index)
+            self.paint_row(painter, list_option, index)
         if not actionable:
             return
         rect = self.action_rect(option.rect)

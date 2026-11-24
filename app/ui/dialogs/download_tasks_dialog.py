@@ -31,7 +31,7 @@ class DownloadTasksPane(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM, 0, 0)
+        layout.setContentsMargins(*([Tokens.SPACING_MD] * 4))
         layout.setSpacing(Tokens.SPACING_SM)
         header = QHBoxLayout()
         title = QLabel("下载任务")
@@ -41,7 +41,7 @@ class DownloadTasksPane(QWidget):
         self.btn_close.setFixedSize(32, 30)
         self.btn_close.setIcon(lucide_icon("x", 14, Tokens.TEXT_SECONDARY))
         self.btn_close.setAccessibleName("收起下载任务")
-        self.btn_close.setToolTip("收起下载任务")
+        self.btn_close.setToolTip("收起下载任务（Esc）")
         self.btn_close.clicked.connect(self.close_requested.emit)
         header.addWidget(self.btn_close)
         layout.addLayout(header)

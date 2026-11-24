@@ -306,7 +306,7 @@ class TestMotion:
 
     def test_shimmer_clock_acquire_release(self, qapp):
         from app.ui.theme import motion
-        clock = motion.ShimmerClock.instance()
+        clock = motion.ShimmerClock()
         assert clock.active() is False
         motion.set_reduced_motion(True)
         clock.acquire()
@@ -324,21 +324,39 @@ class TestMotion:
         from PySide6.QtWidgets import QListWidget
         from app.ui.theme import motion
         from app.ui.widgets import music_card_delegate as mcd
+        from PySide6.QtCore import QEventLoop, QTimer
+
+        clock = motion.ShimmerClock()
+        loader = mcd._CoverLoader(shimmer_clock=clock)
+        monkeypatch.setattr(mcd, "_get_cover_loader", lambda: loader)
+        monkeypatch.setattr(motion, "_forced_reduced", False)
         view = QListWidget()
-        d = mcd.MusicCardDelegate(view)
-        clock = motion.ShimmerClock.instance()
-        motion.set_reduced_motion(False)
-        # 本地封面路径不存在 → request 入队后失败 → pending 归零 → 时钟停止
-        d._loader.request("local:C:/__nope__/a.mp3")
-        assert clock.active() is True
-        QApplication.processEvents()
-        QApplication.processEvents()
-        deadline = 0
-        while clock.active() and deadline < 200:
-            QApplication.processEvents()
-            deadline += 1
-        assert clock.active() is False
-        motion.set_reduced_motion(None)
+        delegate = mcd.MusicCardDelegate(view)
+        completed = []
+        loop = QEventLoop()
+        timeout = QTimer()
+        timeout.setSingleShot(True)
+        timeout.timeout.connect(loop.quit)
+
+        def on_cover(key):
+            completed.append(key)
+            loop.quit()
+
+        loader.loaded.connect(on_cover)
+        key = "local:C:/__nope__/a.mp3"
+        try:
+            delegate._loader.request(key)
+            assert clock.active()
+            timeout.start(2000)
+            if not completed:
+                loop.exec()
+            assert completed == [key]
+            assert loader.failed(key)
+            assert not clock.active()
+        finally:
+            timeout.stop()
+            loader.close()
+            view.deleteLater()
 
 
 # ---------- MusicPanel：卡片网格 + 快捷键 ----------

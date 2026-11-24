@@ -116,7 +116,7 @@ class MusicDiscovery(QWidget):
         available = callable(getattr(music, "recommend_music", None))
         self.recommend_button.setVisible(available)
         recommendation.addWidget(self.recommend_button)
-        recommendation_options = QPushButton("推荐选项")
+        self.recommendation_options = recommendation_options = QPushButton("推荐选项")
         menu = QMenu(recommendation_options)
         for button in (self.change_chart_button, self.like_artist_button, self.reduce_track_button):
             button.setParent(self)
@@ -128,6 +128,7 @@ class MusicDiscovery(QWidget):
         recommendation.addStretch()
         root.addLayout(recommendation)
         self.recommendation_status = label("", True)
+        self.recommendation_status.setMaximumHeight(23)
         root.addWidget(self.recommendation_status)
         self.pages = QStackedWidget()
         root.addWidget(self.pages, 1)
@@ -139,6 +140,10 @@ class MusicDiscovery(QWidget):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 6, 8)
         layout.setSpacing(18)
+        from .music_chrome import FeatureSheet
+        self.feature = FeatureSheet()
+        self.feature.activated.connect(self._open_sheet_row)
+        layout.addWidget(self.feature)
         self.sections = {}
         for key, title in (("today", "今日推荐"), ("ranks", "热门排行榜"), ("featured", "精选歌单"),
                            ("new", "新歌推荐"), ("recent", "最近播放"), ("mine", "我的歌单")):
@@ -214,6 +219,7 @@ class MusicDiscovery(QWidget):
     @Slot(str)
     def _show_recommendation(self, message):
         if not self._recommend_closed:
+            self.recommendation_status.setVisible(bool(message))
             self.recommendation_status.setText(message)
 
     def _recommend(self, **params):
@@ -275,7 +281,7 @@ class MusicDiscovery(QWidget):
         self._sheet = None
         self._render_charts()
         self._render_sheets([])
-        self.status.setText("挑一首喜欢的，或搜索歌曲与歌手。" if self.sources.count() else
+        self._set_status("挑一首喜欢的，或搜索歌曲与歌手。" if self.sources.count() else
                             "当前音源未提供发现内容；普通搜索、本地音乐、最近播放和我的歌单仍可使用。排行榜以音源实际支持为准。")
         if self.isVisible():
             self._source_changed()
@@ -336,7 +342,7 @@ class MusicDiscovery(QWidget):
         if caps.get("sheets"):
             self._request("tags")
         else:
-            self.status.setText("此音源未提供推荐歌单；可查看排行榜、最近播放或直接搜索。")
+            self._set_status("此音源未提供推荐歌单；可查看排行榜、最近播放或直接搜索。")
             self._render_sheets([])
 
     def _request(self, operation, *, force=False, **params):
@@ -346,7 +352,7 @@ class MusicDiscovery(QWidget):
         self._last_request = (operation, dict(params))
         cache_key = (source, operation, json.dumps(params, sort_keys=True, ensure_ascii=False, default=str))
         cached = None if force else self._browse_cache.get(cache_key)
-        self.status.setText("正在读取音源内容…")
+        self._set_status("正在读取音源内容…")
         self.more.setEnabled(False)
         view = self._view
         def read():
@@ -382,14 +388,17 @@ class MusicDiscovery(QWidget):
     def _load_sheets(self, *_):
         tag = self.tags.currentData()
         if not isinstance(tag, dict) or not str(tag.get("id") or "").strip():
-            self.status.setText("此音源未提供可浏览的公开分类；可使用搜索或排行榜。")
+            self._set_status("此音源未提供可浏览的公开分类；可使用搜索或排行榜。")
             return
         self._page = 1
         self._sheet = None
         self._request("sheets", tag=tag, page=1)
 
     def _open_sheet(self, item):
-        self._sheet = item.data(Qt.UserRole)
+        self._open_sheet_row(item.data(Qt.UserRole))
+
+    def _open_sheet_row(self, row):
+        self._sheet = row
         self._page, self._tracks = 1, []
         self._track_pages.clear()
         self._request("sheet", item=self._sheet, page=1)
@@ -446,7 +455,7 @@ class MusicDiscovery(QWidget):
         self.more.setEnabled(True)
         if error or not isinstance(value, dict):
             hint = "请求超时，请检查网络后重试或换一个音源。" if getattr(error, "category", "") == "timeout" else "音源未完成请求，请重试或换一个音源。"
-            self.status.setText(hint)
+            self._set_status(hint)
             if self._view != "home":
                 self.empty.setText(hint)
             self.paging_changed.emit(bool(self._tracks))
@@ -490,7 +499,7 @@ class MusicDiscovery(QWidget):
                     self.sheets.addItem(item)
                 self.empty.setText("" if self.sheets.count() else "此分类暂无内容，试试其他分类或音源。")
                 self.more.setVisible(more)
-            self.status.setText(f"已找到 {len(rows)} 个内容" + (" · 首页仅展示少量预览" if self._view == "home" else ""))
+            self._set_status(f"已找到 {len(rows)} 个内容" + (" · 首页仅展示少量预览" if self._view == "home" else ""))
         else:
             tracks = value.get("tracks")
             if not isinstance(tracks, list):
@@ -501,15 +510,47 @@ class MusicDiscovery(QWidget):
             self._track_pages[self._page] = list(tracks)
             self._tracks = [track for page in sorted(self._track_pages) for track in self._track_pages[page]]
             title = str(self._sheet.get("title") or self._sheet.get("name") or "曲目")
-            self.status.setText(f"{title} · {len(self._tracks)} 首")
+            self._set_status(f"{title} · {len(self._tracks)} 首")
             self.back.show()
             self.paging_changed.emit(more)
             self.tracks_ready.emit(list(self._tracks), title)
             notify("曲目已加载", self.status.text(), source="music", status="success" if self._tracks else "warning")
 
+    def add_browse_actions(self, menu):
+        for key in ("sheets","new","artists"):
+            button = self.nav_buttons[key]
+            menu.addAction(button.text(),button.click)
+        menu.addAction("内容筛选", self.source_options.click)
+        menu.addAction("刷新内容", self.refresh_button.click)
+        if callable(getattr(self.music, "recommend_music", None)):
+            menu.addAction("为我播放", self.recommend_button.click)
+            menu.addMenu(self.recommendation_options.menu()).setText("推荐偏好")
+        for button in (*self.nav_buttons.values(), self.refresh_button, self.source_options,
+                       self.recommend_button, self.recommendation_options):
+            button.hide()
+        self.recommendation_status.hide()
+        from PySide6.QtCore import QSize
+        for section in self.sections.values():
+            cards = section.cards
+            cards.setProperty("albumArt",True)
+            cards.setGridSize(QSize(150,211))
+            cards.setFixedHeight(220)
+            for index in range(cards.count()):
+                cards.item(index).setSizeHint(cards.gridSize())
+        self._compact_chrome = True
+        self._set_status(self.status.text())
+
+    def _set_status(self, message):
+        self.status.setText(message)
+        if getattr(self,"_compact_chrome",False):
+            self.status.setVisible(bool(message) and not message.startswith(("已找到","挑一首喜欢的")))
+
     def _render_sheets(self, rows):
         empty = "暂时没有推荐歌单，试试搜索喜欢的歌手。"
+        featured = next((row for row in rows if row.get("artwork") or row.get("cover_img") or row.get("cover_url")), None)
+        self.feature.set_sheet(featured)
         self.sections["today"].set_rows(rows[:6], music_card, empty)
+        self.sections["featured"].setVisible(len(rows) > 6)
         self.sections["featured"].set_rows(rows[6:12], music_card, "选择“歌单”可浏览其他分类。")
 
     def _ensure_catalog(self, force=False):
@@ -612,7 +653,7 @@ class MusicDiscovery(QWidget):
             hint = new_hint if self._view == "new" else hint
             self.sheets.set_rows(selected, music_card)
             self.empty.setText("" if selected else hint)
-            self.status.setText(hint or f"已找到 {len(selected)} 个榜单")
+            self._set_status(hint or f"已找到 {len(selected)} 个榜单")
 
     def _refresh_local(self):
         def read():

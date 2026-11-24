@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QDialog, QLabel, QListView, QMenu, QPushButton, QVBoxLayout
 
 from ..theme.tokens import Tokens
+from .icon_utils import lucide_icon
 
 
 class QueueListModel(QAbstractListModel):
@@ -105,8 +106,16 @@ class MusicQueueDialog(QDialog):
     remove_requested = Signal(int, int)  # underlying index, structural revision
     move_requested = Signal(str, object, int)  # stable occurrence, before occurrence, revision
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    next_requested = Signal(int, int)
+    close_requested = Signal()
+    clear_requested = Signal()
+
+    def __init__(self, parent=None, *, embedded=False):
+        super().__init__(parent, Qt.Widget if embedded else Qt.Dialog)
+        if embedded:
+            # QDialog promotes a zero window type to Qt.Dialog in its constructor.
+            self.setWindowFlags(Qt.Widget)
+        self._embedded = embedded
         self._revision = None
         self._protected_indices = set()
         self._editable = False
@@ -114,8 +123,9 @@ class MusicQueueDialog(QDialog):
         self.setWindowTitle("播放队列")
         self.setModal(False)
         self.resize(560, 600)
-        self.setMinimumSize(380, 340)
-        self.setStyleSheet(f"QDialog#musicQueueDialog {{ background: {Tokens.BG_BASE}; }}"
+        self.setMinimumSize(260 if embedded else 380, 220 if embedded else 340)
+        background = "transparent" if embedded else Tokens.BG_BASE
+        self.setStyleSheet(f"QDialog#musicQueueDialog {{ background: {background}; }}"
                            f"QLabel {{ color: {Tokens.TEXT_PRIMARY}; }}"
                            f"QListView {{ background: {Tokens.BG_ELEVATED}; color: {Tokens.TEXT_PRIMARY};"
                            f" border: 1px solid {Tokens.BORDER}; border-radius: {Tokens.RADIUS_SMALL}px;"
@@ -123,6 +133,23 @@ class MusicQueueDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(*([Tokens.SPACING_MD] * 4))
         layout.setSpacing(Tokens.SPACING_SM)
+        if embedded:
+            from PySide6.QtWidgets import QHBoxLayout
+            header = QHBoxLayout()
+            title = QLabel("播放队列")
+            title.setProperty("class","title")
+            header.addWidget(title, 1)
+            clear = QPushButton("清空")
+            clear.clicked.connect(self.clear_requested)
+            header.addWidget(clear)
+            self.btn_close = QPushButton()
+            self.btn_close.setFixedSize(32, 30)
+            self.btn_close.setIcon(lucide_icon("x", 14, Tokens.TEXT_SECONDARY))
+            self.btn_close.setAccessibleName("收起播放队列")
+            self.btn_close.setToolTip("收起播放队列（Esc）")
+            self.btn_close.clicked.connect(self.close_requested)
+            header.addWidget(self.btn_close)
+            layout.addLayout(header)
         self.mode_label = QLabel("播放模式：读取中")
         self.mode_label.setProperty("class", "secondary")
         self.current_label = QLabel("正在读取播放状态…")
@@ -166,9 +193,15 @@ class MusicQueueDialog(QDialog):
         self.action_status.setWordWrap(True)
         self.other_model.rejected.connect(self.action_status.setText)
         layout.addWidget(self.action_status)
-        close = QPushButton("关闭")
-        close.clicked.connect(self.close)
-        layout.addWidget(close)
+        if not embedded:
+            close = QPushButton("关闭")
+            close.clicked.connect(self.close)
+            layout.addWidget(close)
+
+    def closeEvent(self, event):
+        if self._embedded:
+            self.close_requested.emit()
+        super().closeEvent(event)
 
     def _list(self, model):
         view = QListView(self)
@@ -191,6 +224,9 @@ class MusicQueueDialog(QDialog):
         action = menu.addAction("移出播放队列")
         # Capture this exact snapshot, even if the menu stays open across a refresh.
         action.triggered.connect(lambda _=False, i=index, r=self._revision: self.remove_requested.emit(i, r))
+        if self._embedded:
+            next_action = menu.addAction("下一首播放")
+            next_action.triggered.connect(lambda _=False, i=index, r=self._revision: self.next_requested.emit(i, r))
         return menu
 
     def _show_remove_menu(self, view, pos):

@@ -37,6 +37,10 @@ class VoiceIsland(QPushButton):
         self.timer.timeout.connect(self.collapse)
 
     @property
+    def showing_feedback(self):
+        return not self._collapsed or self._expanded > 0
+
+    @property
     def colors(self):
         return notification_style(self._theme_override)
 

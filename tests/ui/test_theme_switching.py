@@ -406,3 +406,35 @@ def test_theme_reuses_global_sheet_and_preserves_artwork_cache(theme):
     finally:
         QPixmapCache.remove(key)
         host.close()
+
+
+def test_inactive_page_recolors_its_status_label_before_the_first_visible_paint(theme):
+    from PySide6.QtWidgets import QStackedWidget
+
+    class Status(QLabel):
+        def paintEvent(self, event):
+            paints.append(self.styleSheet())
+            super().paintEvent(event)
+
+    paints = []
+    host = QStackedWidget()
+    host.addWidget(QWidget())
+    page = QWidget()
+    label = Status("已保存", page)
+    label.setStyleSheet(f"color:{Tokens.SUCCESS};")
+    QVBoxLayout(page).addWidget(label)
+    host.addWidget(page)
+    host.show()
+    QTest.qWait(10)
+    try:
+        for mode in ("light", "dark"):
+            host.setCurrentIndex(0)
+            theme.set_theme(mode, persist=False)
+            assert label in theme._deferred
+            paints.clear()
+            host.setCurrentWidget(page)
+            QTest.qWait(10)
+            assert paints and PALETTES[mode].success in paints[0]
+            assert label not in theme._deferred
+    finally:
+        host.close()

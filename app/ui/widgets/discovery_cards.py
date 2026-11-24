@@ -37,7 +37,7 @@ class ContentDelegate(QStyledItemDelegate):
         try:
             painter.setRenderHint(QPainter.Antialiasing)
             rect = QRectF(option.rect).adjusted(6, 6, -6, -6)
-            cover = QRectF(rect.x(), rect.y(), rect.width(), rect.width() * (.92 if self.portrait else .42))
+            cover = QRectF(rect.x(), rect.y(), rect.width(), rect.width() * (1.0 if self.parent().property("albumArt") else .92 if self.portrait else .42))
             path = QPainterPath()
             path.addRoundedRect(cover, 8, 8)
             painter.fillPath(path, QColor(Tokens.BG_HOVER))
@@ -131,7 +131,8 @@ class CardList(QListWidget):
         for row in rows:
             display = describe(row)
             item = QListWidgetItem(str(display.get("title") or "未命名"))
-            item.setSizeHint(self.gridSize())
+            if not self.property("trackTable"):
+                item.setSizeHint(self.gridSize())
             item.setData(Qt.UserRole, row)
             item.setData(DISPLAY_ROLE, display)
             item.setToolTip("\n".join(str(display.get(k) or "") for k in ("title", "subtitle", "caption")))

@@ -59,6 +59,35 @@ class PopularSongs(QWidget):
         layout.addLayout(footer)
         self._selected(None)
 
+    def enable_table(self):
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QListView
+        from .music_card_delegate import MusicCardDelegate
+        self.card_grid = self.cards.gridSize()
+        self.card_delegate = self.cards.itemDelegate()
+        self.cards.setViewMode(QListView.ListMode)
+        self.cards.setGridSize(QSize())
+        self.cards.setFlow(QListView.TopToBottom)
+        self.cards.setWrapping(False)
+        self.cards.setProperty("trackTable",True)
+        self.table_delegate = MusicCardDelegate(self.cards)
+        self.cards.setItemDelegate(self.table_delegate)
+
+    def set_grid(self, grid):
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QListView
+        if not hasattr(self, "table_delegate"):
+            return
+        self.cards.setViewMode(QListView.IconMode if grid else QListView.ListMode)
+        self.cards.setFlow(QListView.LeftToRight if grid else QListView.TopToBottom)
+        self.cards.setWrapping(grid)
+        self.cards.setProperty("trackTable", not grid)
+        size = self.card_grid if grid else QSize()
+        self.cards.setGridSize(size)
+        self.cards.setItemDelegate(self.card_delegate if grid else self.table_delegate)
+        for i in range(self.cards.count()):
+            self.cards.item(i).setSizeHint(size)
+
     def showEvent(self, event):
         super().showEvent(event)
         if not self.closed:
@@ -115,7 +144,8 @@ class PopularSongs(QWidget):
         groups = group_charts(batches)
         def describe(group):
             track = group.entries[0].track
-            return dict(title=track.title, subtitle=track.artist, cover_url=track.cover_url,
+            return dict(title=track.title, artist=track.artist, album=track.album, duration_seconds=track.duration_seconds,
+                        subtitle=track.artist, cover_url=track.cover_url,
                         caption=" · ".join(filter(None, (version_label(track), track.album))))
         self.cards.set_rows(groups, describe)
         if previous:

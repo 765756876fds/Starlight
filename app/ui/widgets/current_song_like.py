@@ -41,6 +41,13 @@ class CurrentSongLikeButton(QPushButton):
             return
         self._read()
 
+    def refresh_membership(self, song):
+        """Refresh the footer after an explicit change to the same library recording."""
+        self.sync()
+        if (not self._closed and self._song is not None
+                and liked_song_identity(self._song) == liked_song_identity(song)):
+            self._read()
+
     def shutdown(self):
         self._closed = True
         self._clear_song()

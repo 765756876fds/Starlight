@@ -1,5 +1,5 @@
 """主界面 Tab 容器：5 个 Tab + 底部状态栏。"""
-from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from app.ui.panels.automation_panel import AutomationPanel
 from app.ui.panels.console_panel import ConsolePanel
@@ -55,8 +55,8 @@ class MainTabs(QWidget):
         self._music = music
         self._tts = tts
         self._equip_toggle = equip_toggle
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(Tokens.SPACING_SM, Tokens.SPACING_SM,
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, Tokens.SPACING_SM,
                                   Tokens.SPACING_SM, Tokens.SPACING_SM)
         layout.setSpacing(Tokens.SPACING_SM)
 
@@ -119,11 +119,70 @@ class MainTabs(QWidget):
         lyrics = getattr(self._panels.get("music"), "playing_lyrics", None)
         if lyrics is not None:
             tabs.reduce_motion = getattr(lyrics, "navigation_motion_reduced", lyrics.motion_reduced)
-        layout.addWidget(tabs)
+        from .domain_rail import DomainRail
+        self.rail = DomainRail(self)
+        self.rail_buttons, self.music_buttons = self.rail.domains, self.rail.library
+        layout.addWidget(self.rail)
+        layout.addWidget(tabs, 1)
+        tabs.tabBar().hide()
+        music_panel = self._panels.get("music")
+        if callable(getattr(music_panel, "enable_shell_navigation", None)):
+            music_panel.enable_shell_navigation()
+            music_panel.tabs.currentChanged.connect(self._sync_rail)
+        settings = self._panels.get("settings")
+        if hasattr(settings, "_tabs"):
+            settings._tabs.currentChanged.connect(self._sync_rail)
+        tabs.currentChanged.connect(self._sync_rail)
+        tabs.setCurrentIndex(1)
+        self._sync_rail()
 
         # 应用持久化的刷新间隔到各面板 timer（settings.yaml ui.refresh_interval 原为死配置）
         self._apply_refresh_interval(int(load_ui_prefs().get("ui_refresh_interval", 500)))
         print("[UI] MainTabs 完成")
+
+    def open_domain(self, label):
+        target = "设置" if label == "语音" else label
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == target:
+                self.tabs.setCurrentIndex(index)
+                break
+        settings = self._panels.get("settings")
+        if label in ("语音", "设置") and hasattr(settings, "_tabs"):
+            settings._tabs.setCurrentIndex(1 if label == "语音" else 0)
+        self._sync_rail()
+
+    def open_music(self, label):
+        panel = self._panels.get("music")
+        if not hasattr(panel, "tabs"):
+            return
+        self.tabs.setCurrentWidget(panel)
+        panel._toggle_playing_lyrics(False, animate=False)
+        target = "歌单" if label == "收藏" else label
+        index = next(i for i in range(panel.tabs.count()) if panel.tabs.tabText(i) == target)
+        panel.tabs.setCurrentIndex(index)
+        panel.set_favorites_view(label == "收藏")
+        if label == "发现音乐":
+            panel._show_discovery_home()
+        self._sync_rail()
+
+    def _sync_rail(self, *_):
+        current = self.tabs.tabText(self.tabs.currentIndex())
+        settings = self._panels.get("settings")
+        if current == "设置" and hasattr(settings, "_tabs") and settings._tabs.currentIndex() == 1:
+            current = "语音"
+        for key, button in self.rail_buttons.items():
+            button.setChecked(key == current)
+        panel = self._panels.get("music")
+        section = panel.tabs.tabText(panel.tabs.currentIndex()) if hasattr(panel, "tabs") else None
+        if section == "歌单" and getattr(panel, "_favorites_only", False):
+            section = "收藏"
+        for key, button in self.music_buttons.items():
+            button.setChecked(current == "音乐" and section == key)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "rail"):
+            self.rail.set_compact(event.size().width() < 960)
 
     def show_notifications(self):
         panel = self._panels.get("console")

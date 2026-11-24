@@ -23,7 +23,10 @@ def test_main_tabs_groups_game_pages_without_rebuilding_them():
             stack.enter_context(p)
         tabs_root = module.MainTabs(None, None, None)
 
-    top_tabs = tabs_root.layout().itemAt(0).widget()
+    top_tabs = tabs_root.tabs
+    assert tabs_root.layout().indexOf(tabs_root.rail) < tabs_root.layout().indexOf(top_tabs)
+    assert top_tabs.tabBar().isHidden()
+    assert tabs_root.rail_buttons["音乐"].isChecked()
     assert top_tabs.count() == 5
     assert [top_tabs.tabText(i) for i in range(top_tabs.count())] == [
         "游戏", "音乐", "电影", "通知中心", "设置"

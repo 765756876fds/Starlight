@@ -26,6 +26,10 @@ class StatusBar(QStatusBar):
         self._svc = services or {}
         self._last_tts_failure = None
         self._last_lcu_connected = None
+        self._game_connected = False
+        self._recognition_ready = False
+        self._mic_on = False
+        self._has_voice_record = False
         self._notices = get_notification_center()
 
         self.lbl_lcu = QLabel()
@@ -41,22 +45,21 @@ class StatusBar(QStatusBar):
         self.island = VoiceIsland(self)
         self.btn_voice_feedback = self.island  # Legacy attribute; no extra window or label.
         self.island.open_notifications.connect(self.notification_requested)
+        self.island.animation.finished.connect(self._sync_visibility)
         self._notice_stream = NotificationStream(self._notices, self)
         self._notice_stream.changed.connect(self._refresh_island, Qt.QueuedConnection)
 
         lay = QHBoxLayout()
-        lay.setContentsMargins(Tokens.SPACING_SM, 4, Tokens.SPACING_SM, 4)
-        lay.setSpacing(Tokens.SPACING_MD)   # 控件间拉开距离（8px 网格 2 格）
+        lay.setContentsMargins(Tokens.SPACING_SM, 1, Tokens.SPACING_SM, 1)
+        lay.setSpacing(Tokens.SPACING_SM)
+        lay.addStretch()
         lay.addWidget(self.lbl_lcu)
         lay.addWidget(self.lbl_asr)
         lay.addWidget(self.btn_mic)
         lay.addWidget(self.btn_voice_feedback)
-        lay.addStretch()
         holder = QWidget()
         holder.setLayout(lay)
         self.addWidget(holder, 1)
-        # QStatusBar's default height can squeeze a two-line custom child.
-        self.setMinimumHeight(self.island.maximumHeight() + 2 * Tokens.SPACING_SM)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
@@ -75,8 +78,13 @@ class StatusBar(QStatusBar):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.lbl_lcu.setVisible(self.width() >= 620)
-        self.lbl_asr.setVisible(self.width() >= 460)
+        self._sync_visibility()
+
+    def _sync_visibility(self):
+        self.lbl_lcu.setVisible(self._game_connected and self.width() >= 620)
+        self.lbl_asr.setVisible(self._mic_on and not self._recognition_ready)
+        self.island.setVisible(self._has_voice_record and self.island.showing_feedback)
+        self.setMinimumHeight(54 if not self.island.isHidden() else 32)
 
     # ---- 图标 + 状态色渲染 ----
     @staticmethod
@@ -92,6 +100,7 @@ class StatusBar(QStatusBar):
         lcu_ok = False
         if lcu is not None:
             lcu_ok = bool(getattr(lcu, "connected", False))
+        self._game_connected = lcu_ok
         self._update_state(self.lbl_lcu, "link", lcu_ok,
                            "游戏已连接" if lcu_ok else "等待游戏客户端")
         if not lcu_ok:
@@ -114,19 +123,23 @@ class StatusBar(QStatusBar):
                 engines = getattr(asr, "engines", []) or []
                 names = [getattr(e, "name", type(e).__name__) for e in engines]
                 asr_label = "/".join(names) if names else "READY"
+        self._recognition_ready = asr_ok
         self._update_state(self.lbl_asr, "cpu", asr_ok, f"ASR {asr_label}")
         self.lbl_asr.setText("语音识别就绪" if asr_ok else "语音识别未就绪")
         self.lbl_asr.setToolTip(f"识别引擎：{asr_label}" if asr_ok else "请在设置 → 诊断中检查运行环境")
         voice = self._svc.get("voice")
-        self._refresh_island()
         try:
-            on = bool(voice.is_mic_on()) if voice is not None else False
-            self._render_mic_btn(on)
-            self.btn_mic.setChecked(on)
+            self._mic_on = bool(voice.is_mic_on()) if voice is not None else False
+            self.btn_mic.setChecked(self._mic_on)
+            self._render_mic_btn(self._mic_on, self._is_listening())
             self.btn_mic.setEnabled(voice is not None)
         except Exception:
+            self._mic_on = False
+            self._render_mic_btn(False)
+            self.btn_mic.setChecked(False)
             self.btn_mic.setEnabled(False)
             self.btn_mic.setToolTip("暂时无法读取语音状态，请查看设置 → 诊断")
+        self._refresh_island()
 
         # refresh 由 GUI 定时器调用；后台失败只在这里显示，不跨线程操作控件。
         try:
@@ -163,11 +176,24 @@ class StatusBar(QStatusBar):
         except Exception:
             return {}
 
+    def _is_listening(self):
+        voice = self._svc.get("voice")
+        listening = getattr(voice, "is_listening", None)
+        return self._mic_on and callable(listening) and bool(listening())
+
     @Slot()
     def _refresh_island(self):
-        voice = self._svc.get("voice")
-        listening = bool(voice.is_listening()) if voice is not None and callable(getattr(voice, "is_listening", None)) else False
-        self.island.set_current(self._notices.get(self._notices.current_voice_id), listening)
+        record = self._notices.get(self._notices.current_voice_id)
+        self._has_voice_record = record is not None
+        if record is not None:
+            try:
+                listening = self._is_listening()
+            except Exception:
+                listening = False
+            self.island.set_current(record, listening)
+        else:
+            self.island.set_current()
+        self._sync_visibility()
 
     def _show_voice_feedback(self):
         self.notification_requested.emit()
@@ -183,8 +209,14 @@ class StatusBar(QStatusBar):
             self.showMessage("语音开关未成功，请查看设置 → 诊断", 5000)
         self.refresh()
 
-    def _render_mic_btn(self, on: bool):
-        self.btn_mic.setText("语音开" if on else "语音关")
+    def _render_mic_btn(self, on: bool, listening=False):
+        label = "正在聆听" if listening else "语音已开" if on else "语音"
+        self.btn_mic.setText(label)
+        self.btn_mic.setFixedHeight(24)
+        self.btn_mic.setAccessibleName(label if on else "开启语音")
         self.btn_mic.setIcon(lucide_icon("mic" if on else "mic-off",
-                                          14, Tokens.SUCCESS if on else Tokens.TEXT_SECONDARY))
-        self.btn_mic.setToolTip("语音识别开关（点击切换）")
+                                          14, Tokens.SUCCESS if listening else Tokens.TEXT_SECONDARY))
+        self.btn_mic.setToolTip(
+            "语音识别未就绪，点击关闭；请在设置 → 诊断检查运行环境"
+            if on and not self._recognition_ready else "点击关闭语音" if on else "点击开启语音"
+        )

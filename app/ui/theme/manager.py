@@ -29,6 +29,7 @@ class ThemeManager(QObject):
         self._updating = False
         self._styles = weakref.WeakKeyDictionary()
         self._pending = weakref.WeakSet()
+        self._deferred = weakref.WeakSet()
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
         self._pending_timer.timeout.connect(self._flush_pending)
@@ -59,6 +60,7 @@ class ThemeManager(QObject):
         if force or mode != self.mode:
             previous = self.mode
             widgets = snapshot_widgets(self.app)
+            has_visible_window = any(widget.isWindow() and widget.isVisible() for widget in widgets)
             for widget in widgets:
                 self._capture_style(widget, previous)
             self._updating = True
@@ -75,9 +77,15 @@ class ThemeManager(QObject):
                     if not isValid(widget):
                         continue
                     # Page roots expose their palette even before navigation.
-                    if widget.isVisible() or widget.isWindow() or isinstance(widget.parentWidget(), QStackedWidget):
-                        self._set_widget_variant(widget, polish=True)
-                    self._apply_widget(widget)
+                    exposed = (widget.isVisible() or widget.isWindow()
+                               or isinstance(widget.parentWidget(), QStackedWidget))
+                    if exposed or not has_visible_window:
+                        self._deferred.discard(widget)
+                        self._apply_widget(widget, update_variant=exposed)
+                    else:
+                        # Inactive pages of an open window inherit the global palette now.
+                        # Recolor their private styles and icons on Show, before their first paint.
+                        self._deferred.add(widget)
                     if isinstance(widget, QLabel) and widget.textFormat() != Qt.PlainText:
                         text = widget.text()
                         if "<" in text and ">" in text:
@@ -121,15 +129,21 @@ class ThemeManager(QObject):
         elif not sheet:
             self._styles.pop(widget, None)
 
-    def _apply_widget(self, widget):
+    def _apply_widget(self, widget, *, update_variant=False):
         if not isValid(widget):
             return
         try:
             entry = self._styles.get(widget)
+            rendered = None
             if entry and not widget.property("themeIndependent"):
                 rendered = render_style(entry[0], self.mode)
-                if rendered != widget.styleSheet():
-                    widget.setStyleSheet(rendered)
+            changes_sheet = rendered is not None and rendered != widget.styleSheet()
+            if update_variant:
+                # setStyleSheet already repolishes the widget with the new selector property.
+                self._set_widget_variant(widget, polish=not changes_sheet)
+            if changes_sheet:
+                widget.setStyleSheet(rendered)
+            if rendered is not None:
                 self._styles[widget] = (entry[0], rendered)
             if isinstance(widget, QAbstractItemView):
                 widget.viewport().update()
@@ -160,9 +174,18 @@ class ThemeManager(QObject):
             # are bound when shown and during an explicit theme change.
             self._set_widget_variant(watched, polish=event.type() == QEvent.Show)
             self._capture_style(watched, self.mode)
-            self._pending.add(watched)
-            if not self._pending_timer.isActive():
-                self._pending_timer.start(0)
+            if event.type() == QEvent.Show and watched in self._deferred:
+                self._deferred.discard(watched)
+                self._pending.discard(watched)
+                self._updating = True
+                try:
+                    self._apply_widget(watched)
+                finally:
+                    self._updating = False
+            elif watched not in self._deferred:
+                self._pending.add(watched)
+                if not self._pending_timer.isActive():
+                    self._pending_timer.start(0)
         return False
 
     def _flush_pending(self):
@@ -171,7 +194,8 @@ class ThemeManager(QObject):
         self._updating = True
         try:
             for widget in widgets:
-                self._apply_widget(widget)
+                if widget not in self._deferred:
+                    self._apply_widget(widget)
         finally:
             self._updating = False
 
