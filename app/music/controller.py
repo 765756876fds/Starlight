@@ -1641,12 +1641,9 @@ class MusicController:
                 if online_song is None:
                     self._is_switching_track = False
                     return
-                if hasattr(self, "music_memory"):
-                    recommended = bool(song.get("extra", {}).get("_starlight_recommended"))
-                    if recommended:
-                        online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
-                    self.music_memory.record(online_song, "recommendation" if recommended else
-                                             "manual" if origin == "user" else "automatic")
+                recommended = bool((song.get("extra") or {}).get("_starlight_recommended"))
+                if recommended:
+                    online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
                 self.queue.confirm_current(song, dict(online_song, source_type="online"))
             try:
                 self.history_recorder.record_song({
@@ -1659,6 +1656,15 @@ class MusicController:
                 })
             except Exception as e:
                 logger.error(f"[Music] 记录播放历史失败: {e}")
+            # Optional recommendation I/O follows confirmed queue and history updates,
+            # outside the playback lock so the UI can read the queue during a slow write.
+            memory = getattr(self, "music_memory", None)
+            if memory is not None:
+                try:
+                    memory.record(online_song, "recommendation" if recommended else
+                                  "manual" if origin == "user" else "automatic")
+                except Exception as e:
+                    logger.warning(f"[Music] 记录音乐偏好失败: {type(e).__name__}")
         except Exception as e:
             logger.error(f"[Music] 队列在线歌播放失败: {e}")
             report_next_feedback(self, "resolve", "failed", req_id)

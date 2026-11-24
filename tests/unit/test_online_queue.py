@@ -6,6 +6,7 @@ pytestmark = pytest.mark.unit
 
 
 import os
+import threading
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -67,21 +68,46 @@ def test_queue_online_song_direct_url_first(tmp_path):
     # 直取成功（底层 get_play_url 消费 track_id/raw_item 返回直链）
     c.online_manager.get_play_url.return_value = {
         "url": "http://x/direct.mp3", "headers": None}
-    c._play_song(_online_song())  # 存的 track_id 是 old-1
-    # 直取用存的 track_id，不走 resolver
-    # 直取在后台 worker 线程执行：先等 get_play_url 被调用，再断言（消除单文件竞态）
-    assert _wait_until(lambda: c.online_manager.get_play_url.called,
-                       timeout=2.0), "直取未在后台触发 get_play_url"
-    got = c.online_manager.get_play_url.call_args.args[0]
-    assert got.track_id == "old-1" and got.source_name == "kw"
-    assert c._resolver.resolve.call_count == 0, "直取成功不得触发重搜"
-    assert _wait_until(lambda: c.mpv.loadfile.call_count == 1, timeout=2.0), "后台切歌超时未执行 loadfile"
-    c.mpv.loadfile.assert_called_once_with("http://x/direct.mp3")
-    # loadfile is only an intermediate worker step; await the actual history write.
-    assert _wait_until(lambda: len(c.db.get_history()) == 1), "后台未记录播放历史"
-    rows = c.db.get_history()
-    assert len(rows) == 1 and rows[0]["source_type"] == "online"
-    assert rows[0]["track_id"] == "old-1", "历史应记录直取 track 的 id"
+    entered_preferences = threading.Event()
+    release_preferences = threading.Event()
+    worker_done = threading.Event()
+    record = c.music_memory.record
+    resolve = c._resolve_online_worker
+
+    def slow_preferences(song, origin):
+        entered_preferences.set()
+        if not release_preferences.wait(5):
+            raise TimeoutError("测试未释放偏好写入")
+        return record(song, origin)
+
+    def watch_resolution(*args):
+        try:
+            return resolve(*args)
+        finally:
+            worker_done.set()
+
+    c.music_memory.record = slow_preferences
+    c._resolve_online_worker = watch_resolution
+    c.queue.add_all([_online_song()])
+    c.queue.play_at(0)
+    c._play_song(c.queue.get_current())
+    try:
+        # The worker is deliberately held inside the optional preference store.
+        # Confirmed playback, queue metadata and real history must already be available.
+        assert entered_preferences.wait(5), "未进入可选的偏好记录阶段"
+        rows = c.db.get_history()
+        assert len(rows) == 1 and rows[0]["source_type"] == "online", rows
+        assert rows[0]["track_id"] == "old-1"
+        snapshot = c.get_queue_snapshot()
+        assert snapshot is not None
+        assert c.queue.get_current()["track_id"] == "old-1"
+        got = c.online_manager.get_play_url.call_args.args[0]
+        assert got.track_id == "old-1" and got.source_name == "kw"
+        c._resolver.resolve.assert_not_called()
+        c.mpv.loadfile.assert_called_once_with("http://x/direct.mp3")
+    finally:
+        release_preferences.set()
+        assert worker_done.wait(5), "解析线程未结束"
 
 
 def test_queue_online_song_researches_when_direct_fails(tmp_path):
