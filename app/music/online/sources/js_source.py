@@ -627,7 +627,8 @@ class JSMusicSource(MusicSource):
         })
         if not r:
             return None
-        return r.get("lyric")
+        from ...lyrics import plugin_lyric_text
+        return plugin_lyric_text(r.get("lyric"), r.get("lxlyric"))
 
     def _release_streams(self, proc):
         """Bounded drain of the existing two readers; no new worker is created."""

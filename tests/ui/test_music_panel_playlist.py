@@ -144,11 +144,14 @@ def test_switch_to_playlist_tab_refreshes(qapp):
 def test_playlist_selection_renders_songs(qapp):
     """选中歌单 → 右侧渲染歌单内歌曲。"""
     from app.ui.panels.music_panel import MusicPanel
+    from tests.ui.test_music_search_reliability import wait_until
     m = FakeMusic()
     panel = MusicPanel(music=m)
     panel.tabs.setCurrentIndex(3)
+    wait_until(lambda: panel.list_playlists.count() > 0)
     assert panel.list_playlists.count() == 1
     panel.list_playlists.setCurrentRow(0)
+    wait_until(lambda: panel.list_playlist_songs.count() > 0)
     assert panel.list_playlist_songs.count() == 1
     assert "S1" in panel.list_playlist_songs.item(0).text()
     assert "本地" in panel.list_playlist_songs.item(0).text()

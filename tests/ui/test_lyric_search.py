@@ -330,6 +330,7 @@ def test_panel_local_play_reused(tmp_path, monkeypatch):
     item = p.list_local.item(0)
     played = []
     p._music = MagicMock()
-    p._music.play_song = lambda s: played.append(s)
+    p._play_async = lambda target, songs, index, **kw: played.append((target, songs, index))
     p._on_local_play(item)
-    assert played and played[0]["title"] == "晴天"
+    assert played and played[0][0] is p._music.play_context
+    assert played[0][2] == 0 and played[0][1][0]["title"] == "晴天"

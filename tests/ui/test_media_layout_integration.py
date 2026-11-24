@@ -34,13 +34,12 @@ def test_narrow_workspace_keeps_music_browsable_with_either_pane_and_across_swit
         p._on_search_done({"fixture": [OnlineTrack("fake", "1", "星桥", "纸鸢", "夜航")]})
         p.online_stack.setCurrentWidget(p.results_page)
         QTest.mouseClick(p.btn_playing_lyrics, Qt.LeftButton)
-        assert p.tabs.isVisible() and p.list_results.isVisible() and p.btn_versions.isHidden()
-        p.tabs.setCurrentIndex(3)
-        assert p.tabs.currentIndex() == 3 and p.playing_lyrics.isVisible()
-        p.tabs.setCurrentIndex(1)
+        assert not p.tabs.isVisible() and not p.list_results.isVisible()
+        assert p._content_pages.currentWidget() is p.playing_lyrics
         assert p.list_results.count() == 1
         assert p.playing_lyrics.isVisible() and p.btn_queue.isVisible() and p.btn_like.isVisible()
-        assert p.tabs.geometry().right() < p._media_pane.geometry().left()
+        assert p.playing_lyrics.width() == p._content_pages.width()
+        assert p.playing_lyrics.mapTo(p, p.playing_lyrics.rect().bottomLeft()).y() < p.btn_playing_lyrics.mapTo(p, p.btn_playing_lyrics.rect().topLeft()).y()
         assert host.width() == 850
         engine = p._lyrics_window
         engine.set_lyrics([(0, "第一句"), (1, "第二句")], "星桥")
@@ -50,6 +49,7 @@ def test_narrow_workspace_keeps_music_browsable_with_either_pane_and_across_swit
         p.action_download_tasks.trigger()
         tasks = p._download_pane
         assert tasks.isVisible() and p.list_results.isVisible()
+        assert p.tabs.currentIndex() == 1 and p.online_stack.currentWidget() is p.results_page
         assert not p.btn_playing_lyrics.isChecked() and not engine._started
         p._download_result(0)
         for _ in range(3):
@@ -123,3 +123,28 @@ def test_film_detail_keeps_source_optional_without_hiding_play(scene):
     dlg.btn_source_details.click()
     assert source.isVisible() and dlg.btn_play.isVisible()
     dlg.close()
+
+
+def test_parent_destruction_releases_music_events(qapp, monkeypatch):
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QWidget
+    from app.core.event_bus import Event, EventBus, EventType
+    from app.ui.panels import music_panel
+
+    bus = EventBus()
+    monkeypatch.setattr(music_panel, "get_event_bus", lambda: bus)
+    host = QWidget()
+    panel = music_panel.MusicPanel(parent=host)
+    delivered, errors = [], []
+    panel._queue_changed.connect(lambda: delivered.append(True))
+    bus.subscribe(EventType.SYSTEM_ERROR, errors.append)
+    try:
+        bus.publish(Event(EventType.MUSIC_STATE_CHANGED, {}))
+        assert delivered == [True]
+        host.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        bus.publish(Event(EventType.MUSIC_STATE_CHANGED, {}))
+        assert errors == []
+        assert delivered == [True]
+    finally:
+        bus.shutdown()

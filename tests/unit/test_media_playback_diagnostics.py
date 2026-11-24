@@ -67,7 +67,7 @@ def test_online_resolution_without_url_records_failure_before_scheduling_skip(pl
     monkeypatch.setattr(ctrl, "_schedule_skip_online", skip)
     song = _online_song()
     ctrl._resolve_online_worker(song, "generated test", ctrl._play_request_id)
-    skip.assert_called_once_with(song)
+    skip.assert_called_once_with(song, ctrl._play_request_id)
     assert not ctrl.mpv.loadfile.called
     assert any("stage=resolve result=no_url" in m for m in messages(log))
 

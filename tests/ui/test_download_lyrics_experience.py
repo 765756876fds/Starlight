@@ -218,6 +218,8 @@ def test_playing_lyrics_shares_clock_and_scrolls_without_seeking(panel, prefs):
     engine.set_lyrics([(float(i), f"第{i}行") for i in range(40)], "星桥")
     music.current_playback_time = 22.2
     engine._sync()
+    assert view.active_line == 22 and view.stage.row == 22
+    view.reader_action.trigger()
     assert view.active_line == 22 and view.lines.item(22).font().bold()
     old_size = view.lines.item(22).font().pixelSize()
     p._build_lyrics_menu()

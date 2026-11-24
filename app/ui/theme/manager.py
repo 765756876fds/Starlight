@@ -29,7 +29,9 @@ class ThemeManager(QObject):
         self._updating = False
         self._styles = weakref.WeakKeyDictionary()
         self._pending = weakref.WeakSet()
-        self._scheduled = False
+        self._pending_timer = QTimer(self)
+        self._pending_timer.setSingleShot(True)
+        self._pending_timer.timeout.connect(self._flush_pending)
         self._requested.connect(self.set_theme, Qt.QueuedConnection)
         app.installEventFilter(self)
         app.setStyle("Fusion")
@@ -151,13 +153,11 @@ class ThemeManager(QObject):
             # are bound when shown and during an explicit theme change.
             self._capture_style(watched, self.mode)
             self._pending.add(watched)
-            if not self._scheduled:
-                self._scheduled = True
-                QTimer.singleShot(0, self._flush_pending)
+            if not self._pending_timer.isActive():
+                self._pending_timer.start(0)
         return False
 
     def _flush_pending(self):
-        self._scheduled = False
         widgets = list(self._pending)
         self._pending.clear()
         self._updating = True

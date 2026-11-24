@@ -1,18 +1,21 @@
 """音乐面板（本地 + 在线）。"""
 import logging
+from contextlib import ExitStack
 import threading
 from ...core.notifications import notify, get_notification_center, current_operation_id
 import time
 import zlib
 
-from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QActionGroup, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QComboBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -22,7 +25,6 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QSplitter,
     QStackedWidget,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -41,8 +43,10 @@ from ..widgets.current_song_like import CurrentSongLikeButton
 from ..widgets.icon_utils import lucide_icon
 from ..widgets.latest_task import LatestTask
 from ..widgets.media_controls import FilterRow, PLAY_LOADING, PLAY_RETRY, SEARCHING
+from ..widgets.music_content_stack import MediaTabs, MusicContentStack
 from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
 from ..widgets.music_queue_dialog import MusicQueueDialog
+from ..widgets.music_wheel import MusicWheelScroll
 from .music_search_order import rank_manual_search
 
 logger = logging.getLogger(__name__)
@@ -195,6 +199,8 @@ class MusicPanel(QWidget):
     _sleep_timer_signal = Signal(bool, int)
     _manual_play_status = Signal(object, object, str)
     _play_result = Signal(bool, str, object)  # 后台播放结果：ok, msg, 目标状态栏（跨线程回主线程）
+    _meter_signal = Signal(object, object, float, float)
+    _poll_finished = Signal(object)
     _progress_signal = Signal(float, float, object)  # 后台轮询 mpv 进度：pos, dur（跨线程回主线程）
     _volume_signal = Signal(int, int)  # gesture generation, volume; worker -> GUI
     _speed_result = Signal(object, float, int, str)  # 倍速三态结果：True / False / None
@@ -286,7 +292,7 @@ class MusicPanel(QWidget):
         self.btn_view_toggle.setAccessibleName("切换网格与列表")
         self.btn_view_toggle.setToolTip("切换歌曲网格与列表")
         self.btn_view_toggle.clicked.connect(self._toggle_view_mode)
-        tabs = self.tabs = QTabWidget()
+        tabs = self.tabs = MediaTabs(("本地", "发现音乐", "歌单"))
         tabs.setCornerWidget(self.btn_view_toggle, Qt.TopRightCorner)
         tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -295,17 +301,30 @@ class MusicPanel(QWidget):
         self._music_content.addWidget(tabs)
         self._media_pane = QStackedWidget()
         self._media_pane.setMinimumWidth(275)
+        self._content_pages = MusicContentStack()
+        self._content_pages.addWidget(self._music_content)
         from ..widgets.playing_lyrics import PlayingLyrics
-        self.playing_lyrics = PlayingLyrics(self._media_pane)
+        self.playing_lyrics = PlayingLyrics(self._content_pages)
+        tabs.reduce_motion = self.playing_lyrics.motion_reduced
+        self.playing_lyrics.style_chosen.connect(lambda key: self._change_lyrics_prefs({"stage_style": key}))
+        self.playing_lyrics.effect_chosen.connect(lambda key: self._change_lyrics_prefs({"stage_effect": key}))
+        self._meter_request = None
+        self._meter_wake = threading.Event()
+        self._cover_anchor = None
+        self.playing_lyrics.stage.meter_requested.connect(self._set_meter_request)
+        self._content_pages.entrance_progress.connect(self.playing_lyrics.stage.set_entrance_progress)
+        self._meter_signal.connect(self._on_meter_sample, Qt.QueuedConnection)
+        self._poll_finished.connect(self._progress_finished, Qt.QueuedConnection)
         self.playing_lyrics.tools.insertWidget(0, self.btn_lyrics)
         self.playing_lyrics.tools.insertWidget(1, self.btn_lyrics_adjust)
-        self.playing_lyrics.close_requested.connect(self._close_media_pane)
-        self._media_pane.addWidget(self.playing_lyrics)
+        self.playing_lyrics.close_requested.connect(lambda: self._toggle_playing_lyrics(False))
+        self._queue_changed.connect(self.playing_lyrics.sync_transport, Qt.QueuedConnection)
+        self._content_pages.addWidget(self.playing_lyrics)
         self._music_content.addWidget(self._media_pane)
         self._music_content.setStretchFactor(0, 1)
         self._music_content.setStretchFactor(1, 0)
         self._media_pane.hide()
-        root.addWidget(self._music_content, 1)
+        root.addWidget(self._content_pages, 1)
 
         # ---- 本地 Tab ----
         local = QWidget()
@@ -497,6 +516,7 @@ class MusicPanel(QWidget):
         ol.addWidget(self.lbl_identify_status)
         self._results_requested = False
         self._last_online_result = None
+        self._discovery_tracks = None
         self._last_online_query = ""
         self.online_stack = QStackedWidget()
         from ..widgets.music_discovery import MusicDiscovery
@@ -694,6 +714,9 @@ class MusicPanel(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(1000)
+        self._music_wheel = MusicWheelScroll(self)
+        for area in self.tabs.findChildren(QAbstractScrollArea):
+            self._music_wheel.install(area)
 
         # 进度轮询后台线程：mpv IPC（playback-time/duration）绝不在主线程同步读取
         self._chorus_cancel = threading.Event()
@@ -706,10 +729,17 @@ class MusicPanel(QWidget):
         self._search_event.connect(self._on_search_show)
         self._status_signal.connect(self._on_status_msg)
         self._sleep_timer_signal.connect(self._on_sleep_timer_state)
+        subscriptions = self._event_subscriptions = ExitStack()
+        self.destroyed.connect(subscriptions.close)
         try:
-            get_event_bus().subscribe(ONLINE_SEARCH_DONE, self._on_search_event)
-            get_event_bus().subscribe(ONLINE_ERROR, self._on_error_event)
-            get_event_bus().subscribe(EventType.MUSIC_STATE_CHANGED, self._on_music_state_event)
+            bus = get_event_bus()
+            for event_type, handler in (
+                (ONLINE_SEARCH_DONE, self._on_search_event),
+                (ONLINE_ERROR, self._on_error_event),
+                (EventType.MUSIC_STATE_CHANGED, self._on_music_state_event),
+            ):
+                bus.subscribe(event_type, handler)
+                subscriptions.callback(bus.unsubscribe, event_type, handler)
         except Exception as e:
             print(f"[MusicPanel] 订阅候选事件失败: {e}")
 
@@ -728,17 +758,12 @@ class MusicPanel(QWidget):
         if self._queue_dialog is not None:
             self._queue_dialog.close()
         self._close_media_pane()
+        self._toggle_playing_lyrics(False, animate=False)
         if self._lyrics_window is not None:
             self._lyrics_window.close()
             from .settings_panel import unregister_lyrics_prefs_listener
             unregister_lyrics_prefs_listener(self._lyrics_window.apply_prefs)
-        try:
-            bus = get_event_bus()
-            bus.unsubscribe(ONLINE_SEARCH_DONE, self._on_search_event)
-            bus.unsubscribe(ONLINE_ERROR, self._on_error_event)
-            bus.unsubscribe(EventType.MUSIC_STATE_CHANGED, self._on_music_state_event)
-        except Exception as e:
-            print(f"[MusicPanel] 注销事件订阅失败: {e}")
+        self._event_subscriptions.close()
         super().closeEvent(event)
 
     def showEvent(self, event):
@@ -750,6 +775,8 @@ class MusicPanel(QWidget):
             self.btn_like.sync()
         self._chorus_cancel = threading.Event()
         self._progress_polling = True
+        if self.btn_playing_lyrics.isChecked() and self._lyrics_window is not None:
+            self._lyrics_window.start()
         self._start_progress_poll()
 
     def hideEvent(self, event):
@@ -766,6 +793,10 @@ class MusicPanel(QWidget):
         if hasattr(self, "_timer") and self._timer is not None:
             self._timer.stop()
         self._progress_polling = False
+        self._set_meter_request(None)
+        self._meter_wake.set()
+        if self._lyrics_window is not None and not self.btn_lyrics.isChecked():
+            self._lyrics_window.stop()
         if hasattr(self, "_chorus_cancel"):
             self._chorus_cancel.set()
             self.slider_pos.set_chorus(None)
@@ -1084,9 +1115,8 @@ class MusicPanel(QWidget):
         s = item.data(Qt.UserRole)
         if not s or self._music is None:
             return
-        print(f"[UI] local play: {s.get('title')} id={s.get('id')}")
-        self._play_async(self._music.play_song, s,
-                         title=s.get("title", ""))
+        self._play_async(self._music.play_context, tuple(self._local_songs), self.list_local.row(item),
+                         title=s.get("title", ""), context=True)
 
     def _on_highlight(self, on: bool):
         try:
@@ -1241,7 +1271,7 @@ class MusicPanel(QWidget):
             self._manual_request = None
 
     def _play_async(self, target, *args, title="", resolving=False,
-                    fail_msg=PLAY_RETRY, status_label=None, play_options=None):
+                    fail_msg=PLAY_RETRY, status_label=None, play_options=None, context=False):
         from ...music.next_feedback import observe_manual_play
 
         if self._music is None:
@@ -1252,7 +1282,8 @@ class MusicPanel(QWidget):
         self.btn_retry_online.hide()
         label = status_label or self.lbl_status
         cancel = threading.Event()
-        self._manual_request = (cancel, label, title, fail_msg, time.perf_counter_ns())
+        intent_ns = time.perf_counter_ns()
+        self._manual_request = (cancel, label, title, fail_msg, intent_ns)
         label.setText(PLAY_LOADING)
 
         def publish(stage, epoch):
@@ -1262,9 +1293,9 @@ class MusicPanel(QWidget):
                 except RuntimeError:
                     cancel.set()  # Widget was destroyed during a slow resolver call.
 
-        if play_options:
+        if context or play_options:
             original = target
-            options = dict(play_options, _before_load=lambda: not cancel.is_set())
+            options = dict(play_options or {}, _before_load=lambda: not cancel.is_set(), _intent_ns=intent_ns)
             target = lambda *values: original(*values, **options)
         threading.Thread(target=observe_manual_play,
                          args=(self._music, target, args, cancel, publish),
@@ -1477,6 +1508,7 @@ class MusicPanel(QWidget):
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
+        self._discovery_tracks = None
         self._retry_online_track = None
         self.btn_retry_online.hide()
         self._results_requested = True
@@ -1578,17 +1610,20 @@ class MusicPanel(QWidget):
         source_filter = self.cb_source.currentData()
         version_filter = self.cb_search_filter.currentIndex() if hasattr(self, "cb_search_filter") else 0
         markers = ("现场", "live") if version_filter == 1 else ("翻唱", "cover")
+        collection = getattr(self, "_discovery_tracks", None)
+        tracks = collection if collection is not None else [
+            track for source, rows in result.items()
+            if not source_filter or source == source_filter for track in rows
+        ]
         tracks_for_search = [
-            track
-            for source, tracks in result.items()
-            if not source_filter or source == source_filter
-            for track in tracks
+            track for track in tracks
+            if collection is None or not source_filter or track.source_name == source_filter
             if not version_filter or any(mark in track.title.casefold() for mark in markers)
         ]
         if display_query:
             tracks_for_search = rank_manual_search(tracks_for_search, display_query)
         from ...music.online.content_choices import group_tracks
-        self._track_versions = (group_tracks(tracks_for_search) if on_done is None
+        self._track_versions = (group_tracks(tracks_for_search) if on_done is None and collection is None
                                 else [[track] for track in tracks_for_search])
         tracks_for_search = [group[0] for group in self._track_versions]
         n = len(tracks_for_search)
@@ -1678,6 +1713,7 @@ class MusicPanel(QWidget):
             self._voice_generation = gen
             self._results_requested = True
             self._last_online_result = None
+            self._discovery_tracks = None
             if hasattr(self, "online_stack"):
                 self.online_stack.setCurrentWidget(self.results_page)
                 self.cb_search_filter.setEnabled(False)
@@ -1728,7 +1764,7 @@ class MusicPanel(QWidget):
     def _play_popular_song(self, tracks, index):
         if self._music is not None:
             self._play_async(self._music.play_online_list, tracks, index,
-                             title=tracks[index].title, resolving=True,
+                             title=tracks[index].title, resolving=True, context=True,
                              fail_msg="该曲目无法播放，可选择其他版本",
                              status_label=self.popular_songs.play_status)
 
@@ -1741,7 +1777,9 @@ class MusicPanel(QWidget):
         self._search_generation += 1
         self._pending_search = None
         # Discovery results carry the actual plugin name, not a merged search key.
-        self.cb_source.setCurrentIndex(0)
+        with QSignalBlocker(self.cb_source):
+            self.cb_source.setCurrentIndex(0)
+        self._discovery_tracks = tuple(tracks)
         grouped = {}
         for track in tracks:
             grouped.setdefault(track.source_name, []).append(track)
@@ -1783,6 +1821,16 @@ class MusicPanel(QWidget):
             if title=="锁定桌面歌词":action.setCheckable(True);action.setChecked(prefs["locked"])
             action.triggered.connect(lambda _=False,values=update:self._change_lyrics_prefs(values))
             self.lyrics_actions[title]=action
+        low = self.lyrics_menu.addAction("低性能舞台")
+        low.setCheckable(True)
+        low.setChecked(prefs.get("stage_low_power") is True)
+        low.triggered.connect(lambda checked: self._change_lyrics_prefs({"stage_low_power": checked}))
+        self.lyrics_actions["低性能舞台"] = low
+        motion_action = self.lyrics_menu.addAction("减少歌词动效")
+        motion_action.setCheckable(True)
+        motion_action.setChecked(prefs.get("reduce_motion") is True)
+        motion_action.triggered.connect(lambda checked: self._change_lyrics_prefs({"reduce_motion": checked}))
+        self.lyrics_actions["减少歌词动效"] = motion_action
         offset=int(prefs.get("offset_ms",0))
         label=self.lyrics_menu.addAction("同步："+(f"延后 {offset/1000:g} 秒" if offset>0 else f"提前 {-offset/1000:g} 秒" if offset<0 else "未校正"))
         label.setEnabled(False)
@@ -1790,8 +1838,12 @@ class MusicPanel(QWidget):
     def _change_lyrics_prefs(self,update):
         from ..settings_store import save_lyrics_prefs
         from .settings_panel import _notify_lyrics_prefs_changed
-        if save_lyrics_prefs(update):_notify_lyrics_prefs_changed(update)
-        else:notify("歌词设置未能保存","请重试",status="failed",source="music")
+        if save_lyrics_prefs(update):
+            _notify_lyrics_prefs_changed(update)
+            if update.get("reduce_motion"):
+                self._content_pages.finish_transition()
+        else:
+            notify("歌词设置未能保存","请重试",status="failed",source="music")
 
     def _ensure_lyrics_window(self):
         from .settings_panel import register_lyrics_prefs_listener
@@ -1799,10 +1851,12 @@ class MusicPanel(QWidget):
             from ..widgets.lyrics_window import LyricsWindow
             self._lyrics_window = LyricsWindow(self._music, self)
             self.playing_lyrics.attach(self._lyrics_window)
+            self._lyrics_window.lyrics_changed.connect(self._discard_stale_lyric_frame)
         register_lyrics_prefs_listener(self._lyrics_window.apply_prefs)
         return self._lyrics_window
 
     def _open_media_pane(self, content):
+        self._toggle_playing_lyrics(False, animate=False)
         was_closed = self._media_pane.isHidden()
         self._media_pane.setCurrentWidget(content)
         self._media_pane.show()
@@ -1810,26 +1864,73 @@ class MusicPanel(QWidget):
             width = self._music_content.width()
             pane_width = max(290, min(380, width // 3))
             self._music_content.setSizes([max(1, width - pane_width), pane_width])
-        self._sync_lyrics_pane(content is self.playing_lyrics)
 
     def _close_media_pane(self):
         self._media_pane.hide()
-        self._sync_lyrics_pane(False)
 
-    def _sync_lyrics_pane(self, enabled):
+    def _shared_lyric_cover(self, entering):
+        from ..widgets.music_card_delegate import cover_key_of, _get_cover_loader
+        stage = self.playing_lyrics.stage
+        if self._music is None or self.playing_lyrics.pages.currentWidget() is not stage:
+            return None
+        track = self._music.get_current_song()
+        key = cover_key_of(track)
+        if not key:
+            self._cover_anchor = None
+            return None
+        stack = self._content_pages
+
+        def stage_anchor():
+            return stage.cover_rect().translated(stage.mapTo(stack, QPoint()))
+
+        if entering:
+            self._cover_anchor = None
+            for listing in (self.list_local, self.list_results, self.list_playlist_songs,
+                            self.list_history, self.list_rank_songs):
+                item = listing.currentItem()
+                if not listing.isVisible() or item is None or listing.viewMode() != QListView.IconMode:
+                    continue
+                data = item.data(Qt.UserRole)
+                if cover_key_of(data) != key or data.get("_play_key") != self._play_key(track):
+                    continue
+                rect = MusicCardDelegate.cover_rect(listing.visualItemRect(item))
+                if listing.viewport().rect().contains(rect.toRect()):
+                    self._cover_anchor = key, rect.translated(listing.viewport().mapTo(stack, QPoint())), stack.size()
+                break
+        anchor = self._cover_anchor
+        if not anchor or anchor[0] != key or anchor[2] != stack.size():
+            return None
+        art = _get_cover_loader().get(key)
+        if art is None or art.isNull():
+            return None
+        origin = anchor[1]
+        return (lambda: (art, origin, stage_anchor())) if entering else (art, stage_anchor(), origin)
+
+    def _discard_stale_lyric_frame(self):
+        key = self._lyrics_window.current_track.get("key", "")
+        self._content_pages.discard_stale_frame(key)
+
+    def _toggle_playing_lyrics(self, enabled, *, animate=True):
+        from ..widgets.lyrics_window import LyricsWindow
+        window = self._ensure_lyrics_window() if enabled and self._music is not None else None
         self.btn_playing_lyrics.setChecked(enabled)
-        if enabled and self._music is not None:
-            window = self._ensure_lyrics_window()
+        if enabled and self._content_pages.currentWidget() is not self.playing_lyrics:
+            self.playing_lyrics.pages.setCurrentWidget(self.playing_lyrics.stage)
+        self._content_pages.transition_to(
+            self.playing_lyrics if enabled else self._music_content,
+            animate=animate and not self.playing_lyrics.motion_reduced(),
+            shared=self._shared_lyric_cover(enabled) if animate and not self.playing_lyrics.motion_reduced() else None,
+            direction=1 if enabled else -1,
+            track_key=LyricsWindow._song_key(self._music.get_current_song()) if animate and self._music else "",
+        )
+        if window is not None:
+            already_started = window._started
             window.start()
-            self.playing_lyrics.refresh()
+            # start() publishes fresh lyrics. An already running desktop window is reused.
+            if already_started:
+                self.playing_lyrics.refresh()
         elif self._lyrics_window is not None and not self.btn_lyrics.isChecked():
             self._lyrics_window.stop()
-
-    def _toggle_playing_lyrics(self, enabled):
-        if enabled:
-            self._open_media_pane(self.playing_lyrics)
-        else:
-            self._close_media_pane()
 
     def _on_toggle_lyrics(self, checked):
         """Desktop visibility is independent of the current-song lyrics view."""
@@ -2020,12 +2121,7 @@ class MusicPanel(QWidget):
         return f"{int(d // 86400)} 天前"
 
     def _on_history_play(self, item: QListWidgetItem):
-        row = item.data(Qt.UserRole)
-        if not row or self._music is None:
-            return
-        self._play_async(self._music.play_history_item, row,
-                         title=row.get("title", ""),
-                         fail_msg="该歌已不可用")
+        self._play_saved_row(self.list_history, item)
 
     def _on_clear_history(self):
         if self._music is None:
@@ -2173,11 +2269,17 @@ class MusicPanel(QWidget):
         self.lbl_playlist_status.setText("歌单已删除")
 
     def _on_playlist_song_play(self, item: QListWidgetItem):
+        self._play_saved_row(self.list_playlist_songs, item)
+
+    def _play_saved_row(self, listing, item):
         row = item.data(Qt.UserRole)
         if not row or self._music is None:
             return
-        self._play_async(self._music.play_playlist_item, row,
-                         title=row.get("title", ""),
+        index = listing.row(item)
+        rows = (tuple(listing.item(i).data(Qt.UserRole) for i in range(listing.count()))
+                if index >= 0 else (row,))
+        self._play_async(self._music.play_playlist_context, rows, max(0, index),
+                         title=row.get("title", ""), context=True,
                          fail_msg="该歌已不可用")
 
     # ---- 榜单 ----
@@ -2391,13 +2493,11 @@ class MusicPanel(QWidget):
                 cover_url=data.get("cover_url") or None,
                 extra=data.get("extra") or {},
             )
-        # 在线歌单连续播放：点击第 index 首，其后歌曲批量入队（play_online_list 内部
-        # 替换队列 + 剩余歌入队），播完队列空保持空闲——不再错误跳转本地歌曲。
         idx = self.list_rank_songs.row(item)
         if idx < 0 or idx >= len(self._rank_tracks):
-            idx = 0
+            return
         self._play_async(self._music.play_online_list, self._rank_tracks, idx,
-                         title=track.title, resolving=True,
+                         title=track.title, resolving=True, context=True,
                          fail_msg="该曲目无法播放",
                          status_label=self.lbl_rank_status)
 
@@ -2922,7 +3022,7 @@ class MusicPanel(QWidget):
         self.btn_retry_online.hide()
         self._play_async(self._music.play_online, track, title=track.title, resolving=True,
                          fail_msg=PLAY_RETRY,
-                         play_options={"_alternatives": tuple(alternatives)})
+                         play_options={"_alternatives": tuple(alternatives), "_single_context": True})
 
     def _retry_online(self):
         if self._retry_online_track is not None:
@@ -2945,6 +3045,10 @@ class MusicPanel(QWidget):
         if row >= len(self._tracks_by_row):
             return
         track = self._tracks_by_row[row]
+        if self._discovery_tracks is not None:
+            self._play_async(self._music.play_online_list, tuple(self._tracks_by_row), row,
+                             title=track.title, resolving=True, context=True)
+            return
         alternatives = self._track_versions[row] if row < len(self._track_versions) else [track]
         self._start_online_track(track, alternatives)
 
@@ -2994,6 +3098,21 @@ class MusicPanel(QWidget):
         except Exception:
             pass
 
+    def _set_meter_request(self, key):
+        self._meter_request = (object(), key) if key else None
+        self._meter_wake.set()
+
+    @Slot(object, object, float, float)
+    def _on_meter_sample(self, request, levels, stamp, position):
+        if request is self._meter_request and abs(position - self._music.current_playback_time) < .65:
+            self.playing_lyrics.stage.accept_levels(request[1], levels, stamp)
+
+    @Slot(object)
+    def _progress_finished(self, worker):
+        if self._progress_thread is worker and self._progress_polling:
+            self._progress_thread = None
+            self._start_progress_poll()
+
     def _start_progress_poll(self):
         """后台线程每 400ms 读 mpv 进度（playback-time/duration 的 IPC 不碰主线程），
         经 _progress_signal 回主线程更新滑块/时间。面板隐藏时停轮询（线程退出后可重启）。"""
@@ -3001,27 +3120,59 @@ class MusicPanel(QWidget):
         if th is not None and th.is_alive():
             return
 
+        def read_progress():
+            try:
+                if self._music is not None and hasattr(self._music, "mpv"):
+                    # 读 controller 受控缓存（_poll_idle 内带代次/切歌闸门，
+                    # 在线解析窗口内旧歌位置不会污染）——绝不直连 mpv 实时值。
+                    visibility = self._chorus_cancel
+                    pos = self._music.current_playback_time
+                    observe = getattr(self._music, "observe_chorus", None)
+                    observed = observe() if observe else None
+                    dur = observed[1] if isinstance(observed, tuple) else self._music.mpv.get_duration()
+                    self._progress_signal.emit(pos, dur, (visibility, observed))
+                    volume_generation = self._volume_request_gen
+                    volume = self._music.get_volume()
+                    if not self._progress_polling:
+                        return
+                    if type(volume) in (int, float) and 0 <= volume <= 100:
+                        self._volume_signal.emit(volume_generation, int(volume))
+            except Exception:
+                pass
+
         def poll():
-            while self._progress_polling:
+            from ..widgets.lyrics_window import LyricsWindow
+            meter = getattr(getattr(self._music, "mpv", None), "lyric_levels", None)
+            metering = False
+            next_progress = 0.
+            try:
+                while self._progress_polling:
+                    if time.monotonic() >= next_progress:
+                        read_progress()
+                        next_progress = time.monotonic() + .4
+                    request = self._meter_request
+                    if request and callable(meter):
+                        if (not getattr(self._music, "_is_switching_track", False)
+                                and request[1] == LyricsWindow._song_key(self._music.get_current_song())):
+                            metering = True
+                            stamp = time.monotonic()
+                            position = self._music.current_playback_time
+                            levels = meter(True)
+                            if request is self._meter_request and isinstance(levels, tuple):
+                                self._meter_signal.emit(request, levels, stamp, position)
+                    elif metering:
+                        meter(False)
+                        metering = False
+                    delay = min(.085 if request else .4, max(0., next_progress - time.monotonic()))
+                    self._meter_wake.wait(delay)
+                    self._meter_wake.clear()
+            finally:
+                if metering:
+                    meter(False)
                 try:
-                    if self._music is not None and hasattr(self._music, "mpv"):
-                        # 读 controller 受控缓存（_poll_idle 内带代次/切歌闸门，
-                        # 在线解析窗口内旧歌位置不会污染）——绝不直连 mpv 实时值。
-                        visibility = self._chorus_cancel
-                        pos = self._music.current_playback_time
-                        observe = getattr(self._music, "observe_chorus", None)
-                        observed = observe() if observe else None
-                        dur = observed[1] if isinstance(observed, tuple) else self._music.mpv.get_duration()
-                        self._progress_signal.emit(pos, dur, (visibility, observed))
-                        volume_generation = self._volume_request_gen
-                        volume = self._music.get_volume()
-                        if not self._progress_polling:
-                            break
-                        if type(volume) in (int, float) and 0 <= volume <= 100:
-                            self._volume_signal.emit(volume_generation, int(volume))
-                except Exception:
-                    pass
-                time.sleep(0.4)
+                    self._poll_finished.emit(threading.current_thread())
+                except RuntimeError:
+                    pass  # Panel already destroyed during application shutdown.
 
         self._progress_thread = threading.Thread(target=poll, daemon=True,
                                                  name="ui-music-progress-poll")

@@ -55,6 +55,7 @@ class PlayQueue:
         self._on_change = None
         self._revision = 0  # Structural version for validating edits from a display snapshot.
         self._entry_ids: list[str] = []  # Identity belongs to an occurrence, not the media file.
+        self._pending_appends: set[str] = set()
 
     def set_change_callback(self, callback):
         """Controller-owned notification hook; UI subscriptions stay on EventBus."""
@@ -73,15 +74,18 @@ class PlayQueue:
         self._revision += 1
 
     @_queue_mutation
-    def add(self, song: dict[str, Any], position: int | None = None):
+    def add(self, song: dict[str, Any], position: int | None = None, *, explicit=False):
         """添加歌曲到队列"""
         with self._lock:
             if position is not None and 0 <= position <= len(self._queue):
                 self._insert(song, position)
             else:
+                position = len(self._queue)
                 self._queue.append(song)
                 self._entry_ids.append(uuid.uuid4().hex)
                 self._revision += 1
+            if explicit:
+                self._pending_appends.add(self._entry_ids[position])
             self._rebuild_shuffle()
 
     @_queue_mutation
@@ -116,7 +120,7 @@ class PlayQueue:
                     return False
             if 0 <= index < len(self._queue):
                 self._queue.pop(index)
-                self._entry_ids.pop(index)
+                self._pending_appends.discard(self._entry_ids.pop(index))
                 if index < self._current_index:
                     self._current_index -= 1
                 elif index == self._current_index:
@@ -143,7 +147,41 @@ class PlayQueue:
             self._shuffle_order.clear()
             self._shuffle_pos = -1
             self._next_up.clear()
+            self._pending_appends.clear()
             self._revision += 1
+
+    @_queue_mutation
+    def replace_context(self, songs, index):
+        """Select a list occurrence, keeping only explicit waiting entries from the old queue."""
+        with self._lock:
+            priority = [(self._queue[i], self._entry_ids[i]) for i in self._next_up]
+            appended = [(song, key) for song, key in zip(self._queue, self._entry_ids)
+                        if key in self._pending_appends]
+            entries = [(song, uuid.uuid4().hex) for song in songs]
+            entries[index + 1:index + 1] = priority
+            entries.extend(appended)
+            self._queue = [song for song, _ in entries]
+            self._entry_ids = [key for _, key in entries]
+            self._current_index = index
+            self._history = [index]
+            self._history_pos = 0
+            self._next_up = list(range(index + 1, index + 1 + len(priority)))
+            self._shuffle_order = []
+            self._shuffle_pos = -1
+            self._revision += 1
+            if self._play_mode == PlayMode.SHUFFLE:
+                self._rebuild_shuffle()
+                self._shuffle_order.remove(index)
+                self._shuffle_order.insert(0, index)
+                self._shuffle_pos = 0
+
+    @_queue_mutation
+    def confirm_current(self, expected, song):
+        """Refresh confirmed metadata without changing the occurrence or playback order."""
+        with self._lock:
+            index = self._current_index
+            if index >= 0 and self._queue[index] is expected:
+                self._queue[index] = song
 
     @_queue_mutation
     def move_waiting(self, entry_id: str, before_id: str | None, revision: int,
@@ -331,6 +369,7 @@ class PlayQueue:
 
     def _add_history(self, index: int):
         """添加到播放历史"""
+        self._pending_appends.discard(self._entry_ids[index])
         # 截断历史位置之后的记录
         if self._history_pos < len(self._history) - 1:
             self._history = self._history[:self._history_pos + 1]

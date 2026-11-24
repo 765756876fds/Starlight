@@ -20,6 +20,9 @@ from typing import Any
 class MpvController:
     """mpv JSON IPC 控制器"""
 
+    # Legacy play()/pause() are command-only. The music clock opts into a receipt.
+    supports_pause_receipt = True
+
     def __init__(self, mpv_path: str, ipc_pipe: str = "\\\\.\\pipe\\lol_music_mpv",
                  video: bool = False, watch_later_dir: str | None = None,
                  extra_video_args: list | None = None):
@@ -37,6 +40,7 @@ class MpvController:
         self._properties: dict[str, Any] = {}
         self._property_watchers: dict[str, Any] = {}
         self._pipe_lock = threading.Lock()
+        self._lyric_meter = "off"
         self._event_pipe = None
         self._event_buffer = b""
         self._event_lock = threading.RLock()
@@ -105,6 +109,7 @@ class MpvController:
             except Exception:
                 pass
             self._pipe = None
+        self._lyric_meter = "off"
         self.ipc_pipe = self._base_ipc_pipe + "_" + str(os.getpid())
 
         print(f"[mpv] pipe name: {self.ipc_pipe!r}")
@@ -233,28 +238,30 @@ class MpvController:
 
     def _send_command(self, command: str, params: list[Any] | None = None,
                        timeout: float = 3.0, *, _locked: bool = False) -> dict[str, Any] | None:
-        if not self._pipe:
-            raise ConnectionError("mpv IPC 未连接")
-        # Only the checkpoint batch below already owns this non-reentrant lock.
         with (nullcontext() if _locked else self._pipe_lock):
+            pipe = self._pipe
+            if pipe is None:
+                raise ConnectionError("mpv IPC 未连接")
             self._request_id += 1
             req_id = self._request_id
             message = {"command": [command] + (params or []), "request_id": req_id}
             line = json.dumps(message) + "\n"
-            self._pipe.write(line)
-            self._pipe.flush()
+            pipe.write(line)
+            pipe.flush()
             start = time.time()
             resp = None
             while time.time() - start < timeout:
                 # Windows 命名管道有界读：PeekNamedPipe 探测可读字节数，
                 # 无数据则短眠轮询；mpv 不响应时到点强制返回 None，绝不无限阻塞。
+                if self._pipe is not pipe:
+                    return None
                 avail = self._pipe_available()
                 if avail < 0:
                     break
                 if avail <= 0:
                     time.sleep(0.01)
                     continue
-                line = self._pipe.readline()
+                line = pipe.readline()
                 if not line:
                     time.sleep(0.01)
                     continue
@@ -387,8 +394,16 @@ class MpvController:
         #   协议层 error 响应（明确失败）。既有调用方忽略返回值，行为不变。
         return resp
 
-    def play(self):
-        self.set_property("pause", False)
+    def _set_paused(self, paused: bool) -> bool:
+        response = self.set_property("pause", paused)
+        if not isinstance(response, dict) or response.get("error") != "success":
+            return False
+        self._properties["pause"] = paused
+        return True
+
+    def play(self, *, confirm=False):
+        result = self._set_paused(False)
+        return result if confirm else None
 
     def loadfile_guarded(self, filepath: str, deadline: float, is_current):
         """Opt-in bounded IPC admission, never used by ordinary loadfile calls."""
@@ -404,8 +419,9 @@ class MpvController:
         finally:
             self._pipe_lock.release()
 
-    def pause(self):
-        self.set_property("pause", True)
+    def pause(self, *, confirm=False):
+        result = self._set_paused(True)
+        return result if confirm else None
 
     def toggle_pause(self):
         self._send_command("cycle", ["pause"])
@@ -525,6 +541,45 @@ class MpvController:
                 self._properties[name] = value
             return value
         return None
+
+    def lyric_levels(self, enabled: bool):
+        """Progress worker only. Meter decoded audio without changing gain or other filters."""
+        if self.video or not self._pipe or (not enabled and self._lyric_meter == "off"):
+            return None
+        # A sample can be skipped while the transport is using the command pipe.
+        # The worker waits its turn to release the filter on leaving the stage.
+        if not self._pipe_lock.acquire(blocking=not enabled):
+            return None
+        try:
+            label = "starlight_lyric_level"
+            if not enabled:
+                if self._lyric_meter in ("active", "uncertain"):
+                    self._send_command("af", ["remove", "@" + label], timeout=.25, _locked=True)
+                self._lyric_meter = "off"
+                return None
+            if self._lyric_meter == "off":
+                meter = "lavfi=[astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level+Peak_level]"
+                self._lyric_meter = "uncertain"
+                result = self._send_command("af", ["add", f"@{label}:{meter}"], timeout=.25, _locked=True)
+                if result and result.get("error") == "success":
+                    self._lyric_meter = "active"
+                elif result:
+                    self._lyric_meter = "unavailable"
+            if self._lyric_meter != "active":
+                return None
+            result = self._send_command("get_property", ["af-metadata/" + label], timeout=.10, _locked=True)
+            data = (result or {}).get("data") or {}
+            if not isinstance(data, dict):
+                return None
+            values = [float(data["lavfi.astats.Overall." + key]) for key in ("RMS_level", "Peak_level")]
+            if any(math.isnan(v) or v == math.inf for v in values):
+                return None
+            # Map -52..-5 dBFS to a perceptual display range. Digital silence (-inf) is valid.
+            return tuple(max(0., min(1., (v + 52.) / 47.)) for v in values)
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+        finally:
+            self._pipe_lock.release()
 
     def get_video_params(self) -> dict:
         """实时查 video-params（w/h/编码等）；未运行或失败 → {}（面板显示分辨率用）。"""

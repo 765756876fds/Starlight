@@ -182,6 +182,10 @@ DEFAULT_LYRICS_PREFS = {
     "bg_opacity": 0,             # 背景透明度 0-100（0=纯透明不画背景；100=半透黑底）
     "mode": "triple",            # triple=3 行上下文 / single=单行
     "offset_ms": 0,             # 正值延后显示，负值提前显示；不修改原歌词
+    "stage_style": "space",
+    "stage_effect": "starlight",
+    "stage_low_power": False,
+    "reduce_motion": False,     # 沉浸歌词即时切换，系统减少动画时同样生效
     "locked": True,              # 锁定=鼠标穿透不可拖（默认锁定）；False=解锁可拖
     "pos_x": None,               # 窗口位置（None=未保存/居中）
     "pos_y": None,

@@ -14,6 +14,7 @@
 - 降级：无歌词 → "暂无歌词"占位；同步/加载异常不影响播放；配置读取失败 → 默认值
 """
 import bisect
+import math
 import threading
 
 from PySide6.QtCore import QRect, Qt, QTimer, Signal, Slot
@@ -28,7 +29,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from ...core.event_bus import EventType
-from ...music.lyrics import find_local_lrc, load_lyrics_from_file, parse_lrc
+from ...music.lyrics import LyricDocument, find_local_lrc, load_lyric_document, parse_document
 from ..settings_store import load_lyrics_prefs, save_lyrics_prefs
 
 _W = 640          # 窗口宽
@@ -47,6 +48,7 @@ class LyricsWindow(QWidget):
     # ——PySide6 对非 QObject receiver 退化为 Direct，跨线程会直执行 Qt 操作。
     lyrics_changed = Signal()
     appearance_changed = Signal()
+    clock_sampled = Signal()
     line_changed = Signal(int)
     _track_requested = Signal(object)               # (snapshot) → 主线程登记请求+加载
     _lyric_fetched = Signal(object, object, object)  # (seq, snapshot, lines) → 主线程应用
@@ -59,8 +61,13 @@ class LyricsWindow(QWidget):
 
         # 歌词数据：[(time_sec, text)]；当前行索引；标题
         self._lines: list[tuple[float, str]] = []
+        self._word_cues = {}
+        self._plain_lines = []
+        self._line_times = []
+        self._last_lyric_position = 0.
         self._title = ""
         self.lyric_status = "idle"
+        self.current_track = {}
         self._current_idx = 0
         self._started = False
         # 当前歌标识（轮询比对用：play_online 不发换歌事件，靠 200ms tick 检测）
@@ -272,6 +279,8 @@ class LyricsWindow(QWidget):
             }
         # extra 浅拷贝（dict 层级；取词服务可能依赖其中的源私有字段）
         snapshot["extra"] = dict(extra)
+        cover = song.get("cover_url") if isinstance(song, dict) else getattr(song, "cover_url", None)
+        snapshot["cover_url"] = cover if isinstance(cover, str) else ""
         return snapshot
 
     def _request_lyric(self, song) -> None:
@@ -307,6 +316,7 @@ class LyricsWindow(QWidget):
         self._last_song_key = snapshot["key"]
         # 入口先清空旧歌词——切歌时旧 lines 残留会继续显示上一首（保留原语义）
         self.loading_title = snapshot["title"]
+        self.current_track = snapshot
         self.set_lyrics([], "", status="loading")
         path = snapshot["path"]
         # 本地分支：path 必须是本地文件路径（在线歌 dict 也带 path=http URL，误判会丢歌词）
@@ -322,14 +332,12 @@ class LyricsWindow(QWidget):
             name="lyrics-fetch",
         ).start()
 
-    def _load_local_lyric(self, path: str) -> list[tuple[float, str]]:
+    def _load_local_lyric(self, path: str):
         """本地同名 .lrc 读取（仅窗口线程调用；失败 → 空列表 → 占位）。"""
         try:
             lrc_path = find_local_lrc(path)
             if lrc_path:
-                lines = load_lyrics_from_file(lrc_path)
-                if lines:
-                    return lines
+                return load_lyric_document(lrc_path)
         except Exception:
             pass
         return []
@@ -339,7 +347,7 @@ class LyricsWindow(QWidget):
         网络异常 → 空歌词（占位），本请求线程结束，不影响后续请求。"""
         try:
             raw = self._fetch_online_lyric(snapshot)
-            lines = parse_lrc(raw) if raw else []
+            lines = parse_document(raw) if raw else []
         except Exception:
             lines = []
         # 窗口已关闭 → 丢弃迟到结果，绝不 emit 到已销毁的 QObject
@@ -400,11 +408,18 @@ class LyricsWindow(QWidget):
         else:
             self.set_lyrics([], title)
 
-    def set_lyrics(self, lines: list[tuple[float, str]], title: str = "", *, status=None) -> None:
-        self._lines = list(lines)
+    def set_lyrics(self, lines: list[tuple[float, str]] | LyricDocument, title: str = "", *, status=None) -> None:
+        doc = lines if isinstance(lines, LyricDocument) else LyricDocument(list(lines))
+        self._lines = doc.lines
+        self._word_cues = doc.words
+        self._plain_lines = doc.plain
+        self._line_times = [second for second, _ in self._lines]
+        self._last_lyric_position = 0.
         self._title = title or ""
         self._current_idx = 0
-        self.lyric_status = status or ("ready" if lines else "missing" if title else "idle")
+        self.lyric_status = status or ("ready" if self._lines else "plain" if self._plain_lines else "missing" if title else "idle")
+        if self.lyric_status == "idle":
+            self.current_track = {}
         self._row_cache.clear()
         self.lyrics_changed.emit()
         self.update()
@@ -421,6 +436,13 @@ class LyricsWindow(QWidget):
             pass  # 换歌加载失败不崩
 
     # ---- 同步 ----
+    def is_playing(self) -> bool:
+        playing = getattr(self._controller, "is_playing", None)
+        try:
+            return callable(playing) and bool(playing())
+        except (RuntimeError, OSError):
+            return False
+
     @staticmethod
     def match_index(lines: list[tuple[float, str]], pos: float) -> int:
         """最后一个 t<=pos 的行索引；pos 早于首行 → 0；空 → -1。"""
@@ -448,25 +470,34 @@ class LyricsWindow(QWidget):
         if key != self._last_song_key:
             self._request_lyric(song)
             return
-        if not self._lines:
-            return
+        pos = self.lyric_position()
+        if pos is not None and self._lines:
+            idx = self.line_at(pos)
+            if idx != self._current_idx:
+                self._current_idx = idx
+                self.line_changed.emit(idx)
+                self.update()
+        self.clock_sampled.emit()
+
+    def line_at(self, position):
+        if not self._line_times:
+            return -1
+        return max(0, bisect.bisect_right(self._line_times, position) - 1)
+
+    def lyric_position(self):
+        """Read the existing MPV memory snapshot, with the user's LRC offset."""
+        snapshot = getattr(self._controller, "_playback_time_cache", None)
+        if getattr(self._controller, "_paused_snapshot", False) is True and snapshot and not snapshot[2]:
+            return self._last_lyric_position
         try:
-            # 读内存快照（controller 后台轮询线程更新），禁调 mpv IPC——200ms 高频
-            # 刷新绝不能阻塞 GUI 线程。
             pos = self._controller.current_playback_time
-        except Exception:
-            return
-        if pos is None:
-            return
-        try:
+            if type(pos) not in (int, float) or not math.isfinite(pos):
+                return None
             offset = max(-10000, min(10000, int(self._prefs.get("offset_ms", 0))))
-            idx = self.match_index(self._lines, float(pos) - offset / 1000.0)
-        except (TypeError, ValueError, OverflowError):
-            return
-        if idx != self._current_idx:
-            self._current_idx = idx
-            self.line_changed.emit(idx)
-            self.update()
+            self._last_lyric_position = pos - offset / 1000.
+            return self._last_lyric_position
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
 
     # ---- 渲染（paintEvent 手绘，S7 标准做法）----
     def _row_pixmap(self, text: str, is_current: bool) -> QPixmap:
@@ -498,7 +529,7 @@ class LyricsWindow(QWidget):
             painter.fillRect(self.rect(), QColor(0, 0, 0, int(op / 100 * 180)))
         if not self._lines:
             # 占位：居中灰字
-            message = {"idle": "播放歌曲后显示歌词", "loading": "正在查找歌词…"}.get(self.lyric_status, _PLACEHOLDER)
+            message = {"idle": "播放歌曲后显示歌词", "loading": "正在查找歌词…", "plain": "可在播放器中阅读完整歌词"}.get(self.lyric_status, _PLACEHOLDER)
             pm = self._row_pixmap(message, True)
             x = (self.width() - pm.width()) // 2
             y = (self.height() - pm.height()) // 2

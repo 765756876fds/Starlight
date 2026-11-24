@@ -10,6 +10,7 @@ from app.ui.panels.ongoing_panel import OngoingPanel
 from app.ui.panels.settings_panel import SettingsPanel
 from app.ui.settings_store import load_ui_prefs
 from app.ui.theme.tokens import Tokens
+from app.ui.widgets.music_content_stack import MediaTabs
 
 
 def _build_acct(ongoing_service, services_dict):
@@ -59,7 +60,7 @@ class MainTabs(QWidget):
                                   Tokens.SPACING_SM, Tokens.SPACING_SM)
         layout.setSpacing(Tokens.SPACING_SM)
 
-        tabs = QTabWidget()
+        tabs = MediaTabs(("音乐", "电影"))
         self.tabs = tabs
         self._panels = {}
 
@@ -115,6 +116,9 @@ class MainTabs(QWidget):
                 on_online_sources_changed=self._notify_online_sources_changed,
                 listen_music_trial=listen_music_trial,
             ), "设置", "settings")
+        lyrics = getattr(self._panels.get("music"), "playing_lyrics", None)
+        if lyrics is not None:
+            tabs.reduce_motion = lyrics.motion_reduced
         layout.addWidget(tabs)
 
         # 应用持久化的刷新间隔到各面板 timer（settings.yaml ui.refresh_interval 原为死配置）

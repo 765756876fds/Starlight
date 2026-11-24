@@ -26,10 +26,13 @@ async function load(filePath) {
     async getLyric(source, musicInfo) {
       try {
         const results = await lx.send('request', {
-          action: 'lyric', source, info: musicInfo,
+          action: 'lyric',
+          source: typeof musicInfo.source === 'string' && musicInfo.source || source,
+          info: { ...musicInfo, musicInfo: musicInfo.musicInfo || musicInfo },
         });
         const r = results && results[0];
-        return r ? { lyric: r.lyric || (typeof r === 'string' ? r : '') } : null;
+        if (typeof r === 'string') return { lyric: r };
+        return r ? { lyric: r.lyric || '', lxlyric: r.lxlyric || null } : null;
       } catch (e) { return null; }
     },
   };

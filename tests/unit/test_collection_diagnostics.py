@@ -50,5 +50,5 @@ def test_direct_and_list_replacement_are_distinguishable(controller, capsys):
     assert controller.play_online(tracks[0]) is True
     assert any("stage=loaded reason=direct_online" in s and "queue_size=0" in s for s in lines(capsys))
     assert controller.play_online_list(tracks, 3) is True
-    assert any("stage=replaced reason=online_list" in s and "track_count=10 retained_count=6" in s
-               and "queue_size=6" in s for s in lines(capsys))
+    assert any("stage=replaced reason=online_list" in s and "track_count=10 retained_count=10" in s
+               and "queue_size=10 index=3" in s for s in lines(capsys))

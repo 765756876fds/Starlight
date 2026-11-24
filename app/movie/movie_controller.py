@@ -1590,8 +1590,14 @@ class MovieController:
             else:
                 session["previous"] = None
             self._restore_online_position(False)
+            video = sample.get("video-params") or {}
+            if (not session["advanced"] and sample.get("pause") is True
+                    and sample.get("seeking") is False and video.get("w") and video.get("h")
+                    and pos is not None and pos >= 5):
+                # A paused, decoded frame may be the first sample after a user
+                # seeks. Persist its verified position without declaring playback.
+                self._remember_view(False, sample=sample)
             if session["advanced"]:
-                video = sample.get("video-params") or {}
                 if video.get("w") and video.get("h"):
                     self._observe_startup(session, "started")
                 startup = self.playback_startup()

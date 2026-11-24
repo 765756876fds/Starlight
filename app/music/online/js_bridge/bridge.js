@@ -136,7 +136,7 @@ async function dispatch(method, params) {
       if (p.type === 'musicfree') {
         return await mfLoader.callGetLyric(p, raw_item);
       } else {
-        return await p.getLyric(source, raw_item || {});
+        return await p.getLyric(source, raw_item || { id: params.track_id });
       }
     }
     case 'getTopLists': {

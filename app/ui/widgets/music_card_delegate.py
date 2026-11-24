@@ -376,6 +376,13 @@ class MusicCardDelegate(QStyledItemDelegate):
         self.playing_key = None   # 当前播放卡片 key（由 panel 同步）
 
     # ---- 尺寸 ----
+    @staticmethod
+    def cover_rect(item_rect):
+        rect = QRectF(item_rect).adjusted(1, 1, -1, -1)
+        pad = Tokens.CARD_PADDING
+        side = rect.width() - 2 * pad
+        return QRectF(rect.left() + pad, rect.top() + pad, side, side)
+
     def sizeHint(self, option, index) -> QSize:
         return QSize(Tokens.CARD_WIDTH, Tokens.CARD_HEIGHT)
 
@@ -469,8 +476,7 @@ class MusicCardDelegate(QStyledItemDelegate):
         painter.drawPath(path)
 
         pad = Tokens.CARD_PADDING
-        cover = QRectF(rect.left() + pad, rect.top() + pad,
-                       rect.width() - 2 * pad, rect.width() - 2 * pad)
+        cover = self.cover_rect(option.rect)
         key = cover_key_of(data)
         pm = self._loader.get(key) if key else None
         if pm is not None:
