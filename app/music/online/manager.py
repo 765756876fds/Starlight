@@ -331,7 +331,8 @@ class OnlineSourceManager:
             return None
         result = self._normalize_play_result(result, source)
         if result and result.get("url"):
-            return dict(result, requested_preference=preference, supports_renditions=callable(resolver))
+            return dict(result, requested_preference=preference,
+                        supports_renditions=result.get("supports_renditions", callable(resolver)))
         return None
 
     def get_play_url(self, track: OnlineTrack, quality: str | None = None) -> dict | None:

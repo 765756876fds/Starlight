@@ -28,9 +28,10 @@ def _pick_play_headers(headers):
         return None
     out = {}
     for k, v in headers.items():
-        if k.lower() not in _WL_LOWER:
+        if not isinstance(k, str) or k.lower() not in _WL_LOWER:
             continue
-        if not isinstance(v, str) or "," in v:
+        if (not isinstance(v, str) or len(v) > 8192 or "," in v
+                or any(ord(char) < 32 or ord(char) == 127 for char in v)):
             continue
         out[k] = v
     return out or None

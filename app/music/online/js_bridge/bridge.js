@@ -150,14 +150,15 @@ async function dispatch(method, params) {
       const { source, quality, track_id, raw_item, timeout_ms } = params;
       const p = downloadOwners.get(source);
       if (!p || p !== sources.get(source) || typeof track_id !== 'string' || !track_id) return null;
-      const tiers = p.type === 'musicfree' ? ['super', 'high', 'standard', 'low'] :
+      const direct = p.type === 'musicfree' && typeof p.getMediaSource !== 'function';
+      const tiers = p.type === 'musicfree' ? (direct ? [null] : ['super', 'high', 'standard', 'low']) :
         ['flac24bit', 'flac', '320k', '128k'];
       if (!tiers.includes(quality) || activeDownloads.has(p)
           || activeDownloads.size >= maxActiveDownloads) return null;
       const raw = raw_item && typeof raw_item === 'object' && !Array.isArray(raw_item) ? raw_item : null;
       const item = raw?.musicInfo || raw;
       const nativeId = item && String(item.id || item.songmid || item.hash || item.rid || '');
-      if (nativeId && nativeId !== track_id) return null;
+      if ((direct && !nativeId) || (nativeId && nativeId !== track_id)) return null;
       // LX requires an owned provider and the original musicInfo payload.
       if (p.type !== 'musicfree' && (!nativeId || !(item?.source || raw?.source))) return null;
       const deadline = Number.isSafeInteger(timeout_ms) ? Math.max(1, Math.min(6500, timeout_ms)) : 2000;
@@ -173,6 +174,7 @@ async function dispatch(method, params) {
         return {
           url: result.url, headers: result.headers || null, requested_quality: quality,
           source_quality: typeof result.source_quality === 'string' ? result.source_quality : null,
+          ...(result.direct_url ? {direct_url: true} : {}),
         };
       } catch {
         return null;
@@ -182,6 +184,11 @@ async function dispatch(method, params) {
       const { source, quality, raw_item } = params;
       const p = sources.get(source);
       if (!p) throw new Error(`unknown source ${source}`);
+      if (p.type === 'musicfree' && typeof p.getMediaSource !== 'function') {
+        const nativeId = raw_item && String(raw_item.id || raw_item.songmid || raw_item.hash || raw_item.rid || '');
+        if (!nativeId || nativeId !== params.track_id || downloadOwners.get(source) !== p) return null;
+        return await mfLoader.callGetUrl(p, raw_item, null);
+      }
       if (Array.isArray(params.playback_qualities)) {
         const allowed = p.type === 'musicfree' ? ['super','high','standard','low'] : ['flac24bit','flac','320k','128k'];
         const choices = [...new Set(params.playback_qualities)].filter(key => allowed.includes(key));
@@ -293,7 +300,8 @@ async function dispatch(method, params) {
     seen.add(p);
     plugins.push({ name: p.name, type: p.type, status: 'ok', file: p.filePath,
       capabilities: {
-        ...(p.type === 'musicfree' ? mfLoader.capabilities(p) : {}),
+        ...(p.type === 'musicfree' ? {...mfLoader.capabilities(p),
+          resolve_media: typeof p.getMediaSource === 'function'} : {}),
         search: p.type === 'musicfree' && typeof p.search === 'function',
       } });
   }

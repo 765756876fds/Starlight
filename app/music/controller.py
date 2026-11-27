@@ -165,6 +165,7 @@ class MusicController:
         self.online_manager = None
         # 下载器（online_manager 注入后创建，见 set_online_manager）
         self.downloader = None
+        self._checked_playback = None
 
         # 核心服务
         self.event_bus = get_event_bus()
@@ -588,6 +589,11 @@ class MusicController:
             logger.warning("[Music] 下载工作正在停止，分片保留供恢复")
         with self._mpv_lifecycle_lock:
             self.mpv.stop_process()
+        checked = getattr(self, "_checked_playback", None)
+        if checked is not None:
+            self._checked_playback = None
+            if not checked.close():
+                logger.warning("[Music] 在线音频连接正在停止")
         thread = getattr(self, "_idle_thread", None)
         if thread is not None and thread.ident is not None and thread is not threading.current_thread():
             thread.join(timeout=2.5)
@@ -1681,6 +1687,15 @@ class MusicController:
         return resolve_playback(self.online_manager, track, getattr(quality, "preference", "auto"),
                                 legacy_quality=legacy_quality)
 
+    def _prepare_checked_playback(self, result):
+        if not result.get("checked_transport") or result.get("_checked_address"):
+            return result
+        from .online.checked_playback import CheckedPlayback
+        if getattr(self, "_checked_playback", None) is None:
+            self._checked_playback = CheckedPlayback()
+        url = self._checked_playback.address(result["url"], result.get("headers"))
+        return dict(result, url=url, headers=None, _checked_address=True)
+
     def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None, *, playback=None, kuwo_rid=None) -> dict | None:
         """统一播放在线流：http-header-fields 重设 + loadfile + pause 同步 + 状态落库。
 
@@ -1692,7 +1707,8 @@ class MusicController:
         """
         if not self._movie_permits_request():
             return None
-        hdr = _pick_play_headers(headers)
+        checked = bool(playback and playback.get("checked_transport"))
+        hdr = None if checked else _pick_play_headers(headers)
         src_name = (getattr(track, "source_name", "") or "").lower()
         need_kw_header = ("kw" in src_name or "酷我" in src_name
                           or "kuwo" in (url or "").lower())
@@ -1705,7 +1721,7 @@ class MusicController:
             if hdr:
                 fields = ",".join(f"{k}: {v}" for k, v in hdr.items())
                 self.mpv.set_property("http-header-fields", fields)
-            elif need_kw_header:
+            elif need_kw_header and not checked:
                 self.mpv.set_property(
                     "http-header-fields",
                     "Referer: https://www.kuwo.cn/,User-Agent: Mozilla/5.0")
@@ -1749,8 +1765,18 @@ class MusicController:
         self._shadow_loadfile_ts = time.perf_counter()
         self._shadow_file_kind = "online"
         try:
+            if checked:
+                playback = self._prepare_checked_playback(dict(playback, url=url, headers=headers))
+                url = playback["url"]
             resp = (self.mpv.loadfile(url) if owned is None else
                     self.mpv.loadfile_guarded(url, owned.request.deadline, owned.guard))
+            if checked and isinstance(resp, dict) and resp.get("error") == "success":
+                def current():
+                    return self._play_request_id == req_epoch and (owned is None or owned.guard())
+                if not self.playback_quality._confirmed(url, resp, current, seconds=1.5):
+                    self.mpv.stop()
+                    raise RuntimeError("在线音频未确认")
+                self._checked_playback.retain(url)
             report_next_feedback(self, "loadfile", "unknown" if resp is None else
                                  "confirmed" if isinstance(resp, dict) and resp.get("error") == "success" else "failed", req_epoch)
         except Exception as e:

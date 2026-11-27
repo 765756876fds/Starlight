@@ -655,6 +655,8 @@ class DownloadManager:
                         if self._stopping():
                             raise
                         if exc.status in _REFRESH_HTTP:
+                            if result.get("direct_url"):
+                                raise
                             result = self._resolve_rendition(track, option.native, 1.2)
                             if not result:
                                 raise
@@ -1146,7 +1148,7 @@ class DownloadManager:
             proof = probe_download(result["url"], headers, timeout=min(1.4, remaining),
                                    max_bytes=min(8192, remaining_bytes), cancelled=cancelled)
             remaining_bytes -= proof.bytes_read
-            if (proof.available is False and proof.http_status in _REFRESH_HTTP
+            if (proof.available is False and proof.http_status in _REFRESH_HTTP and not result.get("direct_url")
                     and probing < MAX_PROBES and deadline - time.monotonic() > .25):
                 refreshed = self._resolve_rendition(track, native, min(.8, deadline - time.monotonic()))
                 if refreshed and refreshed.get("url") and (refreshed.get("url"), refreshed.get("headers")) != (

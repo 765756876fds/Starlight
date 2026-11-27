@@ -11,7 +11,7 @@ class OnlineTrack:
     title: str
     artist: str = ""
     album: str = ""
-    duration_seconds: int = 0
+    duration_seconds: int | float = 0
     cover_url: str | None = None
     extra: dict = field(default_factory=dict)
 

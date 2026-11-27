@@ -35,8 +35,14 @@ async function load(filePath) {
       const r = results && results[0];
       if (!r) return null;
       if (typeof r === 'string') return { url: r, quality };
-      if (r.url) return { url: r.url, quality: r.quality || quality,
-        ...(exact && typeof r.quality === 'string' ? {source_quality: r.quality} : {}) };
+      if (typeof r.url === 'string' && r.url) {
+        const declared = typeof r.quality === 'string' ? r.quality : null;
+        const headers = r.headers && typeof r.headers === 'object' && !Array.isArray(r.headers) ?
+          r.headers : null;
+        return { url: r.url, quality: declared || quality,
+          checked_transport: true, ...(headers ? {headers} : {}),
+          ...(exact && declared ? {source_quality: declared} : {}) };
+      }
       return null;
     },
     async getLyric(source, musicInfo) {

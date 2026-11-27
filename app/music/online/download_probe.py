@@ -166,7 +166,7 @@ def _session(timeout, buffer_size):
 
 def _headers(headers, *, prefix=None):
     safe = CIMultiDict({"User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity"})
-    for name, value in (headers or {}).items():
+    for name, value in (headers.items() if isinstance(headers, dict) else ()):
         if (isinstance(name, str) and name.lower() in _ORIGIN_HEADERS
                 and isinstance(value, str) and len(value) <= 8192
                 and not any(ord(char) < 32 and char != "\t" or ord(char) == 127 for char in value)):

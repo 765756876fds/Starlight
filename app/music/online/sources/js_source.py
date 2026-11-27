@@ -508,7 +508,9 @@ class JSMusicSource(MusicSource):
                          or (extra.get("image") if isinstance(extra, dict) else None)
                          or (extra.get("artwork") if isinstance(extra, dict) else None)
                          or "")
-                dur = r.get("duration_seconds") or r.get("duration") or 0
+                dur = r.get("duration_seconds", r.get("duration", 0))
+                if type(dur) not in (int, float) or not 0 < dur <= (1 << 53) - 1:
+                    dur = 0
                 out.append(OnlineTrack(
                     source_name=r.get("source_name", self.name),
                     track_id=str(r.get("track_id") or extra.get("id") or extra.get("songmid")
@@ -516,7 +518,7 @@ class JSMusicSource(MusicSource):
                     title=r.get("title") or r.get("name") or "",
                     artist=r.get("artist") or "",
                     album=r.get("album") or "",
-                    duration_seconds=int(dur) if dur else 0,
+                    duration_seconds=dur,
                     cover_url=cover or None,
                     extra=extra,
                 ))
@@ -640,6 +642,8 @@ class JSMusicSource(MusicSource):
         if len(plugins) != 1:
             return ()
         protocol = plugins[0].get("type")
+        if protocol == "musicfree" and (plugins[0].get("capabilities") or {}).get("resolve_media") is False:
+            return ((None, None),)
         canonical = {
             "flac24bit": "hires", "flac": "lossless", "320k": "high", "128k": "standard",
         }
@@ -697,6 +701,8 @@ class JSMusicSource(MusicSource):
             **({"quality": r["quality"]} if isinstance(r.get("quality"), str) else {}),
             **({"playback_metadata": r["playback_metadata"]} if isinstance(r.get("playback_metadata"), dict) else {}),
             **({"kuwo_rid": r["kuwo_rid"]} if r.get("kuwo_rid") else {}),
+            **({key: r[key] for key in ("checked_transport", "direct_url", "supports_renditions")
+                if key in r}),
         }
 
     def get_lyric(self, track: OnlineTrack) -> str | None:

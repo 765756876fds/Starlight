@@ -145,6 +145,30 @@ async function callSearchPage(plugin, keyword, page) {
   };
 }
 
+// MusicFree duration is in seconds. Only explicitly named extensions are ms.
+function durationSeconds(item) {
+  const valid = value => typeof value === 'number' && Number.isFinite(value) &&
+    value > 0 && value <= Number.MAX_SAFE_INTEGER;
+  if (valid(item.duration)) return item.duration;
+  const milliseconds = [item.durationMs, item.duration_ms].filter(valid);
+  if (!milliseconds.length || new Set(milliseconds).size !== 1) return 0;
+  return milliseconds[0] / 1000;
+}
+
+function directUrl(plugin, item) {
+  if (typeof plugin.getMediaSource === 'function' || typeof item?.url !== 'string') return null;
+  const value = item.url;
+  if (value.length > 16384 || !/^https?:[/][/]/i.test(value) || /[\s\x00-\x1f\x7f\\]/u.test(value)) return null;
+  try {
+    const parsed = new URL(value);
+    if (!parsed.hostname || parsed.username || parsed.password || parsed.port === '0') return null;
+    // Validate without serializing or changing the signed resource path.
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 // MusicFree 标准歌曲对象：title/name、artists(数组或字符串)、duration(秒)、
 // image/artwork/cover(封面)。各插件字段名不一，统一规范化成 Python 友好结构。
 function normalizeMusicItem(sourceName, item) {
@@ -153,25 +177,25 @@ function normalizeMusicItem(sourceName, item) {
     ? item.artists.map((a) => (a && typeof a === 'object' ? a.name : a))
         .filter(Boolean).join(' / ')
     : (item.artist || item.artists || '');
-  const dur = item.duration;
-  const duration_seconds = dur
-    ? (Number(dur) > 1000 ? Math.floor(Number(dur) / 1000) : Math.floor(Number(dur)))
-    : 0;
   return {
     source_name: sourceName,
     track_id: String(item.id || item.songmid || item.hash || item.rid || ''),
     title,
     artist: artists,
     album: item.album && typeof item.album === 'object' ? (item.album.title || item.album.name || '') : (item.album || ''),
-    duration_seconds,
+    duration_seconds: durationSeconds(item),
     cover_url: item.image || item.artwork || item.cover || item.coverImg || '',
     extra: { _raw: item },
   };
 }
 
 async function callGetUrl(plugin, rawItem, quality, exact = false) {
-  if (typeof plugin.getMediaSource !== 'function') return null;
   const item = rawItem || { id: '' };
+  if (typeof plugin.getMediaSource !== 'function') {
+    const url = directUrl(plugin, item);
+    return url && (!exact || quality === null) ?
+      { url, direct_url: true, checked_transport: true, supports_renditions: false } : null;
+  }
   const want = quality || 'high';
   // 逐级回退：want → high → standard → low。MusicFree 插件标准音质键是
   // low/standard/high/super（'320k' 不是标准键，kg/wy 会 qualities['320k']
@@ -203,7 +227,7 @@ async function callGetUrl(plugin, rawItem, quality, exact = false) {
         }
         // 透传插件返回的 headers（如开心汽水给 douyin Referer），供播放链设置
         if (result.headers && typeof result.headers === 'object'
-            && Object.keys(result.headers).length) {
+            && !Array.isArray(result.headers) && Object.keys(result.headers).length) {
           out.headers = result.headers;
         }
         return out;

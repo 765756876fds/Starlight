@@ -145,6 +145,8 @@ class PlaybackQuality:
             except (OSError, ValueError, RuntimeError, TimeoutError):
                 continue
             if result and isinstance(result.get("url"), str) and result["url"]:
+                if result.get("direct_url"):
+                    continue
                 if best is None or not result.get("downgraded"):
                     best = candidate, result
                 if not result.get("downgraded"):
@@ -154,6 +156,14 @@ class PlaybackQuality:
         if not best:
             return "该音质暂不可用，原版本继续播放"
         candidate, replacement = best
+        if replacement.get("checked_transport"):
+            with owner._lock:
+                if not current():
+                    return ""
+                try:
+                    replacement = owner._prepare_checked_playback(replacement)
+                except (OSError, ValueError):
+                    return "该音质暂不可用，原版本继续播放"
         original = self.result
         if _same_media(original.get("url"), replacement["url"]):
             with owner._lock:
@@ -190,6 +200,8 @@ class PlaybackQuality:
                         self.track = candidate
                         self.alternatives = tuple(t for t in (previous, *self.alternatives)
                                                   if t is not candidate)
+                    if replacement.get("_checked_address"):
+                        owner._checked_playback.retain(replacement["url"])
                     self.result = dict(replacement)
                     self.revision += 1
                 return "已切换到可用音质" if current() else ""
