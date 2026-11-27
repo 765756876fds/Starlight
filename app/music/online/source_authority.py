@@ -125,6 +125,9 @@ class SourceLease:
     def active(self):
         return self._authority.active(self)
 
+    def busy(self):
+        return self._authority.busy(self)
+
     def retire(self):
         self._authority.revoke(self)
 
@@ -264,6 +267,10 @@ class SourceAuthority:
     def active(self, lease):
         with self._lock:
             return self._live.get(lease.source_id) is lease
+
+    def busy(self, lease):
+        with self._lock:
+            return bool(self._running.get(lease.source_id))
 
     def require_live(self, lease):
         if not self.active(lease):

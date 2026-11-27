@@ -154,8 +154,8 @@ class MusicController:
         self._shadow_file_kind = "local"
 
         # 落雪音乐客户端
-        self.lx_client = LxMusicClient()
-        self.lx_connected = self.lx_client.is_connected()
+        self.lx_client = LxMusicClient() if config.get("allow_external_player", True) else None
+        self.lx_connected = self.lx_client is not None and self.lx_client.is_connected()
         if self.lx_connected:
             logger.info('[音乐] 落雪音乐已连接，语音控制将优先控制落雪')
         else:
@@ -1698,6 +1698,13 @@ class MusicController:
         url = self._checked_playback.address(result["url"], result.get("headers"), **scope)
         return dict(result, url=url, headers=None, _checked_address=True)
 
+    def playback_holds_source_lease(self, lease):
+        quality = self.playback_quality
+        song = self._current_song
+        grant = quality.result.get("_authorization")
+        return (self._running and not self._user_stopped and song is not None
+                and quality.song is song and getattr(grant, "lease", None) is lease)
+
     def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None, *, playback=None, kuwo_rid=None) -> dict | None:
         """统一播放在线流：http-header-fields 重设 + loadfile + pause 同步 + 状态落库。
 
@@ -2258,7 +2265,7 @@ class MusicController:
         - 跳过 api_url 为空的源（如仅存元信息的 JS 导入）
         - 不覆盖 js_bridge / demo / archive / Python 插件等内置源（重名保护）
         返回本次注册成功的源数量。任何源失效只影响自身，不影响其他源。"""
-        if self.online_manager is None:
+        if self.online_manager is None or not getattr(self.online_manager, "allow_legacy_sources", True):
             return 0
         from app.music.online.sources.http_source import HttpJsonSource
         from app.music.source_manager import MusicSourceManager

@@ -107,8 +107,9 @@ def _target(value, *, authorization=None):
 
 
 class _PublicResolver(aiohttp.abc.AbstractResolver):
-    def __init__(self, authorization=None):
+    def __init__(self, authorization=None, *, on_dns_worker=None):
         self._authorization = authorization
+        self._on_dns_worker = on_dns_worker
 
     async def resolve(self, host, port=0, family=socket.AF_UNSPEC):
         if not _DNS_SLOTS.acquire(blocking=False):
@@ -120,6 +121,8 @@ class _PublicResolver(aiohttp.abc.AbstractResolver):
             _DNS_SLOTS.release()
             raise
         lookup.add_done_callback(lambda _: _DNS_SLOTS.release())
+        if self._on_dns_worker is not None:
+            self._on_dns_worker(lookup)
         answers = await asyncio.wrap_future(lookup)
         if self._authorization is not None:
             self._authorization.require_active()
@@ -137,8 +140,8 @@ class _PublicResolver(aiohttp.abc.AbstractResolver):
         pass
 
 
-def _session(timeout, buffer_size, *, authorization=None):
-    resolver = _PublicResolver() if authorization is None else _PublicResolver(authorization)
+def _session(timeout, buffer_size, *, authorization=None, on_dns_worker=None):
+    resolver = _PublicResolver(authorization, on_dns_worker=on_dns_worker)
     connector = aiohttp.TCPConnector(resolver=resolver, use_dns_cache=False,
                                      force_close=True, limit=1)
     client = aiohttp.ClientSession(
@@ -753,7 +756,7 @@ def read_download_attachment(url, *, max_bytes=4 * 1024 * 1024, timeout=8.0, can
         raise DownloadTransportError("network") from None
 
 
-async def request_plugin_http(authorization, method, *, body=None, cancelled=None):
+async def request_plugin_http(authorization, method, *, body=None, cancelled=None, on_dns_worker=None):
     """Async entry point for an opt-in host RPC, with bounded response bytes."""
     if not isinstance(authorization, AuthorizedResource):
         raise DownloadTransportError("source_scope")
@@ -764,7 +767,8 @@ async def request_plugin_http(authorization, method, *, body=None, cancelled=Non
     timeout = authorization.budget.timeout
 
     async def perform():
-        async with _session(timeout, 8192, authorization=authorization) as session:
+        async with _session(timeout, 8192, authorization=authorization,
+                            on_dns_worker=on_dns_worker) as session:
             async with _request(session, method, url, _headers(None), authorization=authorization,
                                 body=body) as response:
                 data = bytearray()

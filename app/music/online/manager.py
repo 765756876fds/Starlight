@@ -22,7 +22,7 @@ class OnlineSourceManager:
     PAGED_WORKERS = 12
 
     def __init__(self, cache_ttl: float = 300.0, max_workers: int = 4,
-                 request_timeout: float = 5.0):
+                 request_timeout: float = 5.0, *, allow_legacy_sources: bool = True):
         self._sources: dict[str, MusicSource] = {}
         self._source_leases: dict[str, SourceLease] = {}
         self._managed_names: set[str] = set()
@@ -47,6 +47,7 @@ class OnlineSourceManager:
         self._legacy_download_active = {}
         self._paged_peak = 0
         self._closed = False
+        self.allow_legacy_sources = allow_legacy_sources
 
     def register(self, source: MusicSource, *, lease: SourceLease | None = None) -> None:
         with self._life_lock:
@@ -55,7 +56,7 @@ class OnlineSourceManager:
             if lease is not None and (not isinstance(lease, SourceLease)
                                      or lease.source_id != source.name or not lease.active()):
                 raise DownloadTransportError("source_scope")
-            if lease is None and source.name in self._managed_names:
+            if lease is None and (not self.allow_legacy_sources or source.name in self._managed_names):
                 raise DownloadTransportError("source_scope")
             previous = self._sources.get(source.name)
             previous_lease = self._source_leases.get(source.name)
@@ -78,6 +79,8 @@ class OnlineSourceManager:
 
     def load_custom_sources(self, directory: str) -> int:
         """扫描目录下 *.py，每个文件必须定义 create_source() -> MusicSource。"""
+        if not self.allow_legacy_sources:
+            return 0
         import importlib.util
         import os
         loaded = 0
@@ -120,6 +123,19 @@ class OnlineSourceManager:
 
     def list_sources(self) -> list[str]:
         return list(self._sources.keys())
+
+    def renew_source_lease(self, source, previous, new):
+        """Replace only the still-registered instance's retired authorization."""
+        with self._life_lock:
+            if (self._closed or self._sources.get(source.name) is not source
+                    or self._source_leases.get(source.name) is not previous
+                    or previous.active() or not new.active()
+                    or (new.source_id, new.plugin_id) != (previous.source_id, previous.plugin_id)):
+                return False
+            self._source_leases[source.name] = new
+            self._source_versions[source.name] += 1
+            self._cache.delete(source.name)
+            return True
 
     def get_source(self, name: str) -> MusicSource | None:
         """按注册名取源（UI 等外部组件用，避免摸私有 dict）。"""

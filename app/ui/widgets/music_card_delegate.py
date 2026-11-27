@@ -76,7 +76,7 @@ def cover_key_of(data) -> str:
     if url:
         return "net:" + url
     path = data.get("path")
-    if path:
+    if isinstance(path, str) and path and "://" not in path:
         return "local:" + path
     return None
 

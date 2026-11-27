@@ -124,7 +124,9 @@ class Application:
     # syntax-replaced
     """doc"""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, *, isolated_music_settings=None):
+        self._isolated_music_settings = isolated_music_settings
+        self._isolated_music_host = None
         # 加载配置
         self.config = get_config(config_path)
         self.config_data = self.config.data
@@ -310,36 +312,7 @@ class Application:
             logger.info("[ASR] 拉起超时（60秒），模型可能未就绪，继续启动")
         return False
 
-    def initialize(self):
-        if self._shutdown_event.is_set():
-            return
-        self._startup_entered = True
-        # 类级单例守卫：整个进程内只 initialize 一次。
-        # 入口即置 True，而非函数末尾——当前生产代码只有 run() 一个调用点（main.py:1016），
-        # 无递归或并发初始化路径（已 grep 确认）。
-        # 契约：initialize() 中途异常后，_initialized 保持 True，不支持同一进程内重试；
-        # _handle_startup_failure() 已尽力 stop() 清理已构造模块，但不重置本标志。
-        # 若未来需要重试，必须先证明 stop() 能完整回收所有子进程/句柄，再引入状态机。
-        if Application._initialized:
-            logger.info("[Startup] already initialized, skip")
-            return
-        Application._initialized = True
-        """初始化所有子系统"""
-        logger.info("=" * 60)
-        logger.info("  LoL × 本地音乐 × 语音 Agent")
-        logger.info("=" * 60)
-
-        # 0. Event Log（最先启动，记录所有事件）
-        logger.info("\n[0/5] 初始化 Event Log...")
-        self.event_log = EventLog(
-            log_dir=self.config.get("events.log_dir", os.path.join(USER_DATA_DIR, "data", "events"))
-        )
-
-        # 1. 音乐模块
-        logger.info("\n[1/5] 初始化音乐模块...")
-        if self._shutdown_event.is_set():
-            return
-        self.music = MusicController(self.config.get_section("music"))
+    def _initialize_legacy_music_sources(self):
         # 注册 online music source
         try:
             from app.music.online.manager import OnlineSourceManager
@@ -390,6 +363,62 @@ class Application:
             logger.info(f"[Music] online source 已注册 {self.online_music_manager.list_sources()}")
         except Exception as e:
             logger.info(f"[Music] online source 初始化失败: {e}")
+
+
+    def _initialize_isolated_music_sources(self):
+        from app.music.online.manager import OnlineSourceManager
+
+        self.online_music_manager = OnlineSourceManager(allow_legacy_sources=False)
+        self.music.set_online_manager(self.online_music_manager)
+        try:
+            from app.music.online.isolated_host.host import IsolatedMusicHost
+            self._isolated_music_host = IsolatedMusicHost(
+                self.online_music_manager, self._isolated_music_settings,
+                playback_holds_lease=self.music.playback_holds_source_lease,
+            )
+        except Exception as error:
+            logger.warning("[Music] 隔离音源无法启用 (%s)", type(error).__name__)
+            self._set_module_status("js", "fail")
+        else:
+            self._set_module_status("js", "ok")
+
+    def initialize(self):
+        if self._shutdown_event.is_set():
+            return
+        self._startup_entered = True
+        # 类级单例守卫：整个进程内只 initialize 一次。
+        # 入口即置 True，而非函数末尾——当前生产代码只有 run() 一个调用点（main.py:1016），
+        # 无递归或并发初始化路径（已 grep 确认）。
+        # 契约：initialize() 中途异常后，_initialized 保持 True，不支持同一进程内重试；
+        # _handle_startup_failure() 已尽力 stop() 清理已构造模块，但不重置本标志。
+        # 若未来需要重试，必须先证明 stop() 能完整回收所有子进程/句柄，再引入状态机。
+        if Application._initialized:
+            logger.info("[Startup] already initialized, skip")
+            return
+        Application._initialized = True
+        """初始化所有子系统"""
+        logger.info("=" * 60)
+        logger.info("  LoL × 本地音乐 × 语音 Agent")
+        logger.info("=" * 60)
+
+        # 0. Event Log（最先启动，记录所有事件）
+        logger.info("\n[0/5] 初始化 Event Log...")
+        self.event_log = EventLog(
+            log_dir=self.config.get("events.log_dir", os.path.join(USER_DATA_DIR, "data", "events"))
+        )
+
+        # 1. 音乐模块
+        logger.info("\n[1/5] 初始化音乐模块...")
+        if self._shutdown_event.is_set():
+            return
+        music_config = self.config.get_section("music")
+        if self._isolated_music_settings is not None:
+            music_config = dict(music_config, allow_external_player=False)
+        self.music = MusicController(music_config)
+        if self._isolated_music_settings is None:
+            self._initialize_legacy_music_sources()
+        else:
+            self._initialize_isolated_music_sources()
 
         # 2. LoL 模块
         logger.info("[2/5] 初始化 LoL 模块...")
@@ -689,6 +718,14 @@ class Application:
                 logger.warning("[Shutdown] music scan has not finished its current I/O")
         if self.music:
             _safe("music.stop", self.music.stop)
+        isolated_host = getattr(self, "_isolated_music_host", None)
+        if isolated_host is not None:
+            def stop_isolated_music():
+                if not isolated_host.close():
+                    logger.warning("[Shutdown] 隔离音源资源仍在释放")
+
+            _safe("isolated_music.close", stop_isolated_music)
+
 
         # MovieController 由电影面板懒加载，不能只依赖 SYSTEM_SHUTDOWN
         # 订阅者存在；显式关闭其 mpv，且失败不影响其他播放器回收。
@@ -1578,7 +1615,22 @@ class Application:
 
 def main():
     """doc"""
-    app = Application()
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--isolated-music-config", action="append")
+    options, remaining = parser.parse_known_args()
+    settings = None
+    if options.isolated_music_config is not None:
+        if len(options.isolated_music_config) != 1:
+            parser.exit(2, "隔离音源配置只能指定一次。\n")
+        from app.music.online.isolated_host.settings import load_isolated_music_settings
+        try:
+            settings = load_isolated_music_settings(options.isolated_music_config[0])
+        except (OSError, ValueError):
+            parser.exit(2, "隔离音源配置无效，启动已取消。\n")
+        sys.argv[1:] = remaining
+    app = Application(isolated_music_settings=settings)
     sys.exit(app.run())
 
 
