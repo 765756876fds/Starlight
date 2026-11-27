@@ -19,6 +19,7 @@ GROUPS = {
     "queue": "tests/ui/test_music_queue_view.py",
     "music-search": "tests/ui/test_music_search_reliability.py",
     "music-download": "tests/ui/test_download_lyrics_experience.py",
+    "download-lifecycle": "tests/ui/test_download_task_lifecycle.py",
     "movie-search-coverage": "tests/ui/test_movie_search_coverage.py",
     "movie-poster-backlog": "tests/ui/test_movie_poster_backlog.py",
 }

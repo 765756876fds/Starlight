@@ -6,7 +6,7 @@ from ...core.notifications import notify, get_notification_center, current_opera
 import time
 import zlib
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QItemSelectionModel, QObject, QPoint, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QActionGroup, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -253,6 +253,11 @@ class MusicPanel(QWidget):
         self._download_tasks = {}
         self._download_serial = 0
         self._download_pane = None
+        self._download_snapshots = {}
+        self._download_notices = {}
+        self._download_refresh = QTimer(self)
+        self._download_refresh.setInterval(250)
+        self._download_refresh.timeout.connect(self._refresh_download_tasks)
         self._download_event.connect(self._apply_download_event)
         self._tracks_by_row = []
         self._track_versions = []
@@ -623,13 +628,14 @@ class MusicPanel(QWidget):
         results_layout = QVBoxLayout(self.results_page)
         results_layout.setContentsMargins(0, 0, 0, 0)
         self.list_results = QListWidget()
+        self.list_results.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         from ..widgets.music_card_delegate import DownloadCardDelegate
         self._dl_results = self._setup_card_view(self.list_results, DownloadCardDelegate)
         self._search_pointer = _SearchPointerGuard(self.list_results.viewport())
         self._dl_results.download_requested.connect(self._download_result)
         download_shortcut = QShortcut(QKeySequence("Ctrl+D"), self.list_results)
         download_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        download_shortcut.activated.connect(lambda: self._download_result(self.list_results.currentRow()))
+        download_shortcut.activated.connect(self._download_selected_results)
         self._track_header(results_layout, self.list_results, download=True)
         results_layout.addWidget(self.list_results, 1)
         self.lbl_status = QLabel("输入关键词开始搜索")
@@ -647,6 +653,11 @@ class MusicPanel(QWidget):
         self.btn_retry_online = QPushButton("重试")
         self.btn_retry_online.clicked.connect(self._retry_online)
         self.btn_retry_online.hide()
+        self.btn_download_selected = QPushButton("下载所选")
+        self.btn_download_selected.setToolTip("将所选歌曲以最佳可用品质加入下载队列（Ctrl+D）")
+        self.btn_download_selected.clicked.connect(self._download_selected_results)
+        self.btn_download_selected.hide()
+        self.list_results.itemSelectionChanged.connect(self._sync_result_selection)
         self.btn_search_more = QPushButton("加载更多")
         self.btn_search_more.clicked.connect(self._load_search_more)
         self.btn_search_more.hide()
@@ -663,7 +674,7 @@ class MusicPanel(QWidget):
         self.btn_versions.hide()
         self.list_results.currentRowChanged.connect(self._online_selection_changed)
         for button in (self.btn_result_play, self.btn_versions, self.btn_retry_online,
-                       self.btn_search_more, self.btn_search_retry):
+                       self.btn_search_more, self.btn_search_retry, self.btn_download_selected):
             actions.addWidget(button)
         results_layout.addLayout(actions)
         self.btn_discovery_more = QPushButton("加载更多曲目")
@@ -1252,6 +1263,7 @@ class MusicPanel(QWidget):
         reverse = getattr(listing, "_sort_key", None) == (key, False)
         listing._sort_key = (key, reverse)
         selected = listing.currentItem()
+        selected_items = listing.selectedItems()
         def value(row):
             data = listing.item(row).data(Qt.UserRole) or {}
             if listing is self.popular_songs.cards:
@@ -1272,6 +1284,8 @@ class MusicPanel(QWidget):
                 listing.addItem(items[index])
             if selected is not None:
                 listing.setCurrentItem(selected)
+            for item in selected_items:
+                item.setSelected(True)
         names = (("_tracks_by_row","_track_versions") if listing is self.list_results else
                  ("_local_songs",) if listing is self.list_local else
                  ("_rank_tracks",) if listing is self.list_rank_songs else ())
@@ -1281,6 +1295,7 @@ class MusicPanel(QWidget):
                 setattr(self, name, [rows[index] for index in order])
         if listing is self.list_results:
             self._online_selection_changed(listing.currentRow())
+            self._sync_result_selection()
 
     def _focus_search(self):
         """Ctrl+F / Ctrl+K：聚焦当前 tab 的搜索框并全选。"""
@@ -2058,6 +2073,8 @@ class MusicPanel(QWidget):
         old_rows = self._tracks_by_row
         selected = listing.currentRow()
         previous = old_rows[selected] if paged and 0 <= selected < len(old_rows) else None
+        selected_tracks = [old_rows[listing.row(item)] for item in listing.selectedItems()
+                           if 0 <= listing.row(item) < len(old_rows)] if paged else []
         scroll = listing.verticalScrollBar()
         offset = scroll.value()
         anchor, anchor_y = None, 0
@@ -2148,6 +2165,7 @@ class MusicPanel(QWidget):
         self._fit_sparse_results()
         for key, task in self._download_tasks.items():
             self._update_download_card(key, task)
+        self._paint_download_snapshots()
         def row_of(track, fallback=-1):
             if track is None:
                 return fallback
@@ -2157,9 +2175,17 @@ class MusicPanel(QWidget):
                                 for item in group)), fallback)
 
         row = row_of(previous, 0 if previous is None and tracks_for_search else -1)
-        listing.setCurrentRow(row)
+        if paged and selected_tracks:
+            listing.setCurrentRow(row, QItemSelectionModel.SelectionFlag.NoUpdate)
+        else:
+            listing.setCurrentRow(row)
         if paged:
+            for track in selected_tracks:
+                selected_row = row_of(track)
+                if selected_row >= 0:
+                    listing.item(selected_row).setSelected(True)
             del blocker
+            self._sync_result_selection()
             anchor_row = row_of(anchor)
             if anchor_row >= 0:
                 listing.doItemsLayout()
@@ -3178,9 +3204,11 @@ class MusicPanel(QWidget):
         is_online = song.get("source_type", "local") != "local"
         if is_online:
             try:
-                downloaded = self._music is not None and bool(
-                    "_download_alternatives" not in song and
-                    self._music.is_downloaded(song.get("title", ""), song.get("artist", "")))
+                downloader = self._download_manager()
+                downloaded = self._music is not None and "_download_alternatives" not in song and bool(
+                    downloader.find_download_path_for_song(song)
+                    if callable(getattr(downloader, "find_download_path_for_song", None))
+                    else self._music.is_downloaded(song.get("title", ""), song.get("artist", "")))
             except Exception:
                 downloaded = False
             if downloaded:
@@ -3347,7 +3375,36 @@ class MusicPanel(QWidget):
         if idx < 0 or idx >= len(self._tracks_by_row):
             return
         menu = self._build_song_menu(self._download_result_song(idx))
+        if item.isSelected():
+            songs = self._selected_download_requests()
+            if len(songs) > 1:
+                menu.addAction(f"下载所选 {len(songs)} 首", lambda: self._submit_downloads(songs))
         menu.exec_(self.list_results.mapToGlobal(pos))
+
+    def _sync_result_selection(self):
+        self.btn_download_selected.setVisible(len(self.list_results.selectedItems()) > 1)
+
+    def _selected_download_requests(self):
+        from ...music.downloader import freeze_download_song
+        if self._voice_generation is not None:
+            return ()
+        rows = sorted(self.list_results.row(item) for item in self.list_results.selectedItems())
+        return tuple(freeze_download_song(self._download_result_song(row))
+                     for row in rows if 0 <= row < len(self._tracks_by_row))
+
+    def _download_selected_results(self):
+        songs = self._selected_download_requests()
+        if not songs:
+            self._download_result(self.list_results.currentRow())
+        elif len(songs) == 1:
+            self._on_download_song(songs[0])
+        else:
+            self._submit_downloads(songs)
+
+    def _submit_downloads(self, songs):
+        for song in songs:
+            self._on_download_song(song)
+        self._show_download_tasks()
 
     def _download_result_song(self, row):
         track = self._tracks_by_row[row]
@@ -3396,9 +3453,103 @@ class MusicPanel(QWidget):
             self._download_pane.close_requested.connect(self._close_media_pane)
             self._media_pane.addWidget(self._download_pane)
             self._download_pane.retry_requested.connect(self._retry_download)
+            self._download_pane.operation_requested.connect(self._operate_download_tasks)
             for key, task in self._download_tasks.items():
                 self._download_pane.update_task(key, task)
         self._open_media_pane(self._download_pane)
+        self._refresh_download_tasks()
+
+    def _download_manager(self):
+        manager = getattr(self._music, "downloader", None)
+        return manager if callable(getattr(manager, "tasks", None)) else None
+
+    @Slot(str, object)
+    def _operate_download_tasks(self, operation, keys):
+        manager = self._download_manager()
+        if manager is None or operation not in ("pause", "resume", "cancel", "remove", "retry"):
+            return
+        action = getattr(manager, operation)
+        for key in keys:
+            if action(key) and operation == "retry":
+                song = self._download_snapshots.get(key, {}).get("song", {})
+                self._notice_download_started(key, song.get("title", "歌曲"))
+        self._refresh_download_tasks()
+
+    def _notice_download_started(self, key, name):
+        notice = get_notification_center().post("已加入下载队列", name, source="music")
+        self._download_notices[key] = (notice, self._search_generation)
+
+    def _refresh_download_tasks(self):
+        from ..dialogs.download_tasks_dialog import TERMINAL, download_label
+
+        manager = self._download_manager()
+        pane = self._download_pane
+        visible = pane is not None and pane is self._media_pane.currentWidget() and pane.isVisible()
+        if manager is None:
+            if visible and not self._download_refresh.isActive():
+                self._download_refresh.start()
+            elif not visible:
+                self._download_refresh.stop()
+            return
+        snapshots = {task["key"]: task for task in manager.tasks()}
+        previous = self._download_snapshots
+        self._download_snapshots = snapshots
+        for key in previous.keys() - snapshots.keys():
+            self._download_notices.pop(key, None)
+            if pane is not None:
+                pane.forget(key)
+        completed = False
+        for key, task in snapshots.items():
+            if pane is not None and (key not in pane.rows or previous.get(key) != task):
+                pane.update_task(key, task)
+            state = task["state"]
+            prior = previous.get(key, {})
+            if state not in TERMINAL or (prior.get("state") == state
+                    and prior.get("generation") == task.get("generation")):
+                continue
+            if state == "completed" and (key in self._download_notices
+                    or prior.get("state") not in (None, "completed")):
+                completed = True
+            tracked = self._download_notices.pop(key, None)
+            if tracked is not None:
+                notice, generation = tracked
+                message = download_label(task)
+                if generation == self._search_generation:
+                    self.lbl_status.setText(message)
+                status = {"completed": "success", "failed": "failed", "cancelled": "warning"}[state]
+                get_notification_center().update(notice, title=message,
+                    message=task["song"].get("title", ""), status=status, phase="done")
+        if snapshots != previous:
+            self._paint_download_snapshots()
+        if completed:
+            self._refresh_local_list(self.edit_local.text().strip())
+            if self.tabs.currentIndex() == 3:
+                self._refresh_playlists()
+        active = any(task["state"] not in TERMINAL | {"paused"} for task in snapshots.values())
+        if (visible or active) and not self._download_refresh.isActive():
+            self._download_refresh.start()
+        elif not visible and not active:
+            self._download_refresh.stop()
+
+    def _paint_download_snapshots(self):
+        from ..dialogs.download_tasks_dialog import DOWNLOAD_MESSAGES, TERMINAL
+
+        if not self._download_snapshots and self._download_manager() is None:
+            return
+        by_resource = {}
+        for record in self._download_snapshots.values():
+            state = record["state"]
+            song = record["song"]
+            if state not in TERMINAL:
+                by_resource[self._download_task_key(song)] = record.get("message") or DOWNLOAD_MESSAGES.get(state)
+        for index, track in enumerate(self._tracks_by_row):
+            item = self.list_results.item(index)
+            if item is None:
+                continue
+            key = self._download_task_key({"source_name": track.source_name, "track_id": track.track_id})
+            status = by_resource.get(key)
+            if item.data(MusicCardRoles.StatusRole) != status:
+                item.setData(MusicCardRoles.StatusRole, status)
 
     @Slot(str)
     def _retry_download(self, key):
@@ -3415,8 +3566,27 @@ class MusicPanel(QWidget):
         song = freeze_download_song(song)
         if options is None and not load_download_prefs()["allow_fallback"]:
             options = {"allow_fallback": False}
-        key = self._download_task_key(song)
         name = song.get("title") or "歌曲"
+        manager = self._download_manager()
+        if manager is not None:
+            key = manager.task_key(song, options)
+            if not key:
+                self.lbl_status.setText("此歌曲暂无可下载的资源")
+                return
+            if self._music.download_song(song, options=options):
+                self._notice_download_started(key, name)
+                self.lbl_status.setText(f"已加入下载队列：{name}")
+                self._refresh_download_tasks()
+            else:
+                self._show_download_tasks()
+                row = self._download_pane.rows.get(key)
+                if row is not None:
+                    self._download_pane.items.setCurrentItem(row)
+                else:
+                    self.lbl_status.setText("下载暂不可用，可稍后重试")
+            return
+
+        key = self._download_task_key(song)
         filename_key = DownloadManager._key(song.get("title"), song.get("artist"))
         for existing in self._download_tasks.values():
             if existing["filename_key"] == filename_key and existing["state"] == "active":
@@ -3545,7 +3715,13 @@ class MusicPanel(QWidget):
         path = ""
         try:
             dl = getattr(self._music, "downloader", None)
-            if dl is not None:
+            exact = getattr(dl, "find_download_path_for_song", None)
+            if callable(exact):
+                path = exact(song)
+                if not path:
+                    self.lbl_status.setText("无法确认要删除的下载文件")
+                    return
+            elif dl is not None:
                 path = dl.find_download_path(song.get("title", ""), song.get("artist", ""))
         except Exception:
             pass
@@ -3557,9 +3733,9 @@ class MusicPanel(QWidget):
         if ret != QMessageBox.StandardButton.Ok:
             return
         try:
-            ok, _p, err = self._music.remove_download(song)
-        except Exception as e:
-            self.lbl_status.setText(f"删除失败: {e}")
+            ok, _p, err = self._music.remove_download(dict(song, _download_expected_path=path) if path else song)
+        except Exception:
+            self.lbl_status.setText("无法删除下载文件")
             return
         if ok:
             self.lbl_status.setText("已删除本地下载")

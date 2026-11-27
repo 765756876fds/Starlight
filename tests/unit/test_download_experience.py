@@ -357,7 +357,7 @@ def test_shutdown_reports_queued_task_cancellation(tmp_path):
     try:
         assert downloader.download(song(), {"on_cancel": lambda *_: active_cancel.set()})
         assert entered.wait(2)
-        queued = dict(song(), title="另一首")
+        queued = dict(song(), title="另一首", track_id="other")
         assert downloader.download(queued, {"on_cancel": lambda *_: queued_cancel.set()})
         downloader.close()
         assert queued_cancel.wait(2)

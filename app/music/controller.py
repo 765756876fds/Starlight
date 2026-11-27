@@ -582,6 +582,10 @@ class MusicController:
                 self.online_manager.close()
             except Exception:
                 pass
+        downloader = getattr(self, "downloader", None)
+        wait_downloads = getattr(downloader, "wait_closed", None)
+        if callable(wait_downloads) and wait_downloads(0.75) is False:
+            logger.warning("[Music] 下载工作正在停止，分片保留供恢复")
         with self._mpv_lifecycle_lock:
             self.mpv.stop_process()
         thread = getattr(self, "_idle_thread", None)
@@ -2156,7 +2160,8 @@ class MusicController:
             try:
                 from app.music.downloader import DownloadManager
                 self.downloader = DownloadManager(
-                    manager, self.db, self.download_dir, max_workers=3)
+                    manager, self.db, self.download_dir, max_workers=3,
+                    journal_path=os.path.join(os.path.dirname(self.db_path), "music-download-tasks.sqlite3"))
             except Exception as e:
                 logger.error(f"[Music] 下载器初始化失败: {e}")
 
@@ -2188,9 +2193,10 @@ class MusicController:
             return False, "", "下载服务未就绪"
         try:
             ok, path, err = self.downloader.remove_download(
-                song.get("title", ""), song.get("artist", ""))
-        except Exception as e:
-            return False, "", str(e)
+                song.get("title", ""), song.get("artist", ""), song=song,
+                expected_path=song.get("_download_expected_path"))
+        except Exception:
+            return False, "", "无法移除文件"
         if ok and path:
             try:
                 row = self.db.get_song_by_path(path)

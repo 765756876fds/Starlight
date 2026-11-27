@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from contextlib import ExitStack, asynccontextmanager, suppress
+from dataclasses import dataclass, replace
+from email.utils import format_datetime, parsedate_to_datetime
+from hashlib import sha256
 from io import BytesIO
 import ipaddress
+import os
 import re
 import socket
 import struct
@@ -30,6 +33,10 @@ _UNAVAILABLE = {401, 403, 404, 410, 451}
 _PUBLIC_HEADERS = {"accept", "user-agent"}
 _ORIGIN_HEADERS = _PUBLIC_HEADERS | {"referer", "cookie", "authorization", "origin"}
 _RANGE = re.compile(r"bytes 0-([0-9]{1,16})/([0-9]{1,16}|\*)", re.IGNORECASE)
+_TRANSFER_RANGE = re.compile(r"bytes ([0-9]{1,16})-([0-9]{1,16})/([0-9]{1,16})", re.IGNORECASE)
+_UNSATISFIED_RANGE = re.compile(r"bytes \*/([0-9]{1,16})", re.IGNORECASE)
+_STRONG_ETAG = re.compile(r'"[!#-~]{0,256}"')
+_RESOURCE_KEY = re.compile(r"[0-9a-f]{64}")
 _TRANSITION = tuple(ipaddress.ip_network(network) for network in
                     ("64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16"))
 
@@ -40,6 +47,17 @@ class DownloadTransportError(ValueError):
     def __init__(self, reason, status=None):
         super().__init__(reason)
         self.status = status
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class TransferCheckpoint:
+    """Durable state for an owned part file, without the resource address."""
+    bytes_written: int
+    total_bytes: int | None
+    etag: str | None
+    last_modified: str | None
+    resource_key: str
 
 
 @dataclass
@@ -158,12 +176,21 @@ def _headers(headers, *, prefix=None):
     return safe
 
 
+def _resource_key(url):
+    return sha256(str(url).encode("utf-8")).hexdigest()
+
+
 @asynccontextmanager
-async def _request(session, method, url, headers, evidence=None):
+async def _request(session, method, url, headers, evidence=None, *, resume=None):
     for _ in range(5):
         if evidence is not None:
             evidence.requests += 1
-        async with session.request(method, url, headers=headers, allow_redirects=False) as response:
+        sent = headers
+        if resume is not None and _resource_key(url) == resume.resource_key:
+            sent = headers.copy()
+            sent["Range"] = f"bytes={resume.bytes_written}-"
+            sent["If-Range"] = resume.etag
+        async with session.request(method, url, headers=sent, allow_redirects=False) as response:
             if response.status not in _REDIRECTS:
                 yield response
                 return
@@ -365,39 +392,179 @@ def probe_download(url, headers=None, *, timeout=2.0, max_bytes=8192,
     return evidence
 
 
-async def _stream(url, headers, part, progress, timeout, expected_size):
-    async with _session(timeout, 65536) as session:
-        async with _request(session, "GET", url, _headers(headers)) as response:
-            if response.status != 200 or not _identity_encoding(response) or "Content-Range" in response.headers:
-                raise DownloadTransportError("unexpected_response", response.status)
-            length = _full_length(response)
-            if length is not None and expected_size is not None and length != expected_size:
-                raise DownloadTransportError("size_changed")
-            total = length or expected_size
-            received, last_update = 0, 0.0
-            with open(part, "wb") as dest:
-                async for chunk in response.content.iter_chunked(65536):
-                    received += len(chunk)
-                    if total is not None and received > total:
-                        raise DownloadTransportError("size_changed")
-                    dest.write(chunk)
-                    now = time.monotonic()
-                    if now - last_update >= 0.2:
-                        progress(min(99, int(100 * received / total)) if total else None)
-                        last_update = now
-            if not received or total is not None and received != total:
-                raise DownloadTransportError("empty_or_incomplete")
-            return received
+def _single_header(response, name):
+    values = response.headers.getall(name, [])
+    return values[0] if len(values) == 1 else None
 
 
-def stream_download(url, headers, part, progress, *, timeout=180.0, cancelled=None, expected_size=None):
-    """Write a validated HTTP transfer to a worker-owned temporary file."""
+def _strong_etag(value):
+    return value if isinstance(value, str) and _STRONG_ETAG.fullmatch(value) else None
+
+
+def _last_modified(value):
+    if not value or len(value) > 60:
+        return None
+    try:
+        date = parsedate_to_datetime(value)
+        return format_datetime(date, usegmt=True) if date.tzinfo is not None else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _resume_from_file(resume, dest):
+    if (dest is None or not isinstance(resume, TransferCheckpoint)
+            or type(resume.bytes_written) is not int or not 0 < resume.bytes_written <= _MAX_FILE_BYTES
+            or not _strong_etag(resume.etag) or not isinstance(resume.resource_key, str)
+            or not _RESOURCE_KEY.fullmatch(resume.resource_key)
+            or (resume.total_bytes is not None and (type(resume.total_bytes) is not int
+                or not resume.bytes_written <= resume.total_bytes <= _MAX_FILE_BYTES))):
+        return None
+    return resume if dest.seek(0, os.SEEK_END) == resume.bytes_written else None
+
+
+def _matches_representation(response, resume, etag, last_modified):
+    return (resume is not None and etag == resume.etag
+            and _resource_key(response.url) == resume.resource_key
+            and (not resume.last_modified or not last_modified or last_modified == resume.last_modified))
+
+
+def _total_for_range(response, resume, expected_size):
+    span = _TRANSFER_RANGE.fullmatch(_single_header(response, "Content-Range") or "")
+    if not span:
+        raise DownloadTransportError("invalid_range", 206)
+    start, end, total = map(int, span.groups())
+    length_header = _single_header(response, "Content-Length")
+    if (start != resume.bytes_written or not start <= end < total <= _MAX_FILE_BYTES
+            or end != total - 1 or resume.total_bytes not in (None, total)
+            or expected_size not in (None, total)
+            or ("Content-Length" in response.headers and _positive_length(length_header) != total - start)):
+        raise DownloadTransportError("invalid_range", 206)
+    return total
+
+
+async def _stream(url, headers, part, progress, timeout, expected_size,
+                  resume, checkpoint, open_part, on_bytes):
+    state = durable_state = last_checkpoint = last_sample = None
+
+    def emit_bytes():
+        nonlocal last_sample
+        if on_bytes is not None and state is not None:
+            sample = (state.bytes_written, state.total_bytes)
+            if sample != last_sample:
+                on_bytes(*sample)
+                last_sample = sample
+
+    def flush(dest):
+        nonlocal durable_state
+        if checkpoint is not None and state != durable_state:
+            dest.flush()
+            os.fsync(dest.fileno())
+            durable_state = state
+
+    def persist():
+        nonlocal last_checkpoint
+        if checkpoint is not None and durable_state != last_checkpoint:
+            checkpoint(durable_state)
+            last_checkpoint = durable_state
+
+    try:
+        with ExitStack() as files:
+            dest = files.enter_context(open_part()) if open_part is not None else None
+            pending = _resume_from_file(resume, dest)
+            async with _session(timeout, 65536) as session:
+                # One retry without Range handles unconfirmed representations
+                # and 416. Both requests (including redirects) share one deadline.
+                for _ in range(2):
+                    async with _request(session, "GET", url, _headers(headers), resume=pending) as response:
+                        etag = _strong_etag(_single_header(response, "ETag"))
+                        modified = _last_modified(_single_header(response, "Last-Modified"))
+                        same = _matches_representation(response, pending, etag, modified)
+                        if response.status == 416 and pending is not None:
+                            span = _UNSATISFIED_RANGE.fullmatch(_single_header(response, "Content-Range") or "")
+                            total = _positive_length(span[1]) if span else None
+                            if (same and total == pending.bytes_written and pending.total_bytes in (None, total)
+                                    and expected_size in (None, total)):
+                                state = durable_state = replace(pending, total_bytes=total)
+                                return total
+                            pending = None
+                            continue
+                        if response.status == 206 and pending is not None and not same:
+                            pending = None
+                            continue
+                        if not _identity_encoding(response) or response.status not in (200, 206):
+                            raise DownloadTransportError("unexpected_response", response.status)
+                        if response.content_type in ("text/html", "application/json", "multipart/byteranges"):
+                            raise DownloadTransportError("unexpected_response", response.status)
+                        if response.status == 206:
+                            if not same:
+                                raise DownloadTransportError("invalid_range", 206)
+                            total = _total_for_range(response, pending, expected_size)
+                            received = pending.bytes_written
+                            dest.seek(received)
+                        else:
+                            if "Content-Range" in response.headers:
+                                raise DownloadTransportError("unexpected_response", 200)
+                            length = _full_length(response)
+                            if length is not None and expected_size not in (None, length):
+                                raise DownloadTransportError("size_changed")
+                            total, received = length or expected_size, 0
+                            if dest is None:
+                                dest = files.enter_context(open(part, "wb"))
+                            else:
+                                dest.seek(0)
+                                dest.truncate()
+                        state = TransferCheckpoint(received, total, etag, modified, _resource_key(response.url))
+                        if not received:
+                            flush(dest)
+                            persist()
+                        emit_bytes()
+                        last_progress, last_sync = 0.0, time.monotonic()
+                        try:
+                            async for chunk in response.content.iter_chunked(65536):
+                                if received + len(chunk) > (total or _MAX_FILE_BYTES):
+                                    raise DownloadTransportError("size_changed")
+                                try:
+                                    if dest.write(chunk) != len(chunk):
+                                        raise OSError("short part file write")
+                                except OSError:
+                                    state = None
+                                    raise
+                                received += len(chunk)
+                                state = replace(state, bytes_written=received)
+                                now = time.monotonic()
+                                if now - last_progress >= .2:
+                                    progress(min(99, int(100 * received / total)) if total else None)
+                                    emit_bytes()
+                                    last_progress = now
+                                if now - last_sync >= 1:
+                                    flush(dest)
+                                    persist()
+                                    last_sync = now
+                        finally:
+                            if state is not None:
+                                flush(dest)
+                        if not received or total is not None and received != total:
+                            raise DownloadTransportError("empty_or_incomplete")
+                        return received
+    finally:
+        # Notify the coordinator only after the request and file contexts exit.
+        persist()
+        emit_bytes()
+    raise DownloadTransportError("unexpected_response")
+
+
+def stream_download(url, headers, part, progress, *, timeout=180.0, cancelled=None,
+                    expected_size=None, resume=None, checkpoint=None, open_part=None, on_bytes=None):
+    """Transfer a fresh or conditional resource into a worker-owned part file."""
     if cancelled is not None and cancelled():
         raise InterruptedError("cancelled")
+    if resume is not None and open_part is None:
+        raise ValueError("resume requires an owned file opener")
     target = _target(url)
     try:
-        return asyncio.run(_bounded(_stream(target, headers, part, progress, timeout, expected_size),
-                                    timeout, cancelled))
+        pending = _stream(target, headers, part, progress, timeout, expected_size,
+                          resume, checkpoint, open_part, on_bytes)
+        return asyncio.run(_bounded(pending, timeout, cancelled))
     except TimeoutError:
         raise DownloadTransportError("timeout") from None
     except (aiohttp.ClientError, socket.gaierror):

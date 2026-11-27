@@ -10,9 +10,9 @@ from .online.popular_charts import normalized
 log = logging.getLogger(__name__)
 
 
-def inspect_audio(path, cancelled=None):
+def inspect_audio(path, cancelled=None, *, stream=None):
     from mutagen import File
-    media = File(path)
+    media = File(path) if stream is None else File(fileobj=stream, filename=str(path))
     if media is None or not getattr(media.info, "length", 0) > 0:
         raise ValueError("not playable audio")
     kind = type(media).__name__
@@ -25,7 +25,9 @@ def inspect_audio(path, cancelled=None):
     decoded = kind in ("FLAC", "MP3", "WAVE", "OggVorbis", "OggOpus")
     if decoded:
         import soundfile as sf
-        with sf.SoundFile(path) as decoder:
+        if stream is not None:
+            stream.seek(0)
+        with sf.SoundFile(path if stream is None else stream) as decoder:
             frames = 0
             while True:
                 if cancelled and cancelled():
@@ -102,12 +104,12 @@ def cover_for_track(track, cancelled=None):
     return None
 
 
-def embed_tags(path, track, lyric=None, cover=None):
+def embed_tags(path, track, lyric=None, cover=None, *, stream=None):
     from mutagen import File
     from mutagen.flac import Picture
     from mutagen.id3 import TIT2, TPE1, TALB, USLT, APIC
     from mutagen.mp4 import MP4Cover
-    media = File(path)
+    media = File(path) if stream is None else File(fileobj=stream, filename=str(path))
     if media.tags is None:
         media.add_tags()
     if type(media).__name__ in ("MP3", "WAVE"):
@@ -125,7 +127,13 @@ def embed_tags(path, track, lyric=None, cover=None):
         if lyric: media.tags["lyrics"] = lyric
         if cover and hasattr(media, "add_picture"):
             picture=Picture();picture.type=3;picture.mime=cover[1];picture.data=cover[0];media.add_picture(picture)
-    media.save()
+    if stream is None:
+        media.save()
+    else:
+        stream.seek(0)
+        media.save(fileobj=stream, filename=str(path))
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def save_sidecar(path, content):
