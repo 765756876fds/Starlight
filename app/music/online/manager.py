@@ -39,6 +39,8 @@ class OnlineSourceManager:
         self._paged_executor = ThreadPoolExecutor(max_workers=self.PAGED_WORKERS,
                                                   thread_name_prefix="music-search")
         self._paged_active = {}
+        self._legacy_download_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="legacy-download-url")
+        self._legacy_download_active = {}
         self._paged_peak = 0
         self._closed = False
 
@@ -246,6 +248,74 @@ class OnlineSourceManager:
         except TypeError:
             return src.get_play_url(track)
 
+    def _download_owner(self, track: OnlineTrack):
+        if not track.source_name or not track.track_id:
+            return None
+        with self._life_lock:
+            if self._closed:
+                return None
+            source = self._sources.get(track.source_name)
+            if source is not None:
+                return source
+            candidates = tuple(self._sources.values())
+        # Only a source with an explicit exact-rendition adapter can claim a
+        # nested provider ID. Ambiguous claims are rejected.
+        owners = [item for item in candidates
+                  if callable(getattr(item, "get_download_rendition", None))
+                  and callable(getattr(item, "accepts", None)) and item.accepts(track)]
+        return owners[0] if len(owners) == 1 else None
+
+    def download_tiers(self, track: OnlineTrack) -> tuple:
+        """Canonical quality tiers and the exact keys the same owner accepts."""
+        source = self._download_owner(track)
+        if source is None:
+            return ()
+        adapter = getattr(source, "download_tiers", None)
+        return adapter(track) if callable(adapter) else ((None, None),)
+
+    def _legacy_download_url(self, source, track, timeout):
+        key = track.source_name
+        with self._life_lock:
+            if self._closed or key in self._legacy_download_active or len(self._legacy_download_active) >= 3:
+                return None
+            future = self._legacy_download_executor.submit(source.get_play_url, track)
+            self._legacy_download_active[key] = future
+
+        def released(_):
+            with self._life_lock:
+                if self._legacy_download_active.get(key) is future:
+                    self._legacy_download_active.pop(key)
+
+        future.add_done_callback(released)
+        return future.result(timeout=timeout)
+
+    def get_download_rendition(self, track: OnlineTrack, native_tier, *, timeout=2.0):
+        """Resolve one representation within this resource's owner only."""
+        source = self._download_owner(track)
+        if source is None:
+            return None
+        resolver = getattr(source, "get_download_rendition", None)
+        try:
+            if callable(resolver):
+                result = resolver(track, native_tier, timeout=timeout)
+            elif native_tier is None:
+                result = self._legacy_download_url(source, track, timeout)
+            else:
+                return None
+            result = self._normalize_play_result(result, source)
+            if not result or not isinstance(result.get("url"), str) or not result["url"].strip():
+                return None
+            # Do not surface the address if the resource owner was replaced
+            # or retired during the resolution.
+            if self._download_owner(track) is not source:
+                return None
+            declared = result.get("source_quality")
+            return dict(result, source=track.source_name, requested_quality=native_tier,
+                        source_quality=declared if isinstance(declared, str) else None)
+        except Exception as exc:
+            logger.debug("download address resolution failed type=%s", type(exc).__name__)
+            return None
+
     def get_playback_url(self, track: OnlineTrack, preference: str):
         """Route this recording to its owner. Never pass a foreign service this track ID."""
         source = self._sources.get(track.source_name)
@@ -429,5 +499,6 @@ class OnlineSourceManager:
             except Exception:
                 pass
         self._paged_executor.shutdown(wait=False, cancel_futures=True)
+        self._legacy_download_executor.shutdown(wait=False, cancel_futures=True)
         self._cache.clear()
         self._executor.shutdown(wait=False, cancel_futures=True)

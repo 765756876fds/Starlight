@@ -233,17 +233,23 @@ class JSMusicSource(MusicSource):
                     raise SourceSearchError("unavailable") from exc
                 return None
         if not box["event"].wait(timeout):
-            print(f"[JSBridge] TIMEOUT {method} {params.get('source')} 等了{timeout}s", flush=True)
+            if method == "downloadUrl":
+                print("[JSBridge] TIMEOUT downloadUrl", flush=True)
+            else:
+                print(f"[JSBridge] TIMEOUT {method} {params.get('source')} 等了{timeout}s", flush=True)
             with self._lock:
                 self._pending.pop(rid, None)
-            if method != "searchPage":
+            if method not in ("searchPage", "downloadUrl"):
                 self._note_call_timeout()
             if method in search_methods:
                 raise SourceSearchError("timeout")
             return None
         msg = box["result"]
         if not msg or not msg.get("ok"):
-            print(f"[JSBridge] FAIL {method} {params.get('source')} resp={msg}", flush=True)
+            if method == "downloadUrl":
+                print("[JSBridge] FAIL downloadUrl", flush=True)
+            else:
+                print(f"[JSBridge] FAIL {method} {params.get('source')} resp={msg}", flush=True)
             if method in search_methods:
                 raise SourceSearchError("plugin" if msg else "unknown")
             return None
@@ -626,6 +632,40 @@ class JSMusicSource(MusicSource):
             if not tracks:
                 successful = 0
         return SearchTracks(tracks, errors=errors, successful=successful)
+
+    def download_tiers(self, track):
+        from ...playback_quality import PROTOCOLS
+        plugins = [item for item in self.list_plugins() if item.get("name") == track.source_name
+                   and item.get("status") == "ok"]
+        if len(plugins) != 1:
+            return ()
+        protocol = plugins[0].get("type")
+        canonical = {
+            "flac24bit": "hires", "flac": "lossless", "320k": "high", "128k": "standard",
+        }
+        return tuple((canonical.get(key, key), key) for key in PROTOCOLS.get(protocol, ()))
+
+    def get_download_rendition(self, track, native_tier, *, timeout=2.0):
+        import math
+        if native_tier not in {key for _, key in self.download_tiers(track)}:
+            return None
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+            return None
+        extra = track.extra if isinstance(track.extra, dict) else {}
+        process = self._proc
+        if process is None:
+            return None
+        response = self._call("downloadUrl", {
+            "source": track.source_name,
+            "track_id": track.track_id,
+            "quality": native_tier,
+            "raw_item": extra.get("_raw"),
+            "timeout_ms": max(1, min(6500, int((timeout - .05) * 1000))),
+        }, timeout=timeout, process=process)
+        if (self._proc is not process or not isinstance(response, dict)
+                or not isinstance(response.get("url"), str) or not response["url"].strip()):
+            return None
+        return response
 
     def get_playback_rendition(self, track, preference):
         from ...playback_quality import rendition_order

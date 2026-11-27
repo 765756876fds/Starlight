@@ -3,7 +3,6 @@ import logging
 import os
 import re
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 from .lyrics import parse_lrc
 from .online.popular_charts import normalized
@@ -23,7 +22,8 @@ def inspect_audio(path, cancelled=None):
         raise ValueError("unsupported audio container")
     # Container headers alone can describe a complete song even when the body
     # is truncated. Decode supported formats in bounded blocks, off the UI thread.
-    if kind in ("FLAC", "MP3", "WAVE", "OggVorbis", "OggOpus"):
+    decoded = kind in ("FLAC", "MP3", "WAVE", "OggVorbis", "OggOpus")
+    if decoded:
         import soundfile as sf
         with sf.SoundFile(path) as decoder:
             frames = 0
@@ -46,8 +46,15 @@ def inspect_audio(path, cancelled=None):
     lossless = kind in ("FLAC", "MonkeysAudio") or (kind == "WAVE" and pcm_lossless) or (
         kind == "MP4" and getattr(media.info, "codec", "") == "alac")
     grade = 4 if lossless else 3 if bitrate >= 256000 else 2 if bitrate >= 160000 else 1
+    codec = {"FLAC": "flac", "MP3": "mp3", "WAVE": "pcm" if pcm_lossless else "wav-lossy",
+             "OggVorbis": "vorbis", "OggOpus": "opus", "MonkeysAudio": "ape"}.get(kind)
+    if kind == "MP4":
+        tag = getattr(media.info, "codec", "") or ""
+        codec = "aac" if tag.startswith("mp4a.40.") else tag or None
     return dict(extension=extension, duration=media.info.length, bitrate=bitrate,
-                sample_rate=rate, bits_per_sample=bits,
+                sample_rate=rate, bits_per_sample=bits, codec=codec,
+                channels=getattr(media.info, "channels", None), lossless=lossless,
+                evidence="decoded" if decoded else "metadata_parsed",
                 score=(grade, bits if lossless else bitrate, rate),
                 quality="无损" if lossless else f"{round(bitrate/1000)} kbps" if bitrate else "音质未标注")
 
@@ -76,13 +83,15 @@ def lyric_for_track(manager, track):
     return text
 
 
-def cover_for_track(track):
+def cover_for_track(track, cancelled=None):
+    from .online.download_probe import DownloadTransportError, read_download_attachment
+
     url = getattr(track, "cover_url", None)
-    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+    if not isinstance(url, str):
         return None
-    with urlopen(Request(url, headers={"User-Agent":"Starlight"}), timeout=8) as response:
-        data = response.read(4*1024*1024+1)
-    if len(data) > 4*1024*1024:
+    try:
+        data = read_download_attachment(url, cancelled=cancelled)
+    except DownloadTransportError:
         return None
     if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
         width, height = int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")

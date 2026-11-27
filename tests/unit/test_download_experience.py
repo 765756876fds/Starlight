@@ -27,21 +27,44 @@ def audio(rate=8000):
 
 
 @pytest.fixture
-def server():
+def server(monkeypatch):
+    from app.music.online import download_probe
+    monkeypatch.setattr(download_probe, "_is_allowed_ip", lambda address: str(address) == "127.0.0.1")
     resources = {"/low": audio(), "/high": audio(16000), "/bad": b"<html>not audio</html>"}
     hits = []
 
     class Handler(BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            self._serve(head=True)
+
         def do_GET(self):
-            hits.append(self.path)
+            self._serve()
+
+        def _serve(self, head=False):
             data = resources.get(self.path)
             if data is None:
                 self.send_error(404)
                 return
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(data) + (10 if self.path == "/partial" else 0)))
+            size = len(data) + (10 if self.path == "/partial" else 0)
+            prefix = self.headers.get("Range")
+            self.send_response(206 if prefix else 200)
+            self.send_header("Content-Type", "text/html" if self.path == "/bad" else "application/octet-stream")
+            if prefix:
+                count = min(len(data), int(prefix.removeprefix("bytes=0-")) + 1)
+                data = data[:count]
+                self.send_header("Content-Range", f"bytes 0-{count-1}/{size}")
+                self.send_header("Content-Length", str(count))
+                resources.setdefault("_probe_reads", []).append((self.path, count))
+            else:
+                self.send_header("Content-Length", str(size))
             self.end_headers()
-            self.wfile.write(data)
+            if not head:
+                if not prefix:
+                    hits.append(self.path)
+                try:
+                    self.wfile.write(data)
+                except (ConnectionResetError, BrokenPipeError):
+                    pass
 
         def log_message(self, *args):
             pass
@@ -99,7 +122,7 @@ def test_best_compares_actual_audio_not_quality_labels(downloader, server):
     downloader.online_manager.get_play_url.side_effect = lambda t, **k: {
         "url": base + ("/low" if t.track_id == "chosen" else "/high"), "quality": "super"}
     result = run(downloader)
-    assert hits == ["/low", "/high"]
+    assert hits == ["/high"]  # Header screening avoids transferring the lower rendition.
     assert inspect_audio(result["done"])["sample_rate"] == 16000
     assert result["details"]["quality"] == "无损"
     assert File(result["done"])["TIT2"].text == ["星桥"]
@@ -116,15 +139,16 @@ def test_bad_high_tier_recovers_to_valid_lower_audio(downloader, server, broken)
         "url": base + (broken if quality == "super" else "/low")}
     result = run(downloader)
     assert "done" in result
-    assert hits == [broken, "/low"]
-    assert [c.kwargs["quality"] for c in downloader.online_manager.get_play_url.call_args_list] == ["super", "high"]
+    assert hits == (["/partial", "/low"] if broken == "/partial" else ["/low"])
+    tiers = [c.kwargs["quality"] for c in downloader.online_manager.get_play_url.call_args_list]
+    assert tiers[0] == "super" and "high" in tiers and len(tiers) <= 5
 
 
 def test_repeated_bad_url_is_bounded_and_never_published(downloader, server):
     base, _, hits = server
     downloader.online_manager.get_play_url.return_value = {"url": base + "/bad"}
     result = run(downloader)
-    assert "fail" in result and hits == ["/bad"]
+    assert "fail" in result and hits == []  # HTML is rejected before any full transfer.
     assert downloader.online_manager.get_play_url.call_count == 4
     assert list(Path(downloader.download_dir).iterdir()) == []
     downloader.db.insert_song.assert_not_called()
@@ -195,10 +219,10 @@ def test_no_ambiguous_search_only_download(downloader):
     downloader.online_manager.get_play_url.assert_not_called()
 
 
-def test_cancellation_never_publishes_audio(downloader):
+def test_cancellation_never_publishes_audio(downloader, server):
     entered, release, cancelled = threading.Event(), threading.Event(), threading.Event()
-    downloader.online_manager.get_play_url.return_value = {"url": "http://unused"}
-    def stream(url, headers, part, key, cb):
+    downloader.online_manager.get_play_url.return_value = {"url": server[0] + "/low"}
+    def stream(url, headers, part, key, cb, **kwargs):
         Path(part).write_bytes(audio())
         entered.set()
         assert release.wait(3)
@@ -259,7 +283,8 @@ def test_matching_http_length_cannot_hide_truncated_audio(downloader, server, le
     result = run(downloader)
     assert "done" in result
     assert inspect_audio(result["done"])["duration"] == 1
-    assert [c.kwargs["quality"] for c in downloader.online_manager.get_play_url.call_args_list] == ["super", "high"]
+    tiers = [c.kwargs["quality"] for c in downloader.online_manager.get_play_url.call_args_list]
+    assert tiers[:2] == ["super", "high"] and len(tiers) <= 4
 
 
 def test_real_flac_keeps_format_and_writes_metadata(downloader, server):
@@ -275,17 +300,23 @@ def test_real_flac_keeps_format_and_writes_metadata(downloader, server):
     assert inspect_audio(result["done"])["bits_per_sample"] == 24
     assert File(result["done"])["artist"] == ["纸鸢"]
 
-def test_probe_verifies_real_options_without_publishing_and_pins_format(downloader, server):
-    base, _, hits = server
+def test_probe_reads_bounded_prefix_without_publishing_and_pins_format(downloader, server):
+    base, resources, hits = server
     manager = downloader.online_manager
     manager.get_play_url.side_effect = lambda t, quality: {
         "url": base + ("/bad" if quality == "super" else "/low"), "quality": "super"}
     done = threading.Event()
     found = []
-    assert downloader.probe_options(song(), lambda options: (found.extend(options), done.set()), lambda: False)
+    assert downloader.probe_options(song(_download_alternatives=()),
+                                    lambda options: (found.extend(options), done.set()), lambda: False)
     assert done.wait(5)
-    assert found == [("high", ".wav", "无损")]
-    assert hits == ["/bad", "/low"]
+    assert len(found) == 1
+    option = found[0]
+    assert (option.native, option.extension, option.codec) == ("high", ".wav", "pcm")
+    assert option.size_bytes == len(resources["/low"])
+    assert option.size_evidence == "content_range"
+    assert hits == []
+    assert dict(resources["_probe_reads"]) == {"/bad": len(resources["/bad"]), "/low": 8192}
     assert not Path(downloader.download_dir).exists()
     downloader.db.insert_song.assert_not_called()
     result = run(downloader, song(_download_alternatives=()),

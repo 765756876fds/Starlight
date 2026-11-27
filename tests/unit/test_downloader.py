@@ -1,239 +1,190 @@
-"""下载功能：并发≤3、super→high 降级、入 music 表、已下载判定、失败不卡队列、
-已存在不覆盖、.part 原子改名、无 Content-Length 进度。"""
+"""Download scheduling, progress and publication with a controlled HTTP origin."""
+import os
+from contextlib import suppress
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Event, Thread
+import time
+from unittest.mock import MagicMock
+
 import pytest
+
+from app.music.database import MusicDatabase
+from app.music.downloader import DownloadManager
+from app.music.online import download_probe
+from app.music.online.models import OnlineTrack
 
 pytestmark = pytest.mark.unit
 
 
-import os
-from pathlib import Path
-import time
-from unittest.mock import MagicMock, patch
+@pytest.fixture
+def origin(monkeypatch):
+    monkeypatch.setattr(download_probe, "_is_allowed_ip", lambda ip: ip == "127.0.0.1")
+    policy = dict(chunks=(b"F" * 10,), total=10, delay=0)
+    requests = []
 
-from app.music.database import MusicDatabase
-from app.music.downloader import DownloadManager
-from app.music.online.models import OnlineTrack
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self):
+            requests.append((self.command, self.headers.get("Range")))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            if policy["total"] is not None:
+                self.send_header("Content-Length", str(policy["total"]))
+            self.end_headers()
+            if self.command == "GET":
+                with suppress(ConnectionError):
+                    for chunk in policy["chunks"]:
+                        time.sleep(policy["delay"])
+                        self.wfile.write(chunk)
+
+        do_HEAD = reply
+        do_GET = reply
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": .02})
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/fixture", policy, requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(2)
 
 
-_owned = []
+def _mk_track(title="夜曲", artist="周杰伦"):
+    return OnlineTrack("酷我音乐", "t1", title, artist, duration_seconds=200)
 
 
-@pytest.fixture(autouse=True)
-def close_downloaders():
-    yield
-    while _owned:
-        dl, db = _owned.pop()
+@pytest.fixture
+def harness(tmp_path):
+    db = MusicDatabase(str(tmp_path / "t.db"))
+    dl = DownloadManager(MagicMock(), db, str(tmp_path / "dl"), max_workers=3)
+    # Only media inspection is simulated in these scheduling tests. The rest of
+    # the suite exercises complete media inspection using generated recordings.
+    dl._inspect_audio = lambda path: dict(extension=".m4a" if Path(path).read_bytes().startswith(b"MP4") else ".flac",
+        duration=200, quality="fixture", score=(1, 128000, 44100))
+    try:
+        yield dl, db
+    finally:
         dl.close()
         dl._pool.shutdown(wait=True)
         db.close()
 
 
-def _mk_track(title="夜曲", artist="周杰伦", src="酷我音乐", tid="t1"):
-    return OnlineTrack(source_name=src, track_id=tid, title=title, artist=artist,
-                       album="", duration_seconds=200)
+def _download(dl, title="夜曲", artist="周杰伦", progress=None):
+    event = Event()
+    results = {}
+
+    def complete(kind, value):
+        results.update(kind=kind, value=value)
+        event.set()
+
+    dl.download({"title": title, "artist": artist}, {
+        "on_done": lambda _, path: complete("done", path),
+        "on_fail": lambda _, reason: complete("fail", reason),
+        "on_exists": lambda k: complete("exists", k),
+        "on_progress": lambda _, percent: progress.append(percent) if progress is not None else None,
+    })
+    return event, results
 
 
-def _make_dl(tmp_path, max_workers=3):
-    db = MusicDatabase(str(tmp_path / "t.db"))
-    dl = DownloadManager(MagicMock(), db, str(tmp_path / "dl"), max_workers=max_workers)
-    dl.online_manager = MagicMock()
-    # These tests exercise scheduling/transport with synthetic bytes. Actual media
-    # validation and tagging are covered separately by test_download_experience.
-    dl._inspect_audio = lambda path: dict(extension=".m4a" if Path(path).read_bytes().startswith(b"MP4") else ".flac",
-        duration=200, quality="fixture", score=(1, 128000, 44100))
-    _owned.append((dl, db))
-    return dl, db
+def _bind_single(dl, url):
+    dl.online_manager.search_all.return_value = {"fixture": [_mk_track()]}
+    dl.online_manager.get_play_url.return_value = {"url": url}
 
 
-class _FakeResp:
-    def __init__(self, chunks, total=None):
-        self.headers = {"Content-Length": str(total)} if total is not None else {}
-        self._chunks = list(chunks)
-        self._i = 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def read(self, n):
-        if self._i >= len(self._chunks):
-            return b""
-        c = self._chunks[self._i]
-        self._i += 1
-        return c
+def test_concurrent_workers_limited_to_3(harness, origin):
+    dl, _ = harness
+    url, policy, _ = origin
+    policy.update(chunks=(b"F" * 1000,) * 3, total=3000, delay=.12)
+    dl.online_manager.search_all.side_effect = lambda query, **kw: {"fixture": [_mk_track(query.rsplit(" ", 1)[0], "A")]}
+    dl.online_manager.get_play_url.return_value = {"url": url}
+    tasks = [_download(dl, f"歌{i}", "A") for i in range(5)]
+    peak = 0
+    t0 = time.monotonic()
+    while not all(event.is_set() for event, _ in tasks) and time.monotonic() - t0 < 6:
+        peak = max(peak, dl.active_count())
+        time.sleep(.015)
+    assert peak == 3
+    assert [state["kind"] for _, state in tasks] == ["done"] * 5
 
 
-class _SlowResp:
-    def __init__(self, delay, total, chunk):
-        self.headers = {"Content-Length": str(total)}
-        self._delay = delay
-        self._total = total
-        self._chunk = chunk
-        self._left = total
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def read(self, n):
-        time.sleep(self._delay)
-        if self._left <= 0:
-            return b""
-        c = self._chunk[:min(n, self._left)]
-        self._left -= len(c)
-        return c
+def test_quality_fallback_super_then_high(harness, origin):
+    dl, _ = harness
+    url, _, requests = origin
+    _bind_single(dl, url)
+    dl.online_manager.get_play_url.side_effect = lambda track, quality: {"url": url} if quality == "high" else None
+    event, state = _download(dl)
+    assert event.wait(3)
+    tiers = [call.kwargs["quality"] for call in dl.online_manager.get_play_url.call_args_list]
+    assert tiers[:2] == ["super", "high"] and len(tiers) <= 4
+    assert state["kind"] == "done" and state["value"].endswith(".flac")
+    assert requests.count(("GET", None)) == 1
 
 
-def _url_result(url="http://x/song.flac"):
-    return {"url": url, "headers": None}
-
-
-def test_concurrent_workers_limited_to_3(tmp_path):
-    """并发 ≤3：5 个慢下载同时活动数不超过 max_workers。"""
-    dl, _db = _make_dl(tmp_path)
-    dl.online_manager.search_all.side_effect = lambda query, **kw: {"酷我音乐": [_mk_track(query.rsplit(" ", 1)[0], "A")]}
-    dl.online_manager.get_play_url.return_value = _url_result("http://x/f.flac")
-    with patch("app.music.downloader.urlopen", side_effect=lambda *a, **k: _SlowResp(0.15, 3000, b"x" * 1000)):
-        events = {}
-        for i in range(5):
-            s = {"title": f"歌{i}", "artist": "A"}
-            dl.download(s, {"on_progress": lambda k, p: None,
-                            "on_done": lambda k, p: events.setdefault(k, "done"),
-                            "on_fail": lambda k, r: events.setdefault(k, "fail")})
-        peak = 0
-        t0 = time.time()
-        while time.time() - t0 < 4.0:
-            peak = max(peak, dl.active_count())
-            if len(events) >= 5:
-                break
-            time.sleep(0.03)
-        assert peak <= 3, f"并发超限: peak={peak}"
-        assert set(events.values()) == {"done"}
-        assert len(events) == 5, f"完成数不足: {len(events)}"
-
-
-def test_quality_fallback_super_then_high(tmp_path):
-    """super 失败 → 降 high 取 URL。"""
-    dl, _db = _make_dl(tmp_path)
-    dl.online_manager.search_all.return_value = {"酷我音乐": [_mk_track()]}
-    dl.online_manager.get_play_url.side_effect = [None, _url_result("http://x/h.flac")]
-    done = {}
-    with patch("app.music.downloader.urlopen",
-               return_value=_FakeResp([b"F" * 10], total=10)):
-        dl.download({"title": "夜曲", "artist": "周杰伦"}, {
-            "on_done": lambda k, p: done.setdefault(k, p),
-            "on_fail": lambda k, r: done.setdefault(k, r),
-        })
-        time.sleep(0.5)
-    qs = [c.args[1] if len(c.args) > 1 else c.kwargs.get("quality")
-          for c in dl.online_manager.get_play_url.call_args_list]
-    assert qs == ["super", "high"], f"降级顺序错误: {qs}"
-    assert "夜曲|周杰伦" in done
-    assert done["夜曲|周杰伦"].endswith(".flac")
-
-
-def test_download_inserts_into_music_table(tmp_path):
-    """下载完成 → 入 music 表 + 文件存在 + .part 无残留。"""
-    dl, db = _make_dl(tmp_path)
-    dl.online_manager.search_all.return_value = {"酷我音乐": [_mk_track()]}
-    dl.online_manager.get_play_url.return_value = _url_result("http://x/song.flac")
-    with patch("app.music.downloader.urlopen",
-               return_value=_FakeResp([b"FLAC" * 20], total=80)):
-        done = {}
-        dl.download({"title": "夜曲", "artist": "周杰伦"},
-                    {"on_done": lambda k, p: done.setdefault(k, p),
-                     "on_fail": lambda k, r: done.setdefault(k, r)})
-        time.sleep(0.5)
-    assert "夜曲|周杰伦" in done
-    final = done["夜曲|周杰伦"]
-    assert os.path.exists(final)
-    assert not final.endswith(".part")
-    assert not os.path.exists(final + ".part")
+def test_download_inserts_into_music_table(harness, origin):
+    dl, db = harness
+    _bind_single(dl, origin[0])
+    event, state = _download(dl)
+    assert event.wait(3) and state["kind"] == "done"
+    final = state["value"]
+    assert os.path.isfile(final) and not list(Path(dl.download_dir).glob("*.part"))
     row = db.get_song_by_path(final)
-    assert row is not None
-    assert row["title"] == "夜曲" and row["artist"] == "周杰伦"
+    assert row is not None and row["title"] == "夜曲" and row["artist"] == "周杰伦"
 
 
-def test_downloaded_judgement(tmp_path):
-    """已下载判定：下载目录有同名文件 → True；无 → False。"""
-    dl, _db = _make_dl(tmp_path)
+def test_downloaded_judgement(harness):
+    dl, _ = harness
     assert dl.is_downloaded("夜曲", "周杰伦") is False
     os.makedirs(dl.download_dir, exist_ok=True)
-    open(os.path.join(dl.download_dir, "夜曲 - 周杰伦.mp3"), "w").close()
+    Path(dl.download_dir, "夜曲 - 周杰伦.mp3").touch()
     assert dl.is_downloaded("夜曲", "周杰伦") is True
     assert dl.is_downloaded("晴天", "周杰伦") is False
 
 
-def test_failure_does_not_block_queue(tmp_path):
-    """一个下载失败 → 其他任务继续完成（不卡队列）。"""
-    dl, _db = _make_dl(tmp_path)
-    dl.online_manager.search_all.side_effect = lambda query, **kw: {"酷我音乐": [_mk_track(query.rsplit(" ", 1)[0], "A")]}
-    dl.online_manager.get_play_url.side_effect = lambda track, **kw: None if track.title == "坏歌" else _url_result("http://x/ok.flac")
-    with patch("app.music.downloader.urlopen",
-               return_value=_FakeResp([b"x" * 10], total=10)):
-        done = {}
-        dl.download({"title": "坏歌", "artist": "A"},
-                    {"on_done": lambda k, p: done.setdefault(k, "ok"),
-                     "on_fail": lambda k, r: done.setdefault(k, "fail")})
-        dl.download({"title": "好歌", "artist": "A"},
-                    {"on_done": lambda k, p: done.setdefault(k, "ok"),
-                     "on_fail": lambda k, r: done.setdefault(k, "fail")})
-        time.sleep(0.8)
-    assert done.get("坏歌|A") == "fail"
-    assert done.get("好歌|A") == "ok"
+def test_failure_does_not_block_queue(harness, origin):
+    dl, _ = harness
+    dl.online_manager.search_all.side_effect = lambda query, **kw: {"fixture": [_mk_track(query.rsplit(" ", 1)[0], "A")]}
+    dl.online_manager.get_play_url.side_effect = lambda track, **kw: None if track.title == "坏歌" else {"url": origin[0]}
+    bad, bad_state = _download(dl, "坏歌", "A")
+    good, good_state = _download(dl, "好歌", "A")
+    assert bad.wait(3) and good.wait(3)
+    assert bad_state["kind"] == "fail" and good_state["kind"] == "done"
 
 
-def test_exists_skips_no_overwrite(tmp_path):
-    """目标已存在 → on_exists 跳过，绝不覆盖。"""
-    dl, _db = _make_dl(tmp_path)
+def test_exists_skips_no_overwrite(harness, origin):
+    dl, _ = harness
     os.makedirs(dl.download_dir, exist_ok=True)
-    target = os.path.join(dl.download_dir, "夜曲 - 周杰伦.flac")
-    with open(target, "w", encoding="utf-8") as f:
-        f.write("原始内容")
-    dl.online_manager.search_all.return_value = {"酷我音乐": [_mk_track()]}
-    dl.online_manager.get_play_url.return_value = _url_result("http://x/s.flac")
-    with patch("app.music.downloader.urlopen",
-               return_value=_FakeResp([b"NEWDATA" * 10], total=80)):
-        evt = {}
-        dl.download({"title": "夜曲", "artist": "周杰伦"},
-                    {"on_exists": lambda k: evt.setdefault(k, "exists"),
-                     "on_done": lambda k, p: evt.setdefault(k, "done")})
-        time.sleep(0.5)
-    assert "夜曲|周杰伦" in evt and evt["夜曲|周杰伦"] == "exists"
-    with open(target, "r", encoding="utf-8") as f:
-        assert f.read() == "原始内容"
+    target = Path(dl.download_dir, "夜曲 - 周杰伦.flac")
+    target.write_text("原始内容", encoding="utf8")
+    _bind_single(dl, origin[0])
+    event, state = _download(dl)
+    assert event.is_set() and state["kind"] == "exists"
+    assert target.read_text(encoding="utf8") == "原始内容"
+    assert origin[2] == []
+    dl.online_manager.get_play_url.assert_not_called()
 
 
-def test_no_content_length_progress_none(tmp_path):
-    """无 Content-Length → on_progress(key, None)，不卡不崩。"""
-    dl, _db = _make_dl(tmp_path)
-    dl.online_manager.search_all.return_value = {"酷我音乐": [_mk_track()]}
-    dl.online_manager.get_play_url.return_value = _url_result("http://x/stream.m4a")
-    with patch("app.music.downloader.urlopen",
-               return_value=_FakeResp([b"MP4" * 30])):   # 无 Content-Length
-        progress = []
-        done = {}
-        dl.download({"title": "夜曲", "artist": "周杰伦"},
-                    {"on_progress": lambda k, p: progress.append(p),
-                     "on_done": lambda k, p: done.setdefault(k, p),
-                     "on_fail": lambda k, r: done.setdefault(k, r)})
-        time.sleep(0.5)
-    assert None in progress, "应回调 None 进度"
-    assert "夜曲|周杰伦" in done
-    assert done["夜曲|周杰伦"].endswith(".m4a")
+def test_no_content_length_progress_none(harness, origin):
+    dl, _ = harness
+    url, policy, _ = origin
+    policy.update(chunks=(b"MP4" * 30,), total=None)
+    _bind_single(dl, url)
+    progress = []
+    event, state = _download(dl, progress=progress)
+    assert event.wait(3)
+    assert None in progress
+    assert state["kind"] == "done" and state["value"].endswith(".m4a")
 
 
-def test_remove_download_deletes_file(tmp_path):
-    """删除下载：删文件。"""
-    dl, _db = _make_dl(tmp_path)
+def test_remove_download_deletes_file(harness):
+    dl, _ = harness
     os.makedirs(dl.download_dir, exist_ok=True)
-    target = os.path.join(dl.download_dir, "夜曲 - 周杰伦.flac")
-    with open(target, "w") as f:
-        f.write("x")
+    target = Path(dl.download_dir, "夜曲 - 周杰伦.flac")
+    target.write_bytes(b"x")
     ok, path, err = dl.remove_download("夜曲", "周杰伦")
-    assert ok and path == target
-    assert not os.path.exists(target)
+    assert ok and Path(path) == target
+    assert not target.exists()

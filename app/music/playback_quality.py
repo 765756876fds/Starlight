@@ -135,8 +135,8 @@ class PlaybackQuality:
         best = None
         start = time.monotonic()
         candidates = [self.track, *self.alternatives]
-        for candidate in candidates[:3]:
-            if best and time.monotonic() - start > 2:
+        for index, candidate in enumerate(candidates):
+            if index and time.monotonic() - start > 2:
                 break
             if not current():
                 return ""
@@ -189,7 +189,7 @@ class PlaybackQuality:
                         previous = self.track
                         self.track = candidate
                         self.alternatives = tuple(t for t in (previous, *self.alternatives)
-                                                  if t is not candidate)[:2]
+                                                  if t is not candidate)
                     self.result = dict(replacement)
                     self.revision += 1
                 return "已切换到可用音质" if current() else ""

@@ -2545,11 +2545,10 @@ class MusicController:
             logger.error("[Music] initial address resolution failed", exc_info=True)
             result = None
         if not result or not result.get("url") or result.get("downgraded"):
-            from itertools import islice
             from .online.content_choices import equivalent_versions
             # Only address resolution can fall back. Never repeat an unknown load.
-            for candidate in islice(equivalent_versions(track, _alternatives), 2):
-                if result and result.get("url") and time.monotonic() - resolve_start > 2:
+            for attempt, candidate in enumerate(equivalent_versions(track, _alternatives)):
+                if attempt and time.monotonic() - resolve_start > 2:
                     break
                 with self._lock:
                     current = req_id == self._play_request_id
@@ -2600,9 +2599,9 @@ class MusicController:
                         self._is_switching_track = False
                     return False
                 if hasattr(self, "playback_quality") and _alternatives:
-                    from itertools import islice
                     from .online.content_choices import equivalent_versions
-                    self.playback_quality.alternatives = tuple(islice(equivalent_versions(track, (requested_track, *_alternatives)), 2))
+                    self.playback_quality.alternatives = tuple(equivalent_versions(
+                        track, (requested_track, *_alternatives)))
                 if _recommendation:
                     online_song["extra"] = dict(online_song.get("extra") or {}, _starlight_recommended=True)
                 if selected is not None:

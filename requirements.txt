@@ -1,5 +1,6 @@
 # ===== 核心依赖 =====
 requests>=2.31.0
+aiohttp>=3.12,<4
 websocket-client>=1.6.0
 pydantic>=2.5.0
 PyYAML>=6.0

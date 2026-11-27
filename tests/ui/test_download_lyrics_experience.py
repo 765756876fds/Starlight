@@ -57,12 +57,13 @@ def test_finish_from_worker_reports_audio_and_missing_attachment_separately(pane
     p._on_download_song(dict(title="星桥", artist="纸鸢", source_type="online"))
     assert "完成" not in p.lbl_status.text()
     worker = threading.Thread(target=lambda: (
-        holder["on_details"]("星桥|纸鸢", dict(quality="无损", lyrics="unavailable", indexed=True)),
+        holder["on_details"]("星桥|纸鸢", dict(quality="无损", lyrics="unavailable", indexed=True, fallback=True)),
         holder["on_done"]("星桥|纸鸢", "synthetic.wav")))
     worker.start()
     worker.join(2)
     wait_until(lambda: "下载完成" in p.lbl_status.text())
     assert "无损" in p.lbl_status.text() and "歌词暂缺" in p.lbl_status.text()
+    assert "较低的可用品质" in p.lbl_status.text()
     assert errors == []
 
 
@@ -258,3 +259,153 @@ def test_custom_check_updates_only_open_dialog(qapp, prefs):
     assert cancelled()
     ready([("super", ".flac", "无损")])
     assert dialog.format.findData(".flac") == -1
+
+
+def _rendition(owner="later", track_id="shared"):
+    from app.music.download_selection import DownloadOption
+    return DownloadOption(owner=owner, track_id=track_id, tier="hires", native="flac24bit",
+                          extension=".flac", codec="flac", size_bytes=8 * 1024 * 1024,
+                          bitrate=None, sample_rate=96000, bit_depth=24, channels=2,
+                          size_evidence="content_range", declared_quality="flac24bit")
+
+
+def test_download_dialog_autochecks_shows_separate_evidence_and_saves_safe_preferences(qapp, prefs):
+    from dataclasses import replace
+    from app.ui.dialogs.download_options_dialog import DownloadOptionsDialog
+
+    calls = []
+    dialog = DownloadOptionsDialog(probe=lambda ready, cancelled: calls.append((ready, cancelled)) or True)
+    dialog.show()
+    wait_until(lambda: len(calls) == 1)
+    ready, _ = calls[0]
+    unknown_extent = replace(_rendition("unknown"), extension=None)
+    worker = threading.Thread(target=ready, args=([unknown_extent, _rendition()],))
+    worker.start()
+    worker.join(2)
+    wait_until(lambda: dialog.quality.count() == 2)
+    assert dialog.format.count() == 2 and dialog.format.findData(".flac") > 0
+    dialog.quality.setCurrentIndex(1)
+    assert "24 bit 无损" in dialog.quality.currentText()
+    assert all(field in dialog.details.text() for field in
+               ("8.0 MiB", "资源返回的完整大小", "FLAC", "96 kHz", "24 bit", "2 声道", "下载后校验"))
+    dialog.choices["allow_fallback"].setChecked(False)
+    import os
+    if os.getenv("STARLIGHT_BATCH19_DOWNLOAD_SCREEN"):
+        assert dialog.grab().save(os.environ["STARLIGHT_BATCH19_DOWNLOAD_SCREEN"])
+    options = dialog.options()
+    assert options["representation"] == _rendition()
+    assert options["quality"] == "hires" and options["format"] == ".flac"
+    assert "verified_quality" not in options
+    dialog.download.click()
+    saved = settings_store.load_download_prefs()
+    assert saved["allow_fallback"] is False
+    assert saved["quality"] == "hires" and saved["format"] == ".flac"
+    assert "representation" not in saved
+    assert _rendition().track_id not in (prefs / "prefs.json").read_text(encoding="utf8")
+
+
+def test_download_dialog_cancelled_reads_cannot_retarget_next_song_20_rounds(qapp, prefs):
+    from app.ui.dialogs.download_options_dialog import DownloadOptionsDialog
+
+    for i in range(20):
+        callbacks = []
+
+        def probe(ready, cancelled):
+            callbacks.append((ready, cancelled))
+            return True
+
+        old = DownloadOptionsDialog(song={"title": f"旧曲{i}"}, probe=probe)
+        old.show()
+        wait_until(lambda: len(callbacks) == 1)
+        old.reject()
+        ready_old, cancelled_old = callbacks[0]
+        assert cancelled_old()
+        new = DownloadOptionsDialog(song={"title": f"新曲{i}"}, probe=probe)
+        new.show()
+        try:
+            wait_until(lambda: len(callbacks) == 2)
+            ready_new, _ = callbacks[1]
+            worker = threading.Thread(target=lambda: (
+                ready_new([("high", ".mp3", "320 kbps")]), ready_old([_rendition()])))
+            worker.start()
+            worker.join(2)
+            wait_until(lambda: new.format.findData(".mp3") > 0)
+            assert new.format.findData(".flac") == -1
+            assert old.format.findData(".flac") == -1
+        finally:
+            new.reject()
+            new.deleteLater()
+            old.deleteLater()
+
+
+def test_custom_download_freezes_alternatives_before_late_result_selection(panel, prefs):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    p, music, errors = panel
+    alt = OnlineTrack("later", "shared", "星桥", "纸鸢", "夜航", 180,
+                      extra={"_raw": {"id": "shared", "version": "studio"}})
+    song = p._online_song_row(
+        OnlineTrack("owner", "shared", "星桥", "纸鸢", "夜航", 180, extra={"_raw": {"id": "shared"}}),
+        [alt],
+    )
+    submitted = []
+    music.download_song = lambda song, callbacks, **kwargs: submitted.append((song, kwargs)) or True
+    option = _rendition()
+
+    def select():
+        dialog = QApplication.activeModalWidget()
+        dialog.quality.setCurrentIndex(1)
+        dialog.download.click()
+
+    def probe(frozen, ready, cancelled):
+        assert frozen["_download_alternatives"][0] == alt
+        alt.extra["_raw"]["version"] = "late"
+        song["title"] = "另一首"
+        ready((option,))
+        QTimer.singleShot(0, select)
+        return not cancelled()
+
+    music.downloader = SimpleNamespace(verified_options=lambda _: (), probe_options=probe)
+    p._custom_download(song)
+    assert len(submitted) == 1
+    requested, kwargs = submitted[0]
+    assert requested["title"] == "星桥" and requested["source_name"] == "owner"
+    assert requested["_download_alternatives"][0].source_name == "later"
+    assert requested["_download_alternatives"][0].extra["_raw"]["version"] == "studio"
+    assert kwargs["options"]["representation"] == option
+    assert errors == []
+
+
+def test_one_click_remembers_only_the_downgrade_policy(panel, prefs):
+    p, music, errors = panel
+    calls = []
+    music.download_song = lambda *args, **kwargs: calls.append(kwargs) or True
+    settings_store.save_download_prefs({"format": ".mp3", "quality": "low", "allow_fallback": False})
+    p._on_download_song(dict(title="星桥", artist="纸鸢", source_name="owner", track_id="shared"))
+    assert calls == [{"options": {"allow_fallback": False}}]
+    assert errors == []
+
+
+def test_recheck_invalidates_explicit_quality_until_user_reselects(qapp, prefs):
+    from dataclasses import replace
+    from app.ui.dialogs.download_options_dialog import DownloadOptionsDialog
+
+    options = []
+    choice = _rendition("provider", "same")
+    dialog = DownloadOptionsDialog(verified=(choice,),
+                                   probe=lambda ready, cancelled: options.append(ready) or True)
+    try:
+        dialog.quality.setCurrentIndex(1)
+        assert dialog.options()["representation"] == choice
+        dialog._check_options()
+        options[0]((replace(choice, bit_depth=16, sample_rate=44100),))
+        qapp.processEvents()
+        assert not dialog.download.isEnabled()
+        assert "重新选择" in dialog.status.text()
+        dialog.quality.setCurrentIndex(0)
+        dialog.quality.activated.emit(0)
+        assert dialog.download.isEnabled()
+        assert dialog.options()["quality"] == "best"
+    finally:
+        dialog.close()

@@ -9,32 +9,51 @@ import os
 import logging
 import tempfile
 import threading
+from copy import deepcopy
+from dataclasses import replace
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.request import Request, urlopen
+from .download_selection import CONTAINERS, LOSSLESS_CODECS, TIER_ORDER, DownloadOffer, DownloadOption, codec_family
 
 _EXT_HINTS = (".flac", ".mp3", ".m4a", ".ogg", ".wav", ".ape")
 log = logging.getLogger(__name__)
-DEFAULT_DOWNLOAD_OPTIONS = dict(quality="best", lyrics=True, cover=True, metadata=True)
+DEFAULT_DOWNLOAD_OPTIONS = dict(quality="best", lyrics=True, cover=True, metadata=True, allow_fallback=True)
+PROBE_SECONDS = 8.0
+PROBE_BYTES = 64 * 1024
+MAX_RESOLUTIONS = 36
+MAX_PROBES = 12
+MAX_TRANSFERS = 6
+_REFRESH_HTTP = {401, 403, 404, 410}
 QUALITY_ORDER = ("super", "high", "standard", "low")
 
 
 def normalize_options(options=None):
     result = dict(DEFAULT_DOWNLOAD_OPTIONS)
     if isinstance(options, dict):
-        if options.get("quality") in ("best", *QUALITY_ORDER):
+        if options.get("quality") in ("best", *TIER_ORDER):
             result["quality"] = options["quality"]
         if options.get("format") in _EXT_HINTS:
             result["format"] = options["format"]
         if isinstance(options.get("verified_quality"), str) and options["verified_quality"]:
             result["verified_quality"] = options["verified_quality"]
-        for key in ("lyrics", "cover", "metadata"):
+        for key in ("lyrics", "cover", "metadata", "allow_fallback"):
             if type(options.get(key)) is bool:
                 result[key] = options[key]
     return result
 
 
 _ILLEGAL = '\\/:*?"<>|'
+
+
+def freeze_download_song(song):
+    from .online.models import OnlineTrack
+
+    frozen = dict(song, extra=deepcopy(song.get("extra") or {}))
+    if "_download_alternatives" in song:
+        frozen["_download_alternatives"] = tuple(
+            replace(track, extra=deepcopy(track.extra))
+            for track in song["_download_alternatives"] if isinstance(track, OnlineTrack))
+    return frozen
 
 
 class DownloadManager:
@@ -45,6 +64,8 @@ class DownloadManager:
         self.db = db
         self.download_dir = download_dir
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="music-dl")
+        self._probe_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="music-dl-probe")
+        self._probe_slots = threading.BoundedSemaphore(2)
         self._lock = threading.Lock()
         self._closed = threading.Event()
         self._active = 0
@@ -110,7 +131,10 @@ class DownloadManager:
     def download(self, song, callbacks=None, *, options=None) -> bool:
         title, artist = song.get("title", ""), song.get("artist", "")
         key, cb = self._key(title, artist), callbacks or {}
+        choice = options.get("representation") if isinstance(options, dict) else None
+        choice = choice if isinstance(choice, DownloadOption) else None
         options = normalize_options(options)
+        request = dict(freeze_download_song(song), _download_options=options, _download_choice=choice)
         with self._lock:
             closed = self._closed.is_set()
             cur = self._tasks.get(key)
@@ -125,7 +149,6 @@ class DownloadManager:
         if exists:
             cb.get("on_exists", lambda k: None)(key)
             return False
-        request = dict(song, _download_options=options)
         try:
             future = self._pool.submit(self._run, request, key, cb)
             future.add_done_callback(lambda completed: self._cancel_queued(completed, key, cb))
@@ -183,60 +206,93 @@ class DownloadManager:
             self._fail(key, cb, "下载已取消")
             return
         os.makedirs(self.download_dir, exist_ok=True)
-        candidates = self._resolve_candidates(song)
+        from .online.download_probe import DownloadTransportError
+
+        cb.get("on_stage", lambda k, stage: None)(key, "正在检查可用音频")
+        offers, expected_priority = self._discover_offers(
+            song, self._closed.is_set, options=options, choice=song.get("_download_choice"))
         best = None
         rejected_format = False
-        seen_urls = set()
-        strict_choice = options.get("verified_quality") or options.get("format")
+        choice = song.get("_download_choice")
+        strict_choice = choice or options.get("verified_quality") or options.get("format")
         try:
-            for track, result in candidates:
-                while result and not self._closed.is_set():
-                    if result["url"] in seen_urls:
-                        result = self._next_quality(track, result)
+            transfers = 0
+            for offer in offers:
+                if self._closed.is_set():
+                    break
+                track, result, option = offer.track, offer.result, offer.option
+                if best and not strict_choice and best[2].get("lossless") and option.codec:
+                    if codec_family(option.codec) not in LOSSLESS_CODECS or (
+                        option.bit_depth and option.sample_rate and option.score <= tuple(best[2]["score"])
+                    ):
                         continue
-                    seen_urls.add(result["url"])
-                    valid = False
-                    part = None
+                if options.get("format") and option.extension and options["format"] != option.extension:
+                    rejected_format = True
+                    continue
+                if transfers >= MAX_TRANSFERS:
+                    break
+                transfers += 1
+                part = None
+                try:
+                    with self._lock:
+                        self._tasks[key]["status"] = "downloading"
                     try:
-                        with self._lock:
-                            self._tasks[key]["status"] = "downloading"
                         part, info = self._fetch_audio(track, result, key, cb, self.download_dir)
-                        self._remember_verified(track, result["_requested_quality"], info)
-                        valid = (
-                            options.get("format", info["extension"]) == info["extension"]
-                            and options.get("verified_quality", info["quality"]) == info["quality"]
-                        )
-                        if not valid:
-                            rejected_format = True
-                        if valid and (best is None or tuple(info["score"]) > tuple(best[2]["score"])):
-                            if best: self._cleanup(best[0])
-                            best = (part, track, info)
-                            part = None
-                    except Exception as exc:
-                        log.warning("download candidate rejected type=%s", type(exc).__name__)
-                    finally:
-                        if part: self._cleanup(part)
-                    if valid or options.get("verified_quality"):
+                    except DownloadTransportError as exc:
+                        if exc.status not in _REFRESH_HTTP or self._closed.is_set():
+                            raise
+                        result = self._resolve_rendition(track, option.native, 1.2)
+                        if not result:
+                            raise
+                        part, info = self._fetch_audio(track, result, key, cb, self.download_dir)
+                    self._remember_verified(track, option.tier or "best", info)
+                    if (options.get("format", info["extension"]) != info["extension"]
+                            or options.get("verified_quality", info["quality"]) != info["quality"]
+                            or (choice and not choice.matches(info))
+                            or (not choice and options["quality"] != "best"
+                                and not self._meets_explicit_tier(options["quality"], info))
+                            or (not options["allow_fallback"] and not choice
+                                and not self._meets_declared_floor(offer.priority, info))):
+                        rejected_format = True
+                        continue
+                    if best is None or tuple(info["score"]) > tuple(best[2]["score"]):
+                        if best:
+                            self._cleanup(best[0])
+                        best = part, track, info, offer
+                        part = None
+                    if choice or options.get("verified_quality"):
                         break
-                    result = self._next_quality(track, result)
-                    while result and result["url"] in seen_urls:
-                        result = self._next_quality(track, result)
+                except Exception as exc:
+                    log.warning("download candidate rejected type=%s", type(exc).__name__)
+                finally:
+                    if part:
+                        self._cleanup(part)
             if self._closed.is_set():
                 self._fail(key, cb, "下载已取消")
                 return
             if best is None:
                 reason = "所选音质或格式暂不可用" if rejected_format or strict_choice else (
-                    "来源暂未提供可下载音频" if not candidates else "音频未能完整下载")
+                    "来源暂未提供可下载音频" if not offers else "音频未能完整下载")
                 self._fail(key, cb, reason)
                 return
-            part, track, info = best
-            base = self._filename_base(track.title, track.artist)
+            part, track, info, selected = best
+            base = self._filename_base(song.get("title"), song.get("artist"))
             final = os.path.join(self.download_dir, base + info["extension"])
-            details = dict(quality=info["quality"], lyrics="not_requested", cover="not_requested", metadata="not_requested")
+            lowered = (not choice and options["quality"] == "best" and
+                       (selected.priority < expected_priority or
+                        not self._meets_declared_floor(expected_priority, info)))
+            details = dict(quality=info["quality"], lyrics="not_requested", cover="not_requested",
+                           metadata="not_requested", fallback=lowered,
+                           requested_quality=options["quality"], provider_tier=selected.option.native,
+                           declared_quality=selected.option.declared_quality,
+                           availability_evidence=selected.evidence,
+                           media_evidence=info.get("evidence"), codec=info.get("codec"),
+                           bitrate=info.get("bitrate"), sample_rate=info.get("sample_rate"),
+                           bit_depth=info.get("bits_per_sample"), channels=info.get("channels"))
             cb.get("on_stage", lambda k, stage: None)(key, "正在保存")
             lyric = cover = None
             for name, reader in (("lyrics", lambda: assets.lyric_for_track(self.online_manager, track)),
-                                 ("cover", lambda: assets.cover_for_track(track))):
+                                 ("cover", lambda: assets.cover_for_track(track, cancelled=self._closed.is_set))):
                 if options[name]:
                     try: value = reader()
                     except Exception as exc:
@@ -285,7 +341,8 @@ class DownloadManager:
         os.close(fd)
         try:
             if self._stream(result["url"], result.get("headers") or {}, part, key, callbacks,
-                            **({"cancelled": cancelled} if cancelled is not None else {})) <= 0:
+                            **({"cancelled": cancelled} if cancelled is not None else {}),
+                            **({"expected_size": result["_expected_size"]} if result.get("_expected_size") else {})) <= 0:
                 raise ValueError("empty audio")
             callbacks.get("on_stage", lambda k, stage: None)(key, "正在校验音频")
             info = self._inspect_audio(part)
@@ -299,35 +356,29 @@ class DownloadManager:
             raise
 
     def probe_options(self, song, callback, cancelled):
-        """Verify on demand using the same transfer and media validation as a download."""
-        track = self._preferred_track(song)
-        if track is None or self._closed.is_set():
+        """Report bounded current observations without creating a download file."""
+        if self._closed.is_set() or not self._probe_slots.acquire(blocking=False):
             return False
 
-        def probe():
-            seen = set()
-            for requested in QUALITY_ORDER:
-                if cancelled() or self._closed.is_set():
-                    return
-                result = self._get_url_with_fallback(track, requested, exact=True)
-                if not result or result["url"] in seen:
-                    continue
-                seen.add(result["url"])
-                try:
-                    part, info = self._fetch_audio(track, result, "", {}, cancelled=cancelled)
-                except Exception as exc:
-                    log.info("download option rejected type=%s", type(exc).__name__)
-                else:
-                    self._cleanup(part)
-                    if not cancelled() and not self._closed.is_set():
-                        self._remember_verified(track, requested, info)
-            if not cancelled():
-                callback(self.verified_options(song))
+        def cancelled_or_closed():
+            return cancelled() or self._closed.is_set()
+
+        def probe(frozen):
+            try:
+                found, _ = self._discover_offers(frozen, cancelled_or_closed, menu=True)
+            except Exception as exc:
+                log.info("download option check failed type=%s", type(exc).__name__)
+                found = []
+            if not cancelled_or_closed():
+                callback(tuple(offer.option for offer in found
+                               if offer.evidence == "reachable" and offer.option.extension))
 
         try:
-            self._pool.submit(probe)
-        except RuntimeError:
+            future = self._probe_pool.submit(probe, freeze_download_song(song))
+        except (RuntimeError, TypeError, ValueError):
+            self._probe_slots.release()
             return False
+        future.add_done_callback(lambda _: self._probe_slots.release())
         return True
 
     @staticmethod
@@ -340,14 +391,7 @@ class DownloadManager:
                                song.get("cover_url"), dict(song.get("extra") or {}))
         return None
 
-    def _resolve_track(self, song):
-        candidates = self._resolve_candidates(song)
-        if candidates:
-            track, result = candidates[0]
-            return track, result["url"], result.get("headers") or {}
-        return None
-
-    def _resolve_candidates(self, song):
+    def _recording_candidates(self, song):
         from .online.models import OnlineTrack
         from .online.content_choices import equivalent_versions, same_recording
         from .online.popular_charts import normalized
@@ -372,73 +416,138 @@ class DownloadManager:
             same_recording(left, right) for index, left in enumerate(matched) for right in matched[index + 1:]
         ):
             return []  # Ambiguous versions require the user to choose an actual result.
-        seen, candidates = set(), []
-        options = song.get("_download_options", DEFAULT_DOWNLOAD_OPTIONS)
-        quality = options["quality"]
-        for track in matched:
-            if self._closed.is_set(): break
-            identity = track.source_name, track.track_id
-            if identity in seen: continue
-            seen.add(identity)
-            if len(seen) > 3:
+        return matched
+
+    def _resolve_rendition(self, track, native, timeout):
+        manager = self.online_manager
+        method = getattr(type(manager), "get_download_rendition", None)
+        try:
+            if method is not None:
+                return method(manager, track, native, timeout=timeout)
+            # Compatibility for third-party manager implementations with a
+            # single adapter. The formal manager always uses owner-only routing.
+            result = manager.get_play_url(track, quality=native)
+            return dict(result, requested_quality=native) if isinstance(result, dict) else None
+        except Exception as exc:
+            log.info("download address unavailable type=%s", type(exc).__name__)
+            return None
+
+    def _request_plan(self, tracks, options, choice):
+        from .online.search_resources import search_resources
+
+        manager = self.online_manager
+        tiers = getattr(type(manager), "download_tiers", None)
+        requested = options["quality"]
+        planned = []
+        for track in tracks:
+            available = tiers(manager, track) if tiers else [(tier, tier) for tier in QUALITY_ORDER]
+            hints = {item.declared_quality: item for item in search_resources(track)}
+            for tier, native in available:
+                if requested != "best" and not choice and tier != requested:
+                    continue
+                hint = hints.get(native) if native else hints.get(None)
+                preference = TIER_ORDER.get(tier, 0)
+                if hint and hint.format in ("FLAC", "ALAC", "APE"):
+                    preference = max(preference, TIER_ORDER["lossless"])
+                    if (hint.bit_depth or 0) >= 24 and (hint.sample_rate_hz or 0) > 48_000:
+                        preference = TIER_ORDER["hires"]
+                pinned = bool(choice and (track.source_name, str(track.track_id), native) == choice.resource)
+                planned.append((pinned, preference, hint, track, tier, native))
+        planned.sort(key=lambda item: (item[0], item[1], item[2] is not None), reverse=True)
+        if requested == "best" and not options["allow_fallback"] and planned and not choice:
+            highest_declared = max((item[1] for item in planned if item[2]), default=planned[0][1])
+            planned = [item for item in planned if item[1] >= highest_declared]
+        return planned
+
+    def _discover_offers(self, song, cancelled, *, menu=False, options=None, choice=None):
+        from .online.download_probe import probe_download
+
+        deadline = time.monotonic() + PROBE_SECONDS
+        remaining_bytes = PROBE_BYTES
+        tracks = self._recording_candidates(song)
+        plans = self._request_plan(tracks, options or DEFAULT_DOWNLOAD_OPTIONS, choice)
+        seen, offers = set(), []
+        expected_priority = max((item[1] for item in plans if item[2]), default=0)
+        probing = 0
+        for _, priority, hint, track, tier, native in plans[:MAX_RESOLUTIONS]:
+            remaining = deadline - time.monotonic()
+            if cancelled() or remaining <= .05 or probing >= MAX_PROBES:
                 break
-            result = self._get_url_with_fallback(track, quality, exact=bool(options.get("verified_quality")))
-            if result and result.get("url"):
-                candidates.append((track,result))
-        return candidates
+            result = self._resolve_rendition(track, native, min(1.2, remaining))
+            if not result or not isinstance(result.get("url"), str) or not result["url"]:
+                continue
+            headers = result.get("headers") or {}
+            dedup = result["url"], tuple(sorted((str(k), str(v)) for k, v in headers.items()))
+            if dedup in seen:
+                continue
+            seen.add(dedup)
+            remaining = deadline - time.monotonic()
+            if remaining <= .05 or cancelled():
+                break
+            probing += 1
+            proof = probe_download(result["url"], headers, timeout=min(1.4, remaining),
+                                   max_bytes=min(8192, remaining_bytes), cancelled=cancelled)
+            remaining_bytes -= proof.bytes_read
+            if (proof.available is False and proof.http_status in _REFRESH_HTTP
+                    and probing < MAX_PROBES and deadline - time.monotonic() > .25):
+                refreshed = self._resolve_rendition(track, native, min(.8, deadline - time.monotonic()))
+                if refreshed and refreshed.get("url") and (refreshed.get("url"), refreshed.get("headers")) != (
+                    result["url"], result.get("headers")
+                ):
+                    result = refreshed
+                    remaining = deadline - time.monotonic()
+                    if remaining <= .05 or cancelled():
+                        break
+                    probing += 1
+                    proof = probe_download(result["url"], result.get("headers"), timeout=min(1.3, remaining),
+                                           max_bytes=min(8192, remaining_bytes), cancelled=cancelled)
+                    remaining_bytes -= proof.bytes_read
+            if (proof.available is False or proof.reason in {
+                    "invalid_url", "blocked_target", "blocked_redirect", "invalid_redirect", "redirect_limit"
+                } or (menu and proof.available is not True)):
+                continue
+            if proof.size_bytes and hint and hint.size_bytes and proof.size_bytes != hint.size_bytes:
+                log.info("download resource size differs from source declaration")
+            option = DownloadOption(
+                track.source_name, str(track.track_id), tier, native,
+                CONTAINERS.get(proof.container), proof.codec, proof.size_bytes or (hint.size_bytes if hint else None),
+                proof.bitrate, proof.sample_rate, proof.bit_depth, proof.channels,
+                proof.size_evidence if proof.size_bytes else "source_declared" if hint and hint.size_bytes else None,
+                result.get("source_quality") or (hint.declared_quality if hint else None),
+            )
+            if proof.size_bytes:
+                result = dict(result, _expected_size=proof.size_bytes)
+            offers.append(DownloadOffer(track, result, option, priority,
+                                        "reachable" if proof.available else "unknown"))
+        offers.sort(key=lambda item: (bool(choice and item.option.resource == choice.resource),
+                                      item.option.score, item.priority), reverse=True)
+        return offers, expected_priority or max((item[1] for item in plans), default=0)
+
+    @classmethod
+    def _meets_explicit_tier(cls, tier, info):
+        if tier in ("standard", "high"):
+            return info["score"][0] >= (3 if tier == "high" else 2)
+        return cls._meets_declared_floor(TIER_ORDER[tier], info)
+
+    @staticmethod
+    def _meets_declared_floor(priority, info):
+        if priority >= TIER_ORDER["hires"]:
+            return (bool(info.get("lossless")) and info["bits_per_sample"] >= 24
+                    and info["sample_rate"] > 48_000)
+        if priority >= TIER_ORDER["lossless"]:
+            return bool(info.get("lossless"))
+        return True
 
     def _inspect_audio(self, path):
         from .download_assets import inspect_audio
         return inspect_audio(path, cancelled=self._closed.is_set)
 
-    def _get_url_with_fallback(self, track, quality="best", *, exact=False):
-        qualities = QUALITY_ORDER if quality == "best" else QUALITY_ORDER[QUALITY_ORDER.index(quality):]
-        for requested in qualities[:1] if exact else qualities:
-            if self._closed.is_set(): return None
-            try:
-                result = self.online_manager.get_play_url(track, quality=requested)
-                if result and result.get("url"):
-                    return dict(result, _requested_quality=requested)
-            except Exception:
-                continue
-        return None
-
-    def _next_quality(self, track, result):
-        current = result.get("_requested_quality", "low")
-        index = QUALITY_ORDER.index(current)
-        if self._closed.is_set() or index + 1 >= len(QUALITY_ORDER):
-            return None
-        return self._get_url_with_fallback(track, QUALITY_ORDER[index + 1])
-
-    def _stream(self, url, headers, part, key, cb, *, cancelled=None):
-        """流式下载到 .part；有 Content-Length → 百分比进度，无 → on_progress(key, None)。"""
-        h = {"User-Agent": "Mozilla/5.0"}
-        for k in ("Referer", "Cookie", "Authorization"):
-            if headers and headers.get(k):
-                h[k] = headers[k]
-        req = Request(url, headers=h)
-        last_progress_at = 0.0
-        with urlopen(req, timeout=30) as resp:
-            total_s = resp.headers.get("Content-Length")
-            total = int(total_s) if total_s and total_s.isdigit() else None
-            got = 0
-            with open(part, "wb") as f:
-                while True:
-                    if self._closed.is_set() or (cancelled and cancelled()):
-                        raise InterruptedError("download cancelled")
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    got += len(chunk)
-                    now = time.monotonic()
-                    if now - last_progress_at >= 0.2:
-                        pct = min(99, int(got * 100 / total)) if total else None
-                        cb.get("on_progress", lambda k, p: None)(key, pct)
-                        last_progress_at = now
-        if total is not None and got != total:
-            raise ValueError("incomplete audio response")
-        return got
+    def _stream(self, url, headers, part, key, cb, *, cancelled=None, expected_size=None):
+        from .online.download_probe import stream_download
+        return stream_download(url, headers, part,
+                               lambda progress: cb.get("on_progress", lambda k, p: None)(key, progress),
+                               cancelled=lambda: self._closed.is_set() or (cancelled and cancelled()),
+                               expected_size=expected_size)
 
     def _fail(self, key, cb, reason):
         with self._lock:
@@ -456,4 +565,5 @@ class DownloadManager:
 
     def close(self):
         self._closed.set()
+        self._probe_pool.shutdown(wait=False, cancel_futures=True)
         self._pool.shutdown(wait=False, cancel_futures=True)

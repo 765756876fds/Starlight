@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 
-GROUPS = ("harness", "theme", "notifications", "movie-cards", "movie-startup", "queue", "music-search",
+GROUPS = ("harness", "theme", "notifications", "movie-cards", "movie-startup", "queue", "music-search", "music-download",
           "movie-search-coverage", "movie-poster-backlog")
 
 

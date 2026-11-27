@@ -62,10 +62,11 @@ class SearchResource:
 
 
 def _resource(track, fields, quality=None):
-    raw_format = fields.get("format") or fields.get("ext") or fields.get("container")
+    raw_format = fields.get("format") or fields.get("ext") or fields.get("container") or fields.get("extension")
     fmt = raw_format.strip().lower().removeprefix(".") if isinstance(raw_format, str) else ""
     fmt = fmt.upper() if fmt in _FORMATS else None
-    size = _size(fields.get("sizeBytes", fields.get("size_bytes", fields.get("size"))))
+    size = next((size for key in ("sizeBytes", "size_bytes", "size")
+                 if (size := _size(fields.get(key))) is not None), None)
     bitrate = _integer(fields.get("bitrate_bps"), 8000, 100_000_000)
     if bitrate is None:
         kbps = _integer(fields.get("bitrate_kbps"), 8, 100_000)
@@ -79,7 +80,8 @@ def _resource(track, fields, quality=None):
                 bitrate = _integer(bitrate, 8000, 100_000_000)
     rate = _integer(fields.get("sampleRate", fields.get("sample_rate_hz", fields.get("sampleRateHz"))),
                     8000, 1_536_000)
-    depth = _integer(fields.get("bitDepth", fields.get("bit_depth", fields.get("bits_per_sample"))), 8, 64)
+    depth = _integer(fields.get("bitDepth", fields.get("bit_depth",
+                      fields.get("bits_per_sample", fields.get("bitsPerSample")))), 8, 64)
     return SearchResource(track.source_name, size, quality, fmt, bitrate, rate, depth)
 
 

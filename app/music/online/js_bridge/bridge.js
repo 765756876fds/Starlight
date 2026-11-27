@@ -17,6 +17,9 @@ process.on('uncaughtException', (e) => {
 // Keep plugin console output off the NDJSON protocol stream.
 console.log = console.info = console.debug = console.error.bind(console);
 const sources = new Map(); // name -> plugin object
+const downloadOwners = new Map(); // canonical names only; duplicate owners are rejected
+const activeDownloads = new Set();
+const maxActiveDownloads = 4;
 
 // Bound discovery reads independently. This cannot cancel plugin HTTP requests;
 // it only prevents one stalled plugin from hiding other completed catalogues.
@@ -94,6 +97,7 @@ async function loadAll() {
       const p = j.isLx ? await lxLoader.load(j.fp) : mfLoader.load(j.fp);
       p.filePath = j.fp;   // 记录本地路径（插件更新/替换用）
       sources.set(p.name, p);
+      downloadOwners.set(p.name, downloadOwners.has(p.name) ? null : p);
       // aliases: basename (without .js) and lowercase
       const base = path.basename(j.fp, '.js');
       sources.set(base, p);
@@ -142,6 +146,38 @@ async function dispatch(method, params) {
       return searchPage(sources.get(params.source), params.keyword, params.page);
     case 'searchStats':
       return { active: activeSearches.size, peak: peakSearches, limit: maxActiveSearches };
+    case 'downloadUrl': {
+      const { source, quality, track_id, raw_item, timeout_ms } = params;
+      const p = downloadOwners.get(source);
+      if (!p || p !== sources.get(source) || typeof track_id !== 'string' || !track_id) return null;
+      const tiers = p.type === 'musicfree' ? ['super', 'high', 'standard', 'low'] :
+        ['flac24bit', 'flac', '320k', '128k'];
+      if (!tiers.includes(quality) || activeDownloads.has(p)
+          || activeDownloads.size >= maxActiveDownloads) return null;
+      const raw = raw_item && typeof raw_item === 'object' && !Array.isArray(raw_item) ? raw_item : null;
+      const item = raw?.musicInfo || raw;
+      const nativeId = item && String(item.id || item.songmid || item.hash || item.rid || '');
+      if (nativeId && nativeId !== track_id) return null;
+      // LX requires an owned provider and the original musicInfo payload.
+      if (p.type !== 'musicfree' && (!nativeId || !(item?.source || raw?.source))) return null;
+      const deadline = Number.isSafeInteger(timeout_ms) ? Math.max(1, Math.min(6500, timeout_ms)) : 2000;
+      const pending = Promise.resolve().then(() => p.type === 'musicfree'
+        ? mfLoader.callGetUrl(p, raw || { id: track_id }, quality, true)
+        : p.getUrl(source, raw, quality, true));
+      activeDownloads.add(p);
+      const release = () => activeDownloads.delete(p);
+      pending.then(release, release);
+      try {
+        const result = await readCatalogue(() => pending, deadline);
+        if (typeof result?.url !== 'string' || !result.url.trim()) return null;
+        return {
+          url: result.url, headers: result.headers || null, requested_quality: quality,
+          source_quality: typeof result.source_quality === 'string' ? result.source_quality : null,
+        };
+      } catch {
+        return null;
+      }
+    }
     case 'getUrl': {
       const { source, quality, raw_item } = params;
       const p = sources.get(source);

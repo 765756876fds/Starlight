@@ -3368,18 +3368,18 @@ class MusicPanel(QWidget):
             self._on_download_song(self._download_result_song(row))
 
     def _custom_download(self, song):
+        from ...music.downloader import freeze_download_song
         from ..dialogs.download_options_dialog import DownloadOptionsDialog
+
+        song = freeze_download_song(song)
         downloader = getattr(self._music, "downloader", None)
         verified = downloader.verified_options(song) if downloader is not None else ()
         probe = None
         if downloader is not None and song.get("source_name") and song.get("track_id"):
             probe = lambda ready, cancelled: downloader.probe_options(song, ready, cancelled)
         dialog = DownloadOptionsDialog(self, song=song, verified=verified, probe=probe)
-        if dialog.exec() == dialog.Accepted:
-            selected = dict(song)
-            if song.get("source_name") and song.get("track_id"):
-                selected["_download_alternatives"] = ()
-            self._on_download_song(selected, options=dialog.options())
+        if dialog.exec() == DownloadOptionsDialog.DialogCode.Accepted:
+            self._on_download_song(song, options=dialog.options())
         dialog.deleteLater()
 
     @staticmethod
@@ -3407,10 +3407,14 @@ class MusicPanel(QWidget):
             self._on_download_song(task["song"], options=task["options"])
 
     def _on_download_song(self, song, *, options=None):
-        from ...music.downloader import DownloadManager
+        from ...music.downloader import DownloadManager, freeze_download_song
+        from ..settings_store import load_download_prefs
 
         if self._music is None:
             return
+        song = freeze_download_song(song)
+        if options is None and not load_download_prefs()["allow_fallback"]:
+            options = {"allow_fallback": False}
         key = self._download_task_key(song)
         name = song.get("title") or "歌曲"
         filename_key = DownloadManager._key(song.get("title"), song.get("artist"))
@@ -3462,7 +3466,7 @@ class MusicPanel(QWidget):
         if not task or task["serial"] != serial or task["state"] != "active":
             return
         if event == "details":
-            for field in ("format", "quality", "size_bytes", "lyrics", "cover", "metadata", "indexed"):
+            for field in ("format", "quality", "size_bytes", "lyrics", "cover", "metadata", "indexed", "fallback"):
                 if field in value:
                     task[field] = value[field]
             return
@@ -3478,6 +3482,8 @@ class MusicPanel(QWidget):
             status = "success"
             task["path"] = value
             message = "下载完成"
+            if task.get("fallback") is True:
+                message += "，已使用较低的可用品质"
             missing = [name for field, name in (("lyrics", "歌词"), ("cover", "封面"), ("metadata", "歌曲信息"))
                        if task.get(field) == "unavailable"]
             if missing:
