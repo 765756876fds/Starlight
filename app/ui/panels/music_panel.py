@@ -9,6 +9,8 @@ import zlib
 from PySide6.QtCore import QEvent, QObject, QPoint, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QActionGroup, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
+    QAbstractItemView,
     QAbstractScrollArea,
     QComboBox,
     QFrame,
@@ -50,6 +52,9 @@ from ..widgets.music_card_delegate import MusicCardDelegate, MusicCardRoles
 from ..widgets.music_queue_dialog import MusicQueueDialog
 from ..widgets.music_wheel import MusicWheelScroll
 from .music_search_order import rank_manual_search
+from .music_search_rows import resource_note, search_rows
+from ...music.online.content_choices import group_tracks, resource_identity
+from ...music.online.search_resources import search_resources
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +197,27 @@ class _TrackTitle(QLabel):
         self._elide_title()
 
 
+class _SearchPointerGuard(QObject):
+    """Defer result reordering while the user can still act on an existing row."""
+
+    def __init__(self, viewport):
+        super().__init__(viewport)
+        self.until = 0.0
+        viewport.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick):
+            self.until = time.monotonic() + QApplication.instance().doubleClickInterval() / 1000
+        elif kind == QEvent.Wheel:
+            self.until = time.monotonic() + .12
+        return False
+
+    def blocks_update(self):
+        return (time.monotonic() < self.until or bool(
+            self.until and QApplication.mouseButtons() & (Qt.LeftButton | Qt.RightButton)))
+
+
 class MusicPanel(QWidget):
     # P1 候选旁路：后台线程 publish → 此 Signal 桥到主线程渲染
     _search_event = Signal(dict)
@@ -240,6 +266,9 @@ class MusicPanel(QWidget):
         self._search_pages = None
         self._search_visible_limit = 30
         self._search_has_buffer = False
+        self._search_mode = "relevance"
+        self._search_heat_available = False
+        self._search_pending_render = False
         self._active_search = None
         self._pending_search = None
         self._pending_identify_close = None
@@ -596,6 +625,7 @@ class MusicPanel(QWidget):
         self.list_results = QListWidget()
         from ..widgets.music_card_delegate import DownloadCardDelegate
         self._dl_results = self._setup_card_view(self.list_results, DownloadCardDelegate)
+        self._search_pointer = _SearchPointerGuard(self.list_results.viewport())
         self._dl_results.download_requested.connect(self._download_result)
         download_shortcut = QShortcut(QKeySequence("Ctrl+D"), self.list_results)
         download_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
@@ -1098,10 +1128,16 @@ class MusicPanel(QWidget):
         if song.get("online"):
             tid = song.get("track_id") or ""
             if tid:
-                return f"net:{tid}"
+                source = song.get("source_name")
+                return ("online", source, str(tid)) if source else f"net:{tid}"
             return f"net:{song.get('title')}|{song.get('artist')}"
         sid = song.get("id")
         return f"local:{sid}" if sid else None
+
+    @staticmethod
+    def _online_play_key(track):
+        key = resource_identity(track)
+        return ("online", key[0], str(key[1])) if key else None
 
     def _track_header(self, layout, listing, *, download=False):
         from ..widgets.music_chrome import TrackColumns
@@ -1118,8 +1154,17 @@ class MusicPanel(QWidget):
         self.header_layout.addWidget(self.btn_search)
         self.sort_button = QPushButton("排序")
         self.sort_menu = QMenu(self.sort_button)
-        for field, label in (("title","歌曲名称"),("artist","歌手"),("album","专辑"),("duration","时长")):
+        self._search_sort_actions = {}
+        for mode, label in (("relevance", "相关性"), ("size", "文件大小（已知最大资源）"),
+                            ("heat", "热度（来源内）")):
+            action = self.sort_menu.addAction(label, lambda checked=False, key=mode: self._set_search_mode(key))
+            action.setCheckable(True)
+            self._search_sort_actions[mode] = action
+        self._table_sort_actions = [
             self.sort_menu.addAction(label, lambda checked=False, key=field: self._sort_tracks(key))
+            for field, label in (("title","歌曲名称"),("artist","歌手"),("album","专辑"),("duration","时长"))
+        ]
+        self.sort_menu.aboutToShow.connect(self._prepare_sort_menu)
         self.sort_button.setMenu(self.sort_menu)
         self.browse_button = QPushButton("浏览")
         browse_menu = QMenu(self.browse_button)
@@ -1177,6 +1222,24 @@ class MusicPanel(QWidget):
         if item is not None:
             track = self._rank_tracks[listing.row(item)]
             self._build_song_menu(self._online_song_row(track, ())).exec(listing.viewport().mapToGlobal(pos))
+
+    def _prepare_sort_menu(self):
+        searching = (self._search_pages is not None and self.tabs.currentIndex() == 1
+                     and self.online_stack.currentWidget() is self.results_page)
+        for mode, action in self._search_sort_actions.items():
+            action.setVisible(searching)
+            action.setChecked(mode == self._search_mode)
+            if mode == "heat":
+                action.setEnabled(self._search_heat_available)
+                action.setText("热度（来源内）" if self._search_heat_available else "热度（暂无数据）")
+        for action in self._table_sort_actions:
+            action.setVisible(not searching)
+
+    def _set_search_mode(self, mode):
+        if self._search_pages is None or (mode == "heat" and not self._search_heat_available):
+            return
+        self._search_mode = mode
+        self._render_search_pages()
 
     def _sort_tracks(self, key):
         listing = (self.list_local, self.list_results, self.list_history,
@@ -1779,6 +1842,7 @@ class MusicPanel(QWidget):
         if self._search_pages is None:
             return
         self._search_pages = None
+        self._search_pending_render = False
         self._search_page_timer.stop()
         self.btn_search_more.hide()
         self.btn_search_retry.hide()
@@ -1797,13 +1861,18 @@ class MusicPanel(QWidget):
 
     def _poll_search_pages(self):
         session = self._search_pages
-        if session is not None and session.poll():
-            self._render_search_pages()
-        if session is None or not session.loading():
+        if session is not None:
+            self._search_pending_render |= session.poll()
+            if self._search_pending_render and not self._search_pointer.blocks_update():
+                self._render_search_pages()
+        if session is None or (not session.loading() and not self._search_pending_render):
             self._search_page_timer.stop()
+        elif not self._search_page_timer.isActive():
+            self._search_page_timer.start()
 
     def _render_search_pages(self):
         session = self._search_pages
+        self._search_pending_render = False
         results = session.results()
         self._on_search_done(results, display_query=session.keyword, paged=True)
         owner = self.cb_source.currentData()
@@ -1901,6 +1970,8 @@ class MusicPanel(QWidget):
                 self._pending_search = None
                 self._search_pages = session
                 self._search_visible_limit = 30
+                self._search_mode = "relevance"
+                self._search_pointer.until = 0.0
                 self.refresh_online_sources(include_discovery=False)
                 session.request()
                 self._poll_search_pages()
@@ -1983,11 +2054,21 @@ class MusicPanel(QWidget):
         if getattr(self, "_results_requested", False):
             self.online_stack.setCurrentWidget(self.results_page)
         self._voice_generation = None   # 手动搜索 → 重置语音候选代际
-        selected = self.list_results.currentRow()
-        previous = self._tracks_by_row[selected] if paged and 0 <= selected < len(self._tracks_by_row) else None
-        scroll = self.list_results.verticalScrollBar()
+        listing = self.list_results
+        old_rows = self._tracks_by_row
+        selected = listing.currentRow()
+        previous = old_rows[selected] if paged and 0 <= selected < len(old_rows) else None
+        scroll = listing.verticalScrollBar()
         offset = scroll.value()
-        self.list_results.clear()
+        anchor, anchor_y = None, 0
+        blocker = QSignalBlocker(listing) if paged else None
+        if paged and offset:
+            for index, track in enumerate(old_rows):
+                rect = listing.visualItemRect(listing.item(index))
+                if rect.intersects(listing.viewport().rect()):
+                    anchor, anchor_y = track, rect.top()
+                    break
+        listing.clear()
         source_filter = self.cb_source.currentData()
         version_filter = self.cb_search_filter.currentIndex() if hasattr(self, "cb_search_filter") else 0
         markers = ("现场", "live") if version_filter == 1 else ("翻唱", "cover")
@@ -2003,15 +2084,29 @@ class MusicPanel(QWidget):
         ]
         if display_query:
             tracks_for_search = rank_manual_search(tracks_for_search, display_query)
-        from ...music.online.content_choices import group_tracks
-        self._track_versions = (group_tracks(tracks_for_search) if on_done is None and collection is None
-                                else [[track] for track in tracks_for_search])
+        groups = (group_tracks(tracks_for_search) if on_done is None and collection is None
+                  else [[track] for track in tracks_for_search])
+        notes = []
         if paged:
-            self._search_has_buffer = len(self._track_versions) > self._search_visible_limit
-            self._track_versions = self._track_versions[:self._search_visible_limit]
-        tracks_for_search = [group[0] for group in self._track_versions]
+            prior = {resource_identity(track) or id(track) for track in old_rows}
+            for group in groups:
+                preferred = next((i for i, track in enumerate(group)
+                                  if (resource_identity(track) or id(track)) in prior), 0)
+                if preferred:
+                    group.insert(0, group.pop(preferred))
+            ranked = search_rows(groups, self._search_mode)
+            self._search_heat_available = any(row.play_count is not None for row in ranked)
+            if self._search_mode == "heat" and not self._search_heat_available:
+                self._search_mode = "relevance"
+            self._search_has_buffer = len(ranked) > self._search_visible_limit
+            ranked = ranked[:self._search_visible_limit]
+            groups = [row.tracks for row in ranked]
+            notes = [resource_note(row, self._search_mode) for row in ranked]
+        self._track_versions = groups
+        tracks_for_search = [group[0] for group in groups]
         n = len(tracks_for_search)
-        for t in tracks_for_search:
+        for i, t in enumerate(tracks_for_search):
+            note = notes[i] if notes else ""
             # 显示具体插件源名（t.source_name = 插件 platform，如"酷我音乐"），
             # 而不是 dict key "js_bridge"（7 个 JS 插件合并注册成一个源）
             item = QListWidgetItem(f"{t.title} — {t.artist}")
@@ -2034,19 +2129,45 @@ class MusicPanel(QWidget):
                 "source_name": t.source_name,
                 "track_id": t.track_id,
                 "cover_url": getattr(t, "cover_url", None) or None,
-            }, sub, f"net:{t.track_id}" if t.track_id else None))
-            item.setToolTip(" · ".join(filter(None, (t.title, t.artist, t.album, "来源：" + t.source_name))))
+                "_resource_note": note,
+            }, " · ".join(filter(None, (sub, note))), self._online_play_key(t)))
+            tooltip = " · ".join(filter(None, (t.title, t.artist, t.album, "来源：" + t.source_name)))
+            if paged:
+                shown = ranked[i]
+                resource = shown.size_resource if self._search_mode == "size" else shown.preferred_resource
+                if note:
+                    tooltip += "\n" + note
+                if resource:
+                    tooltip += "\n来源标注 · " + resource.source
+                    if resource.parameters():
+                        tooltip += " · " + resource.parameters()
+            item.setToolTip(tooltip)
             item.setData(MusicCardRoles.DownloadRole, True)
             self.list_results.addItem(item)
         self._tracks_by_row = tracks_for_search
         self._fit_sparse_results()
         for key, task in self._download_tasks.items():
             self._update_download_card(key, task)
-        row = next((i for i, group in enumerate(self._track_versions) if previous is not None
-                    and any(previous is track for track in group)), 0 if tracks_for_search else -1)
-        self.list_results.setCurrentRow(row)
+        def row_of(track, fallback=-1):
+            if track is None:
+                return fallback
+            identity = resource_identity(track)
+            return next((i for i, group in enumerate(groups)
+                         if any(item is track or (identity and resource_identity(item) == identity)
+                                for item in group)), fallback)
+
+        row = row_of(previous, 0 if previous is None and tracks_for_search else -1)
+        listing.setCurrentRow(row)
         if paged:
-            scroll.setValue(offset)
+            del blocker
+            anchor_row = row_of(anchor)
+            if anchor_row >= 0:
+                listing.doItemsLayout()
+                listing.scrollToItem(listing.item(anchor_row), QAbstractItemView.PositionAtTop)
+                if listing.verticalScrollMode() == QAbstractItemView.ScrollPerPixel:
+                    scroll.setValue(scroll.value() - anchor_y)
+            else:
+                scroll.setValue(offset)
             self._online_selection_changed(row)
             return
         errors = {src: error for src, error in getattr(result, "errors", {}).items()
@@ -2918,7 +3039,7 @@ class MusicPanel(QWidget):
                 "extra": t.extra,
                 "duration_seconds": t.duration_seconds,
                 "album": t.album,
-            }, " · ".join(v for v in (t.artist, t.album, t.source_name) if v), f"net:{t.track_id}" if t.track_id else None))
+            }, " · ".join(v for v in (t.artist, t.album, t.source_name) if v), self._online_play_key(t)))
             self.list_rank_songs.addItem(item)
         n = len(tracks)
         self.lbl_rank_status.setText(f"共 {n} 首，双击播放" if n else "榜单无歌曲")
@@ -3501,7 +3622,10 @@ class MusicPanel(QWidget):
             return
         menu = QMenu(self)
         for track in self._track_versions[row]:
-            text = " · ".join(filter(None, (track.artist, track.album, track.source_name)))
+            details = " / ".join(filter(None, (
+                resource.brief() or resource.parameters() for resource in search_resources(track))))
+            text = " · ".join(filter(None, (track.artist, track.album, track.source_name,
+                                            "标注 " + details if details else "")))
             menu.addAction(text or track.title).triggered.connect(
                 lambda _=False, t=track: self._start_online_track(t, ()))
         menu.exec_(self.btn_versions.mapToGlobal(self.btn_versions.rect().bottomLeft()))

@@ -440,6 +440,7 @@ class MusicCardDelegate(QStyledItemDelegate):
         x += 42
         remaining = max(1, rect.right()-x-4)
         artist, album = data.get("artist") or "", data.get("album") or ""
+        note = data.get("_resource_note") or ""
         duration = data.get("duration_seconds") or data.get("duration")
         time_text = ""
         if type(duration) in (int,float) and 0 < duration < 86400:
@@ -456,14 +457,18 @@ class MusicCardDelegate(QStyledItemDelegate):
             fields.append((str(artist),artist_width,Tokens.TEXT_SECONDARY))
         if show_album:
             fields.append((str(album),work-title_width-artist_width,Tokens.TEXT_SECONDARY))
-        for text, width, color in fields:
+        for i, (text, width, color) in enumerate(fields):
             painter.setPen(QColor(color))
-            area = QRect(x,y,width-6,rect.height() if score else rect.height()//2+2)
-            painter.drawText(area, Qt.AlignLeft | Qt.AlignVCenter,painter.fontMetrics().elidedText(text,Qt.ElideRight,max(1,area.width())))
-            if not score:
+            two_lines = i == 0 and (not score or note)
+            area = QRect(x, y, width - 6, rect.height() // 2 + 2 if two_lines else rect.height())
+            painter.drawText(area, Qt.AlignLeft | Qt.AlignVCenter,
+                             painter.fontMetrics().elidedText(text, Qt.ElideRight, max(1, area.width())))
+            if two_lines:
                 painter.setPen(QColor(Tokens.TEXT_SECONDARY))
-                area.translate(0,rect.height()//2-2)
-                painter.drawText(area,Qt.AlignLeft|Qt.AlignVCenter,painter.fontMetrics().elidedText(str(artist),Qt.ElideRight,max(1,area.width())))
+                area.translate(0, rect.height() // 2 - 2)
+                secondary = note if score else " · ".join(filter(None, (str(artist), note)))
+                painter.drawText(area, Qt.AlignLeft | Qt.AlignVCenter,
+                                 painter.fontMetrics().elidedText(secondary, Qt.ElideRight, max(1, area.width())))
             x += width
         if duration_width:
             painter.setPen(QColor(Tokens.TEXT_SECONDARY))

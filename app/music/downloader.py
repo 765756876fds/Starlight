@@ -349,7 +349,7 @@ class DownloadManager:
 
     def _resolve_candidates(self, song):
         from .online.models import OnlineTrack
-        from .online.content_choices import recording_key
+        from .online.content_choices import equivalent_versions, same_recording
         from .online.popular_charts import normalized
         title, artist = song.get("title", ""), song.get("artist", "")
         if not title or self.online_manager is None:
@@ -367,12 +367,11 @@ class DownloadManager:
             found = []
         matched = [t for t in found if normalized(t.title)==normalized(title) and normalized(t.artist)==normalized(artist)]
         if preferred is not None:
-            identity = recording_key(preferred)
-            matched = [preferred] + [t for t in matched if identity is not None and recording_key(t)==identity]
-        elif len(matched) > 1:
-            identities = {recording_key(t) for t in matched}
-            if None in identities or len(identities) != 1:
-                return []  # Ambiguous versions require the user to choose an actual result.
+            matched = [preferred, *equivalent_versions(preferred, matched)]
+        elif len(matched) > 1 and not all(
+            same_recording(left, right) for index, left in enumerate(matched) for right in matched[index + 1:]
+        ):
+            return []  # Ambiguous versions require the user to choose an actual result.
         seen, candidates = set(), []
         options = song.get("_download_options", DEFAULT_DOWNLOAD_OPTIONS)
         quality = options["quality"]

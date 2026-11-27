@@ -490,3 +490,87 @@ def test_paged_window_uses_buffer_and_only_accepts_latest_search(qapp, paged_bri
         heartbeat.stop()
         panel.close()
         manager.close()
+
+
+def test_sorted_increment_does_not_retarget_an_active_download_gesture(qapp, paged_bridge, monkeypatch):
+    import os
+    from pathlib import Path
+
+    from app.music.online.manager import OnlineSourceManager
+
+    class PagedMusic(FakeMusic):
+        def open_online_search(self, keyword):
+            return manager.open_search(keyword)
+
+        def get_online_sources(self):
+            return manager.list_sources()
+
+    manager = OnlineSourceManager()
+    manager.register(paged_bridge)
+    music = PagedMusic()
+    music.play_online = Mock(return_value=True)
+    music.add_next = Mock(return_value=True)
+    p = MusicPanel(music)
+    p.enable_shell_navigation()
+    p.resize(920, 680)
+    p.show()
+    downloaded = []
+    monkeypatch.setattr(p, "_on_download_song", downloaded.append)
+    try:
+        p.edit_kw.setText("星桥 纸鸢乐队")
+        QTest.mouseClick(p.btn_search, Qt.LeftButton)
+        wait_until(lambda: p.list_results.count() == 29)
+        assert p._search_pages.loading()
+        assert p._tracks_by_row[0].title == "星桥"
+        p._prepare_sort_menu()
+        p._search_sort_actions["size"].trigger()
+        assert p._tracks_by_row[0].title == "回声"
+        p.list_results.setCurrentRow(1)
+        selected = p.list_results.item(1)
+        point = p._dl_results.action_rect(p.list_results.visualItemRect(selected)).center()
+        QTest.mousePress(p.list_results.viewport(), Qt.LeftButton, pos=point)
+        try:
+            Path(paged_bridge._mf_dir, "release-b18").touch()
+            wait_until(lambda: not p._search_pages.loading())
+            assert p._search_pending_render
+            assert p.list_results.itemAt(point) == selected
+        finally:
+            QTest.mouseRelease(p.list_results.viewport(), Qt.LeftButton, pos=point)
+        assert [(row["source_name"], row["track_id"], row["title"]) for row in downloaded] == [("fast", "1", "星桥")]
+        wait_until(lambda: not p._search_pending_render)
+        assert p._tracks_by_row[0].title == "星桥（Live）"
+        row = p.list_results.currentRow()
+        assert row == 1 and p._tracks_by_row[row].source_name == "fast"
+        assert {t.source_name for t in p._track_versions[row]} == {"fast", "slow"}
+        assert "16.0 MiB" in p.list_results.currentItem().toolTip()
+        assert "96 kHz" in p.list_results.currentItem().toolTip()
+        assert "slow" in p.list_results.currentItem().toolTip()
+        assert len({p.list_results.item(i).data(Qt.UserRole)["_play_key"] for i in range(3)}) == 3
+
+        p._start_online_track = Mock()
+        p._on_play(p.list_results.currentItem())
+        played, alternatives = p._start_online_track.call_args.args
+        assert played.source_name == "fast" and len(alternatives) == 2
+        monkeypatch.setattr(QMenu, "exec_", lambda menu, *_: next(
+            action for action in menu.actions() if action.text() == "下一首播放").trigger())
+        p._on_online_context_menu(p.list_results.visualItemRect(p.list_results.currentItem()).center())
+        queued = music.add_next.call_args.args[0]
+        assert (queued["source_name"], queued["track_id"], queued["title"]) == ("fast", "1", "星桥")
+        p._prepare_sort_menu()
+        assert p._search_sort_actions["heat"].isEnabled()
+        p._search_sort_actions["heat"].trigger()
+        assert [t.title for t in p._tracks_by_row[:3]] == ["回声", "星桥（Live）", "星桥"]
+        p._search_sort_actions["relevance"].trigger()
+        assert p._tracks_by_row[0].title == "星桥"
+        if os.getenv("STARLIGHT_BATCH18_SCREEN"):
+            assert p.grab().save(os.environ["STARLIGHT_BATCH18_SCREEN"])
+
+        p.edit_kw.setText("pages")
+        QTest.mouseClick(p.btn_search, Qt.LeftButton)
+        wait_until(lambda: not p._search_pages.loading())
+        p._prepare_sort_menu()
+        assert not p._search_sort_actions["heat"].isEnabled()
+        assert "暂无数据" in p._search_sort_actions["heat"].text()
+    finally:
+        p.close()
+        manager.close()

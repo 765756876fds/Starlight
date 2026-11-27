@@ -50,7 +50,7 @@ def test_explicit_version_is_not_replaced_by_bare_title(results, keyword, track_
     assert rank_manual_search(results, keyword)[0].track_id == track_id
 
 
-@pytest.mark.parametrize("keyword", ["纸鸢乐队", "未知标题", "桥", "", "《》"])
+@pytest.mark.parametrize("keyword", ["未知标题", "桥", "", "《》"])
 def test_ambiguous_input_preserves_incoming_order(results, keyword):
     assert rank_manual_search(results, keyword) == results
 
@@ -64,3 +64,9 @@ def test_english_word_and_symbol_matching_is_conservative():
     tracks = [someone, note, exact, c, cpp]
     assert rank_manual_search(tracks, "Ｏｎｅ") == [exact, note, someone, c, cpp]
     assert rank_manual_search(tracks, "C++") == [cpp, someone, note, exact, c]
+
+def test_artist_only_prioritizes_the_named_artist_with_stable_ties(results):
+    ordered = rank_manual_search(results, "纸鸢乐队")
+    matches = [track for track in results if track.artist == "纸鸢乐队"]
+    assert ordered[:len(matches)] == matches
+    assert set(map(id, ordered)) == set(map(id, results))
