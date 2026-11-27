@@ -3413,11 +3413,14 @@ class MusicPanel(QWidget):
 
     @staticmethod
     def _online_song_row(track, alternatives):
+        from ...music.online.source_authority import authorization_plugin
+        plugin_identity = authorization_plugin(track)
         return dict(title=track.title, artist=track.artist, album=track.album,
                     duration_seconds=track.duration_seconds, source_type="online",
                     source_name=track.source_name, track_id=track.track_id,
                     cover_url=track.cover_url, extra=dict(track.extra or {}),
-                    _download_alternatives=tuple(alternatives), path="", music_id=0, id=0)
+                    _download_alternatives=tuple(alternatives), path="", music_id=0, id=0,
+                    **({"authorization_plugin": plugin_identity} if plugin_identity else {}))
 
     @Slot(int)
     def _download_result(self, row):

@@ -60,6 +60,11 @@ def _track_data(data):
     extra = data.get("extra")
     raw = _raw(extra.get("_raw", extra.get("raw"))) if isinstance(extra, dict) else {}
     fields["extra"] = {"_raw": raw} if raw else {}
+    authority = data.get("authorization_plugin")
+    if authority is not None:
+        if plain(authority, 128) != authority or not authority or not fields["source_name"] or not fields["track_id"]:
+            raise ValueError("Invalid stored authorization identity")
+        fields["authorization_plugin"] = authority
     return fields
 
 

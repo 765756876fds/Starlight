@@ -21,6 +21,8 @@ import aiohttp
 from multidict import CIMultiDict
 from yarl import URL
 
+from .source_authority import AuthorizedResource, DownloadTransportError, parse_remote_url
+
 _PROBE_SLOTS = threading.BoundedSemaphore(3)
 # Windows getaddrinfo may outlive a cancelled coroutine. A DNS worker keeps
 # its own slot until the actual call finishes, independently of the HTTP slot.
@@ -39,15 +41,6 @@ _STRONG_ETAG = re.compile(r'"[!#-~]{0,256}"')
 _RESOURCE_KEY = re.compile(r"[0-9a-f]{64}")
 _TRANSITION = tuple(ipaddress.ip_network(network) for network in
                     ("64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16"))
-
-
-class DownloadTransportError(ValueError):
-    """A non-sensitive reason code for the surrounding download worker."""
-
-    def __init__(self, reason, status=None):
-        super().__init__(reason)
-        self.status = status
-        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -103,29 +96,20 @@ def _is_allowed_ip(address):
     return target.is_global and not target.is_multicast and not target.is_reserved
 
 
-def _target(value):
-    if not isinstance(value, str) or len(value) > 16384 or any(
-        ord(char) <= 32 or ord(char) == 127 or char == "\\" for char in value
-    ):
-        raise DownloadTransportError("invalid_url")
-    try:
-        # Keep the percent encoding of signed CDN paths and query strings.
-        url = URL(value, encoded=True)
-        host, port = url.raw_host, url.port
-        if (url.scheme not in ("http", "https") or not host or not host.isascii()
-                or url.raw_user is not None or url.raw_password is not None or not 0 < port <= 65535
-                or "%" in host):
+def _target(value, *, authorization=None):
+    if authorization is not None and not isinstance(authorization, AuthorizedResource):
+        raise DownloadTransportError("source_scope")
+    url = parse_remote_url(value) if authorization is None else authorization.target(value)
+    if aiohttp.helpers.is_ip_address(url.raw_host) and not _is_allowed_ip(url.raw_host):
+        if authorization is None or not authorization.local_allowed(url):
             raise DownloadTransportError("blocked_target")
-        if aiohttp.helpers.is_ip_address(host) and not _is_allowed_ip(host):
-            raise DownloadTransportError("blocked_target")
-        return url.with_fragment(None)
-    except DownloadTransportError:
-        raise
-    except (ValueError, TypeError, UnicodeError):
-        raise DownloadTransportError("invalid_url") from None
+    return url
 
 
 class _PublicResolver(aiohttp.abc.AbstractResolver):
+    def __init__(self, authorization=None):
+        self._authorization = authorization
+
     async def resolve(self, host, port=0, family=socket.AF_UNSPEC):
         if not _DNS_SLOTS.acquire(blocking=False):
             raise DownloadTransportError("dns_busy")
@@ -137,6 +121,8 @@ class _PublicResolver(aiohttp.abc.AbstractResolver):
             raise
         lookup.add_done_callback(lambda _: _DNS_SLOTS.release())
         answers = await asyncio.wrap_future(lookup)
+        if self._authorization is not None:
+            self._authorization.require_active()
         if not answers or any(not _is_allowed_ip(item[4][0]) for item in answers):
             raise DownloadTransportError("blocked_target")
         # The connector uses these numeric addresses directly, keeping the
@@ -151,10 +137,11 @@ class _PublicResolver(aiohttp.abc.AbstractResolver):
         pass
 
 
-def _session(timeout, buffer_size):
-    connector = aiohttp.TCPConnector(resolver=_PublicResolver(), use_dns_cache=False,
+def _session(timeout, buffer_size, *, authorization=None):
+    resolver = _PublicResolver() if authorization is None else _PublicResolver(authorization)
+    connector = aiohttp.TCPConnector(resolver=resolver, use_dns_cache=False,
                                      force_close=True, limit=1)
-    return aiohttp.ClientSession(
+    client = aiohttp.ClientSession(
         connector=connector,
         cookie_jar=aiohttp.DummyCookieJar(),
         trust_env=False,
@@ -162,6 +149,7 @@ def _session(timeout, buffer_size):
         read_bufsize=buffer_size,
         timeout=aiohttp.ClientTimeout(total=None, sock_read=min(timeout, 20)),
     )
+    return client
 
 
 def _headers(headers, *, prefix=None):
@@ -176,38 +164,175 @@ def _headers(headers, *, prefix=None):
     return safe
 
 
-def _resource_key(url):
+def _resource_key(url, authorization=None):
+    if authorization is not None:
+        return authorization.resume_key(url)
     return sha256(str(url).encode("utf-8")).hexdigest()
 
 
+
+class _Ledger:
+    def __init__(self, authorization):
+        self.authorization = authorization
+        self.requests = authorization.budget.requests
+        self.header_bytes = authorization.budget.header_bytes
+        self.body_bytes = authorization.budget.body_bytes
+        self.upload_bytes = authorization.budget.upload_bytes
+
+    def request(self, body):
+        self.requests -= 1
+        self.upload_bytes -= len(body or b"")
+        if self.requests < 0 or self.upload_bytes < 0:
+            raise DownloadTransportError("source_budget")
+
+    def headers(self, pairs):
+        self.header_bytes -= sum(len(name) + len(value) + 4 for name, value in pairs)
+        if self.header_bytes < 0:
+            raise DownloadTransportError("source_budget")
+
+
+class _LimitedBody:
+    def __init__(self, content, ledger):
+        self._content = content
+        self._ledger = ledger
+
+    async def read(self, count):
+        self._ledger.authorization.require_active()
+        data = await self._content.read(min(count, self._ledger.body_bytes + 1))
+        if not self._ledger.authorization.active():
+            raise DownloadTransportError("source_inactive")
+        self._ledger.body_bytes -= len(data)
+        if self._ledger.body_bytes < 0:
+            raise DownloadTransportError("source_budget")
+        return data
+
+    async def readexactly(self, count):
+        buffer = bytearray()
+        while len(buffer) < count:
+            chunk = await self.read(count - len(buffer))
+            if not chunk:
+                raise asyncio.IncompleteReadError(bytes(buffer), count)
+            buffer.extend(chunk)
+        return bytes(buffer)
+
+    async def iter_chunked(self, count):
+        while chunk := await self.read(count):
+            yield chunk
+
+
+class _LimitedResponse:
+    def __init__(self, response, ledger):
+        self.status = response.status
+        self.headers = response.headers
+        self.content_type = response.content_type
+        self.url = response.url
+        self.content = _LimitedBody(response.content, ledger)
+
+
 @asynccontextmanager
-async def _request(session, method, url, headers, evidence=None, *, resume=None):
+async def _request(session, method, url, headers, evidence=None, *, resume=None, authorization=None,
+                   ledger=None, body=None):
+    if authorization is None:
+        async with _request_chain(session, method, url, headers, evidence, resume=resume,
+                                  authorization=None, ledger=None, body=None) as response:
+            yield response
+        return
+    if not authorization.method_allowed(method):
+        raise DownloadTransportError("source_method")
+    # The hop ledger owns retries. Reject an unsupported client rather than
+    # silently allowing an internal retry outside the request count.
+    if not hasattr(session, "_retry_connection"):
+        raise DownloadTransportError("source_transport_version")
+    session._retry_connection = False
+    # The caller may only add transport-generated range fields. Origin
+    # credentials and arbitrary response fields never modify the grant.
+    trusted = _headers(None)
+    trusted.update(authorization.headers)
+    if "Range" in headers:
+        trusted["Range"] = headers["Range"]
+    with authorization.slot():
+        async with asyncio.timeout(authorization.budget.timeout):
+            async with _request_chain(session, method, url, trusted, evidence, resume=resume,
+                                      authorization=authorization, ledger=ledger or _Ledger(authorization),
+                                      body=body) as response:
+                yield response
+
+
+def _scope(authorization):
+    if authorization is None:
+        return {}
+    return {"authorization": authorization}
+
+
+def _cancel_check(cancelled, authorization):
+    if authorization is None:
+        return cancelled
+    def check():
+        if not authorization.active():
+            raise DownloadTransportError("source_inactive")
+        return bool(cancelled and cancelled())
+    return check
+
+
+def _authorized_target(url, authorization, kind):
+    if authorization is None:
+        return _target(url)
+    if not isinstance(authorization, AuthorizedResource):
+        raise DownloadTransportError("source_scope")
+    authorization.check(kind, url)
+    return _target(url, authorization=authorization)
+
+
+@asynccontextmanager
+async def _request_chain(session, method, url, headers, evidence, *, resume, authorization, ledger, body):
     for _ in range(5):
         if evidence is not None:
             evidence.requests += 1
+        if authorization is not None:
+            _target(str(url), authorization=authorization)
+            ledger.request(body)
         sent = headers
-        if resume is not None and _resource_key(url) == resume.resource_key:
+        if resume is not None and _resource_key(url, authorization) == resume.resource_key:
             sent = headers.copy()
             sent["Range"] = f"bytes={resume.bytes_written}-"
             sent["If-Range"] = resume.etag
-        async with session.request(method, url, headers=sent, allow_redirects=False) as response:
+        payload = {"data": body} if body is not None else {}
+        async with session.request(method, url, headers=sent, allow_redirects=False, **payload) as response:
+            if ledger is not None:
+                ledger.headers(response.raw_headers)
             if response.status not in _REDIRECTS:
-                yield response
+                yield response if ledger is None else _LimitedResponse(response, ledger)
                 return
+            if ledger is not None:
+                # Charge any application bytes read from intermediate responses.
+                async for _ in _LimitedBody(response.content, ledger).iter_chunked(8192):
+                    pass
+                locations = response.headers.getall("Location", [])
+                if len(locations) != 1:
+                    raise DownloadTransportError("invalid_redirect")
             location = response.headers.get("Location")
             if not location:
                 raise DownloadTransportError("invalid_redirect")
             if any(ord(char) <= 32 or ord(char) == 127 or char == "\\" for char in location):
                 raise DownloadTransportError("invalid_redirect")
             try:
-                target = _target(str(url.join(URL(location, encoded=True))))
+                destination = str(url.join(URL(location, encoded=True)))
+                target = (_target(destination) if authorization is None else
+                          _target(destination, authorization=authorization))
             except DownloadTransportError:
                 raise
             except (ValueError, TypeError, UnicodeError):
                 raise DownloadTransportError("invalid_redirect") from None
             if url.scheme == "https" and target.scheme != "https":
                 raise DownloadTransportError("blocked_redirect")
+            if authorization is not None and (response.status == 303 and method != "HEAD"
+                    or response.status in (301, 302) and method == "POST"):
+                method, body = "GET", None
+                if not authorization.method_allowed(method):
+                    raise DownloadTransportError("source_method")
             if target.origin() != url.origin():
+                if authorization is not None and method not in ("GET", "HEAD"):
+                    raise DownloadTransportError("blocked_redirect")
                 # Forward only the two known public plugin fields plus the
                 # transport's own Range and Accept-Encoding values.
                 fields = _PUBLIC_HEADERS | {"range", "accept-encoding"}
@@ -275,10 +400,12 @@ def _record_prefix(evidence, data):
     evidence.channels = info.channels
 
 
-async def _inspect(url, headers, timeout, max_bytes, verify_body, evidence):
+async def _inspect(url, headers, timeout, max_bytes, verify_body, evidence, authorization=None):
     head_target = None
-    async with _session(timeout, max(1024, min(max_bytes, 8192))) as session:
-        async with _request(session, "HEAD", url, _headers(headers), evidence) as response:
+    scope = _scope(authorization)
+    options = dict(scope, ledger=_Ledger(authorization)) if scope else {}
+    async with _session(timeout, max(1024, min(max_bytes, 8192)), **scope) as session:
+        async with _request(session, "HEAD", url, _headers(headers), evidence, **options) as response:
             evidence.http_status = response.status
             if response.status == 200 and response.content_type not in ("text/html", "application/json"):
                 evidence.size_bytes = _full_length(response)
@@ -291,7 +418,7 @@ async def _inspect(url, headers, timeout, max_bytes, verify_body, evidence):
         if max_bytes == 0:
             evidence.reason = "byte_budget"
             return
-        async with _request(session, "GET", url, _headers(headers, prefix=max_bytes), evidence) as response:
+        async with _request(session, "GET", url, _headers(headers, prefix=max_bytes), evidence, **options) as response:
             evidence.http_status = response.status
             if head_target is not None and response.url != head_target:
                 evidence.size_bytes = evidence.size_evidence = None
@@ -364,7 +491,7 @@ async def _bounded(operation, timeout, cancelled):
 
 
 def probe_download(url, headers=None, *, timeout=2.0, max_bytes=8192,
-                   cancelled=None, verify_body=True):
+                   cancelled=None, verify_body=True, authorization=None):
     """Probe a single previously resolved resource on a background worker."""
     evidence = ProbeEvidence()
     if timeout <= 0 or not _PROBE_SLOTS.acquire(blocking=False):
@@ -374,9 +501,12 @@ def probe_download(url, headers=None, *, timeout=2.0, max_bytes=8192,
     try:
         if cancelled is not None and cancelled():
             raise InterruptedError("cancelled")
-        target = _target(url)
+        target = _authorized_target(url, authorization, "download")
+        if authorization is not None:
+            timeout = min(timeout, authorization.budget.timeout)
+        cancelled = _cancel_check(cancelled, authorization)
         cap = max(0, min(int(max_bytes), _MAX_PREFIX))
-        asyncio.run(_bounded(_inspect(target, headers, timeout, cap, verify_body, evidence), timeout, cancelled))
+        asyncio.run(_bounded(_inspect(target, headers, timeout, cap, verify_body, evidence, authorization), timeout, cancelled))
     except (InterruptedError, TimeoutError, DownloadTransportError, aiohttp.ClientError, OSError) as exc:
         if isinstance(exc, InterruptedError):
             evidence.reason = "cancelled"
@@ -422,9 +552,9 @@ def _resume_from_file(resume, dest):
     return resume if dest.seek(0, os.SEEK_END) == resume.bytes_written else None
 
 
-def _matches_representation(response, resume, etag, last_modified):
+def _matches_representation(response, resume, etag, last_modified, authorization=None):
     return (resume is not None and etag == resume.etag
-            and _resource_key(response.url) == resume.resource_key
+            and _resource_key(response.url, authorization) == resume.resource_key
             and (not resume.last_modified or not last_modified or last_modified == resume.last_modified))
 
 
@@ -443,7 +573,7 @@ def _total_for_range(response, resume, expected_size):
 
 
 async def _stream(url, headers, part, progress, timeout, expected_size,
-                  resume, checkpoint, open_part, on_bytes):
+                  resume, checkpoint, open_part, on_bytes, authorization=None):
     state = durable_state = last_checkpoint = last_sample = None
 
     def emit_bytes():
@@ -471,14 +601,16 @@ async def _stream(url, headers, part, progress, timeout, expected_size,
         with ExitStack() as files:
             dest = files.enter_context(open_part()) if open_part is not None else None
             pending = _resume_from_file(resume, dest)
-            async with _session(timeout, 65536) as session:
+            scope = _scope(authorization)
+            options = dict(scope, ledger=_Ledger(authorization)) if scope else {}
+            async with _session(timeout, 65536, **scope) as session:
                 # One retry without Range handles unconfirmed representations
                 # and 416. Both requests (including redirects) share one deadline.
                 for _ in range(2):
-                    async with _request(session, "GET", url, _headers(headers), resume=pending) as response:
+                    async with _request(session, "GET", url, _headers(headers), resume=pending, **options) as response:
                         etag = _strong_etag(_single_header(response, "ETag"))
                         modified = _last_modified(_single_header(response, "Last-Modified"))
-                        same = _matches_representation(response, pending, etag, modified)
+                        same = _matches_representation(response, pending, etag, modified, authorization)
                         if response.status == 416 and pending is not None:
                             span = _UNSATISFIED_RANGE.fullmatch(_single_header(response, "Content-Range") or "")
                             total = _positive_length(span[1]) if span else None
@@ -513,7 +645,7 @@ async def _stream(url, headers, part, progress, timeout, expected_size,
                             else:
                                 dest.seek(0)
                                 dest.truncate()
-                        state = TransferCheckpoint(received, total, etag, modified, _resource_key(response.url))
+                        state = TransferCheckpoint(received, total, etag, modified, _resource_key(response.url, authorization))
                         if not received:
                             flush(dest)
                             persist()
@@ -554,16 +686,20 @@ async def _stream(url, headers, part, progress, timeout, expected_size,
 
 
 def stream_download(url, headers, part, progress, *, timeout=180.0, cancelled=None,
-                    expected_size=None, resume=None, checkpoint=None, open_part=None, on_bytes=None):
+                    expected_size=None, resume=None, checkpoint=None, open_part=None, on_bytes=None,
+                    authorization=None):
     """Transfer a fresh or conditional resource into a worker-owned part file."""
     if cancelled is not None and cancelled():
         raise InterruptedError("cancelled")
     if resume is not None and open_part is None:
         raise ValueError("resume requires an owned file opener")
-    target = _target(url)
+    target = _authorized_target(url, authorization, "download")
+    if authorization is not None:
+        timeout = min(timeout, authorization.budget.timeout)
+    cancelled = _cancel_check(cancelled, authorization)
     try:
         pending = _stream(target, headers, part, progress, timeout, expected_size,
-                          resume, checkpoint, open_part, on_bytes)
+                          resume, checkpoint, open_part, on_bytes, authorization)
         return asyncio.run(_bounded(pending, timeout, cancelled))
     except TimeoutError:
         raise DownloadTransportError("timeout") from None
@@ -571,9 +707,10 @@ def stream_download(url, headers, part, progress, *, timeout=180.0, cancelled=No
         raise DownloadTransportError("network") from None
 
 
-async def _read_attachment(url, timeout, max_bytes):
-    async with _session(timeout, min(max_bytes, 65536)) as session:
-        async with _request(session, "GET", url, _headers({"User-Agent": "Starlight"})) as response:
+async def _read_attachment(url, timeout, max_bytes, authorization=None):
+    scope = _scope(authorization)
+    async with _session(timeout, min(max_bytes, 65536), **scope) as session:
+        async with _request(session, "GET", url, _headers({"User-Agent": "Starlight"}), **scope) as response:
             if response.status != 200 or not _identity_encoding(response) or "Content-Range" in response.headers:
                 raise DownloadTransportError("unexpected_response", response.status)
             length = _full_length(response)
@@ -594,16 +731,45 @@ async def _read_attachment(url, timeout, max_bytes):
             return bytes(body)
 
 
-def read_download_attachment(url, *, max_bytes=4 * 1024 * 1024, timeout=8.0, cancelled=None):
+def read_download_attachment(url, *, max_bytes=4 * 1024 * 1024, timeout=8.0, cancelled=None,
+                             authorization=None, kind="cover"):
     """Read a small optional attachment with the same target policy as audio."""
     if cancelled is not None and cancelled():
         raise InterruptedError("cancelled")
     if type(max_bytes) is not int or not 0 < max_bytes <= 4 * 1024 * 1024:
         raise DownloadTransportError("attachment_budget")
-    target = _target(url)
+    if kind not in ("cover", "lyrics", "metadata"):
+        raise DownloadTransportError("source_scope")
+    target = _authorized_target(url, authorization, kind)
+    if authorization is not None:
+        timeout = min(timeout, authorization.budget.timeout)
+        max_bytes = min(max_bytes, authorization.budget.body_bytes)
+    cancelled = _cancel_check(cancelled, authorization)
     try:
-        return asyncio.run(_bounded(_read_attachment(target, timeout, max_bytes), timeout, cancelled))
+        return asyncio.run(_bounded(_read_attachment(target, timeout, max_bytes, authorization), timeout, cancelled))
     except TimeoutError:
         raise DownloadTransportError("timeout") from None
     except (aiohttp.ClientError, socket.gaierror):
         raise DownloadTransportError("network") from None
+
+
+async def request_plugin_http(authorization, method, *, body=None, cancelled=None):
+    """Async entry point for an opt-in host RPC, with bounded response bytes."""
+    if not isinstance(authorization, AuthorizedResource):
+        raise DownloadTransportError("source_scope")
+    url = _authorized_target(authorization.url, authorization, "host_http")
+    if (body is not None and (not isinstance(body, bytes) or method != "POST")
+            or authorization.budget.body_bytes > 64 * 1024):
+        raise DownloadTransportError("source_budget")
+    timeout = authorization.budget.timeout
+
+    async def perform():
+        async with _session(timeout, 8192, authorization=authorization) as session:
+            async with _request(session, method, url, _headers(None), authorization=authorization,
+                                body=body) as response:
+                data = bytearray()
+                async for chunk in response.content.iter_chunked(8192):
+                    data.extend(chunk)
+                return response.status, response.content_type, bytes(data)
+
+    return await _bounded(perform(), timeout, _cancel_check(cancelled, authorization))

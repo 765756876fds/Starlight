@@ -17,6 +17,7 @@ from .download_probe import (
     DownloadTransportError, ProbeEvidence, _bounded, _headers, _identity_encoding,
     _positive_length, _record_prefix, _request, _session, _target,
 )
+from .source_authority import AuthorizedResource
 
 _RANGE_REQUEST = re.compile(r"bytes=([0-9]{1,16})-([0-9]{0,16})")
 _RANGE_REPLY = re.compile(r"bytes ([0-9]{1,16})-([0-9]{1,16})/([0-9]{1,16})")
@@ -27,9 +28,13 @@ _UNSATISFIED = re.compile(r"bytes \*/[0-9]{1,16}")
 class _Stream:
     url: str = field(repr=False)
     headers: dict = field(repr=False)
+    authorization: AuthorizedResource | None = field(default=None, repr=False)
     stopped: Event = field(default_factory=Event)
     proof: tuple[str, str | None] | None = field(default=None, repr=False)
     clients: set = field(default_factory=set, repr=False)
+
+    def active(self):
+        return not self.stopped.is_set() and (self.authorization is None or self.authorization.active())
 
     def stop(self):
         self.stopped.set()
@@ -55,6 +60,10 @@ class _LocalAudioServer(ThreadingHTTPServer):
         client, address = super().get_request()
         client.settimeout(5)
         return client, address
+
+    def service_actions(self):
+        # A receiver blocked on a full socket cannot poll from its relay task.
+        self.streams.expire()
 
     def process_request(self, request, address):
         if not self.slots.acquire(blocking=False):
@@ -121,18 +130,20 @@ class _AudioRequest(BaseHTTPRequestHandler):
             self.send_error(416)
             return
         self._started = False
+        timeout = 240 if stream.authorization is None else stream.authorization.budget.timeout
         try:
-            asyncio.run(_bounded(self._relay(stream, method, span), 240, stream.stopped.is_set))
+            asyncio.run(_bounded(self._relay(stream, method, span), timeout, lambda: not stream.active()))
         except (OSError, ValueError, EOFError, aiohttp.ClientError):
-            if not self._started and not stream.stopped.is_set():
+            if not self._started and stream.active():
                 self.send_error(502)
 
     async def _relay(self, stream, method, span):
         headers = _headers(stream.headers)
         if span:
             headers["Range"] = span[0]
-        async with _session(12, 65536) as client:
-            async with _request(client, method, _target(stream.url), headers) as response:
+        options = {} if stream.authorization is None else {"authorization": stream.authorization}
+        async with _session(12, 65536, **options) as client:
+            async with _request(client, method, _target(stream.url, **options), headers, **options) as response:
                 if response.status == 416:
                     self.send_response(416)
                     self._started = True
@@ -191,7 +202,7 @@ class _AudioRequest(BaseHTTPRequestHandler):
                     sent = len(prefix)
                     self.wfile.write(prefix)
                     async for data in response.content.iter_chunked(65536):
-                        if stream.stopped.is_set() or length and sent + len(data) > length:
+                        if not stream.active() or length and sent + len(data) > length:
                             return
                         self.wfile.write(data)
                         sent += len(data)
@@ -208,17 +219,23 @@ class CheckedPlayback:
         Thread(target=self._server.serve_forever, kwargs={"poll_interval": .05},
                name="music-checked-audio", daemon=True).start()
 
-    def address(self, url, headers):
-        url = str(_target(url))
-        headers = dict(_headers(headers))
+    def address(self, url, headers, *, authorization=None):
+        if authorization is not None:
+            if not isinstance(authorization, AuthorizedResource):
+                raise DownloadTransportError("source_scope")
+            url = str(authorization.check("playback", url))
+            headers = dict(authorization.headers)
+        else:
+            url = str(_target(url))
+            headers = dict(_headers(headers))
         with self._lock:
             for token, stream in self._streams.items():
-                if stream.url == url and stream.headers == headers:
+                if stream.url == url and stream.headers == headers and stream.authorization is authorization:
                     self._streams.move_to_end(token)
                     break
             else:
                 token = "/" + token_urlsafe(24)
-                self._streams[token] = _Stream(url, headers)
+                self._streams[token] = _Stream(url, headers, authorization)
                 if len(self._streams) > 3:
                     stale = next(key for key in self._streams if key != self._retained)
                     self._streams.pop(stale).stop()
@@ -232,10 +249,18 @@ class CheckedPlayback:
     def attach(self, token, client):
         with self._lock:
             stream = self._streams.get(token)
-            if stream is not None and not stream.stopped.is_set():
+            if stream is not None and stream.active():
                 stream.clients.add(client)
                 return stream
             return None
+
+    def expire(self):
+        with self._lock:
+            for token, stream in tuple(self._streams.items()):
+                if stream.authorization is not None and not stream.active():
+                    self._streams.pop(token).stop()
+                    if self._retained == token:
+                        self._retained = None
 
     def detach(self, stream, client):
         with self._lock:

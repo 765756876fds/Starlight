@@ -1688,12 +1688,14 @@ class MusicController:
                                 legacy_quality=legacy_quality)
 
     def _prepare_checked_playback(self, result):
-        if not result.get("checked_transport") or result.get("_checked_address"):
+        grant = result.get("_authorization")
+        if grant is None and (not result.get("checked_transport") or result.get("_checked_address")):
             return result
         from .online.checked_playback import CheckedPlayback
         if getattr(self, "_checked_playback", None) is None:
             self._checked_playback = CheckedPlayback()
-        url = self._checked_playback.address(result["url"], result.get("headers"))
+        scope = {"authorization": grant} if grant is not None else {}
+        url = self._checked_playback.address(result["url"], result.get("headers"), **scope)
         return dict(result, url=url, headers=None, _checked_address=True)
 
     def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None, *, playback=None, kuwo_rid=None) -> dict | None:
@@ -1707,7 +1709,23 @@ class MusicController:
         """
         if not self._movie_permits_request():
             return None
-        checked = bool(playback and playback.get("checked_transport"))
+        grant = playback.get("_authorization") if playback else None
+        from .online.manager import OnlineSourceManager
+        from .online.source_authority import authorization_plugin
+        manager = getattr(self, "online_manager", None)
+        plugin_identity = authorization_plugin(track)
+        managed = (plugin_identity
+                   or isinstance(manager, OnlineSourceManager) and manager.is_managed_track(track))
+        if grant is not None or managed:
+            from .online.source_authority import AuthorizedResource, DownloadTransportError
+            if not isinstance(grant, AuthorizedResource):
+                return None
+            try:
+                grant.check_owner(track.source_name, str(track.track_id))
+                grant.check("playback", url)
+            except DownloadTransportError:
+                return None
+        checked = bool(playback and (playback.get("checked_transport") or grant))
         hdr = None if checked else _pick_play_headers(headers)
         src_name = (getattr(track, "source_name", "") or "").lower()
         need_kw_header = ("kw" in src_name or "酷我" in src_name
@@ -1841,6 +1859,7 @@ class MusicController:
             "source_name": getattr(track, 'source_name', '') or '',
             "track_id": getattr(track, 'track_id', '') or '',
             "cover_url": getattr(track, "cover_url", None),
+            **({"authorization_plugin": plugin_identity} if plugin_identity else {}),
             "extra": getattr(track, 'extra', None) or {},
         }
         resolved = playback or {"kuwo_rid": kuwo_rid}
@@ -2486,15 +2505,18 @@ class MusicController:
             source_name=song.get("source_name", ""), track_id=str(song.get("track_id") or ""),
             title=song.get("title", ""), artist=song.get("artist", ""), album=song.get("album", ""),
             duration_seconds=int(song.get("duration") or 0), cover_url=song.get("cover_url"),
-            extra=song.get("extra") or {},
+            extra=song.get("extra") or {}, authorization_plugin=song.get("authorization_plugin"),
         )
 
     @staticmethod
     def _online_entry(track):
+        from .online.source_authority import authorization_plugin
+        plugin_identity = authorization_plugin(track)
         return dict(title=track.title, artist=track.artist, album=track.album,
                     duration=track.duration_seconds, cover_url=track.cover_url,
                     source_type="online", source_name=track.source_name,
-                    track_id=track.track_id, extra=track.extra or {})
+                    track_id=track.track_id, extra=track.extra or {},
+                    **({"authorization_plugin": plugin_identity} if plugin_identity else {}))
 
     def play_online_list(self, tracks: list, index: int = 0, *, _before_load=None,
                          _intent_ns=None) -> bool:

@@ -14,6 +14,8 @@ class OnlineTrack:
     duration_seconds: int | float = 0
     cover_url: str | None = None
     extra: dict = field(default_factory=dict)
+    # Durable plugin identity only. Live leases and URLs never belong here.
+    authorization_plugin: str | None = None
 
 
 @dataclass

@@ -5,13 +5,15 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
+from dataclasses import replace
 
 from app.core.logger import get_logger
 
 from .cache import OnlineCache
-from .models import OnlineTrack, SearchResults
+from .models import OnlineTrack, SearchPage, SearchResults, SearchTracks
 from .paged_search import PagedSearch, SearchTarget
 from .source import MusicSource, SourceSearchError
+from .source_authority import DownloadTransportError, SourceLease, authorization_plugin
 
 logger = get_logger()
 
@@ -22,6 +24,8 @@ class OnlineSourceManager:
     def __init__(self, cache_ttl: float = 300.0, max_workers: int = 4,
                  request_timeout: float = 5.0):
         self._sources: dict[str, MusicSource] = {}
+        self._source_leases: dict[str, SourceLease] = {}
+        self._managed_names: set[str] = set()
         self._cache = OnlineCache(ttl_seconds=cache_ttl)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._timeout = request_timeout
@@ -44,9 +48,24 @@ class OnlineSourceManager:
         self._paged_peak = 0
         self._closed = False
 
-    def register(self, source: MusicSource) -> None:
+    def register(self, source: MusicSource, *, lease: SourceLease | None = None) -> None:
         with self._life_lock:
+            if self._closed:
+                raise RuntimeError("music source manager is closed")
+            if lease is not None and (not isinstance(lease, SourceLease)
+                                     or lease.source_id != source.name or not lease.active()):
+                raise DownloadTransportError("source_scope")
+            if lease is None and source.name in self._managed_names:
+                raise DownloadTransportError("source_scope")
             previous = self._sources.get(source.name)
+            previous_lease = self._source_leases.get(source.name)
+            if lease is not None and lease is previous_lease and previous is not source:
+                raise DownloadTransportError("source_scope")
+            if lease is not None:
+                self._managed_names.add(source.name)
+                self._source_leases[source.name] = lease
+            if previous_lease is not None and previous_lease is not lease:
+                previous_lease.retire()
             if previous is not None:
                 self._cache.delete(source.name)
             self._sources[source.name] = source
@@ -86,6 +105,9 @@ class OnlineSourceManager:
     def unregister(self, name: str) -> None:
         with self._life_lock:
             s = self._sources.pop(name, None)
+            lease = self._source_leases.pop(name, None)
+            if lease is not None:
+                lease.retire()
             # 版本单调递增并保留（删除标记）：同名源重新注册后版本必然不同，
             # 在途旧搜索任务的结果会被版本校验丢弃，不会写回缓存。
             self._source_versions[name] = self._source_versions.get(name, 0) + 1
@@ -112,22 +134,52 @@ class OnlineSourceManager:
             self._source_versions[name] = self._source_versions.get(name, 0) + 1
             self._cache.delete(name)
 
+    def _managed_tracks(self, source, result):
+        with self._life_lock:
+            lease = self._source_leases.get(source.name)
+            if lease is None:
+                if source.name in self._managed_names:
+                    raise SourceSearchError("unavailable")
+                return result
+            if not lease.active() or self._sources.get(source.name) is not source:
+                raise SourceSearchError("unavailable")
+        page = isinstance(result, SearchPage)
+        tracks = result.tracks if page else result
+        if not isinstance(tracks, list):
+            raise SourceSearchError("structure")
+        from ..download_journal import _raw
+        clean = []
+        for track in tracks:
+            if not isinstance(track, OnlineTrack) or lease.source_id != track.source_name:
+                raise SourceSearchError("structure")
+            raw = track.extra.get("_raw", {}) if isinstance(track.extra, dict) else {}
+            clean.append(replace(track, cover_url=None, extra={"_raw": _raw(raw)},
+                                 authorization_plugin=lease.plugin_id))
+        if page:
+            return replace(result, tracks=clean)
+        return SearchTracks(clean, errors=getattr(result, "errors", None),
+                            successful=getattr(result, "successful", 1))
+
     def open_search(self, keyword: str) -> PagedSearch:
         targets = []
         with self._life_lock:
             sources = [(name, src, self._source_versions[name])
-                       for name, src in self._sources.items()]
+                       for name, src in self._sources.items()
+                       if name not in self._source_leases or self._source_leases[name].active()]
         for name, src, version in sources:
             if not hasattr(src, "search_snapshot"):
                 targets.append(SearchTarget(name, name, src, version, False))
                 continue
             process, aliases = src.search_snapshot()
             for alias in aliases:
+                if name in self._managed_names and alias != name:
+                    continue
                 targets.append(SearchTarget(name, alias, src, version, True, process))
         return PagedSearch(self, keyword, targets)
 
     def _target_is_current(self, target: SearchTarget) -> bool:
         return (not self._closed and self._source_versions.get(target.owner) == target.version
+                and (target.owner not in self._source_leases or self._source_leases[target.owner].active())
                 and (not target.pageable or target.source.has_search_process(target.process)))
 
     def submit_search_page(self, target, keyword, page):
@@ -153,7 +205,7 @@ class OnlineSourceManager:
     def _read_search_page(self, target, read):
         started = time.monotonic()
         try:
-            return read()
+            return self._managed_tracks(target.source, read())
         finally:
             with self._life_lock:
                 if self._target_is_current(target):
@@ -170,6 +222,9 @@ class OnlineSourceManager:
         with self._life_lock:
             sources = []
             for name, src in self._sources.items():
+                if name in self._source_leases and not self._source_leases[name].active():
+                    out.errors[name] = "unavailable"
+                    continue
                 cached = self._cache.get(name, keyword, limit_per_source)
                 if cached is not None:
                     out[name] = cached
@@ -189,7 +244,8 @@ class OnlineSourceManager:
                     # register 无法插入（生命周期锁），彻底关闭"检查通过→set
                     # 之前被替换导致旧结果回写污染"的竞争窗口。
                     with self._life_lock:
-                        if self._source_versions.get(name) != ver:
+                        if (self._source_versions.get(name) != ver or
+                                name in self._source_leases and not self._source_leases[name].active()):
                             out.errors[name] = "interrupted"
                             continue
                         out[name] = tracks
@@ -230,7 +286,7 @@ class OnlineSourceManager:
             result = src.search(kw, limit)
             if not isinstance(result, list):
                 raise SourceSearchError("unknown" if result is None else "structure")
-            return result
+            return self._managed_tracks(src, result)
         finally:
             self._latency[src.name] = time.monotonic() - t0
 
@@ -248,16 +304,73 @@ class OnlineSourceManager:
         except TypeError:
             return src.get_play_url(track)
 
+    def _managed(self, track):
+        return bool(authorization_plugin(track) or track.source_name in self._managed_names)
+
+    def _managed_owner(self, track):
+        with self._life_lock:
+            owner, lease = self._sources.get(track.source_name), self._source_leases.get(track.source_name)
+            declared = authorization_plugin(track)
+            if (self._closed or owner is None or lease is None or not lease.active()
+                    or lease.plugin_id != declared):
+                return None, None
+            return owner, lease
+
+    def _authorized_result(self, track, owner, lease, result, kind):
+        current, live = self._managed_owner(track)
+        if owner is not current or lease is not live or result is None:
+            return None
+        result = self._normalize_play_result(result, owner)
+        if not result or not result.get("url"):
+            return None
+        try:
+            grant = lease.resource(kind, result["url"], result.get("headers"),
+                                   resource_id=str(track.track_id))
+        except DownloadTransportError:
+            return None
+        # Do not accept checked-address flags or provenance from a plugin.
+        fields = ("quality", "source_quality", "requested_quality", "supports_renditions", "direct_url")
+        clean = {name: result[name] for name in fields if type(result.get(name)) in (str, bool)}
+        return {**clean, "url": grant.url, "headers": None, "_authorization": grant,
+                "checked_transport": kind == "playback"}
+
+    def _legacy_routes(self, track):
+        with self._life_lock:
+            if self._closed or self._managed(track):
+                return None, ()
+            return self._sources.get(track.source_name), tuple(
+                (name, src) for name, src in self._sources.items() if name not in self._managed_names)
+
+    def _legacy_current(self, track, source):
+        with self._life_lock:
+            return (not self._closed and not self._managed(track) and source.name not in self._managed_names
+                    and self._sources.get(source.name) is source)
+
+    def get_cover_resource(self, track):
+        owner, lease = self._managed_owner(track)
+        getter = getattr(owner, "get_cover_url", None)
+        if not callable(getter):
+            return None
+        try:
+            return self._authorized_result(track, owner, lease, getter(track), "cover")
+        except (OSError, ValueError, TimeoutError, RuntimeError):
+            return None
+
+    def is_managed_track(self, track):
+        return self._managed(track)
+
     def _download_owner(self, track: OnlineTrack):
         if not track.source_name or not track.track_id:
             return None
+        if self._managed(track):
+            return self._managed_owner(track)[0]
         with self._life_lock:
             if self._closed:
                 return None
             source = self._sources.get(track.source_name)
             if source is not None:
                 return source
-            candidates = tuple(self._sources.values())
+            candidates = tuple(item for name, item in self._sources.items() if name not in self._managed_names)
         # Only a source with an explicit exact-rendition adapter can claim a
         # nested provider ID. Ambiguous claims are rejected.
         owners = [item for item in candidates
@@ -294,6 +407,9 @@ class OnlineSourceManager:
         source = self._download_owner(track)
         if source is None:
             return None
+        lease = self._managed_owner(track)[1] if self._managed(track) else None
+        if self._managed(track) and lease is None:
+            return None
         resolver = getattr(source, "get_download_rendition", None)
         try:
             if callable(resolver):
@@ -302,12 +418,15 @@ class OnlineSourceManager:
                 result = self._legacy_download_url(source, track, timeout)
             else:
                 return None
-            result = self._normalize_play_result(result, source)
+            if lease is not None:
+                result = self._authorized_result(track, source, lease, result, "download")
+            else:
+                result = self._normalize_play_result(result, source)
             if not result or not isinstance(result.get("url"), str) or not result["url"].strip():
                 return None
-            # Do not surface the address if the resource owner was replaced
-            # or retired during the resolution.
-            if self._download_owner(track) is not source:
+            # Do not surface the address if the owner or registration mode changed.
+            if (self._download_owner(track) is not source
+                    or lease is None and not self._legacy_current(track, source)):
                 return None
             declared = result.get("source_quality")
             return dict(result, source=track.source_name, requested_quality=native_tier,
@@ -318,10 +437,14 @@ class OnlineSourceManager:
 
     def get_playback_url(self, track: OnlineTrack, preference: str):
         """Route this recording to its owner. Never pass a foreign service this track ID."""
-        source = self._sources.get(track.source_name)
-        if source is None:
-            source = next((item for item in self._sources.values()
-                           if callable(getattr(item, "accepts", None)) and item.accepts(track)), None)
+        managed = self._managed(track)
+        if managed:
+            source, lease = self._managed_owner(track)
+        else:
+            source, legacy = self._legacy_routes(track)
+            if source is None:
+                source = next((item for _, item in legacy
+                               if callable(getattr(item, "accepts", None)) and item.accepts(track)), None)
         if source is None:
             return None
         resolver = getattr(source, "get_playback_rendition", None)
@@ -329,27 +452,41 @@ class OnlineSourceManager:
             result = resolver(track, preference) if callable(resolver) else source.get_play_url(track)
         except (OSError, ValueError, TimeoutError, RuntimeError):
             return None
-        result = self._normalize_play_result(result, source)
+        if managed:
+            result = self._authorized_result(track, source, lease, result, "playback")
+        elif self._legacy_current(track, source):
+            result = self._normalize_play_result(result, source)
+        else:
+            return None
         if result and result.get("url"):
             return dict(result, requested_preference=preference,
                         supports_renditions=result.get("supports_renditions", callable(resolver)))
         return None
 
     def get_play_url(self, track: OnlineTrack, quality: str | None = None) -> dict | None:
+        if self._managed(track):
+            owner, lease = self._managed_owner(track)
+            if owner is None:
+                return None
+            try:
+                return self._authorized_result(track, owner, lease,
+                                               self._call_get_url(owner, track, quality), "playback")
+            except (OSError, ValueError, TimeoutError, RuntimeError):
+                return None
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         tried = set()
-        src = self._sources.get(track.source_name)
+        src, legacy = self._legacy_routes(track)
         if src is not None:
             tried.add(id(src))
             try:
                 r = self._normalize_play_result(self._call_get_url(src, track, quality), src)
-                if r:
+                if r and self._legacy_current(track, src):
                     return r
             except Exception as e:
                 self._errors[track.source_name] = str(e)
                 logger.warning(f"定向源 {track.source_name} 失败，回退其他源: {e}")
         # 定向 miss 或定向失败：遍历 accepts 命中的源（不重复定向源）
-        for s in self._sources.values():
+        for _, s in legacy:
             if id(s) in tried:
                 continue
             try:
@@ -358,18 +495,18 @@ class OnlineSourceManager:
                     continue
                 tried.add(id(s))
                 r = self._normalize_play_result(self._call_get_url(s, track, quality), s)
-                if r:
+                if r and self._legacy_current(track, s):
                     return r
             except Exception as e:
                 logger.warning(f"获取在线源失败: {e}")
                 continue
         # 仍 miss：回退全遍历（不重复已试源）
-        for s in self._sources.values():
+        for _, s in legacy:
             if id(s) in tried:
                 continue
             try:
                 r = self._normalize_play_result(self._call_get_url(s, track, quality), s)
-                if r:
+                if r and self._legacy_current(track, s):
                     return r
             except Exception:
                 continue
@@ -389,23 +526,42 @@ class OnlineSourceManager:
         return {"url": r, "headers": None}
 
     def get_lyric(self, track: OnlineTrack) -> str | None:
+        if self._managed(track):
+            owner, lease = self._managed_owner(track)
+            if owner is None:
+                return None
+            try:
+                result = owner.get_lyric(track)
+                if self._managed_owner(track) != (owner, lease):
+                    return None
+                if isinstance(result, str):
+                    return result
+                bound = self._authorized_result(track, owner, lease, result, "lyrics")
+                if bound is None:
+                    return None
+                from .download_probe import read_download_attachment
+                return read_download_attachment(bound["url"], authorization=bound["_authorization"],
+                                                kind="lyrics", max_bytes=2_000_000).decode("utf-8")
+            except (OSError, ValueError, TimeoutError, RuntimeError):
+                return None
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
-        src = self._sources.get(track.source_name)
+        src, legacy = self._legacy_routes(track)
         if src is not None:
             try:
-                return src.get_lyric(track)
+                lyric = src.get_lyric(track)
+                return lyric if self._legacy_current(track, src) else None
             except Exception:
                 return None
         # 定向 miss：track.source_name 可能是 js_bridge 的内部插件名（如"酷狗音乐"），
         # 而非注册名（"js_bridge"）。对齐 get_play_url：accepts 命中源优先路由，
         # 避免遍历 http 源对陌生 track 发无谓请求。不加全遍历——歌词无强回退需求。
-        for s in self._sources.values():
+        for _, s in legacy:
             try:
                 acc = getattr(s, "accepts", None)
                 if acc is None or not acc(track):
                     continue
                 r = s.get_lyric(track)
-                if r:
+                if r and self._legacy_current(track, s):
                     return r
             except Exception:
                 continue  # 单源失败继续下一个
@@ -420,7 +576,9 @@ class OnlineSourceManager:
         from .models import CatalogResults
         out = CatalogResults()
         with self._life_lock:
-            sources = list(self._sources.items())
+            if source in self._managed_names:
+                return out
+            sources = [(name, src) for name, src in self._sources.items() if name not in self._managed_names]
         for name, src in sources:
             if source and name not in (source, "js_bridge"):
                 continue
@@ -444,7 +602,9 @@ class OnlineSourceManager:
         返回 {is_end: bool, tracks: [OnlineTrack]}；无能力/失败 → None。
         """
         with self._life_lock:
-            sources = list(self._sources.items())
+            if source in self._managed_names:
+                return None
+            sources = [(name, src) for name, src in self._sources.items() if name not in self._managed_names]
         for name, src in sources:
             if limit is not None and name not in (source, "js_bridge"):
                 continue
@@ -466,7 +626,7 @@ class OnlineSourceManager:
         """Read bridge metadata, without making a network request in the GUI."""
         out = []
         with self._life_lock:
-            sources = list(self._sources.values())
+            sources = [src for name, src in self._sources.items() if name not in self._managed_names]
         for src in sources:
             getter = getattr(src, "list_plugins", None)
             if callable(getter):
@@ -475,7 +635,9 @@ class OnlineSourceManager:
 
     def browse(self, source, operation, **params):
         with self._life_lock:
-            sources = list(self._sources.values())
+            if source in self._managed_names:
+                raise SourceSearchError("unavailable")
+            sources = [src for name, src in self._sources.items() if name not in self._managed_names]
         for src in sources:
             getter = getattr(src, "list_plugins", None)
             if callable(getter) and any(p.get("name") == source for p in getter()):
@@ -494,6 +656,9 @@ class OnlineSourceManager:
             self._closed = True
             sources = list(self._sources.values())
             self._sources.clear()
+            for lease in self._source_leases.values():
+                lease.retire()
+            self._source_leases.clear()
         for src in sources:
             try:
                 src.close()

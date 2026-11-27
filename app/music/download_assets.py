@@ -85,14 +85,29 @@ def lyric_for_track(manager, track):
     return text
 
 
-def cover_for_track(track, cancelled=None):
+def cover_for_track(track, cancelled=None, *, manager=None):
     from .online.download_probe import DownloadTransportError, read_download_attachment
 
-    url = getattr(track, "cover_url", None)
-    if not isinstance(url, str):
-        return None
+    from .online.manager import OnlineSourceManager
+
+    from .online.source_authority import authorization_plugin
+
+    managed = (authorization_plugin(track) is not None
+               or isinstance(manager, OnlineSourceManager) and manager.is_managed_track(track))
     try:
-        data = read_download_attachment(url, cancelled=cancelled)
+        if managed:
+            if not isinstance(manager, OnlineSourceManager):
+                return None
+            entry = manager.get_cover_resource(track)
+            if entry is None:
+                return None
+            data = read_download_attachment(entry["url"], authorization=entry["_authorization"],
+                                            kind="cover", cancelled=cancelled)
+        else:
+            url = getattr(track, "cover_url", None)
+            if not isinstance(url, str):
+                return None
+            data = read_download_attachment(url, cancelled=cancelled)
     except DownloadTransportError:
         return None
     if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:

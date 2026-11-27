@@ -267,6 +267,9 @@ class LyricsWindow(QWidget):
                 "source_name": str(song.get("source_name") or ""),
                 "track_id": str(song.get("track_id") or ""),
             }
+            plugin_identity = song.get("authorization_plugin")
+            if isinstance(plugin_identity, str):
+                snapshot["authorization_plugin"] = plugin_identity
         else:
             extra = getattr(song, "extra", None) or {}
             snapshot = {
@@ -277,6 +280,9 @@ class LyricsWindow(QWidget):
                 "source_name": str(getattr(song, "source_name", "") or ""),
                 "track_id": str(getattr(song, "track_id", "") or ""),
             }
+            plugin_identity = getattr(song, "authorization_plugin", None)
+            if isinstance(plugin_identity, str):
+                snapshot["authorization_plugin"] = plugin_identity
         # extra 浅拷贝（dict 层级；取词服务可能依赖其中的源私有字段）
         snapshot["extra"] = dict(extra)
         cover = song.get("cover_url") if isinstance(song, dict) else getattr(song, "cover_url", None)
@@ -374,6 +380,7 @@ class LyricsWindow(QWidget):
                 duration_seconds=0,
                 cover_url=None,
                 extra=snapshot["extra"],
+                authorization_plugin=snapshot.get("authorization_plugin"),
             )
             return mgr.get_lyric(track)
         except Exception:

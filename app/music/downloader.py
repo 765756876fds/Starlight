@@ -120,6 +120,8 @@ class DownloadManager:
             identity = ("metadata", *(song.get(key) or "" for key in ("title", "artist", "album")),
                         float(duration) if type(duration) in (int, float) and 0 < duration < 86400 else 0.0,
                         *(extra.get(key) for key in ("ISRC", "isrc", "version", "versionName")))
+        if song.get("authorization_plugin"):
+            identity += ("authorized", song["authorization_plugin"])
         settings = normalize_options(options)
         choice = options.get("representation") if isinstance(options, dict) else None
         if isinstance(choice, DownloadOption):
@@ -657,7 +659,7 @@ class DownloadManager:
                         if exc.status in _REFRESH_HTTP:
                             if result.get("direct_url"):
                                 raise
-                            result = self._resolve_rendition(track, option.native, 1.2)
+                            result = self._refresh_rendition(track, option.native, 1.2, result)
                             if not result:
                                 raise
                         elif self._retryable_transfer(task, exc):
@@ -722,7 +724,7 @@ class DownloadManager:
             cb.get("on_stage", lambda k, stage: None)(key, "正在保存")
             lyric = cover = None
             for name, reader in (("lyrics", lambda: assets.lyric_for_track(self.online_manager, track)),
-                                 ("cover", lambda: assets.cover_for_track(track, cancelled=self._stopping))):
+                                 ("cover", lambda: self._download_cover(assets, track))):
                 if options[name]:
                     try: value = reader()
                     except Exception as exc:
@@ -892,9 +894,28 @@ class DownloadManager:
             os.close(fd)
             raise
 
-    def _fetch_audio(self, track, result, key, callbacks, directory=None, cancelled=None, *, native=None):
-        from .online.download_probe import DownloadTransportError
+    def _download_cover(self, assets, track):
+        if self._managed_online_track(track):
+            return assets.cover_for_track(track, cancelled=self._stopping, manager=self.online_manager)
+        return assets.cover_for_track(track, cancelled=self._stopping)
 
+    def _managed_online_track(self, track):
+        from .online.manager import OnlineSourceManager
+        from .online.source_authority import authorization_plugin
+        return (authorization_plugin(track) is not None or
+                isinstance(self.online_manager, OnlineSourceManager) and self.online_manager.is_managed_track(track))
+
+    def _fetch_audio(self, track, result, key, callbacks, directory=None, cancelled=None, *, native=None):
+        from .online.source_authority import AuthorizedResource, DownloadTransportError
+
+        options = {}
+        grant = result.get("_authorization")
+        if grant is not None or self._managed_online_track(track):
+            if not isinstance(grant, AuthorizedResource):
+                raise DownloadTransportError("source_scope")
+            grant.check_owner(track.source_name, str(track.track_id))
+            grant.check("download", result["url"])
+            options["authorization"] = grant
         task, run = self._current.task, self._current.run
         resource = (track.source_name, str(track.track_id), native)
         try:
@@ -941,6 +962,7 @@ class DownloadManager:
                 cancelled=cancelled, expected_size=result.get("_expected_size"),
                 resume=checkpoint, checkpoint=checkpoint_written,
                 open_part=lambda: self._open_owned(part, task["partial"]["stamp"]), on_bytes=written,
+                **options,
             )
             if bytes_written <= 0:
                 raise ValueError("empty audio")
@@ -1046,7 +1068,8 @@ class DownloadManager:
             return OnlineTrack(song["source_name"], str(song["track_id"]), song.get("title") or "",
                                song.get("artist") or "", song.get("album") or "",
                                song.get("duration_seconds") or song.get("duration") or 0,
-                               song.get("cover_url"), dict(song.get("extra") or {}))
+                               song.get("cover_url"), dict(song.get("extra") or {}),
+                               authorization_plugin=song.get("authorization_plugin"))
         return None
 
     def _recording_candidates(self, song):
@@ -1089,6 +1112,23 @@ class DownloadManager:
         except Exception as exc:
             log.info("download address unavailable type=%s", type(exc).__name__)
             return None
+
+    @staticmethod
+    def _same_download_address(left, right):
+        def address(result):
+            grant = result.get("_authorization")
+            return result.get("url"), grant.headers if grant is not None else result.get("headers")
+        return address(left) == address(right)
+
+    def _refresh_rendition(self, track, native, timeout, previous):
+        grant = previous.get("_authorization")
+        if grant is not None and not grant.active():
+            return None
+        result = self._resolve_rendition(track, native, timeout)
+        if grant is not None and (not result or not grant.active()
+                                  or getattr(result.get("_authorization"), "lease", None) is not grant.lease):
+            return None
+        return result
 
     def _request_plan(self, tracks, options, choice):
         from .online.search_resources import search_resources
@@ -1135,7 +1175,23 @@ class DownloadManager:
             if not result or not isinstance(result.get("url"), str) or not result["url"]:
                 continue
             headers = result.get("headers") or {}
-            dedup = result["url"], tuple(sorted((str(k), str(v)) for k, v in headers.items()))
+            grant = result.get("_authorization")
+            if grant is None:
+                if self._managed_online_track(track):
+                    continue
+                dedup = result["url"], tuple(sorted((str(k), str(v)) for k, v in headers.items()))
+                scope = {}
+            else:
+                from .online.source_authority import AuthorizedResource, DownloadTransportError
+                if not isinstance(grant, AuthorizedResource):
+                    continue
+                try:
+                    grant.check_owner(track.source_name, str(track.track_id))
+                    grant.check("download", result["url"])
+                except DownloadTransportError:
+                    continue
+                dedup = (grant.lease, grant.resource_id, result["url"], tuple(sorted(grant.headers.items())))
+                scope = {"authorization": grant}
             if dedup in seen:
                 continue
             seen.add(dedup)
@@ -1146,25 +1202,24 @@ class DownloadManager:
             if on_probe:
                 on_probe()
             proof = probe_download(result["url"], headers, timeout=min(1.4, remaining),
-                                   max_bytes=min(8192, remaining_bytes), cancelled=cancelled)
+                                   max_bytes=min(8192, remaining_bytes), cancelled=cancelled, **scope)
             remaining_bytes -= proof.bytes_read
             if (proof.available is False and proof.http_status in _REFRESH_HTTP and not result.get("direct_url")
                     and probing < MAX_PROBES and deadline - time.monotonic() > .25):
-                refreshed = self._resolve_rendition(track, native, min(.8, deadline - time.monotonic()))
-                if refreshed and refreshed.get("url") and (refreshed.get("url"), refreshed.get("headers")) != (
-                    result["url"], result.get("headers")
-                ):
+                refreshed = self._refresh_rendition(track, native, min(.8, deadline - time.monotonic()), result)
+                if refreshed and refreshed.get("url") and not self._same_download_address(refreshed, result):
                     result = refreshed
+                    scope = {"authorization": result["_authorization"]} if result.get("_authorization") else {}
                     remaining = deadline - time.monotonic()
                     if remaining <= .05 or cancelled():
                         break
                     probing += 1
                     proof = probe_download(result["url"], result.get("headers"), timeout=min(1.3, remaining),
-                                           max_bytes=min(8192, remaining_bytes), cancelled=cancelled)
+                                           max_bytes=min(8192, remaining_bytes), cancelled=cancelled, **scope)
                     remaining_bytes -= proof.bytes_read
             if (proof.available is False or proof.reason in {
                     "invalid_url", "blocked_target", "blocked_redirect", "invalid_redirect", "redirect_limit"
-                } or (menu and proof.available is not True)):
+                } or proof.reason.startswith("source_") or (menu and proof.available is not True)):
                 continue
             if proof.size_bytes and hint and hint.size_bytes and proof.size_bytes != hint.size_bytes:
                 log.info("download resource size differs from source declaration")
