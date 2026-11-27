@@ -4,17 +4,21 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 
 from app.core.logger import get_logger
 
 from .cache import OnlineCache
 from .models import OnlineTrack, SearchResults
+from .paged_search import PagedSearch, SearchTarget
 from .source import MusicSource, SourceSearchError
 
 logger = get_logger()
 
 
 class OnlineSourceManager:
+    PAGED_WORKERS = 12
+
     def __init__(self, cache_ttl: float = 300.0, max_workers: int = 4,
                  request_timeout: float = 5.0):
         self._sources: dict[str, MusicSource] = {}
@@ -32,11 +36,24 @@ class OnlineSourceManager:
         # unregister/同名 register 插入（消除旧结果回写污染窗口）。
         # 锁内只做 dict/缓存操作（微秒级），不等待搜索线程，无死锁。
         self._life_lock = threading.Lock()
+        self._paged_executor = ThreadPoolExecutor(max_workers=self.PAGED_WORKERS,
+                                                  thread_name_prefix="music-search")
+        self._paged_active = {}
+        self._paged_peak = 0
+        self._closed = False
 
     def register(self, source: MusicSource) -> None:
         with self._life_lock:
+            previous = self._sources.get(source.name)
+            if previous is not None:
+                self._cache.delete(source.name)
             self._sources[source.name] = source
             self._source_versions[source.name] = self._source_versions.get(source.name, 0) + 1
+        if previous is not None and previous is not source:
+            try:
+                previous.close()
+            except Exception:
+                logger.exception("Failed to close a replaced music source: %s", source.name)
 
     def load_custom_sources(self, directory: str) -> int:
         """扫描目录下 *.py，每个文件必须定义 create_source() -> MusicSource。"""
@@ -92,6 +109,57 @@ class OnlineSourceManager:
         with self._life_lock:
             self._source_versions[name] = self._source_versions.get(name, 0) + 1
             self._cache.delete(name)
+
+    def open_search(self, keyword: str) -> PagedSearch:
+        targets = []
+        with self._life_lock:
+            sources = [(name, src, self._source_versions[name])
+                       for name, src in self._sources.items()]
+        for name, src, version in sources:
+            if not hasattr(src, "search_snapshot"):
+                targets.append(SearchTarget(name, name, src, version, False))
+                continue
+            process, aliases = src.search_snapshot()
+            for alias in aliases:
+                targets.append(SearchTarget(name, alias, src, version, True, process))
+        return PagedSearch(self, keyword, targets)
+
+    def _target_is_current(self, target: SearchTarget) -> bool:
+        return (not self._closed and self._source_versions.get(target.owner) == target.version
+                and (not target.pageable or target.source.has_search_process(target.process)))
+
+    def submit_search_page(self, target, keyword, page):
+        # Keep counting a job until the Python call actually returns. The
+        # session can stop waiting without creating unbounded executor work.
+        with self._life_lock:
+            if self._closed or target.key in self._paged_active or len(self._paged_active) >= self.PAGED_WORKERS:
+                return None
+            read = (partial(target.source.search_page, target.process, target.name, keyword, page)
+                    if target.pageable else partial(target.source.search, keyword, 30))
+            future = self._paged_executor.submit(self._read_search_page, target, read)
+            self._paged_active[target.key] = future
+            self._paged_peak = max(self._paged_peak, len(self._paged_active))
+
+        def released(_):
+            with self._life_lock:
+                if self._paged_active.get(target.key) is future:
+                    self._paged_active.pop(target.key)
+
+        future.add_done_callback(released)
+        return future
+
+    def _read_search_page(self, target, read):
+        started = time.monotonic()
+        try:
+            return read()
+        finally:
+            with self._life_lock:
+                if self._target_is_current(target):
+                    self._latency[target.name] = time.monotonic() - started
+
+    def paged_search_activity(self):
+        with self._life_lock:
+            return len(self._paged_active), self._paged_peak
 
     def search_all(self, keyword: str, limit_per_source: int = 10
                    ) -> dict[str, list[OnlineTrack]]:
@@ -351,11 +419,15 @@ class OnlineSourceManager:
 
     def close(self) -> None:
         """关闭线程池并释放全部音源（程序退出/模块停止时调用，幂等）。"""
-        for name, src in list(self._sources.items()):
+        with self._life_lock:
+            self._closed = True
+            sources = list(self._sources.values())
+            self._sources.clear()
+        for src in sources:
             try:
                 src.close()
             except Exception:
                 pass
-        self._sources.clear()
+        self._paged_executor.shutdown(wait=False, cancel_futures=True)
         self._cache.clear()
         self._executor.shutdown(wait=False, cancel_futures=True)

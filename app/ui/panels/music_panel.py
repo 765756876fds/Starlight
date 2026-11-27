@@ -237,6 +237,9 @@ class MusicPanel(QWidget):
         self._voice_generation = None   # P1 候选旁路：当前 UI 展示的语音候选代际
         self._identify_auto_generation = 0
         self._search_generation = 0
+        self._search_pages = None
+        self._search_visible_limit = 30
+        self._search_has_buffer = False
         self._active_search = None
         self._pending_search = None
         self._pending_identify_close = None
@@ -614,12 +617,23 @@ class MusicPanel(QWidget):
         self.btn_retry_online = QPushButton("重试")
         self.btn_retry_online.clicked.connect(self._retry_online)
         self.btn_retry_online.hide()
+        self.btn_search_more = QPushButton("加载更多")
+        self.btn_search_more.clicked.connect(self._load_search_more)
+        self.btn_search_more.hide()
+        self.btn_search_retry = QPushButton("重试未完成来源")
+        self.btn_search_retry.clicked.connect(self._retry_search_pages)
+        self.btn_search_retry.hide()
+        self._search_page_timer = QTimer(self)
+        self._search_page_timer.setInterval(25)
+        self._search_page_timer.timeout.connect(self._poll_search_pages)
+        self.edit_kw.textChanged.connect(self._search_keyword_changed)
         self.btn_result_play.setEnabled(False)
         self.btn_result_play.hide()
         self.btn_versions.setEnabled(False)
         self.btn_versions.hide()
         self.list_results.currentRowChanged.connect(self._online_selection_changed)
-        for button in (self.btn_result_play, self.btn_versions, self.btn_retry_online):
+        for button in (self.btn_result_play, self.btn_versions, self.btn_retry_online,
+                       self.btn_search_more, self.btn_search_retry):
             actions.addWidget(button)
         results_layout.addLayout(actions)
         self.btn_discovery_more = QPushButton("加载更多曲目")
@@ -851,6 +865,7 @@ class MusicPanel(QWidget):
         与 __init__ 中 subscribe 的一一配对注销。"""
         self._cancel_manual_feedback()
         self._queue_refresh_timer.stop()
+        self._stop_search_pages()
         if hasattr(self, "btn_like"):
             self.btn_like.shutdown()
             self.quality_button.shutdown()
@@ -1745,6 +1760,8 @@ class MusicPanel(QWidget):
                         self.cb_source.setCurrentIndex(idx)
             finally:
                 self.cb_source.blockSignals(False)
+            if include_discovery and self._search_pages is not None:
+                self._poll_search_pages()
             if include_discovery and hasattr(self, "discovery"):
                 self.discovery.refresh_sources()
                 self.popular_songs.cache.clear()
@@ -1758,12 +1775,100 @@ class MusicPanel(QWidget):
         """Qt clicked(bool) 不进入业务完成回调参数。"""
         self._do_search(rank_for_display=True)
 
+    def _stop_search_pages(self):
+        if self._search_pages is None:
+            return
+        self._search_pages = None
+        self._search_page_timer.stop()
+        self.btn_search_more.hide()
+        self.btn_search_retry.hide()
+        notice_id = getattr(self, "_search_notice_ids", {}).pop(self._search_generation, None)
+        if notice_id:
+            center = get_notification_center()
+            notice = center.get(notice_id)
+            if notice and notice.status == "processing":
+                center.update(notice_id, title="已结束本次搜索", status="warning", phase="done")
+
+    def _search_keyword_changed(self, *_):
+        if self._search_pages is not None:
+            self._stop_search_pages()
+            self._last_online_result = None
+            self.lbl_status.setText("关键词已更改，请点击搜索或按回车")
+
+    def _poll_search_pages(self):
+        session = self._search_pages
+        if session is not None and session.poll():
+            self._render_search_pages()
+        if session is None or not session.loading():
+            self._search_page_timer.stop()
+
+    def _render_search_pages(self):
+        session = self._search_pages
+        results = session.results()
+        self._on_search_done(results, display_query=session.keyword, paged=True)
+        owner = self.cb_source.currentData()
+        loading = session.loading(owner)
+        errors = session.errors(owner)
+        count = len(self._tracks_by_row)
+        if loading:
+            status = f"已找到 {count} 首，仍在搜索…" if count else SEARCHING
+        elif errors:
+            if count:
+                status = f"已找到 {count} 首；部分内容暂不可用。"
+            elif set(errors.values()) <= {"unavailable", "interrupted"}:
+                status = "暂无可用音源，请检查音源后重新搜索。"
+            elif set(errors.values()) <= {"timeout", "network_timeout", "busy"}:
+                status = "部分音源响应超时，请重试。"
+            else:
+                status = "搜索暂未完成，请重试。"
+        elif count:
+            status = f"已找到 {count} 首"
+        elif (results.successful_sources if owner is None else owner in results.successful_sources):
+            status = "未找到歌曲，试试其他歌名或歌手"
+        else:
+            status = "暂无可用音源，请检查音源设置"
+        if self._manual_request is None:
+            self.lbl_status.setText(status)
+        can_load = self._search_has_buffer or session.can_fetch(owner)
+        self.btn_search_more.setVisible(can_load and (not loading or self._search_has_buffer))
+        self.btn_search_retry.setVisible(not loading and session.can_retry(owner))
+
+        if not session.loading():
+            notice_id = self._search_notice_ids.pop(self._search_generation, None)
+            if notice_id:
+                notify(f"已找到 {count} 首歌曲" if count else status, status,
+                       operation_id=notice_id, status="success" if count and not session.errors() else "warning")
+
+    def _load_search_more(self):
+        session = self._search_pages
+        if session is None:
+            return
+        self._search_visible_limit += 30
+        owner = self.cb_source.currentData()
+        self._render_search_pages()
+        if len(self._tracks_by_row) < self._search_visible_limit:
+            session.request(owner)
+            self._poll_search_pages()
+            self._render_search_pages()
+            if session.loading():
+                self._search_page_timer.start()
+
+    def _retry_search_pages(self):
+        session = self._search_pages
+        if session is not None:
+            session.request(self.cb_source.currentData(), retry=True)
+            self._poll_search_pages()
+            self._render_search_pages()
+            if session.loading():
+                self._search_page_timer.start()
+
     def _do_search(self, *, on_done=None, on_failed=None, rank_for_display=False):
         if hasattr(self, "sort_button"):
             self.tabs.setCurrentIndex(1)
         kw = self.edit_kw.text().strip()
         if not kw or self._music is None:
             return
+        self._stop_search_pages()
         self._discovery_tracks = None
         self._retry_online_track = None
         self.btn_retry_online.hide()
@@ -1789,6 +1894,20 @@ class MusicPanel(QWidget):
         self.list_results.clear()
         self._tracks_by_row = []
         self.lbl_status.setText(SEARCHING)
+        open_search = getattr(self._music, "open_online_search", None)
+        if rank_for_display and on_done is None and on_failed is None and open_search is not None:
+            session = open_search(kw)
+            if session is not None:
+                self._pending_search = None
+                self._search_pages = session
+                self._search_visible_limit = 30
+                self.refresh_online_sources(include_discovery=False)
+                session.request()
+                self._poll_search_pages()
+                self._render_search_pages()
+                if session.loading():
+                    self._search_page_timer.start()
+                return
         # finished 槽回收旧线程前不覆盖引用；最多保存最后一次待执行请求。
         if self._thread is not None:
             self._pending_search = request
@@ -1837,6 +1956,8 @@ class MusicPanel(QWidget):
         self._worker = None
         self._active_search = None
         pending, self._pending_search = self._pending_search, None
+        if self._search_pages is not None:
+            return
         if pending is not None and pending[1] == self.edit_kw.text().strip():
             self._start_search(pending)
         elif pending is not None or (request is not None and request[1] != self.edit_kw.text().strip()):
@@ -1854,7 +1975,7 @@ class MusicPanel(QWidget):
         return "请重试或更换音源；若持续失败，请在设置中检查插件和网络"
 
     def _on_search_done(self, result: dict, search_generation=None, on_done=None,
-                        on_failed=None, *, display_query=""):
+                        on_failed=None, *, display_query="", paged=False):
         if search_generation is not None and search_generation != self._search_generation:
             return
         self._last_online_result = result
@@ -1862,6 +1983,10 @@ class MusicPanel(QWidget):
         if getattr(self, "_results_requested", False):
             self.online_stack.setCurrentWidget(self.results_page)
         self._voice_generation = None   # 手动搜索 → 重置语音候选代际
+        selected = self.list_results.currentRow()
+        previous = self._tracks_by_row[selected] if paged and 0 <= selected < len(self._tracks_by_row) else None
+        scroll = self.list_results.verticalScrollBar()
+        offset = scroll.value()
         self.list_results.clear()
         source_filter = self.cb_source.currentData()
         version_filter = self.cb_search_filter.currentIndex() if hasattr(self, "cb_search_filter") else 0
@@ -1881,6 +2006,9 @@ class MusicPanel(QWidget):
         from ...music.online.content_choices import group_tracks
         self._track_versions = (group_tracks(tracks_for_search) if on_done is None and collection is None
                                 else [[track] for track in tracks_for_search])
+        if paged:
+            self._search_has_buffer = len(self._track_versions) > self._search_visible_limit
+            self._track_versions = self._track_versions[:self._search_visible_limit]
         tracks_for_search = [group[0] for group in self._track_versions]
         n = len(tracks_for_search)
         for t in tracks_for_search:
@@ -1914,7 +2042,13 @@ class MusicPanel(QWidget):
         self._fit_sparse_results()
         for key, task in self._download_tasks.items():
             self._update_download_card(key, task)
-        self.list_results.setCurrentRow(0 if tracks_for_search else -1)
+        row = next((i for i, group in enumerate(self._track_versions) if previous is not None
+                    and any(previous is track for track in group)), 0 if tracks_for_search else -1)
+        self.list_results.setCurrentRow(row)
+        if paged:
+            scroll.setValue(offset)
+            self._online_selection_changed(row)
+            return
         errors = {src: error for src, error in getattr(result, "errors", {}).items()
                   if not source_filter or src == source_filter}
         succeeded = {src for src in getattr(result, "successful_sources", set())
@@ -1968,6 +2102,9 @@ class MusicPanel(QWidget):
             gen = int(gen)
             if self._voice_generation is not None and gen <= self._voice_generation:
                 return
+            if self._search_pages is not None:
+                self._stop_search_pages()
+                self._search_generation += 1
             self._voice_generation = gen
             self._results_requested = True
             self._last_online_result = None
@@ -2027,6 +2164,7 @@ class MusicPanel(QWidget):
                              status_label=self.popular_songs.play_status)
 
     def _show_discovered_tracks(self, tracks, title):
+        self._stop_search_pages()
         self._results_requested = True
         self.cb_search_filter.setEnabled(True)
         self.cb_search_filter.blockSignals(True)
@@ -2045,6 +2183,9 @@ class MusicPanel(QWidget):
         self.lbl_status.setText(f"{title} · {len(tracks)} 首；双击播放，右键可加入队列或歌单")
 
     def _show_discovery_home(self):
+        if self._search_pages is not None:
+            self._stop_search_pages()
+            self._last_online_result = None
         self._results_requested = False
         self.online_stack.setCurrentWidget(self.discovery)
         self.discovery.show_view("home")
@@ -2052,7 +2193,10 @@ class MusicPanel(QWidget):
         self.btn_discovery_more.hide()
 
     def _apply_online_filter(self, *_):
-        if self._last_online_result is not None:
+        if self._search_pages is not None:
+            self._search_pages.poll()
+            self._render_search_pages()
+        elif self._last_online_result is not None:
             self._on_search_done(self._last_online_result, display_query=self._last_online_query)
 
     def _play_discovery_history(self, row):

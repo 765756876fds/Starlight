@@ -223,8 +223,13 @@ const scenario = process.argv[2];
 let handler;
 const loader = {
   capabilities() { return {}; },
-  load(fp) { return { name: fp.includes('bad') ? 'bad' : 'good', type:'musicfree' }; },
-  async callSearch(p) { if (p.name === 'bad') throw Error('fixture parse error'); return []; }
+  load(fp) {
+    return { name: fp.includes('bad') ? 'bad' : 'good', type:'musicfree', search() {} };
+  },
+  async callSearchPage(p) {
+    if (p.name === 'bad') throw Error('fixture parse error');
+    return { tracks: [], is_end: true, total: 0 };
+  }
 };
 const fakeFs = {existsSync:()=>true, readdirSync:()=>scenario==='unavailable'?[]:
   scenario==='empty'?['good.js']:scenario==='failed'?['bad.js']:['bad.js','good.js']};

@@ -38,6 +38,36 @@ async function readCatalogue(read, timeoutMs = 8000) {
   }
 }
 
+// One unresolved plugin call per source, including calls whose RPC timed out.
+const activeSearches = new Map();
+const maxActiveSearches = 12;
+let peakSearches = 0;
+
+async function searchPage(plugin, keyword, page) {
+  if (plugin?.type !== 'musicfree' || typeof plugin.search !== 'function') {
+    return { status: 'unavailable' };
+  }
+  if (!Number.isSafeInteger(page) || page < 1 || typeof keyword !== 'string' || !keyword.trim()) {
+    return { status: 'structure' };
+  }
+  if (activeSearches.has(plugin) || activeSearches.size >= maxActiveSearches) {
+    return { status: 'busy' };
+  }
+  const pending = Promise.resolve().then(() => mfLoader.callSearchPage(plugin, keyword, page));
+  activeSearches.set(plugin, pending);
+  peakSearches = Math.max(peakSearches, activeSearches.size);
+  const release = () => activeSearches.delete(plugin);
+  pending.then(release, release);
+  try {
+    return { status: 'ok', page, ...await readCatalogue(() => pending) };
+  } catch (error) {
+    const status = error?.catalogueTimeout ? 'timeout' :
+      error?.category === 'structure' ? 'structure' : 'plugin';
+    console.error(`[bridge] search failed source=${plugin.name} type=${status}`);
+    return { status };
+  }
+}
+
 function scanDir(dir, isLx) {
   if (!dir) return [];
   dir = path.resolve(dir);
@@ -96,22 +126,22 @@ async function dispatch(method, params) {
       const out = [];
       const errors = {};
       let successful = 0;
-      const results = await Promise.all(plugins.map(async p => {
-        try {
-          const items = await readCatalogue(() => mfLoader.callSearch(p, keyword, limit || 20));
-          return items;
-        } catch (e) {
-          errors[p.name] = e.catalogueTimeout ? 'timeout' : 'plugin';
-          console.error(`[bridge] search failed source=${p.name} type=${errors[p.name]}`);
-          return null;
+      const results = await Promise.all(plugins.map(p => searchPage(p, keyword, 1)));
+      for (const [index, result] of results.entries()) {
+        if (result.status === 'ok') {
+          out.push(...result.tracks.slice(0, limit || 20));
+          successful += 1;
+        } else {
+          errors[plugins[index].name] = result.status;
         }
-      }));
-      for (const items of results) {
-        if (items !== null) { out.push(...items); successful += 1; }
       }
       if (!successful && !Object.keys(errors).length) errors.js_bridge = 'unavailable';
       return { tracks: out, errors, successful };
     }
+    case 'searchPage':
+      return searchPage(sources.get(params.source), params.keyword, params.page);
+    case 'searchStats':
+      return { active: activeSearches.size, peak: peakSearches, limit: maxActiveSearches };
     case 'getUrl': {
       const { source, quality, raw_item } = params;
       const p = sources.get(source);
@@ -226,7 +256,10 @@ async function dispatch(method, params) {
     if (seen.has(p)) continue;
     seen.add(p);
     plugins.push({ name: p.name, type: p.type, status: 'ok', file: p.filePath,
-      capabilities: p.type === 'musicfree' ? mfLoader.capabilities(p) : {} });
+      capabilities: {
+        ...(p.type === 'musicfree' ? mfLoader.capabilities(p) : {}),
+        search: p.type === 'musicfree' && typeof p.search === 'function',
+      } });
   }
   for (const f of failures) plugins.push(f);
   // ready event

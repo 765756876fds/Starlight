@@ -2247,6 +2247,11 @@ class MusicController:
             logger.info(f"[Music] 自定义音源已同步: {sorted(self._custom_http_sources)}")
         return registered
 
+    def open_online_search(self, keyword: str):
+        if self.online_manager is not None:
+            return self.online_manager.open_search(keyword)
+        return None
+
     def search_online(self, keyword: str) -> dict:
         if self.online_manager is None:
             return {}

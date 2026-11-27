@@ -16,6 +16,13 @@ class OnlineTrack:
     extra: dict = field(default_factory=dict)
 
 
+@dataclass
+class SearchPage:
+    tracks: list[OnlineTrack]
+    is_end: bool | None = None
+    total: int | None = None
+
+
 class SearchTracks(list):
     """兼容旧歌曲列表，同时保留桥接内部各插件的本次搜索状态。"""
 

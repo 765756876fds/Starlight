@@ -11,6 +11,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QPushButton
 
 from app.music.online.models import OnlineTrack
+from tests.music_search_fixture import paged_bridge  # noqa: F401
 from app.ui.panels.music_panel import MusicPanel
 from app.ui.panels.settings_panel import SettingsPanel
 
@@ -401,3 +402,91 @@ def test_latest_manual_search_ranks_with_its_own_keyword(panel):
     assert p.displays == [[latest.title, first.title]]
     assert p._tracks_by_row == [latest, first]
     assert errors == []
+
+
+def test_paged_window_uses_buffer_and_only_accepts_latest_search(qapp, paged_bridge):
+    from app.music.online.manager import OnlineSourceManager
+    from PySide6.QtCore import QTimer, Qt
+    import json
+    import os
+    from pathlib import Path
+
+    class PagedMusic(FakeMusic):
+        open_online_search = lambda self, keyword: manager.open_search(keyword)
+        get_online_sources = lambda self: manager.list_sources()
+
+    manager = OnlineSourceManager()
+    manager.register(paged_bridge)
+    panel = MusicPanel(PagedMusic())
+    panel.enable_shell_navigation()
+    panel.resize(920, 700)
+    panel.show()
+    beats = []
+    heartbeat = QTimer(panel)
+    heartbeat.setTimerType(Qt.PreciseTimer)
+    heartbeat.timeout.connect(lambda: beats.append(time.monotonic()))
+    heartbeat.start(20)
+    try:
+        panel.edit_kw.setText("pages")
+        panel.btn_search.click()
+        wait_until(lambda: panel._search_pages is not None and not panel._search_pages.loading())
+        assert panel.list_results.count() == 30
+        assert len(panel._track_versions[0]) == 2
+        panel.btn_search_more.click()
+        wait_until(lambda: not panel._search_pages.loading())
+        assert panel.list_results.count() == 35
+        first_click = {t.extra["_raw"]["observedPage"] for t in panel._tracks_by_row}
+        assert first_click == {1, 2}
+        panel.btn_search_more.click()
+        wait_until(lambda: not panel._search_pages.loading())
+        assert panel.list_results.count() == 36
+        assert not panel.btn_search_more.isVisible()
+
+        for index in range(20):
+            panel.edit_kw.setText(f"old-{index}")
+            panel.btn_search.click()
+            panel.edit_kw.setText(f"new-{index}")
+            panel.btn_search.click()
+            wait_until(lambda: not panel._search_pages.loading())
+            assert panel.list_results.count() == 30
+            assert all(t.title.startswith(f"new-{index} ") for t in panel._tracks_by_row)
+
+        start = time.monotonic()
+        beats.clear()
+        panel.edit_kw.setText("split")
+        panel.btn_search.click()
+        wait_until(lambda: panel.list_results.count() == 30)
+        first = time.monotonic() - start
+        assert panel._search_pages.loading()
+        assert panel.btn_result_play.isEnabled()
+        assert paged_bridge._call("searchStats", {})["active"] == 1
+        panel.btn_search_more.click()
+        assert panel.list_results.count() == 60
+        assert paged_bridge._call("searchStats", {})["active"] == 1
+        assert {t.extra["_raw"]["observedPage"] for t in panel._tracks_by_row} == {1}
+        wait_until(lambda: not panel._search_pages.loading(), timeout=9)
+        elapsed = time.monotonic() - start
+        assert panel.list_results.count() == 60
+        assert not panel.btn_search_retry.isHidden(), (
+            panel._search_pages.errors(), panel.cb_source.currentData(), panel.lbl_status.text())
+        assert panel.isVisible() and panel.list_results.isVisible()
+        gaps = sorted((b - a) * 1000 for a, b in zip(beats, beats[1:]))
+        assert len(gaps) > 100
+        evidence = os.getenv("STARLIGHT_UI_SEARCH_EVIDENCE")
+        if evidence:
+            Path(evidence).write_text(json.dumps({
+                "qpa": qapp.platformName(),
+                "visible": panel.isVisible(),
+                "first_30_displayed_ms": round(first * 1000, 2),
+                "final_ms": round(elapsed * 1000, 2),
+                "fast_count_after_timeout": panel.list_results.count(),
+                "heartbeat_samples": len(gaps),
+                "heartbeat_p50_ms": round(gaps[len(gaps) // 2], 2),
+                "heartbeat_p95_ms": round(gaps[int(len(gaps) * .95)], 2),
+                "heartbeat_max_ms": round(gaps[-1], 2),
+                "rapid_query_rounds": 20,
+            }, indent=2), encoding="utf8")
+    finally:
+        heartbeat.stop()
+        panel.close()
+        manager.close()

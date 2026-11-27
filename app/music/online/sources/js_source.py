@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 
-from ..models import OnlineTrack, SearchTracks
+from ..models import OnlineTrack, SearchPage, SearchTracks
 from ..source import MusicSource, SourceSearchError
 
 
@@ -210,11 +210,12 @@ class JSMusicSource(MusicSource):
                 print("[JSBridge] bridge 进程退出，尝试自动恢复")
                 self._maybe_auto_reload("node-exit")
 
-    def _call(self, method: str, params: dict, timeout: float = 15.0):
+    def _call(self, method: str, params: dict, timeout: float = 15.0, *, process=None):
+        search_methods = ("search", "searchPage", "browse", "getTopLists")
         with self._write_lock:
             proc = self._proc
-            if proc is None or self._closed:
-                if method in ("search", "browse", "getTopLists"):
+            if proc is None or self._closed or (process is not None and process is not proc):
+                if method in search_methods:
                     raise SourceSearchError("unavailable")
                 return None
             rid = str(uuid.uuid4())
@@ -228,21 +229,22 @@ class JSMusicSource(MusicSource):
             except Exception as exc:
                 with self._lock:
                     self._pending.pop(rid, None)
-                if method in ("search", "browse", "getTopLists"):
+                if method in search_methods:
                     raise SourceSearchError("unavailable") from exc
                 return None
         if not box["event"].wait(timeout):
             print(f"[JSBridge] TIMEOUT {method} {params.get('source')} 等了{timeout}s", flush=True)
             with self._lock:
                 self._pending.pop(rid, None)
-            self._note_call_timeout()
-            if method in ("search", "browse", "getTopLists"):
+            if method != "searchPage":
+                self._note_call_timeout()
+            if method in search_methods:
                 raise SourceSearchError("timeout")
             return None
         msg = box["result"]
         if not msg or not msg.get("ok"):
             print(f"[JSBridge] FAIL {method} {params.get('source')} resp={msg}", flush=True)
-            if method in ("search", "browse", "getTopLists"):
+            if method in search_methods:
                 raise SourceSearchError("plugin" if msg else "unknown")
             return None
         self._call_timeout_streak = 0
@@ -285,6 +287,33 @@ class JSMusicSource(MusicSource):
         if "tracks" in result:
             result = dict(result, tracks=self._parse_tracks(result["tracks"]))
         return result
+
+    def search_snapshot(self):
+        process = self._proc
+        if process is None or process.poll() is not None or not self._ready.is_set():
+            return None, ()
+        names = tuple(dict.fromkeys(
+            plugin["name"] for plugin in self._plugins
+            if plugin.get("status") == "ok" and plugin.get("capabilities", {}).get("search")
+        ))
+        return process, names
+
+    def has_search_process(self, process):
+        return self._proc is process and self.available
+
+    def search_page(self, process, source, keyword, page) -> SearchPage:
+        result = self._call("searchPage", {"source": source, "keyword": keyword, "page": page},
+                            timeout=9.0, process=process)
+        if not isinstance(result, dict):
+            raise SourceSearchError("structure")
+        if result.get("status") != "ok":
+            raise SourceSearchError(result.get("status") or "unknown")
+        if result.get("page") != page or not isinstance(result.get("tracks"), list):
+            raise SourceSearchError("structure")
+        tracks = self._parse_tracks(result["tracks"])
+        if result["tracks"] and not tracks:
+            raise SourceSearchError("structure")
+        return SearchPage(tracks, result.get("is_end"), result.get("total"))
 
     def search_plugin(self, source: str, keyword: str, limit: int = 20) -> list[OnlineTrack]:
         """只搜指定插件（测试按钮用，不经 manager 遍历回退）。"""

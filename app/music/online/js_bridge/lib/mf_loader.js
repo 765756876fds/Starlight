@@ -127,11 +127,22 @@ async function fetchUpdateMeta(plugin, timeoutMs = 10000) {
   };
 }
 
-async function callSearch(plugin, keyword, limit) {
-  if (typeof plugin.search !== 'function') return [];
-  const result = await plugin.search(keyword, 1, 'music');
-  const items = (result && result.data) || (Array.isArray(result) ? result : []);
-  return items.slice(0, limit).map((item) => normalizeMusicItem(plugin.name, item));
+async function callSearchPage(plugin, keyword, page) {
+  const result = await plugin.search(keyword, page, 'music');
+  const data = Array.isArray(result) ? result : result?.data;
+  const items = Array.isArray(data) && data.filter(item => item && typeof item === 'object');
+  if (!items || (data.length && !items.length)) {
+    const error = new Error('Invalid music search response');
+    error.category = 'structure';
+    throw error;
+  }
+  // Forward the complete plugin page. Slicing here would skip the tail
+  // permanently once the UI advances to the next upstream page.
+  return {
+    tracks: items.map(item => normalizeMusicItem(plugin.name, item)),
+    is_end: typeof result.isEnd === 'boolean' ? result.isEnd : null,
+    total: Number.isSafeInteger(result.total) && result.total >= 0 ? result.total : null,
+  };
 }
 
 // MusicFree 标准歌曲对象：title/name、artists(数组或字符串)、duration(秒)、
@@ -304,5 +315,5 @@ async function browse(plugin, operation, params) {
   throw new Error('This plugin does not provide the requested discovery feature');
 }
 
-module.exports = { load, loadFromSource, fetchText, fetchUpdateMeta, callSearch, callGetUrl, callGetLyric,
+module.exports = { load, loadFromSource, fetchText, fetchUpdateMeta, callSearchPage, callGetUrl, callGetLyric,
   callGetTopLists, callGetTopListDetail, capabilities, browse };
