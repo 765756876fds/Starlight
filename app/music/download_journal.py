@@ -17,8 +17,9 @@ _RAW_FIELDS = {
     "platform", "source", "name", "title", "artist", "singer", "album", "albumId", "albumMid",
     "duration", "interval", "isrc", "ISRC", "musicbrainzRecordingId", "mbRecordingId",
     "recording_mbid", "version", "versionName", "subtitle", "versionType", "mixName",
+    "copyrightId", "mixSongId", "albumAudioId", "albumName",
 }
-_QUALITY_FIELDS = {"size", "sizeBytes", "fileSize", "format", "bitrate", "sampleRate", "bitDepth", "quality"}
+_QUALITY_FIELDS = {"size", "sizeBytes", "fileSize", "format", "bitrate", "sampleRate", "bitDepth", "quality", "hash"}
 _QUALITY_NAMES = {"flac24bit", "flac", "320k", "128k", "super", "high", "standard", "low", "lossless", "hires"}
 
 
@@ -60,6 +61,9 @@ def _track_data(data):
     extra = data.get("extra")
     raw = _raw(extra.get("_raw", extra.get("raw"))) if isinstance(extra, dict) else {}
     fields["extra"] = {"_raw": raw} if raw else {}
+    if isinstance(extra, dict) and "_catalog" in extra:
+        from .online.catalog_routes import stored_route
+        fields["extra"]["_catalog"] = stored_route(extra["_catalog"])
     authority = data.get("authorization_plugin")
     if authority is not None:
         if plain(authority, 128) != authority or not authority or not fields["source_name"] or not fields["track_id"]:

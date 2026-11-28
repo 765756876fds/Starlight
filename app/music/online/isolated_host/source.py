@@ -113,12 +113,25 @@ class IsolatedMusicSource(MusicSource):
     def _track_params(self, track, **params):
         if track.source_name != self.name or not plain(track.track_id):
             return None
-        raw = _raw(track.extra.get("_raw")) if isinstance(track.extra, dict) else {}
+        extra = track.extra if isinstance(track.extra, dict) else {}
+        raw = _raw(extra.get("_raw"))
+        native = track.track_id
         if self.plugin_type == "lx":
             provider = raw.get("musicInfo", {}).get("source") or raw.get("source")
             if not isinstance(provider, str) or provider not in self.providers:
                 return None
-        return {"source": self.name, "track_id": track.track_id, "raw_item": raw or None, **params}
+            if "_catalog" in extra:
+                from ..catalog_routes import resolver_quality_fields, routed_native_id, stored_route
+                try:
+                    ref = stored_route(extra["_catalog"])
+                except ValueError:
+                    return None
+                info = raw.get("musicInfo", {})
+                native = routed_native_id(track.track_id, info, provider, ref["source"])
+                if native is None:
+                    return None
+                info.update(resolver_quality_fields(info))
+        return {"source": self.name, "track_id": native, "raw_item": raw or None, **params}
 
     def _request(self, method, params, *, timeout=7.0):
         token, _ = self.search_snapshot()
@@ -167,7 +180,8 @@ class IsolatedMusicSource(MusicSource):
         if self._configured_qualities is not None:
             order = [tier for tier in order if tier in self._configured_qualities]
         params = self._track_params(track, playback_qualities=list(order))
-        return _remote_result(self._request("getUrl", params))
+        timeout = 2.0 if isinstance(track.extra, dict) and "_catalog" in track.extra else 7.0
+        return _remote_result(self._request("getUrl", params, timeout=timeout))
 
     def get_play_url(self, track, quality=None):
         params = self._track_params(track, quality=quality)

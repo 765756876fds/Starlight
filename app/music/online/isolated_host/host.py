@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.core.logger import get_logger
 
+from ..catalog_routes import validate_routes
 from ..plugin_trust import PluginTrustStore, _owned_directory, _pinned_runtime, _plain_file
 from ..source_authority import SourceAuthority, SourceLease
 from . import win32
@@ -76,6 +77,7 @@ class IsolatedMusicHost:
         self._closed_cleanly = False
         if not 0 < len(settings.sources) <= self.MAX_PROCESSES:
             raise ValueError("isolated_host_sources")
+        validate_routes(settings.catalog_routes, settings.sources)
         parent = _owned_directory(settings.work_parent)
         trust_root = _owned_directory(settings.trust_root)
         project = Path(__file__).resolve().parents[4]

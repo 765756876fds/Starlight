@@ -312,8 +312,9 @@ function mediaHeaders(value) {
 
 const rowFields = ['id', 'songmid', 'songId', 'songIdStr', 'musicId', 'hash', 'rid', 'strMediaMid', 'platform', 'source',
   'albumId', 'albumMid', 'isrc', 'ISRC', 'musicbrainzRecordingId', 'mbRecordingId', 'recording_mbid', 'version',
-  'versionName', 'subtitle', 'versionType', 'mixName', 'interval'];
-const qualityFields = ['size', 'sizeBytes', 'fileSize', 'format', 'bitrate', 'sampleRate', 'bitDepth', 'quality'];
+  'versionName', 'subtitle', 'versionType', 'mixName', 'interval', 'copyrightId', 'mixSongId', 'albumAudioId',
+  'albumName'];
+const qualityFields = ['size', 'sizeBytes', 'fileSize', 'format', 'bitrate', 'sampleRate', 'bitDepth', 'quality', 'hash'];
 const qualityNames = ['super', 'high', 'standard', 'low', 'flac24bit', 'flac', '320k', '128k', 'lossless', 'hires'];
 function project(input, fields, limit) {
   return Object.fromEntries(fields.flatMap(key => {
@@ -339,9 +340,15 @@ function normalizeTrack(item) {
   // has been replaced and the full raw search row is absent.
   Object.assign(raw, project(item, rowFields, 512));
   if (duration) raw.duration = duration;
-  if (record(item.qualities)) {
-    raw.qualities = Object.fromEntries(qualityNames.flatMap(key => record(item.qualities[key])
-      ? [[key, project(item.qualities[key], qualityFields, 80)]] : []));
+  if (record(item.qualities) || record(item._types)) {
+    raw.qualities = Object.fromEntries(qualityNames.flatMap(key => {
+      const itemQuality = item.qualities?.[key];
+      const legacyQuality = item._types?.[key];
+      if (!record(itemQuality) && !record(legacyQuality)) return [];
+      const facts = {...project(legacyQuality || {}, qualityFields, 80),
+        ...project(itemQuality || {}, qualityFields, 80)};
+      return [[key, facts]];
+    }));
   }
   return {
     source_name: sourceId,

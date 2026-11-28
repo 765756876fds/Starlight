@@ -1097,6 +1097,14 @@ class DownloadManager:
             same_recording(left, right) for index, left in enumerate(matched) for right in matched[index + 1:]
         ):
             return []  # Ambiguous versions require the user to choose an actual result.
+        expand = getattr(type(self.online_manager), "catalog_candidates", None)
+        if expand is not None:
+            from .online.content_choices import resource_identity
+            candidates = {resource_identity(track): track for track in matched}
+            for track in matched:
+                for candidate in expand(self.online_manager, track):
+                    candidates.setdefault(resource_identity(candidate), candidate)
+            return list(candidates.values())
         return matched
 
     def _resolve_rendition(self, track, native, timeout):

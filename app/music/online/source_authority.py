@@ -7,7 +7,7 @@ and passes a lease to its reviewed adapter, never to plugin code or a journal.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from ipaddress import ip_address
 import math
@@ -162,13 +162,25 @@ class AuthorizedResource:
     url: str = field(repr=False)
     headers: object = field(repr=False)
     _policy: ResourcePolicy = field(repr=False)
+    _catalog: tuple[SourceLease, str] | None = field(default=None, repr=False)
 
     @property
     def budget(self):
         return self._policy.budget
 
     def active(self):
-        return self.lease.active()
+        return self.lease.active() and (self._catalog is None or self._catalog[0].active())
+
+    def for_catalog(self, catalog, resource_id):
+        self.require_active()
+        if (self._catalog is not None or not isinstance(catalog, SourceLease) or catalog is self.lease
+                or catalog._authority is not self.lease._authority
+                or not catalog.active() or not isinstance(resource_id, str) or not 0 < len(resource_id) <= 512):
+            raise DownloadTransportError("source_scope")
+        return replace(self, _catalog=(catalog, resource_id))
+
+    def holds_lease(self, lease):
+        return self.lease is lease or (self._catalog is not None and self._catalog[0] is lease)
 
     def check(self, kind, url):
         target = self.target(url)
@@ -177,12 +189,17 @@ class AuthorizedResource:
         return target
 
     def check_owner(self, source, resource_id):
-        self.lease._authority.require_live(self.lease)
-        if self.lease.source_id != source or self.resource_id != resource_id:
-            raise DownloadTransportError("source_scope")
+        self.require_active()
+        if (self.lease.source_id, self.resource_id) == (source, resource_id):
+            return
+        if self.kind == "playback" and self._catalog is not None:
+            catalog, original = self._catalog
+            if (catalog.source_id, original) == (source, resource_id):
+                return
+        raise DownloadTransportError("source_scope")
 
     def target(self, url):
-        self.lease._authority.require_live(self.lease)
+        self.require_active()
         target = parse_remote_url(url)
         if target.origin() not in self._policy.origins:
             raise DownloadTransportError("source_origin")
@@ -199,17 +216,31 @@ class AuthorizedResource:
 
     def require_active(self):
         self.lease._authority.require_live(self.lease)
+        if self._catalog is not None:
+            catalog = self._catalog[0]
+            catalog._authority.require_live(catalog)
 
     def resume_key(self, url):
         # Same owner, policy revision, track and effective representation address.
         # Instance replacement remains resumable only after current re-authorization.
         scope = (self.lease.source_id, self.lease.plugin_id, str(self.lease.version),
                  self.resource_id, str(url))
+        if self._catalog is not None:
+            catalog, original = self._catalog
+            scope += (catalog.source_id, catalog.plugin_id, str(catalog.version), original)
         encoded = "".join(f"{len(field)}:{field}" for field in scope)
         return sha256(encoded.encode("utf-8")).hexdigest()
 
+    @contextmanager
     def slot(self):
-        return self.lease._authority.slot(self.lease)
+        self.require_active()
+        with self.lease._authority.slot(self.lease):
+            if self._catalog is None:
+                yield
+            else:
+                catalog = self._catalog[0]
+                with catalog._authority.slot(catalog):
+                    yield
 
 
 class SourceAuthority:

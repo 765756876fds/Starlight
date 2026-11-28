@@ -9,6 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
+from ..catalog_routes import CatalogRoute, PLATFORMS, validate_routes
 from ..plugin_trust import MAX_DOCUMENT, TrustPolicy, _owned_directory, _plain_file
 from ..source_authority import ResourcePolicy, TransferBudget
 
@@ -37,6 +38,7 @@ class IsolatedMusicSettings:
     # Loopback authorizations are available only to isolated test harnesses
     # constructing these settings directly. The CLI does not parse them.
     idle_timeout: float = field(default=600.0, repr=False)
+    catalog_routes: tuple[CatalogRoute, ...] = ()
 
 
 def _absolute(value):
@@ -100,7 +102,8 @@ def load_isolated_music_settings(path):
     """Read an explicit, trusted local owner document without importing plugins."""
     document = json.loads(_document_bytes(_absolute(path)), object_pairs_hook=_unique)
     required = {"work_parent", "trust_root", "node", "trust_policy", "trust_policy_sha256", "sources"}
-    if not isinstance(document, dict) or document.keys() != required:
+    if (not isinstance(document, dict) or required - document.keys()
+            or document.keys() - required - {"catalog_routes"}):
         raise ValueError("isolated_host_settings")
     policy = TrustPolicy.from_owner_document(
         _document_bytes(_absolute(document["trust_policy"])), pinned_sha256=document["trust_policy_sha256"]
@@ -116,7 +119,7 @@ def load_isolated_music_settings(path):
         if not isinstance(name, str) or not _ID.fullmatch(name) or name not in policy.plugins:
             raise ValueError("isolated_host_plugin")
         kind = item["type"]
-        providers = _list(item["providers"], allowed={"kw", "kg", "tx", "wy", "mg", "bd"})
+        providers = _list(item["providers"], allowed=PLATFORMS)
         if kind not in ("musicfree", "lx") or bool(providers) != (kind == "lx"):
             raise ValueError("isolated_host_adapter")
         sources.append(IsolatedSourceSettings(name, kind, providers, _policies(item["policies"])))
@@ -124,7 +127,17 @@ def load_isolated_music_settings(path):
     digests = {policy.plugins[source.name].runtime_sha256 for source in sources}
     if len(names) != len(sources) or "js_bridge" in names or len(digests) != 1:
         raise ValueError("isolated_host_sources")
+    raw_routes = document.get("catalog_routes", [])
+    if not isinstance(raw_routes, list) or len(raw_routes) > MAX_ISOLATED_SOURCES:
+        raise ValueError("invalid_catalog_route")
+    routes = []
+    for route in raw_routes:
+        if (not isinstance(route, dict) or route.keys() != {"catalog", "platform", "resolvers"}
+                or not isinstance(route["catalog"], str) or not isinstance(route["platform"], str)):
+            raise ValueError("invalid_catalog_route")
+        routes.append(CatalogRoute(route["catalog"], route["platform"], _list(route["resolvers"])))
+    validate_routes(routes, sources)
     return IsolatedMusicSettings(
         _absolute(document["work_parent"]), _absolute(document["trust_root"]), _absolute(document["node"]),
-        policy, tuple(sources)
+        policy, tuple(sources), catalog_routes=tuple(routes)
     )

@@ -368,7 +368,9 @@ class Application:
     def _initialize_isolated_music_sources(self):
         from app.music.online.manager import OnlineSourceManager
 
-        self.online_music_manager = OnlineSourceManager(allow_legacy_sources=False)
+        self.online_music_manager = OnlineSourceManager(
+            allow_legacy_sources=False, catalog_routes=self._isolated_music_settings.catalog_routes,
+        )
         self.music.set_online_manager(self.online_music_manager)
         try:
             from app.music.online.isolated_host.host import IsolatedMusicHost

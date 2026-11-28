@@ -1703,7 +1703,7 @@ class MusicController:
         song = self._current_song
         grant = quality.result.get("_authorization")
         return (self._running and not self._user_stopped and song is not None
-                and quality.song is song and getattr(grant, "lease", None) is lease)
+                and quality.song is song and grant is not None and grant.holds_lease(lease))
 
     def _apply_stream(self, track, url: str, headers, before_load=None, verify_load=None, *, playback=None, kuwo_rid=None) -> dict | None:
         """统一播放在线流：http-header-fields 重设 + loadfile + pause 同步 + 状态落库。

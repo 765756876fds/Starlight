@@ -22,7 +22,10 @@ class OnlineSourceManager:
     PAGED_WORKERS = 12
 
     def __init__(self, cache_ttl: float = 300.0, max_workers: int = 4,
-                 request_timeout: float = 5.0, *, allow_legacy_sources: bool = True):
+                 request_timeout: float = 5.0, *, allow_legacy_sources: bool = True, catalog_routes=()):
+        if catalog_routes and allow_legacy_sources:
+            raise ValueError("catalog routes require a managed registry")
+        self._catalog_routes = {route.catalog: route for route in catalog_routes}
         self._sources: dict[str, MusicSource] = {}
         self._source_leases: dict[str, SourceLease] = {}
         self._managed_names: set[str] = set()
@@ -321,20 +324,74 @@ class OnlineSourceManager:
             return src.get_play_url(track)
 
     def _managed(self, track):
-        return bool(authorization_plugin(track) or track.source_name in self._managed_names)
+        extra = getattr(track, "extra", None)
+        return bool(authorization_plugin(track) or track.source_name in self._managed_names
+                    or isinstance(extra, dict) and "_catalog" in extra)
 
     def _managed_owner(self, track):
+        return self._managed_context(track)[:2]
+
+    def _managed_context(self, track):
+        from .catalog_routes import routed_native_id, stored_route
+
         with self._life_lock:
             owner, lease = self._sources.get(track.source_name), self._source_leases.get(track.source_name)
             declared = authorization_plugin(track)
             if (self._closed or owner is None or lease is None or not lease.active()
                     or lease.plugin_id != declared):
-                return None, None
-            return owner, lease
+                return None, None, None
+            extra = track.extra if isinstance(track.extra, dict) else {}
+            if "_catalog" not in extra:
+                return owner, lease, None
+            try:
+                ref = stored_route(extra["_catalog"])
+            except ValueError:
+                return None, None, None
+            route = self._catalog_routes.get(ref["source"])
+            catalog = self._source_leases.get(ref["source"])
+            raw = extra.get("_raw")
+            info = raw.get("musicInfo") if isinstance(raw, dict) else None
+            if (route is None or catalog is None or not catalog.active() or ref["plugin"] != catalog.plugin_id
+                    or catalog._authority is not lease._authority or route.platform != ref["platform"]
+                    or track.source_name not in route.resolvers or getattr(owner, "plugin_type", None) != "lx"
+                    or route.platform not in owner.providers or not isinstance(info, dict)
+                    or routed_native_id(track.track_id, info, route.platform, route.catalog) is None):
+                return None, None, None
+            return owner, lease, (catalog, ref["track"])
 
-    def _authorized_result(self, track, owner, lease, result, kind):
-        current, live = self._managed_owner(track)
-        if owner is not current or lease is not live or result is None:
+    def catalog_candidates(self, track):
+        """Expand resource choices only when processing an explicit recording."""
+        from .catalog_routes import resolver_track
+
+        route = self._catalog_routes.get(track.source_name)
+        if route is None:
+            return ()
+        owner, _ = self._managed_owner(track)
+        if getattr(owner, "plugin_type", None) != "musicfree":
+            return ()
+        candidates = (resolver_track(track, route.platform, name) for name in route.resolvers)
+        return tuple(item for item in candidates if item is not None and self._managed_owner(item)[0] is not None)
+
+    def _resolution_choices(self, track):
+        if track.source_name not in self._catalog_routes:
+            yield track
+            return
+        original = self._managed_context(track)
+        for candidate in (track, *self.catalog_candidates(track)):
+            if original != self._managed_context(track):
+                return
+            yield candidate
+
+    def _attachment_choices(self, track):
+        from .catalog_routes import original_catalog_track
+
+        original = self._managed_context(track)
+        yield from self._resolution_choices(track)
+        if original[2] is not None and self._managed_context(track) == original:
+            yield original_catalog_track(track, track.extra["_catalog"])
+
+    def _authorized_result(self, track, owner, lease, result, kind, catalog=None):
+        if self._managed_context(track) != (owner, lease, catalog) or result is None:
             return None
         result = self._normalize_play_result(result, owner)
         if not result or not result.get("url"):
@@ -342,10 +399,12 @@ class OnlineSourceManager:
         try:
             grant = lease.resource(kind, result["url"], result.get("headers"),
                                    resource_id=str(track.track_id))
+            if catalog is not None:
+                grant = grant.for_catalog(*catalog)
         except DownloadTransportError:
             return None
         # Do not accept checked-address flags or provenance from a plugin.
-        fields = ("quality", "source_quality", "requested_quality", "supports_renditions", "direct_url")
+        fields = ("quality", "source_quality", "requested_quality", "supports_renditions", "direct_url", "downgraded")
         clean = {name: result[name] for name in fields if type(result.get(name)) in (str, bool)}
         return {**clean, "url": grant.url, "headers": None, "_authorization": grant,
                 "checked_transport": kind == "playback"}
@@ -363,14 +422,18 @@ class OnlineSourceManager:
                     and self._sources.get(source.name) is source)
 
     def get_cover_resource(self, track):
-        owner, lease = self._managed_owner(track)
-        getter = getattr(owner, "get_cover_url", None)
-        if not callable(getter):
-            return None
-        try:
-            return self._authorized_result(track, owner, lease, getter(track), "cover")
-        except (OSError, ValueError, TimeoutError, RuntimeError):
-            return None
+        for candidate in self._attachment_choices(track):
+            owner, lease, catalog = self._managed_context(candidate)
+            getter = getattr(owner, "get_cover_url", None)
+            if not callable(getter):
+                continue
+            try:
+                resolved = self._authorized_result(candidate, owner, lease, getter(candidate), "cover", catalog)
+                if resolved is not None:
+                    return resolved
+            except (OSError, ValueError, TimeoutError, RuntimeError):
+                continue
+        return None
 
     def is_managed_track(self, track):
         return self._managed(track)
@@ -423,9 +486,11 @@ class OnlineSourceManager:
         source = self._download_owner(track)
         if source is None:
             return None
-        lease = self._managed_owner(track)[1] if self._managed(track) else None
-        if self._managed(track) and lease is None:
-            return None
+        lease, catalog = None, None
+        if self._managed(track):
+            current, lease, catalog = self._managed_context(track)
+            if current is not source:
+                return None
         resolver = getattr(source, "get_download_rendition", None)
         try:
             if callable(resolver):
@@ -435,7 +500,7 @@ class OnlineSourceManager:
             else:
                 return None
             if lease is not None:
-                result = self._authorized_result(track, source, lease, result, "download")
+                result = self._authorized_result(track, source, lease, result, "download", catalog)
             else:
                 result = self._normalize_play_result(result, source)
             if not result or not isinstance(result.get("url"), str) or not result["url"].strip():
@@ -452,10 +517,21 @@ class OnlineSourceManager:
             return None
 
     def get_playback_url(self, track: OnlineTrack, preference: str):
-        """Route this recording to its owner. Never pass a foreign service this track ID."""
+        """Try the owner and any approved same-platform catalog route in order."""
+        best = None
+        for candidate in self._resolution_choices(track):
+            result = self._playback_rendition(candidate, preference)
+            if result:
+                if not result.get("downgraded"):
+                    return result
+                best = best or result
+        grant = best.get("_authorization") if best else None
+        return best if grant is None or grant.active() else None
+
+    def _playback_rendition(self, track, preference):
         managed = self._managed(track)
         if managed:
-            source, lease = self._managed_owner(track)
+            source, lease, catalog = self._managed_context(track)
         else:
             source, legacy = self._legacy_routes(track)
             if source is None:
@@ -469,7 +545,7 @@ class OnlineSourceManager:
         except (OSError, ValueError, TimeoutError, RuntimeError):
             return None
         if managed:
-            result = self._authorized_result(track, source, lease, result, "playback")
+            result = self._authorized_result(track, source, lease, result, "playback", catalog)
         elif self._legacy_current(track, source):
             result = self._normalize_play_result(result, source)
         else:
@@ -481,12 +557,14 @@ class OnlineSourceManager:
 
     def get_play_url(self, track: OnlineTrack, quality: str | None = None) -> dict | None:
         if self._managed(track):
-            owner, lease = self._managed_owner(track)
+            if quality is None and track.source_name in self._catalog_routes:
+                return self.get_playback_url(track, "auto")
+            owner, lease, catalog = self._managed_context(track)
             if owner is None:
                 return None
             try:
                 return self._authorized_result(track, owner, lease,
-                                               self._call_get_url(owner, track, quality), "playback")
+                                               self._call_get_url(owner, track, quality), "playback", catalog)
             except (OSError, ValueError, TimeoutError, RuntimeError):
                 return None
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
@@ -543,23 +621,11 @@ class OnlineSourceManager:
 
     def get_lyric(self, track: OnlineTrack) -> str | None:
         if self._managed(track):
-            owner, lease = self._managed_owner(track)
-            if owner is None:
-                return None
-            try:
-                result = owner.get_lyric(track)
-                if self._managed_owner(track) != (owner, lease):
-                    return None
-                if isinstance(result, str):
+            for candidate in self._attachment_choices(track):
+                result = self._managed_lyric(candidate)
+                if result:
                     return result
-                bound = self._authorized_result(track, owner, lease, result, "lyrics")
-                if bound is None:
-                    return None
-                from .download_probe import read_download_attachment
-                return read_download_attachment(bound["url"], authorization=bound["_authorization"],
-                                                kind="lyrics", max_bytes=2_000_000).decode("utf-8")
-            except (OSError, ValueError, TimeoutError, RuntimeError):
-                return None
+            return None
         # 定向路由：track.source_name 通常等于注册名（自定义 HTTP 源）。
         src, legacy = self._legacy_routes(track)
         if src is not None:
@@ -582,6 +648,25 @@ class OnlineSourceManager:
             except Exception:
                 continue  # 单源失败继续下一个
         return None
+
+    def _managed_lyric(self, track):
+        owner, lease, catalog = self._managed_context(track)
+        if owner is None:
+            return None
+        try:
+            result = owner.get_lyric(track)
+            if self._managed_context(track) != (owner, lease, catalog):
+                return None
+            if isinstance(result, str):
+                return result
+            bound = self._authorized_result(track, owner, lease, result, "lyrics", catalog)
+            if bound is None:
+                return None
+            from .download_probe import read_download_attachment
+            return read_download_attachment(bound["url"], authorization=bound["_authorization"],
+                                            kind="lyrics", max_bytes=2_000_000).decode("utf-8")
+        except (OSError, ValueError, TimeoutError, RuntimeError):
+            return None
 
     def get_top_lists(self, source=None) -> dict[str, list]:
         """聚合各源榜单分组（源自报能力，无该方法/失败自动跳过）。
