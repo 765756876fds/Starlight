@@ -2343,6 +2343,9 @@ class MusicController:
             logger.info(f"[Music] 插件缓存清理失败: {e!r}")
         return ok, n
 
+    def get_custom_online_sources(self) -> frozenset[str]:
+        return frozenset(self._custom_http_sources)
+
     def get_online_sources(self) -> list:
         if self.online_manager is None:
             return []

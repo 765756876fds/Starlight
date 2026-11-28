@@ -107,6 +107,30 @@ class IsolatedMusicHost:
             self._remove_workspace()
             raise
 
+    def source_overview(self):
+        """Inspect approval records without starting plugins or contacting services."""
+        rows = []
+        for spec in self._settings.sources:
+            status = self._trust.status(spec.name) or {}
+            if status.get("active_sha") and status.get("active_policy") == self._settings.policy.sha256:
+                state = "已启用" if not status.get("latest_revoked") else "已撤销"
+            elif status.get("latest_revoked"):
+                state = "已撤销"
+            elif status.get("last_failure") and not status.get("candidate_sha"):
+                state = "验证未通过"
+            elif status.get("authorization_pending") or status.get("candidate_sha"):
+                state = "等待审查或授权"
+            else:
+                state = "未启用"
+            rows.append({
+                "name": spec.name, "kind": spec.plugin_type, "providers": spec.providers,
+                "version": status.get("latest_version"), "state": state,
+                "services": tuple(role for role in ("playback", "download") if role in spec.policies),
+                "routes": tuple((route.platform, route.resolvers) for route in self._settings.catalog_routes
+                                if route.catalog == spec.name),
+            })
+        return rows
+
     def _bind(self, spec):
         return self._authority.bind(spec.name, spec.name, self._settings.policy.revision, spec.policies,
                                     test_loopback_origins=spec.test_loopback_origins)

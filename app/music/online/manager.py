@@ -51,6 +51,7 @@ class OnlineSourceManager:
         self._paged_peak = 0
         self._closed = False
         self.allow_legacy_sources = allow_legacy_sources
+        self.isolated_source_overview = None
 
     def register(self, source: MusicSource, *, lease: SourceLease | None = None) -> None:
         with self._life_lock:

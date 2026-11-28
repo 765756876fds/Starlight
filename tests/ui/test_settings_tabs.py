@@ -71,7 +71,7 @@ def test_key_widgets_alive_after_redesign(app):
         "cmb_engine", "cmb_voice", "_rate_slider", "_vol_slider",
         "_key_edit", "_btn_key_save",
         "btn_add_dir", "btn_scan_all", "btn_source_manage",
-        "btn_refresh_plugins", "btn_check_updates",
+        "btn_refresh_plugins",
         "btn_gate", "btn_equip", "btn_update_data",
         "btn_overlay", "spin_refresh",
     ):

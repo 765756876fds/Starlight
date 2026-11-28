@@ -299,6 +299,7 @@ async function dispatch(method, params) {
     if (seen.has(p)) continue;
     seen.add(p);
     plugins.push({ name: p.name, type: p.type, status: 'ok', file: p.filePath,
+      version: p.type === 'musicfree' && typeof p.raw?.version === 'string' ? p.raw.version : null,
       capabilities: {
         ...(p.type === 'musicfree' ? {...mfLoader.capabilities(p),
           resolve_media: typeof p.getMediaSource === 'function'} : {}),

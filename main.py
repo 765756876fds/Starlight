@@ -383,6 +383,7 @@ class Application:
             logger.warning("[Music] 隔离音源无法启用 (%s)", type(error).__name__)
             self._set_module_status("js", "fail")
         else:
+            self.online_music_manager.isolated_source_overview = self._isolated_music_host.source_overview
             self._set_module_status("js", "ok")
 
     def initialize(self):

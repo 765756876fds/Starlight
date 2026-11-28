@@ -133,11 +133,14 @@ def test_lx_client_is_connected_fallback():
         assert c.is_connected() is False
 
 
-def test_source_manager_js_import_fallback(tmp_path):
-    """source_manager.import_from_json：非 JSON 文件 → 降级提取 @name（行为不变）。"""
+def test_invalid_json_source_does_not_create_legacy_placeholder(tmp_path):
     from app.music.source_manager import MusicSourceManager
-    js = tmp_path / "test_source.js"
-    js.write_text("// @name 测试源\n// @version 1.0\n", encoding="utf-8")
-    m = MusicSourceManager(str(tmp_path))  # 隔离目录，绝不碰真实 config/music_sources.json
-    src = m.import_from_json(str(js))
-    assert src.name == "测试源"
+
+    config = tmp_path / "source.json"
+    for bad in ("// @name old", '{"name":"test","api_url":"file:///abc"}', '{"name":"test"}'):
+        config.write_text(bad, encoding="utf-8")
+        manager = MusicSourceManager(str(tmp_path))
+        with pytest.raises(ValueError):
+            manager.import_from_json(str(config))
+        assert manager.get_all_sources() == []
+        assert not (tmp_path / "music_sources.json").exists()

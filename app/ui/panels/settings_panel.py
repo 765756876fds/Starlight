@@ -11,8 +11,6 @@ from __future__ import annotations
 import threading
 from ...core.notifications import notify
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, QSignalBlocker, Slot
@@ -64,6 +62,7 @@ from ..settings_store import (
 from ..widgets.glass_dialog import GlassDialog
 from ..widgets.glass_msg import glass_question, glass_warning
 from ..widgets.icon_utils import lucide_icon
+from ..widgets.latest_task import LatestTask
 from ..widgets.toggle_button import ToggleButton
 
 
@@ -184,32 +183,6 @@ def _edge_pct(n: int) -> str:
     return f"{n:+d}%"
 
 
-def _probe_url(url: str, headers, timeout: float = 5.0) -> str:
-    """探测 URL 能否播放：GET + Range: bytes=0-1024（只拉前 1KB，不下整首）。
-    200/206 → ✓；403/404 → ✗(403)；其他 → ✗(原因)。
-    带插件 headers（Referer）——否则开心汽水裸请求必 403，而 mpv 带 Referer
-    可能能播，探测结果要反映"真实播放能力"。
-    """
-    h = {"Range": "bytes=0-1024", "User-Agent": "Mozilla/5.0"}
-    if headers:
-        for k in ("Referer", "User-Agent", "Cookie", "Authorization"):
-            if k in headers:
-                h[k] = headers[k]
-    req = urllib.request.Request(url, headers=h, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            code = resp.getcode()
-            out = "✓" if code in (200, 206) else f"✗({code})"
-            print(f"[probe] {url[:60]} -> {out} ({code})", flush=True)
-            return out
-    except urllib.error.HTTPError as e:
-        print(f"[probe] {url[:60]} -> HTTPError {e.code}", flush=True)
-        return f"✗({e.code})"
-    except Exception as e:
-        print(f"[probe] {url[:60]} -> {type(e).__name__}", flush=True)
-        return f"✗({type(e).__name__})"
-
-
 class _ScanWorker(QObject):
     """后台扫描 worker（复用 QThread 模式，避免大目录扫描卡 UI）。"""
     done = Signal(dict)
@@ -270,7 +243,6 @@ class SettingsPanel(QWidget):
     _refresh_done = Signal(bool, int)   # (ok, 插件数)
     _data_done = Signal(str)            # 数据更新完成消息（跨线程回主线程）
     _data_progress = Signal(int, int)   # 数据更新进度（done, total；跨线程回主线程）
-    _updates_done = Signal(str, object)  # (状态文本, 检查结果列表)
 
     def __init__(self, music=None, tts=None, combo_manager=None,
                  equip_toggle: Callable[[bool], None] | None = None,
@@ -291,15 +263,13 @@ class SettingsPanel(QWidget):
         self._on_online_sources_changed = on_online_sources_changed
         self._scan_thread = None
         self._js_source = None
+        self._online = getattr(music, "online_manager", None)
+        self._controlled_sources = not getattr(self._online, "allow_legacy_sources", True)
         self._reloading = False
-        self._checking_updates = False
         self._plugin_rows: dict = {}
         self._test_btns: dict = {}
-        self._update_btns: dict = {}
-        self._plugin_updates: dict = {}   # name -> check_updates 结果（重渲染时合并进行）
         self._test_done.connect(self._on_test_done)
         self._refresh_done.connect(self._on_refresh_done)
-        self._updates_done.connect(self._on_updates_done)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -396,7 +366,7 @@ class SettingsPanel(QWidget):
         self.btn_scan_all = QPushButton("扫描全部")
         self.btn_scan_all.setProperty("class", "primary")
         self.btn_scan_all.clicked.connect(self._on_scan_all)
-        self.btn_source_manage = QPushButton("音源管理…")
+        self.btn_source_manage = QPushButton("查看受控音源" if self._controlled_sources else "个人音源…")
         self.btn_source_manage.clicked.connect(self._on_source_manage)
         self.lbl_scan_status = QLabel("")
         self.lbl_scan_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
@@ -668,7 +638,8 @@ class SettingsPanel(QWidget):
 
     def _build_plugins_group(self, root: QVBoxLayout) -> None:
         self._js_source = self._find_js_source()
-        box = QGroupBox("内置插件 (MusicFree/洛雪)")
+        box = QGroupBox("受控音源" if self._controlled_sources else "已加载插件（MusicFree / 洛雪）")
+        self._plugins_group = box
         lay = QVBoxLayout(box)
         lay.setSpacing(Tokens.SPACING_SM)  # 组内 8px 网格
 
@@ -681,27 +652,75 @@ class SettingsPanel(QWidget):
         self._plugins_layout.setSpacing(2)   # 更紧凑的行间距
         lay.addWidget(self._plugins_container)
 
-        hint = QLabel("在线搜索自动遍历全部 MusicFree 插件；点「测试」验证单源（搜索+URL+能否播）")
+        if self._controlled_sources:
+            instructions = ("在受控启动配置中选定插件。此处显示审批状态和允许的用途，"
+                            "具体曲目及音质须在搜索、播放和下载时确认。")
+        else:
+            instructions = ("MusicFree 可提供搜索目录，洛雪用于匹配目录中的已知曲目。"
+                            "检查只验证能否搜索和获取地址。插件更新需先审查，再使用受控入口。")
+        hint = QLabel(instructions)
         hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         hint.setWordWrap(True)
         lay.addWidget(hint)
         btns = QHBoxLayout()
-        self.btn_refresh_plugins = QPushButton("刷新插件")
-        self.btn_refresh_plugins.setToolTip("重新扫描插件目录（新丢进的 .js 生效）；刷新会短暂中断搜索")
-        self.btn_refresh_plugins.clicked.connect(self._on_refresh_plugins)
-        self.btn_check_updates = QPushButton("检查更新")
-        self.btn_check_updates.setIcon(lucide_icon("search", 16, Colors.TEXT_PRIMARY))
-        self.btn_check_updates.setToolTip("拉取全部 MusicFree 插件更新源，对比版本；有新版的行会显示「更新」按钮")
-        self.btn_check_updates.clicked.connect(self._on_check_updates)
+        self.btn_refresh_plugins = QPushButton("刷新状态" if self._controlled_sources else "刷新已配置插件")
+        if self._controlled_sources:
+            self._source_status_task = LatestTask(self, timeout_ms=2500)
+            self._source_status_task.completed.connect(self._show_controlled_sources)
+            self.btn_refresh_plugins.clicked.connect(self._refresh_controlled_sources)
+        else:
+            self.btn_refresh_plugins.setToolTip("重新加载普通入口已有的插件配置，期间会短暂中断搜索")
+            self.btn_refresh_plugins.clicked.connect(self._on_refresh_plugins)
         self.lbl_plugin_status = QLabel("")
+        self.lbl_plugin_status.setWordWrap(True)
         self.lbl_plugin_status.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
         btns.addWidget(self.btn_refresh_plugins)
-        btns.addWidget(self.btn_check_updates)
         btns.addWidget(self.lbl_plugin_status)
         btns.addStretch()
         lay.addLayout(btns)
         root.addWidget(box)
-        self._render_plugins()
+        if self._controlled_sources:
+            self._refresh_controlled_sources()
+        else:
+            self._render_plugins()
+
+    def _refresh_controlled_sources(self):
+        inspect = getattr(self._online, "isolated_source_overview", None)
+        if inspect is None:
+            self._show_controlled_sources(None, None, RuntimeError())
+        else:
+            self.btn_refresh_plugins.setEnabled(False)
+            self.lbl_plugin_status.setText("正在读取审批状态…")
+            self._source_status_task.submit("controlled_sources", inspect)
+
+    def _show_controlled_sources(self, _key, rows, error):
+        self.btn_refresh_plugins.setEnabled(True)
+        self._clear_plugin_rows()
+        if error is not None:
+            self.lbl_plugin_status.setText("暂时无法读取受控音源，请检查启动配置或刷新状态。")
+            return
+        self.lbl_plugin_status.setText("" if rows else "当前启动配置没有受控音源。")
+        for source in rows:
+            catalog = source["kind"] == "musicfree"
+            role = "MusicFree 搜索目录" if catalog else "洛雪资源解析器"
+            version = f" · 版本 {source['version']}" if source["version"] else ""
+            subtitle = "、".join(source["providers"])
+            if catalog and source["routes"]:
+                subtitle = "；".join(f"{platform} → {'、'.join(resolvers)}"
+                                     for platform, resolvers in source["routes"])
+            services = "、".join(label for key, label in (("playback", "播放"), ("download", "下载"))
+                                if key in source["services"])
+            if services:
+                subtitle = f"{subtitle} · 允许{services}" if subtitle else f"允许{services}"
+            text = f"{source['name']} · {role}{version} · {source['state']}"
+            self._plugins_layout.addWidget(self._source_label(text + (f"\n{subtitle}" if subtitle else "")))
+
+    @staticmethod
+    def _source_label(text):
+        label = QLabel(text)
+        label.setTextFormat(Qt.PlainText)
+        label.setWordWrap(True)
+        return label
 
     def _find_js_source(self):
         if self._music is None:
@@ -714,26 +733,27 @@ class SettingsPanel(QWidget):
         except Exception:
             return None
 
-    def _render_plugins(self) -> None:
+    def _clear_plugin_rows(self) -> None:
         # 清空容器布局再重建（与 _render_dirs 同模式；spacer 由 takeAt 直接拿走）
         while self._plugins_layout.count():
             it = self._plugins_layout.takeAt(0)
             w = it.widget()
             if w is not None:
                 w.deleteLater()
+    def _render_plugins(self) -> None:
+        self._clear_plugin_rows()
         self._plugin_rows = {}
         self._test_btns = {}
-        self._update_btns = {}
         self._delete_btns = {}
         if self._js_source is None:
-            lbl = QLabel("JS 桥接未启用（node 缺失或初始化失败）")
+            lbl = QLabel("普通插件宿主未就绪。HTTP JSON 音源仍可单独配置。")
             lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._plugins_layout.addWidget(lbl)
             self.btn_refresh_plugins.setEnabled(False)
             return
         plugins = self._js_source.list_plugins() or []
         if not plugins:
-            lbl = QLabel("无插件（目录为空）")
+            lbl = QLabel("没有已加载的插件。可在「个人音源」中配置 HTTP JSON 服务。")
             lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Tokens.FONT_SIZE_SUB}px;")
             self._plugins_layout.addWidget(lbl)
             return
@@ -743,34 +763,23 @@ class SettingsPanel(QWidget):
     def _make_plugin_row(self, p: dict) -> QWidget:
         kind = "MusicFree" if p.get("type") == "musicfree" else "洛雪"
         name = p.get("name", "?")
-        if p.get("status") == "ok":
-            state = "✅"
-        else:
-            err = p.get("error") or "加载失败"
-            err_short = err if len(err) <= 24 else err[:24] + "…"
-            state = f"❌ {err_short}"
+        capabilities = p.get("capabilities") or {}
+        ready = p.get("status") == "ok"
+        roles = []
+        if capabilities.get("search"):
+            roles.append("搜索目录")
+        if p.get("type") == "lx" or capabilities.get("resolve_media"):
+            roles.append("资源解析")
+        version = p.get("version")
+        details = " · ".join(part for part in (
+            " / ".join(roles), f"版本 {version}" if version else "",
+            "已加载" if ready else "加载失败",
+        ) if part)
         row = QWidget()
         row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         h = QHBoxLayout(row)
-        h.setContentsMargins(4, 1, 4, 1)   # 更紧凑的行内边距
-        lbl = QLabel(f"[{kind}] {name} {state}")
-        lbl.setWordWrap(True)
-        if p.get("status") != "ok":
-            lbl.setToolTip(f"[{kind}] {name}\n完整错误: {p.get('error') or '加载失败'}")
-        # 检查更新结果（合并进行显示：有更新 / 已最新 / 检查失败）
-        upd = self._plugin_updates.get(name)
-        if upd:
-            if upd.get("error"):
-                err_short = upd["error"] if len(upd["error"]) <= 16 else upd["error"][:16] + "…"
-                lbl.setText(f"[{kind}] {name} {state} | 更新: ✗ {err_short}")
-                lbl.setToolTip(f"[{kind}] {name}\n检查更新失败: {upd['error']}")
-            elif upd.get("has_update"):
-                lbl.setText(f"[{kind}] {name} {state} | 有更新 "
-                            f"(v{upd.get('local_version')}→v{upd.get('remote_version')})")
-                lbl.setToolTip(f"[{kind}] {name}\n"
-                               f"本地 v{upd.get('local_version')} → 远端 v{upd.get('remote_version')}")
-            else:
-                lbl.setText(f"[{kind}] {name} {state} | 已最新 (v{upd.get('local_version')})")
+        h.setContentsMargins(4, 1, 4, 1)
+        lbl = self._source_label(f"{name} · {kind} · {details}")
         h.addWidget(lbl, 1)
         btn_del = QPushButton("删除")
         btn_del.setFixedHeight(24)
@@ -778,22 +787,14 @@ class SettingsPanel(QWidget):
         btn_del.clicked.connect(lambda _=False, n=name: self._on_delete_plugin(n))
         h.addWidget(btn_del)
         self._delete_btns[name] = btn_del
-        if p.get("status") == "ok" and p.get("type") == "musicfree":
-            btn = QPushButton("测试")
+        if ready and capabilities.get("search"):
+            btn = QPushButton("检查搜索")
             btn.setFixedHeight(24)
             btn.setMinimumWidth(64)   # 最小宽度保底；宽度由内容自适应，不再固定（中文字宽+字体缩放会变）
             btn.clicked.connect(lambda _=False, n=name: self._on_test_plugin(n))
             h.addWidget(btn)
             self._plugin_rows[name] = lbl
             self._test_btns[name] = btn
-            # 有更新 → 行尾加「更新」按钮
-            if upd and upd.get("has_update"):
-                btn_upd = QPushButton("更新")
-                btn_upd.setFixedHeight(24)
-                btn_upd.setMinimumWidth(64)
-                btn_upd.clicked.connect(lambda _=False, n=name: self._on_update_plugin(n))
-                h.addWidget(btn_upd)
-                self._update_btns[name] = btn_upd
         h.addStretch()   # 行尾 stretch：标签占满、按钮靠右，行宽 = 面板宽
         return row
 
@@ -814,24 +815,14 @@ class SettingsPanel(QWidget):
                 tracks = self._js_source.search_plugin(name, "晴天", 3)
                 n = len(tracks)
                 print(f"[Test] {name} search 完成 {n} 条 耗时{time.monotonic()-t0:.2f}s", flush=True)
-                if n == 0:
-                    res = f"[MusicFree] {name} | 搜索 ✗(0条)"
+                if not n:
+                    res = f"{name} · 试搜未返回歌曲，可换关键词后在音乐页重试。"
                 else:
-                    url_res = "—"
-                    try:
-                        r = self._js_source.get_play_url(tracks[0])
-                        print(f"[Test] {name} getUrl 完成 耗时{time.monotonic()-t0:.2f}s", flush=True)
-                        if r and r.get("url"):
-                            url_res = _probe_url(r["url"], r.get("headers"))
-                            print(f"[Test] {name} probe 完成 耗时{time.monotonic()-t0:.2f}s", flush=True)
-                        else:
-                            url_res = "✗(null)"
-                    except Exception as e:
-                        url_res = f"✗({type(e).__name__})"
-                    res = f"[MusicFree] {name} | 搜索 ✓({n}条) | URL {url_res}"
-            except Exception as e:
-                res = f"[MusicFree] {name} | 测试失败 ({type(e).__name__})"
-                print(f"[Test] {name} worker 异常 {type(e).__name__}: {e} 耗时{time.monotonic()-t0:.2f}s", flush=True)
+                    result = self._js_source.get_play_url(tracks[0])
+                    address = "已取得地址" if result and result.get("url") else "未取得地址"
+                    res = f"{name} · 搜索返回 {n} 首，{address}。实际播放及音质待确认。"
+            except Exception:
+                res = f"{name} · 暂时无法完成检查，请在音乐页重试。"
             print(f"[Test] 结果: {name} -> {res}", flush=True)
             self._test_done.emit(name, res)   # Signal 回主线程（worker 线程无 Qt 事件循环）
 
@@ -868,7 +859,7 @@ class SettingsPanel(QWidget):
     def _on_refresh_done(self, ok: bool, n: int) -> None:
         self._reloading = False
         self.btn_refresh_plugins.setEnabled(True)
-        self.btn_refresh_plugins.setText("刷新插件")
+        self.btn_refresh_plugins.setText("刷新已配置插件")
         tail = getattr(self, "_delete_result_tail", "")
         if tail:
             self.lbl_plugin_status.setText(tail)
@@ -896,77 +887,6 @@ class SettingsPanel(QWidget):
                 self._on_online_sources_changed()
             except Exception as e:
                 print(f"[Settings] 音源变更通知失败: {e}")
-
-    # ---------- 🔍 插件检查更新 ----------
-
-    def _on_check_updates(self) -> None:
-        if self._js_source is None or self._checking_updates:
-            return
-        self._checking_updates = True
-        self.btn_check_updates.setEnabled(False)
-        self.btn_check_updates.setText("检查中…")
-        self.lbl_plugin_status.setText("拉取更新源中…")
-
-        def worker():
-            updates = []
-            try:
-                updates = self._js_source.check_updates(timeout=25.0)
-            except Exception as e:
-                print(f"[CheckUpdates] worker 异常 {type(e).__name__}: {e}", flush=True)
-            n_upd = sum(1 for u in updates if u.get("has_update"))
-            msg = f"检查完成：{n_upd} 个有更新 / {len(updates)} 个已检查"
-            self._updates_done.emit(msg, updates)   # Signal 回主线程
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_updates_done(self, msg: str, updates: list) -> None:
-        self._checking_updates = False
-        self.btn_check_updates.setEnabled(True)
-        self.btn_check_updates.setText("检查更新")
-        self.btn_check_updates.setIcon(lucide_icon("search", 16, Colors.TEXT_PRIMARY))
-        self.lbl_plugin_status.setText(msg)
-        by_name = {}
-        for u in updates:
-            by_name[u.get("name") or u.get("file")] = u
-        self._plugin_updates = by_name
-        self._render_plugins()
-
-    def _on_update_plugin(self, name: str) -> None:
-        """用户点行内「更新」→ 确认框 → 后台备份+替换+reload。"""
-        if self._js_source is None:
-            return
-        upd = self._plugin_updates.get(name)
-        if not upd:
-            return
-        if not glass_question(
-            self,
-            "确认更新插件",
-            f"将更新插件「{name}」\n"
-            f"v{upd.get('local_version')} → v{upd.get('remote_version')}\n\n"
-            f"更新会替换本地插件文件（旧版备份到 data/plugins_backup/），"
-            f"并短暂中断在线搜索。\n确定继续？",
-        ):
-            return
-        self.lbl_plugin_status.setText(f"更新 {name} 中…")
-        btn_upd = self._update_btns.get(name)
-        if btn_upd is not None:
-            btn_upd.setEnabled(False)
-            btn_upd.setText("更新中…")
-
-        def worker():
-            try:
-                result = self._js_source.update_plugin(name)
-            except Exception as e:
-                result = {"ok": False, "error": str(e)}
-            # 更新成功 → 从结果里移除该项（行回到无更新状态，下次「检查更新」重新拉）
-            remaining = [u for u in self._plugin_updates.values()
-                         if (u.get("name") or u.get("file")) != name]
-            self._updates_done.emit(
-                f"更新 {name}: {'成功（已重载）' if result.get('ok') else '失败: ' + str(result.get('error'))}",
-                remaining,
-            )
-
-        threading.Thread(target=worker, daemon=True).start()
 
     def _on_delete_plugin(self, name: str) -> None:
         """确认 → 后台删除插件文件 + reload → 回主线程刷新列表。"""
@@ -1005,11 +925,16 @@ class SettingsPanel(QWidget):
         """打开音源管理对话框（从音乐面板挪到设置页）。"""
         if self._music is None:
             return
+        if self._controlled_sources:
+            self._tabs.setCurrentIndex(0)
+            self._tabs.currentWidget().ensureWidgetVisible(self._plugins_group)
+            self._refresh_controlled_sources()
+            return
         from app.ui.dialogs.source_manage_dialog import SourceManageDialog
         dlg = SourceManageDialog(
             self,
             on_sources_changed=self._music.sync_custom_sources,
-            reload_plugins=self._music.reload_online_plugins,
+            active_sources=self._music.get_custom_online_sources,
         )
         dlg.exec()
         # 对话框内可能增删自定义音源 / 导入插件：关闭后同步搜索界面音源下拉

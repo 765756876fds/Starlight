@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.core.path_resolve import USER_DATA_DIR, resolve_user_path
 
@@ -102,48 +103,51 @@ class MusicSourceManager:
         """获取所有启用的音源"""
         return [s for s in self.sources if s.enabled]
 
-    def import_from_json(self, file_path: str) -> MusicSource:
-        """从JSON/JS文件导入音源配置"""
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        
-        # 先尝试解析JSON
-        try:
-            data = json.loads(content)
-            source = MusicSource.from_dict(data)
-        except Exception:
-            # 如果是JS文件，提取头部信息
-            source = MusicSource()
-            # 提取@name
-            import re
-            name_match = re.search(r'@name\s+(\S+)', content)
-            if name_match:
-                source.name = name_match.group(1)
-            else:
-                source.name = os.path.basename(file_path).replace(".js", "")
-            
-            # 提取API_URL
-            api_match = re.search(r'API_URL\s*=\s*["\']([^"\']+)["\']', content)
-            if api_match:
-                source.api_url = api_match.group(1)
-            
-            source.source_type = "js"
-        
-        if not source.name:
-            source.name = os.path.basename(file_path).replace(".json", "").replace(".js", "")
-        self.add_source(source)
-        return source
+    @staticmethod
+    def _configuration(data: Any) -> MusicSource:
+        if not isinstance(data, dict) or data.get("source_type", "online") != "online":
+            raise ValueError("Expected an HTTP JSON source configuration")
+        name = data.get("name")
+        url = data.get("api_url")
+        if not isinstance(name, str) or not name.strip() or not isinstance(url, str):
+            raise ValueError("Missing source name or API URL")
+        target = urlsplit(url)
+        if target.scheme not in ("http", "https") or not target.hostname or target.username is not None:
+            raise ValueError("Expected an HTTP(S) API URL without embedded credentials")
+        for field in ("search_path", "song_url_path"):
+            if field in data and not isinstance(data[field], str):
+                raise ValueError("Invalid endpoint")
+        if not isinstance(data.get("enabled", True), bool):
+            raise ValueError("Invalid enabled state")
+        return MusicSource.from_dict({**data, "name": name.strip()})
 
-    def import_from_url(self, url: str) -> MusicSource:
-        """从URL在线导入音源配置"""
+    def import_from_json(self, file_path: str) -> MusicSource:
+        """导入声明式配置。无效文件或重名不会更改现有音源。"""
+        with open(file_path, "rb") as stream:
+            payload = stream.read(65537)
+        return self.import_configuration(payload)
+
+    @staticmethod
+    def fetch_configuration(url: str) -> bytes:
         import requests
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        source = MusicSource.from_dict(data)
-        if not source.name:
-            source.name = "在线音源"
-        self.add_source(source)
+
+        if urlsplit(url).scheme not in ("http", "https"):
+            raise ValueError("Expected an HTTP(S) configuration URL")
+        with requests.get(url, timeout=(3, 5), stream=True) as response:
+            response.raise_for_status()
+            payload = bytearray()
+            for chunk in response.iter_content(chunk_size=8192):
+                payload.extend(chunk)
+                if len(payload) > 65536:
+                    raise ValueError("Configuration is too large")
+        return bytes(payload)
+
+    def import_configuration(self, payload: bytes) -> MusicSource:
+        if len(payload) > 65536:
+            raise ValueError("Configuration is too large")
+        source = self._configuration(json.loads(payload.decode("utf-8-sig")))
+        if not self.add_source(source):
+            raise ValueError("已存在同名音源，请使用其他名称")
         return source
 
     def get_all_sources(self) -> list[MusicSource]:

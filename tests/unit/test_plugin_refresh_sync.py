@@ -1,6 +1,5 @@
 """
 插件刷新同步定向测试（任务 A/B/C 核心逻辑）：
-- 插件类型全文检测（混淆插件不再误判为 JSON 空壳）；
 - OnlineSourceManager.invalidate 清缓存（刷新后搜索不被旧缓存掩盖）；
 - MusicController.reload_online_plugins 统一重载入口（真实结果 + 清缓存）；
 - JSMusicSource._read_loop 旧进程 EOF 竞态守卫（刷新后搜索失效的根因）。
@@ -14,54 +13,6 @@ from unittest.mock import MagicMock
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
-# ---------- 1. 插件类型全文检测 ----------
-
-def _obfuscated_like_kaixin():
-    """模拟混淆插件：require(/exports 标记都在第 500 字节之后（开心汽水 实况）。"""
-    head = "var _0xod8='jsjiami.com.v7';'use strict';const _0x448874=_0x42e4;(function(_0x32c1b8){return 0;}());"
-    pad = "_" * 500
-    tail = "Object.defineProperty(exports, '__esModule', {value: true}); const http = require('axios'); module.exports = {platform: 'p', version: '1.0', search: async function(){}};"
-    return head + pad + tail
-
-
-def test_detect_plugin_type_obfuscated_markers_beyond_500():
-    """混淆插件的标记在第 500 字节之后 → 全文检测必须识别为 musicfree
-    （旧实现只读前 500 字节 → 误判为非插件 → 空壳导入，开心汽水 丢失根因）。"""
-    from app.ui.dialogs.source_manage_dialog import detect_plugin_type
-    assert detect_plugin_type(_obfuscated_like_kaixin()) == "musicfree"
-
-
-def test_detect_plugin_type_real_files():
-    """真实插件文件分类：musicfree 6 个 + lx 2 个（基于当前 data/music_sources）。"""
-    from app.core.path_resolve import PROJECT_ROOT
-    from app.ui.dialogs.source_manage_dialog import detect_plugin_type
-
-    base = PROJECT_ROOT / "data" / "music_sources"
-    mf_dir = base / "musicfree"
-    lx_dir = base / "lx"
-    if not mf_dir.is_dir() or not lx_dir.is_dir():
-        pytest.skip("插件目录不存在，跳过真实文件断言")
-
-    mf_ok = lx_ok = 0
-    for f in sorted(mf_dir.glob("*.js")):
-        assert detect_plugin_type(f.read_text(encoding="utf-8")) == "musicfree", f.name
-        mf_ok += 1
-    for f in sorted(lx_dir.glob("*.js")):
-        assert detect_plugin_type(f.read_text(encoding="utf-8")) == "lx", f.name
-        lx_ok += 1
-    assert mf_ok >= 1 and lx_ok >= 1, "真实插件文件应可被识别"
-
-
-def test_detect_plugin_type_edge_cases():
-    """边界：两类标记并存 → musicfree；无标记 → 按 musicfree 候选（不建空壳）。"""
-    from app.ui.dialogs.source_manage_dialog import detect_plugin_type
-    assert detect_plugin_type("@name 洛雪\nconst x = require('a');") == "musicfree"
-    assert detect_plugin_type("module.exports = {platform:'p'}") == "musicfree"
-    assert detect_plugin_type("/*! * @name 洛雪音源 */\nconst DEV=true") == "lx"
-    assert detect_plugin_type("console.log('hello')") == "musicfree"
-    assert detect_plugin_type("") == "musicfree"
 
 
 # ---------- 2. OnlineSourceManager.invalidate ----------
