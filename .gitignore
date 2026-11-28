@@ -150,6 +150,7 @@ data/music/
 # 根目录日志/输出
 /*.txt
 !/requirements-dev.txt
+!/requirements-lock.txt
 /*.log
 /*.png
 /run_*.log
