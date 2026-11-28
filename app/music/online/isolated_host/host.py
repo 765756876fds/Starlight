@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import shutil
 import threading
 import time
 from concurrent.futures import TimeoutError as CallTimeout
@@ -16,7 +15,7 @@ from app.core.logger import get_logger
 from ..catalog_routes import validate_routes
 from ..plugin_trust import PluginTrustStore, _owned_directory, _pinned_runtime, _plain_file
 from ..source_authority import SourceAuthority, SourceLease
-from . import win32
+from .lifecycle import WorkspaceLifecycle
 from .session import Session
 from .settings import MAX_ISOLATED_SOURCES, IsolatedSourceSettings
 from .source import IsolatedMusicSource
@@ -84,7 +83,8 @@ class IsolatedMusicHost:
         if (os.name != "nt" or parent.is_relative_to(project) or trust_root.is_relative_to(project)
                 or trust_root == parent or parent.is_relative_to(trust_root)):
             raise ValueError("isolated_host_workspace")
-        self._root = win32.create_workspace(parent)
+        self._workspace = WorkspaceLifecycle(parent, trust_root)
+        self._root = self._workspace.root
         try:
             self._runtime = self._root / "runtime" / "node.exe"
             self._runtime.parent.mkdir()
@@ -182,7 +182,8 @@ class IsolatedMusicHost:
         config = {"origin": spec.test_loopback_origins[0]} if spec.test_loopback_origins else None
         session = Session(base=self._root, runtime=self._runtime, bootstrap=self._bootstrap, bundle=bundle,
                           lease=entry.lease, plugin_type=spec.plugin_type, providers=spec.providers, config=config,
-                          resume_allowed=lambda: self._current(spec.name, bundle.package_sha256))
+                          resume_allowed=lambda: self._current(spec.name, bundle.package_sha256),
+                          workspace_lifecycle=self._workspace)
         entry.session = session
         try:
             await session.start(timeout=self.START_TIMEOUT)
@@ -291,10 +292,7 @@ class IsolatedMusicHost:
         return True
 
     def _remove_workspace(self):
-        candidate = self._root.resolve(strict=True)
-        if candidate.parent != self._settings.work_parent.resolve(strict=True) or candidate != self._root:
-            raise ValueError("isolated_cleanup_path")
-        shutil.rmtree(candidate)
+        return self._workspace.close()
 
     def close(self, timeout=12.0):
         if self._closed_cleanly:
@@ -317,6 +315,5 @@ class IsolatedMusicHost:
         self._thread.join(timeout=timeout)
         if self._thread.is_alive():
             return False
-        self._remove_workspace()
-        self._closed_cleanly = True
-        return True
+        self._closed_cleanly = self._remove_workspace()
+        return self._closed_cleanly

@@ -372,6 +372,7 @@ class Application:
             allow_legacy_sources=False, catalog_routes=self._isolated_music_settings.catalog_routes,
         )
         self.music.set_online_manager(self.online_music_manager)
+        self.music.mpv.require_owned_launch()
         try:
             from app.music.online.isolated_host.host import IsolatedMusicHost
             self._isolated_music_host = IsolatedMusicHost(

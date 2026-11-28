@@ -12,6 +12,7 @@ import os
 import subprocess
 import threading
 import time
+from uuid import uuid4
 from collections.abc import Callable
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -33,7 +34,8 @@ class MpvController:
         self.video = video
         self.watch_later_dir = watch_later_dir
         self.extra_video_args = extra_video_args or []  # 电影缓冲参数（仅 video 分支追加）
-        self._process: subprocess.Popen | None = None
+        self._process = None
+        self._owned_launch = False
         self._pipe = None
         self._running = False
 
@@ -48,6 +50,12 @@ class MpvController:
         self._event_lock = threading.RLock()
         self._last_end_file = None
         self._film_end_reasons = {}
+
+    def require_owned_launch(self):
+        """Opt-in for the independent player of the controlled plugin host."""
+        if self._process is not None:
+            raise RuntimeError("owned launch must be selected before starting MPV")
+        self._owned_launch = True
 
     def start(self, taskkill: bool = True, wid: int | None = None,
               pipe_timeout: float = 10.0, prop_timeout: float = 1.0, *,
@@ -113,6 +121,8 @@ class MpvController:
             self._pipe = None
         self._lyric_meter = "off"
         self.ipc_pipe = self._base_ipc_pipe + "_" + str(os.getpid())
+        if self._owned_launch:
+            self.ipc_pipe += "_" + uuid4().hex
 
         print(f"[mpv] pipe name: {self.ipc_pipe!r}")
         args = [self.mpv_path]
@@ -145,10 +155,12 @@ class MpvController:
             return False
         kwargs = {} if cancel is None else {"cancel": cancel}
         try:
-            self._process = subprocess.Popen(
-                args,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
+            if self._owned_launch:
+                from .online.isolated_host.win32 import OwnedProcess
+
+                self._process = OwnedProcess(args)
+            else:
+                self._process = subprocess.Popen(args, creationflags=subprocess.CREATE_NO_WINDOW)
 
             self._wait_for_pipe(timeout=pipe_timeout, **kwargs)
         except Exception as e:

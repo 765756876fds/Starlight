@@ -96,7 +96,7 @@ class ActiveCall:
 class Session:
     def __init__(self, *, base: Path, runtime: Path, bootstrap: Path, bundle: VerifiedPlugin,
                  lease: SourceLease, plugin_type: str, providers: tuple[str, ...], config=None,
-                 resume_allowed=None):
+                 resume_allowed=None, workspace_lifecycle=None):
         if os.name != "nt":
             raise Closed("UNAVAILABLE")
         if (not isinstance(bundle, VerifiedPlugin) or not isinstance(lease, SourceLease)
@@ -115,6 +115,7 @@ class Session:
         self.providers = tuple(providers)
         self.config = config or {}
         self._resume_allowed = resume_allowed
+        self._workspace_lifecycle = workspace_lifecycle
         self.origin = self.config.get("origin", "")
         if not isinstance(self.origin, str):
             raise ValueError("invalid owner origin")
@@ -232,9 +233,13 @@ class Session:
         work_dir.mkdir()
 
         self._require_starting()
-        self.profile = w.ensure_profile("SL25" + self.generation)
+        profile_name = "SL25" + self.generation
+        expected_sid = self._workspace_lifecycle.reserve_profile(profile_name) if self._workspace_lifecycle else None
+        self.profile = w.ensure_profile(profile_name)
         self.owns_profile = not self.profile.already_existed and self.profile.create_hr == "0x00000000"
-        if not self.owns_profile or not self.profile.sid_string:
+        if self.profile.already_existed and self._workspace_lifecycle:
+            self._workspace_lifecycle.forget_profile(profile_name)
+        if not self.owns_profile or not self.profile.sid_string or (expected_sid and expected_sid != self.profile.sid_string):
             raise Closed("fresh AppContainer profile unavailable")
         for path, perm in ((runtime_dir, "RX"), (code_dir, "RX"), (work_dir, "M")):
             self._require_starting()
@@ -658,8 +663,11 @@ class Session:
             workspace_removed = handles_closed and job_closed and await asyncio.to_thread(self._remove_workspace)
             profile_deleted = not self.owns_profile
             if self.owns_profile and process_exited and job_closed and handles_closed:
-                rc = await asyncio.to_thread(w.delete_profile, self.profile.name)
-                profile_deleted = rc == "0x00000000"
+                if self._workspace_lifecycle:
+                    profile_deleted = await asyncio.to_thread(self._workspace_lifecycle.release_profile, self.profile.name)
+                else:
+                    rc = await asyncio.to_thread(w.delete_profile, self.profile.name)
+                    profile_deleted = rc == "0x00000000"
                 if profile_deleted:
                     self.owns_profile = False
             if self.profile and profile_deleted and runtime_acl_removed:

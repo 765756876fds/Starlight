@@ -6,6 +6,7 @@ private workspace created by this module and explicit AppContainer SIDs.
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import re
 import secrets
@@ -220,6 +221,19 @@ kernel32.GetVolumeInformationW.argtypes = [
 kernel32.GetVolumeInformationW.restype = wintypes.BOOL
 kernel32.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(SECURITY_ATTRIBUTES)]
 kernel32.CreateDirectoryW.restype = wintypes.BOOL
+kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4)]
+kernel32.GetProcessTimes.restype = wintypes.BOOL
+kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+kernel32.ReleaseMutex.restype = wintypes.BOOL
+userenv.DeriveAppContainerSidFromAppContainerName.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+userenv.DeriveAppContainerSidFromAppContainerName.restype = ctypes.c_long
+userenv.GetAppContainerFolderPath.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+userenv.GetAppContainerFolderPath.restype = ctypes.c_long
+ole32 = ctypes.WinDLL("ole32")
+ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+ole32.CoTaskMemFree.restype = None
 
 
 def hr(code: int) -> str:
@@ -269,6 +283,73 @@ def ensure_profile(name: str, display: str = "Starlight plugin") -> Profile:
 def delete_profile(name: str) -> str:
     _profile_name(name)
     return hr(userenv.DeleteAppContainerProfile(name))
+
+
+def profile_sid(name):
+    _profile_name(name)
+    sid = ctypes.c_void_p()
+    try:
+        code = userenv.DeriveAppContainerSidFromAppContainerName(name, ctypes.byref(sid))
+        value = sid_to_string(sid) if code == 0 else None
+        if not value:
+            raise OSError(f"could not derive profile SID: {hr(code)}")
+        return value
+    finally:
+        if sid:
+            advapi32.FreeSid(sid)
+
+
+def profile_exists(sid):
+    folder = ctypes.c_void_p()
+    try:
+        code = userenv.GetAppContainerFolderPath(sid, ctypes.byref(folder))
+        if code == 0:
+            return True
+        if hr(code) == "0x80070002":  # ERROR_FILE_NOT_FOUND
+            return False
+        raise OSError(f"could not check profile: {hr(code)}")
+    finally:
+        if folder:
+            ole32.CoTaskMemFree(folder)
+
+
+def _creation_time(handle):
+    creation, exit_time, kernel, user = (wintypes.FILETIME() for _ in range(4))
+    if not kernel32.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exit_time),
+                                    ctypes.byref(kernel), ctypes.byref(user)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+
+
+def current_process_creation():
+    return _creation_time(kernel32.GetCurrentProcess())
+
+
+def owner_gone(pid, creation):
+    handle = kernel32.OpenProcess(0x00101000, False, pid)  # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        # PID absent is conclusive. Access denied and other errors are not.
+        return ctypes.get_last_error() == 87  # ERROR_INVALID_PARAMETER
+    try:
+        return _creation_time(handle) != creation or kernel32.WaitForSingleObject(handle, 0) == WAIT_OBJECT_0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+@contextmanager
+def workspace_claim(name):
+    handle = kernel32.CreateMutexW(None, False, "Local\\Starlight-isolated-reclaim-" + name)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        acquired = kernel32.WaitForSingleObject(handle, 0) in (WAIT_OBJECT_0, 128)  # WAIT_ABANDONED
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                kernel32.ReleaseMutex(handle)
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _windows_directory() -> Path:
@@ -440,7 +521,7 @@ class Job:
     assigned: bool = False
     error: str | None = None
 
-    def create(self, *, holder=False) -> bool:
+    def create(self, *, holder=False, lifetime_only=False) -> bool:
         try:
             self.handle = kernel32.CreateJobObjectW(None, None)
             if not self.handle:
@@ -450,6 +531,8 @@ class Job:
                 JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_PROCESS_MEMORY
                 | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                 | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
+            if lifetime_only:
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             if holder:
                 # The inert holder cannot run. Its nominal child must enter
                 # a separate Job with no breakaway permission.
@@ -571,6 +654,77 @@ def _in_job(process, job):
     return bool(present.value)
 
 
+class OwnedProcess:
+    """Trusted media child created in an unnamed, non-inherited lifetime Job."""
+
+    def __init__(self, args):
+        self.args = args
+        self._job = Job()
+        self._process = PROCESS_INFORMATION()
+        self.returncode = None
+        if not self._job.create(lifetime_only=True):
+            raise RuntimeError(f"media Job create failed: {self._job.error}")
+        try:
+            jobs = (wintypes.HANDLE * 1)(self._job.handle)
+            with _attributes(1) as attributes:
+                _attribute(attributes, PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs)
+                startup = STARTUPINFOEXW()
+                startup.StartupInfo.cb = ctypes.sizeof(startup)
+                startup.lpAttributeList = ctypes.cast(attributes, ctypes.c_void_p)
+                if not kernel32.CreateProcessW(
+                        str(Path(args[0]).resolve(strict=True)),
+                        ctypes.create_unicode_buffer(subprocess.list2cmdline(args)),
+                        None, None, False, _SUSPENDED_FLAGS, None, None,
+                        ctypes.byref(startup), ctypes.byref(self._process)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            self.pid = self._process.dwProcessId
+            self._job.assigned = _in_job(self._process.hProcess, self._job.handle)
+            if not self._job.assigned:
+                raise RuntimeError("media process is outside its Job")
+            if kernel32.ResumeThread(self._process.hThread) != 1:
+                raise RuntimeError("media process did not leave initial suspension")
+        except BaseException:
+            if self._process.hProcess:
+                kernel32.TerminateProcess(self._process.hProcess, 1)
+            self._close_handles()
+            raise
+        finally:
+            if self._process.hThread and kernel32.CloseHandle(self._process.hThread):
+                self._process.hThread = None
+
+    def _close_handles(self):
+        self._job.close()
+        if self._process.hProcess and kernel32.CloseHandle(self._process.hProcess):
+            self._process.hProcess = None
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            millis = 0xffffffff if timeout is None else min(0xfffffffe, max(0, math.ceil(timeout * 1000)))
+            result = kernel32.WaitForSingleObject(self._process.hProcess, millis)
+            if result == 258:  # WAIT_TIMEOUT
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            code = wintypes.DWORD()
+            if result != WAIT_OBJECT_0 or not kernel32.GetExitCodeProcess(self._process.hProcess, ctypes.byref(code)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            self.returncode = code.value
+        return self.returncode
+
+    def poll(self):
+        try:
+            return self.wait(timeout=0)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def terminate(self):
+        if not self._job.terminate() and self.poll() is None:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    kill = terminate
+
+    def __del__(self):
+        self._close_handles()
+
+
 class _HandleHolder:
     # This nominal parent remains suspended for its entire lifetime.
 
@@ -635,7 +789,7 @@ class _HandleHolder:
 def launch_appcontainer(*, node_path: Path, command_line: str, cwd: Path, profile: Profile,
                          env_extra: dict[str, str] | None = None, job: Job | None = None,
                          require_job: bool = True, before_resume=None) -> LaunchResult:
-    """Create suspended AppContainer process, assign job, verify token, then resume.
+    """Create suspended AppContainer process inside its Job, verify token, then resume.
 
     Any failure after CreateProcess terminates the just-created process and closes
     handles; it never falls back to a normal-privilege Node process.
@@ -667,7 +821,11 @@ def launch_appcontainer(*, node_path: Path, command_line: str, cwd: Path, profil
         nominal_parent = wintypes.HANDLE(holder.process.hProcess)
         handles = holder.duplicate(child_ends)
         caps = SECURITY_CAPABILITIES(profile.sid, None, 0, 0)
-        with _attributes(3) as buffer:
+        if not job.create():
+            raise RuntimeError(f"job create failed: {job.error}")
+        jobs = (wintypes.HANDLE * 1)(job.handle)
+        with _attributes(4) as buffer:
+            _attribute(buffer, PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs)
             _attribute(buffer, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, nominal_parent)
             _attribute(buffer, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles)
             _attribute(buffer, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, caps)
@@ -699,10 +857,9 @@ def launch_appcontainer(*, node_path: Path, command_line: str, cwd: Path, profil
             raise RuntimeError("AppContainer SID absent or mismatched")
         if tok.get("capability_count") != 0:
             raise RuntimeError("AppContainer capabilities absent from attestation or not empty")
-        if not job.create():
-            raise RuntimeError(f"job create failed: {job.error}")
-        if not job.assign(pi.hProcess):
-            raise RuntimeError(f"job assign failed: {job.error}")
+        job.assigned = _in_job(pi.hProcess, job.handle)
+        if not job.assigned:
+            raise RuntimeError("plugin process is outside its Job")
         # Only after token + job checks: resume.
         if before_resume is not None:
             before_resume()
