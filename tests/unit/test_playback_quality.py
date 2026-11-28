@@ -98,3 +98,21 @@ def test_decoder_query_keeps_coalesced_events_and_partial_utf8_reply(fragmented)
     player._pipe_available = lambda: len(pipe.chunks[0]) if pipe.chunks else 0
     assert player.get_property("current-tracks/audio", timeout=.12) == "已解码"
     assert not player._command_buffer
+
+
+def test_explicit_quality_switch_keeps_current_audio_when_only_lower_tier_exists(monkeypatch):
+    from types import SimpleNamespace
+    from app.music import playback_quality
+
+    song = {"title": "Fixture", "source": "online"}
+    owner = SimpleNamespace(_running=True, _user_stopped=False, _play_request_id=7,
+                            get_current_song=lambda: song, _movie_permits_request=lambda: True,
+                            online_manager=object())
+    quality = playback_quality.PlaybackQuality(owner)
+    track = OnlineTrack("sample", "song", "Fixture")
+    original = {"url": "https://music.example.com/owned.flac"}
+    quality.bind(song, track, original)
+    monkeypatch.setattr(playback_quality, "resolve_playback",
+                        lambda *args: {"url": "https://music.example.com/owned.mp3", "downgraded": True})
+    assert quality.change(quality.reserve("lossless"), lambda: True) == "所选音质暂不可用，继续播放原版本"
+    assert quality.result == original

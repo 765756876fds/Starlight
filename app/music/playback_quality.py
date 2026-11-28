@@ -156,6 +156,8 @@ class PlaybackQuality:
         if not best:
             return "该音质暂不可用，原版本继续播放"
         candidate, replacement = best
+        if preference != "auto" and replacement.get("downgraded"):
+            return "所选音质暂不可用，继续播放原版本"
         if replacement.get("checked_transport"):
             with owner._lock:
                 if not current():

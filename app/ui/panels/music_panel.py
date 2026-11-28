@@ -219,6 +219,7 @@ class _SearchPointerGuard(QObject):
 
 
 class MusicPanel(QWidget):
+    online_source_settings_requested = Signal()
     # P1 候选旁路：后台线程 publish → 此 Signal 桥到主线程渲染
     _search_event = Signal(dict)
     # 识曲语音命令（MUSIC_IDENTIFY）跨线程桥：voice 线程 emit → 主线程弹窗
@@ -278,6 +279,7 @@ class MusicPanel(QWidget):
         self._pending_search = None
         self._pending_identify_close = None
         self._manual_request = None
+        self._manual_search_generation = None
         self._manual_play_status.connect(self._on_manual_play_status)
         self._play_result.connect(self._on_play_result)
         self._speed_result.connect(self._after_speed)
@@ -661,6 +663,9 @@ class MusicPanel(QWidget):
         self.btn_search_more = QPushButton("加载更多")
         self.btn_search_more.clicked.connect(self._load_search_more)
         self.btn_search_more.hide()
+        self.btn_search_sources = QPushButton("打开音源设置")
+        self.btn_search_sources.clicked.connect(self.online_source_settings_requested)
+        self.btn_search_sources.hide()
         self.btn_search_retry = QPushButton("重试未完成来源")
         self.btn_search_retry.clicked.connect(self._retry_search_pages)
         self.btn_search_retry.hide()
@@ -674,7 +679,8 @@ class MusicPanel(QWidget):
         self.btn_versions.hide()
         self.list_results.currentRowChanged.connect(self._online_selection_changed)
         for button in (self.btn_result_play, self.btn_versions, self.btn_retry_online,
-                       self.btn_search_more, self.btn_search_retry, self.btn_download_selected):
+                       self.btn_search_more, self.btn_search_retry, self.btn_search_sources,
+                       self.btn_download_selected):
             actions.addWidget(button)
         results_layout.addLayout(actions)
         self.btn_discovery_more = QPushButton("加载更多曲目")
@@ -1631,6 +1637,7 @@ class MusicPanel(QWidget):
         cancel = threading.Event()
         intent_ns = time.perf_counter_ns()
         self._manual_request = (cancel, label, title, fail_msg, intent_ns)
+        self._manual_search_generation = self._search_generation
         label.setText(PLAY_LOADING)
 
         def publish(stage, epoch):
@@ -1670,9 +1677,10 @@ class MusicPanel(QWidget):
             "no_url": PLAY_RETRY,
             "failed": failure,
         }
-        label.setText(messages[stage])
-        self.btn_retry_online.setVisible(label is self.lbl_status and stage in ("failed", "no_url", "unknown")
-                                         and self._retry_online_track is not None)
+        if label is not self.lbl_status or self._playback_owns_search_feedback():
+            label.setText(messages[stage])
+            self.btn_retry_online.setVisible(label is self.lbl_status and stage in ("failed", "no_url", "unknown")
+                                             and self._retry_online_track is not None)
         if stage not in ("loading", "accepted"):
             if stage != "started" and self.lbl_time.text() == "加载中...":
                 self.lbl_time.setText("0:00 / 0:00")
@@ -1854,6 +1862,7 @@ class MusicPanel(QWidget):
         self._do_search(rank_for_display=True)
 
     def _stop_search_pages(self):
+        self.btn_search_sources.hide()
         if self._search_pages is None:
             return
         self._search_pages = None
@@ -1885,6 +1894,11 @@ class MusicPanel(QWidget):
         elif not self._search_page_timer.isActive():
             self._search_page_timer.start()
 
+    def _playback_owns_search_feedback(self):
+        request = self._manual_request
+        return bool(request and request[1] is self.lbl_status
+                    and self._manual_search_generation == self._search_generation)
+
     def _render_search_pages(self):
         session = self._search_pages
         self._search_pending_render = False
@@ -1894,24 +1908,33 @@ class MusicPanel(QWidget):
         loading = session.loading(owner)
         errors = session.errors(owner)
         count = len(self._tracks_by_row)
+        successful = bool(results.successful_sources if owner is None else owner in results.successful_sources)
+        categories = set(errors.values())
+        source_unavailable = (not loading and not count and not successful
+                              and categories <= {"unavailable", "interrupted"})
+        restricted = getattr(getattr(session, "manager", None), "allow_legacy_sources", True) is False
         if loading:
             status = f"已找到 {count} 首，仍在搜索…" if count else SEARCHING
+        elif source_unavailable:
+            status = ("受控音源暂不可用，请核对音源授权和启动配置。"
+                      if restricted else "当前没有可搜索的在线音源。可检查音源设置，或去「本地」听歌。")
         elif errors:
             if count:
                 status = f"已找到 {count} 首；部分内容暂不可用。"
-            elif set(errors.values()) <= {"unavailable", "interrupted"}:
-                status = "暂无可用音源，请检查音源后重新搜索。"
-            elif set(errors.values()) <= {"timeout", "network_timeout", "busy"}:
+            elif successful:
+                status = "未找到歌曲；部分音源暂不可用。"
+            elif categories <= {"timeout", "network_timeout", "busy"}:
                 status = "部分音源响应超时，请重试。"
+            elif all(str(category).startswith(("network", "http_")) for category in categories):
+                status = "连接音源失败，请检查网络后重试。"
             else:
                 status = "搜索暂未完成，请重试。"
         elif count:
             status = f"已找到 {count} 首"
-        elif (results.successful_sources if owner is None else owner in results.successful_sources):
-            status = "未找到歌曲，试试其他歌名或歌手"
         else:
-            status = "暂无可用音源，请检查音源设置"
-        if self._manual_request is None:
+            status = "未找到歌曲，试试其他歌名或歌手"
+        self.btn_search_sources.setVisible(bool(source_unavailable and not restricted))
+        if not self._playback_owns_search_feedback():
             self.lbl_status.setText(status)
         can_load = self._search_has_buffer or session.can_fetch(owner)
         self.btn_search_more.setVisible(can_load and (not loading or self._search_has_buffer))

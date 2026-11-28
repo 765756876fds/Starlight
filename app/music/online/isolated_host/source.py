@@ -176,12 +176,16 @@ class IsolatedMusicSource(MusicSource):
         return _remote_result(self._request("downloadUrl", params, timeout=timeout))
 
     def get_playback_rendition(self, track, preference):
-        order = rendition_order(preference, self.plugin_type)
-        if self._configured_qualities is not None:
-            order = [tier for tier in order if tier in self._configured_qualities]
-        params = self._track_params(track, playback_qualities=list(order))
+        requested_order = rendition_order(preference, self.plugin_type)
+        available_order = [tier for tier in requested_order
+                           if self._configured_qualities is None or tier in self._configured_qualities]
+        params = self._track_params(track, playback_qualities=available_order)
         timeout = 2.0 if isinstance(track.extra, dict) and "_catalog" in track.extra else 7.0
-        return _remote_result(self._request("getUrl", params, timeout=timeout))
+        result = _remote_result(self._request("getUrl", params, timeout=timeout))
+        # The plugin only sees the filtered list and cannot mark skipped tiers.
+        if result and result.get("requested_quality") in requested_order[1:]:
+            result["downgraded"] = True
+        return result
 
     def get_play_url(self, track, quality=None):
         params = self._track_params(track, quality=quality)

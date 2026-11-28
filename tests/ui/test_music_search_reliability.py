@@ -574,3 +574,30 @@ def test_sorted_increment_does_not_retarget_an_active_download_gesture(qapp, pag
     finally:
         p.close()
         manager.close()
+
+
+@pytest.mark.parametrize("legacy", (True, False))
+def test_fresh_search_owns_feedback_after_prior_play_request(panel, legacy):
+    from app.music.online.manager import OnlineSourceManager
+
+    widget, music, errors = panel
+    manager = OnlineSourceManager(allow_legacy_sources=legacy)
+    music.open_online_search = manager.open_search
+    widget.show()
+    try:
+        old = threading.Event()
+        widget._manual_request = (old, widget.lbl_status, "旧歌曲", "播放失败", 0)
+        widget._manual_search_generation = widget._search_generation
+        widget.edit_kw.setText("另一次搜索")
+        widget.btn_search.click()
+        expected = "在线音源" if legacy else "核对音源授权"
+        assert expected in widget.lbl_status.text()
+        assert (not widget.btn_search_sources.isHidden()) == legacy
+        widget._on_manual_play_status(old, None, "loading")
+        assert expected in widget.lbl_status.text()
+        assert not old.is_set()
+        widget.edit_kw.setText("再搜索")
+        assert widget.btn_search_sources.isHidden()
+        assert not errors
+    finally:
+        manager.close()

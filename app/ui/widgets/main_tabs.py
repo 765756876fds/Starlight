@@ -129,6 +129,7 @@ class MainTabs(QWidget):
         if callable(getattr(music_panel, "enable_shell_navigation", None)):
             music_panel.enable_shell_navigation()
             music_panel.tabs.currentChanged.connect(self._sync_rail)
+            music_panel.online_source_settings_requested.connect(self.open_music_source_settings)
         settings = self._panels.get("settings")
         if hasattr(settings, "_tabs"):
             settings._tabs.currentChanged.connect(self._sync_rail)
@@ -150,6 +151,14 @@ class MainTabs(QWidget):
         if label in ("语音", "设置") and hasattr(settings, "_tabs"):
             settings._tabs.setCurrentIndex(1 if label == "语音" else 0)
         self._sync_rail()
+
+    def open_music_source_settings(self):
+        settings = self._panels.get("settings")
+        if settings is None:
+            return
+        self.open_domain("设置")
+        settings._tabs.currentWidget().ensureWidgetVisible(settings.btn_source_manage)
+        settings.btn_source_manage.setFocus()
 
     def open_music(self, label):
         panel = self._panels.get("music")

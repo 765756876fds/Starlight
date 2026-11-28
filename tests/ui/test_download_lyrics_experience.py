@@ -409,3 +409,20 @@ def test_recheck_invalidates_explicit_quality_until_user_reselects(qapp, prefs):
         assert dialog.options()["quality"] == "best"
     finally:
         dialog.close()
+
+
+def test_verified_download_choice_keeps_automatic_fallback_for_auto_only(qapp, prefs):
+    from app.ui.dialogs.download_options_dialog import DownloadOptionsDialog
+
+    dialog = DownloadOptionsDialog(verified=(_rendition(),))
+    try:
+        dialog.format.setCurrentIndex(dialog.format.findData(".flac"))
+        dialog.quality.setCurrentIndex(1)
+        assert dialog.details.text()
+        assert dialog.info.isHidden()
+        assert not dialog.choices["allow_fallback"].isEnabled()
+        dialog.quality.setCurrentIndex(0)
+        assert dialog.info.isHidden()
+        assert dialog.choices["allow_fallback"].isEnabled()
+    finally:
+        dialog.close()

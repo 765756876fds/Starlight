@@ -126,6 +126,8 @@ class PlaybackQualityButton(QPushButton):
                  f"{bits} · {bitrate} · {channels}",
                  f"设备输出  {self.rate(data.get('output_rate')) or '未知'} · {f('output_format')} · {f('output_channels')} 声道",
                  f"此曲请求  {PREFERENCES.get(data.get('requested_preference'), '未知')} / {f('requested')}    来源声明  {f('declared')}" if online else "本地文件按原编码播放"]
+        if online and data.get("downgraded") and data.get("requested_preference") not in (None, "auto"):
+            lines[-1] += " · 所选音质暂不可用"
         for action,text in zip(self.metadata,lines):
             action.setText(text)
         self.setToolTip("查看实际播放参数与切换选项")

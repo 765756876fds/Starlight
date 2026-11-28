@@ -204,3 +204,19 @@ def test_python_source_preserves_host_failure_categories(code, category):
     token, _ = source.search_snapshot()
     with pytest.raises(SourceSearchError, match=category):
         source.search_page(token, "owned", "word", 2)
+
+
+def test_filtered_lx_playback_preserves_requested_tier_for_fallback():
+    from app.music.online.isolated_host.source import IsolatedMusicSource
+    from app.music.online.models import OnlineTrack
+
+    def resolve(method, params, timeout):
+        assert method == "getUrl"
+        assert params["playback_qualities"] == ["128k"]
+        return {"url": "https://music.example.com/audio", "requested_quality": "128k"}
+
+    source = IsolatedMusicSource("sample", "lx", ("tx",), resolve,
+                                download_qualities=("128k",))
+    track = OnlineTrack("sample", "song", "Fixture", extra={"_raw": {"source": "tx"}})
+    assert source.get_playback_rendition(track, "lossless")["downgraded"] is True
+    assert "downgraded" not in source.get_playback_rendition(track, "standard")

@@ -208,6 +208,10 @@ class DownloadOptionsDialog(GlassDialog):
         option = self.quality.currentData()
         self.download.setEnabled(not self._selection_needs_confirmation and (
             not self._checking or (option is None and self.format.currentData() is None)))
+        fallback = self.choices["allow_fallback"]
+        fallback.setEnabled(option is None)
+        fallback.setToolTip("选择具体音质后，资源不可用时会提示失败，不会换成较低音质。"
+                            if option is not None else "")
         if not isinstance(option, DownloadOption):
             self.details.clear()
             self.details.setVisible(False)
